@@ -1,0 +1,3 @@
+[workspace]
+members = ["octopus-cli", "kosong"]
+resolver = "3"

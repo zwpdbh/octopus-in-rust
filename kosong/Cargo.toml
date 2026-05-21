@@ -1,0 +1,21 @@
+[package]
+name = "kosong"
+version = "0.1.0"
+edition = "2024"
+authors = ["Octopus Team"]
+description = "A faithful Rust rewrite of the Python kosong LLM abstraction layer"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+schemars = "0.8"
+futures = "0.3"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
