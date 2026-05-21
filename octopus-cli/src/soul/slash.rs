@@ -245,6 +245,408 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    registry.register(SlashCommand {
+        name: "help".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                let mut lines = vec![
+                    "Available slash commands:".to_string(),
+                    String::new(),
+                ];
+                for cmd in soul.slash_registry.list_commands() {
+                    lines.push(format!("  /{} - {}", cmd.name, cmd.description));
+                    for alias in &cmd.aliases {
+                        lines.push(format!("  /{} - alias for /{}", alias, cmd.name));
+                    }
+                }
+                crate::wire::wire_send(TextPart {
+                    text: lines.join("\n"),
+                });
+            })
+        }),
+        description: "Show help information".to_string(),
+        aliases: vec!["h".to_string(), "?".to_string()],
+    });
+
+    registry.register(SlashCommand {
+        name: "changelog".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Release notes are not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Show release notes".to_string(),
+        aliases: vec!["release-notes".to_string()],
+    });
+
+    registry.register(SlashCommand {
+        name: "debug".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                let snap = soul.status_snapshot();
+                let lines = vec![
+                    "Debug context:".to_string(),
+                    String::new(),
+                    format!("  Session ID:     {}", soul.session.id),
+                    format!("  Model:          {}", soul.llm.as_ref().map(|l| l.model_name.clone()).unwrap_or_else(|| "none".to_string())),
+                    format!("  Plan mode:      {}", soul.plan_mode),
+                    format!("  YOLO:           {}", soul.approval.yolo),
+                    format!("  AFK:            {}", soul.approval.afk),
+                    format!("  Context tokens: {} / {} ({:.1}%)",
+                        snap.context_tokens,
+                        snap.max_context_tokens,
+                        snap.context_usage * 100.0
+                    ),
+                    format!("  Checkpoints:    {}", soul.context.n_checkpoints()),
+                ];
+                crate::wire::wire_send(TextPart {
+                    text: lines.join("\n"),
+                });
+            })
+        }),
+        description: "Debug the context".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "add-dir".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
+            Box::pin(async move {
+                let path = args.trim();
+                if path.is_empty() {
+                    let dirs = &soul.config.workspace_dirs;
+                    if dirs.is_empty() {
+                        crate::wire::wire_send(TextPart {
+                            text: "No additional directories in the workspace.\nUsage: /add-dir <path>".to_string(),
+                        });
+                    } else {
+                        let mut lines = vec!["Added directories:".to_string()];
+                        for d in dirs {
+                            lines.push(format!("  - {}", d.display()));
+                        }
+                        crate::wire::wire_send(TextPart {
+                            text: lines.join("\n"),
+                        });
+                    }
+                    return;
+                }
+                let p = std::path::PathBuf::from(path);
+                if !p.exists() {
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Path does not exist: {}", path),
+                    });
+                    return;
+                }
+                if !p.is_dir() {
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Path is not a directory: {}", path),
+                    });
+                    return;
+                }
+                let canonical = p.canonicalize().unwrap_or(p);
+                if !soul.config.workspace_dirs.contains(&canonical) {
+                    soul.config.workspace_dirs.push(canonical.clone());
+                }
+                crate::wire::wire_send(TextPart {
+                    text: format!("Added directory to workspace: {}", canonical.display()),
+                });
+            })
+        }),
+        description: "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "exit".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Use Ctrl-D or type 'exit' to quit.".to_string(),
+                });
+            })
+        }),
+        description: "Exit the CLI".to_string(),
+        aliases: vec!["quit".to_string()],
+    });
+
+    registry.register(SlashCommand {
+        name: "version".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: format!("kimi, version {}", crate::constant::get_version()),
+                });
+            })
+        }),
+        description: "Show version information".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "model".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                let model = soul.llm.as_ref().map(|l| l.model_name.clone()).unwrap_or_else(|| "no model".to_string());
+                crate::wire::wire_send(TextPart {
+                    text: format!("Current model: {}", model),
+                });
+            })
+        }),
+        description: "Show or switch the current model".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "feedback".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Spot a bug or have feedback? Visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
+                });
+            })
+        }),
+        description: "Submit feedback to make Kimi Code CLI better".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "new".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                if soul.session.is_empty() {
+                    let _ = soul.session.delete().await;
+                }
+                let work_dir = soul.session.work_dir.clone();
+                match crate::session::Session::create(&work_dir, None).await {
+                    Ok(new_session) => {
+                        let id = new_session.id.clone();
+                        crate::wire::wire_send(TextPart {
+                            text: format!("New session created: {}. Restart octopus to switch to it.", id),
+                        });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Failed to create new session: {}", e),
+                        });
+                    }
+                }
+            })
+        }),
+        description: "Start a new session".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "title".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
+            Box::pin(async move {
+                let new_title = args.trim();
+                if new_title.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Session title: {}", soul.session.title),
+                    });
+                    return;
+                }
+                let trimmed = new_title.chars().take(200).collect::<String>();
+                let session_dir = soul.session.dir();
+                let mut fresh = crate::session_state::load_session_state(&session_dir);
+                fresh.custom_title = Some(trimmed.clone());
+                fresh.title_generated = true;
+                crate::session_state::save_session_state(&fresh, &session_dir).ok();
+                soul.session.state.custom_title = Some(trimmed.clone());
+                soul.session.state.title_generated = true;
+                soul.session.title = trimmed.clone();
+                crate::wire::wire_send(TextPart {
+                    text: format!("Session title set to: {}", trimmed),
+                });
+            })
+        }),
+        description: "Set or show the session title".to_string(),
+        aliases: vec!["rename".to_string()],
+    });
+
+    registry.register(SlashCommand {
+        name: "sessions".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                let work_dir = soul.session.work_dir.clone();
+                let sessions = crate::session::Session::list(&work_dir).await;
+                if sessions.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: "No sessions found.".to_string(),
+                    });
+                    return;
+                }
+                let mut lines = vec!["Sessions:".to_string(), String::new()];
+                for s in sessions {
+                    let marker = if s.id == soul.session.id { " ← current" } else { "" };
+                    lines.push(format!("  {} - {}{}", &s.id[..8.min(s.id.len())], s.title, marker));
+                }
+                crate::wire::wire_send(TextPart {
+                    text: lines.join("\n"),
+                });
+            })
+        }),
+        description: "List sessions and resume optionally".to_string(),
+        aliases: vec!["resume".to_string()],
+    });
+
+    registry.register(SlashCommand {
+        name: "web".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Web UI is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Open Kimi Code Web UI in browser".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "vis".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Visualizer is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Open Kimi Agent Tracing Visualizer in browser".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "mcp".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                if let Some(ref mcp) = soul.status_snapshot().mcp_status {
+                    let mut lines = vec!["MCP Servers:".to_string(), String::new()];
+                    for server in &mcp.servers {
+                        lines.push(format!("  {} - {} ({} tools)", server.name, server.status, server.tools.len()));
+                    }
+                    crate::wire::wire_send(TextPart {
+                        text: lines.join("\n"),
+                    });
+                } else {
+                    crate::wire::wire_send(TextPart {
+                        text: "No MCP servers configured.".to_string(),
+                    });
+                }
+            })
+        }),
+        description: "Show MCP servers and tools".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "hooks".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Hooks are not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "List configured hooks".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "undo".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Undo is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Undo: fork the session at a previous turn and retry".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "fork".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Fork is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Fork the current session (copy all history to a new session)".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "btw".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Side questions (/btw) are not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Ask a side question without interrupting the main conversation".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "editor".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Editor configuration is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Set default external editor for Ctrl-O".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "task".to_string(),
+        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+            Box::pin(async move {
+                crate::wire::wire_send(TextPart {
+                    text: "Background task browser is not yet implemented in octopus-cli.".to_string(),
+                });
+            })
+        }),
+        description: "Browse and manage background tasks".to_string(),
+        aliases: Vec::new(),
+    });
+
+    registry.register(SlashCommand {
+        name: "theme".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
+            Box::pin(async move {
+                let arg = args.trim().to_lowercase();
+                if arg.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Current theme: {}. Usage: /theme dark | /theme light", soul.config.theme),
+                    });
+                    return;
+                }
+                if arg != "dark" && arg != "light" {
+                    crate::wire::wire_send(TextPart {
+                        text: "Unknown theme. Use 'dark' or 'light'.".to_string(),
+                    });
+                    return;
+                }
+                soul.config.theme = arg.clone();
+                crate::wire::wire_send(TextPart {
+                    text: format!("Theme set to: {}. Restart to apply.", arg),
+                });
+            })
+        }),
+        description: "Switch terminal color theme (dark/light)".to_string(),
+        aliases: Vec::new(),
+    });
+
     registry
 }
 

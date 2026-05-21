@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
@@ -11,7 +11,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::soul::KimiSoul;
 
@@ -28,15 +28,12 @@ pub struct ShellUI {
     // Cached values for drawing when soul is running
     cached_model_name: String,
     cached_plan_mode: bool,
-    cached_session_id: String,
-    cached_work_dir: String,
     // Completion state
-    completions: Vec<String>,
+    completions: Vec<(String, String)>,
     completion_index: usize,
     show_completions: bool,
-    // Ctrl-C tip
-    show_ctrl_c_tip: bool,
-    ctrl_c_tip_timer: Option<Instant>,
+    // Ctrl-C tips shown below input area (stack on repeated presses)
+    ctrl_c_tips: Vec<String>,
     // Welcome panel inside TUI
     show_welcome: bool,
     // Input area width for cursor calculation
@@ -62,12 +59,6 @@ impl ShellUI {
             .map(|l| l.model_name.clone())
             .unwrap_or_else(|| "no model".to_string());
         let cached_plan_mode = soul.plan_mode;
-        let cached_session_id = soul.session.id.clone();
-        let cached_work_dir = std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
         Self {
             soul: Some(soul),
             soul_arc: None,
@@ -80,13 +71,10 @@ impl ShellUI {
             state: AppState::Idle,
             cached_model_name,
             cached_plan_mode,
-            cached_session_id,
-            cached_work_dir,
-            completions: Vec::new(),
+            completions: Vec::new(), // Vec<(name, description)>
             completion_index: 0,
             show_completions: false,
-            show_ctrl_c_tip: false,
-            ctrl_c_tip_timer: None,
+            ctrl_c_tips: Vec::new(),
             show_welcome: true,
             last_frame_width: 80,
         }
@@ -98,7 +86,6 @@ impl ShellUI {
         crossterm::execute!(
             stdout,
             crossterm::terminal::EnterAlternateScreen,
-            crossterm::event::EnableMouseCapture
         )?;
 
         let backend = CrosstermBackend::new(stdout);
@@ -116,7 +103,6 @@ impl ShellUI {
         crossterm::execute!(
             terminal.backend_mut(),
             crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture
         )?;
         terminal.show_cursor()?;
 
@@ -127,46 +113,29 @@ impl ShellUI {
 
     fn welcome_lines(&self) -> Vec<Line<'static>> {
         let version = crate::constant::get_version();
-        let dir = self.cached_work_dir.clone();
-        let session = self.cached_session_id.clone();
         let model = self.cached_model_name.clone();
 
-        let style = Style::default().fg(Color::White);
-        let label_style = Style::default().fg(Color::Cyan);
+        let gray = Style::default().fg(Color::Gray);
+        let yellow = Style::default().fg(Color::Yellow);
+        let white = Style::default().fg(Color::White);
 
         vec![
             Line::from(""),
             Line::from(vec![
+                Span::styled("  Model: ", gray),
+                Span::styled(model, white),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Tip: Spot a bug or have feedback? Type /feedback right in this session – every report makes Kimi better.", gray),
+            ]),
+            Line::from(""),
+            Line::from(vec![
                 Span::styled(
-                    "  Welcome to Kimi Code CLI!",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    format!("  New version available: {}. Run `cargo install --path octopus-cli` to upgrade.", version),
+                    yellow,
                 ),
-                Span::styled(format!(" v{}", version), Style::default().fg(Color::Gray)),
             ]),
-            Line::from(Span::styled(
-                "  Send /help for help information.",
-                Style::default().fg(Color::Gray),
-            )),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Directory: ", label_style),
-                Span::styled(dir, style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Session:   ", label_style),
-                Span::styled(session, style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Model:     ", label_style),
-                Span::styled(model, style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Tip: Spot a bug or have feedback? Type /feedback right in this session.",
-                Style::default().fg(Color::Gray),
-            )),
             Line::from(""),
         ]
     }
@@ -182,7 +151,6 @@ impl ShellUI {
             terminal.draw(|f| self.draw(f))?;
 
             self.check_task_completion().await;
-            self.update_ctrl_c_tip();
 
             tokio::select! {
                 _ = tick.tick() => {},
@@ -246,17 +214,6 @@ impl ShellUI {
         }
     }
 
-    fn update_ctrl_c_tip(&mut self) {
-        if self.show_ctrl_c_tip {
-            if let Some(timer) = self.ctrl_c_tip_timer {
-                if timer.elapsed() > Duration::from_secs(3) {
-                    self.show_ctrl_c_tip = false;
-                    self.ctrl_c_tip_timer = None;
-                }
-            }
-        }
-    }
-
     async fn handle_key_event(&mut self, key: KeyEvent) {
         // If completions are showing, handle navigation first
         if self.show_completions {
@@ -313,12 +270,10 @@ impl ShellUI {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 match &self.state {
                     AppState::Idle => {
-                        if self.show_ctrl_c_tip {
-                            self.exit = true;
-                        } else {
-                            self.show_ctrl_c_tip = true;
-                            self.ctrl_c_tip_timer = Some(Instant::now());
-                        }
+                        // Ctrl-C never exits; stack tips below input area
+                        self.ctrl_c_tips.push(
+                            "Tip: press Ctrl-D or send 'exit' to quit".to_string(),
+                        );
                     }
                     AppState::Running(handle) => {
                         handle.abort();
@@ -401,40 +356,60 @@ impl ShellUI {
         let commands = self.get_available_commands();
         self.completions = commands
             .into_iter()
-            .filter(|cmd| cmd.starts_with(prefix))
+            .filter(|(name, _desc)| name.starts_with(prefix))
             .collect();
 
         if self.completions.is_empty() {
             self.show_completions = false;
-        } else if self.completions.len() == 1 {
-            // Auto-accept single match
-            self.accept_completion();
+        } else {
+            self.show_completions = true;
+            self.completion_index = 0;
         }
     }
 
-    fn get_available_commands(&self) -> Vec<String> {
-        let mut commands = vec![
-            "clear".to_string(),
-            "reset".to_string(),
-            "yolo".to_string(),
-            "afk".to_string(),
-            "plan".to_string(),
-            "compact".to_string(),
-            "exit".to_string(),
-            "help".to_string(),
-            "model".to_string(),
+    fn get_available_commands(&self) -> Vec<(String, String)> {
+        let mut commands: Vec<(String, String)> = Vec::new();
+
+        // Hardcoded fallback commands when soul is not available (e.g. during task execution)
+        let fallback = vec![
+            ("add-dir".to_string(), "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs".to_string()),
+            ("afk".to_string(), "Toggle afk mode (auto-dismiss AskUserQuestion, auto-approve tool calls)".to_string()),
+            ("changelog".to_string(), "Show release notes".to_string()),
+            ("clear".to_string(), "Clear the context".to_string()),
+            ("compact".to_string(), "Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)".to_string()),
+            ("debug".to_string(), "Debug the context".to_string()),
+            ("exit".to_string(), "Exit the CLI".to_string()),
+            ("feedback".to_string(), "Submit feedback to make Kimi Code CLI better".to_string()),
+            ("fork".to_string(), "Fork the current session (copy all history to a new session)".to_string()),
+            ("help".to_string(), "Show help information".to_string()),
+            ("hooks".to_string(), "List configured hooks".to_string()),
+            ("mcp".to_string(), "Show MCP servers and tools".to_string()),
+            ("model".to_string(), "Show or switch the current model".to_string()),
+            ("new".to_string(), "Start a new session".to_string()),
+            ("plan".to_string(), "Toggle plan mode. Usage: /plan [on|off|view|clear]".to_string()),
+            ("sessions".to_string(), "List sessions and resume optionally".to_string()),
+            ("theme".to_string(), "Switch terminal color theme (dark/light)".to_string()),
+            ("title".to_string(), "Set or show the session title".to_string()),
+            ("undo".to_string(), "Undo: fork the session at a previous turn and retry".to_string()),
+            ("version".to_string(), "Show version information".to_string()),
+            ("vis".to_string(), "Open Kimi Agent Tracing Visualizer in browser".to_string()),
+            ("web".to_string(), "Open Kimi Code Web UI in browser".to_string()),
+            ("yolo".to_string(), "Toggle YOLO mode (auto-approve all actions)".to_string()),
         ];
+        commands.extend(fallback);
 
         // Add commands from soul's slash registry if available
         if let Some(ref soul) = self.soul {
-            for (name, _desc, aliases) in soul.list_slash_commands() {
-                commands.push(name);
-                commands.extend(aliases);
+            for (name, desc, aliases) in soul.list_slash_commands() {
+                commands.push((name, desc.clone()));
+                for alias in aliases {
+                    commands.push((alias, desc.clone()));
+                }
             }
         }
 
-        commands.sort();
-        commands.dedup();
+        commands.sort_by(|a, b| a.0.cmp(&b.0));
+        commands.dedup_by(|a, b| a.0 == b.0);
         commands
     }
 
@@ -443,8 +418,8 @@ impl ShellUI {
             return;
         }
         let idx = self.completion_index.min(self.completions.len() - 1);
-        let completion = &self.completions[idx];
-        self.input = format!("/{}", completion);
+        let (name, _desc) = &self.completions[idx];
+        self.input = format!("/{}", name);
         self.cursor_position = self.input.len();
         self.show_completions = false;
     }
@@ -483,6 +458,7 @@ impl ShellUI {
         self.show_welcome = false;
         self.show_completions = false;
         self.completions.clear();
+        self.ctrl_c_tips.clear();
 
         // Handle /exit
         if input == "/exit" {
@@ -541,30 +517,7 @@ impl ShellUI {
     fn draw(&mut self, frame: &mut Frame) {
         self.last_frame_width = frame.area().width;
 
-        let input_height = self.calculate_input_height();
-        let completion_height = if self.show_completions {
-            (self.completions.len() as u16 + 2).min(6)
-        } else {
-            0
-        };
-        let tip_height = if self.show_ctrl_c_tip { 1 } else { 0 };
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),
-                Constraint::Length(completion_height),
-                Constraint::Length(input_height),
-                Constraint::Length(tip_height),
-                Constraint::Length(1),
-            ])
-            .split(frame.area());
-
-        let mut chunk_idx = 0;
-
-        // Chat area
-        let chat_area = chunks[chunk_idx];
-        chunk_idx += 1;
+        // Build chat content first so we can size the chat area to its content
         let mut text_lines = Vec::new();
 
         for (role, content) in &self.messages {
@@ -610,52 +563,60 @@ impl ShellUI {
             text_lines.extend(self.welcome_lines());
         }
 
+        let chat_content_height = text_lines.len() as u16;
+        let input_height = self.calculate_input_height();
+        let completion_height = if self.show_completions {
+            (self.completions.len() as u16).min(10)
+        } else {
+            0
+        };
+        let tip_height = self.ctrl_c_tips.len() as u16;
+        // Chat gets exactly the space its content needs (capped at half terminal),
+        // then a bottom spacer absorbs extra space so input isn't pushed to bottom.
+        let chat_height = chat_content_height.max(3).min(frame.area().height / 2);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(chat_height),
+                Constraint::Length(input_height),
+                Constraint::Length(completion_height),
+                Constraint::Length(tip_height),
+                Constraint::Min(0),
+            ])
+            .split(frame.area());
+
+        let mut chunk_idx = 0;
+
+        // Chat area
+        let chat_area = chunks[chunk_idx];
+        chunk_idx += 1;
+
         let chat = Paragraph::new(Text::from(text_lines))
-            .block(Block::default().borders(Borders::ALL).title("Chat"))
             .wrap(Wrap { trim: false })
             .scroll((0, 0));
         frame.render_widget(chat, chat_area);
 
-        // Completion popup
-        if self.show_completions && completion_height > 0 {
-            let comp_area = chunks[chunk_idx];
-            chunk_idx += 1;
-            let comp_text: Vec<Line> = self
-                .completions
-                .iter()
-                .enumerate()
-                .map(|(i, cmd)| {
-                    let style = if i == self.completion_index {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    Line::from(Span::styled(format!("  /{}", cmd), style))
-                })
-                .collect();
-            let comp_widget = Paragraph::new(Text::from(comp_text))
-                .block(Block::default().borders(Borders::ALL).title("Commands"));
-            frame.render_widget(comp_widget, comp_area);
-        } else {
-            chunk_idx += 1;
-        }
-
-        // Input area
+        // Input area: top border with embedded title, bottom border as separator
         let input_area = chunks[chunk_idx];
         chunk_idx += 1;
         let mode_indicator = match self.mode {
-            ShellMode::Agent => "── input ──",
-            ShellMode::Shell => "─",
+            ShellMode::Agent => "input",
+            ShellMode::Shell => "shell",
         };
         let prompt = match self.mode {
-            ShellMode::Agent => "✨ ",
+            ShellMode::Agent => "",
             ShellMode::Shell => "$ ",
         };
 
-        let input_block = Block::default().borders(Borders::ALL).title(mode_indicator);
+        let title_text = format!("── {} ──", mode_indicator);
+        let input_block = Block::default()
+            .title_top(Line::from(Span::styled(
+                title_text,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .border_style(Style::default().fg(Color::DarkGray));
 
         // Render multiline input
         let input_with_prompt = format!("{}{}", prompt, self.input);
@@ -666,44 +627,79 @@ impl ShellUI {
         let cursor_pos = self.calculate_cursor_position(input_area, prompt);
         frame.set_cursor_position(cursor_pos);
 
-        // Ctrl-C tip
-        if self.show_ctrl_c_tip && tip_height > 0 {
+        // Completion menu (rendered below input)
+        let comp_area = chunks[chunk_idx];
+        if self.show_completions && !self.completions.is_empty() && comp_area.height > 0 {
+            let cmd_col_width = 18usize;
+            let comp_lines: Vec<Line> = self
+                .completions
+                .iter()
+                .enumerate()
+                .map(|(i, (name, desc))| {
+                    let is_selected = i == self.completion_index;
+                    let prefix = if is_selected { "› " } else { "  " };
+                    let cmd_text = format!("{}/{}", prefix, name);
+                    let cmd_visual_width = cmd_text.width();
+                    let padding =
+                        " ".repeat(cmd_col_width.saturating_sub(cmd_visual_width));
+
+                    let cmd_style = if is_selected {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    let max_desc_width =
+                        (comp_area.width as usize).saturating_sub(cmd_col_width + 2);
+                    let desc_text = if max_desc_width > 0 && desc.width() > max_desc_width {
+                        let mut truncated = String::new();
+                        let mut w = 0usize;
+                        for ch in desc.chars() {
+                            let cw = UnicodeWidthChar::width(ch).unwrap_or(1);
+                            if w + cw + 3 > max_desc_width {
+                                break;
+                            }
+                            truncated.push(ch);
+                            w += cw;
+                        }
+                        format!("{}...", truncated)
+                    } else {
+                        desc.clone()
+                    };
+
+                    Line::from(vec![
+                        Span::styled(cmd_text, cmd_style),
+                        Span::styled(padding, cmd_style),
+                        Span::styled(desc_text, Style::default().fg(Color::DarkGray)),
+                    ])
+                })
+                .collect();
+
+            let comp_widget = Paragraph::new(Text::from(comp_lines));
+            frame.render_widget(comp_widget, comp_area);
+        }
+        chunk_idx += 1;
+
+        // Ctrl-C tips (rendered below completion area)
+        if tip_height > 0 {
             let tip_area = chunks[chunk_idx];
-            chunk_idx += 1;
-            let tip = Paragraph::new("Tip: press Ctrl-D or send 'exit' to quit")
-                .style(Style::default().fg(Color::Yellow));
-            frame.render_widget(tip, tip_area);
-        } else {
-            chunk_idx += 1;
+            let tip_lines: Vec<Line> = self
+                .ctrl_c_tips
+                .iter()
+                .map(|t| Line::from(Span::styled(t.clone(), Style::default().fg(Color::Yellow))))
+                .collect();
+            let tip_widget = Paragraph::new(Text::from(tip_lines));
+            frame.render_widget(tip_widget, tip_area);
         }
 
-        // Bottom toolbar
-        let toolbar_area = chunks[chunk_idx];
-        let plan_indicator = if self.cached_plan_mode {
-            " · plan"
-        } else {
-            ""
-        };
-        let toolbar_text = format!(
-            "{} | {}{} | {}",
-            match self.mode {
-                ShellMode::Agent => "agent",
-                ShellMode::Shell => "shell",
-            },
-            self.cached_model_name,
-            plan_indicator,
-            self.cached_work_dir
-        );
-        let toolbar = Paragraph::new(toolbar_text).style(Style::default().fg(Color::Gray));
-        frame.render_widget(toolbar, toolbar_area);
     }
 
     fn calculate_input_height(&self) -> u16 {
         let prompt_len = match self.mode {
-            ShellMode::Agent => "✨ ".len(),
+            ShellMode::Agent => 0,
             ShellMode::Shell => "$ ".len(),
         };
-        let available_width = (self.last_frame_width as usize).saturating_sub(2 + prompt_len);
+        let available_width = (self.last_frame_width as usize).saturating_sub(prompt_len);
         if available_width == 0 {
             return 3;
         }
@@ -711,7 +707,7 @@ impl ShellUI {
         let text_with_prompt = format!(
             "{}{}",
             match self.mode {
-                ShellMode::Agent => "✨ ",
+                ShellMode::Agent => "",
                 ShellMode::Shell => "$ ",
             },
             self.input
@@ -732,14 +728,15 @@ impl ShellUI {
             }
         }
 
+        // +2 for top and bottom borders, min 5 (2 borders + 3 content rows)
         (lines_needed as u16 + 2).clamp(5, 12)
     }
 
     fn calculate_cursor_position(&self, input_area: Rect, prompt: &str) -> (u16, u16) {
-        let available_width = (input_area.width as usize).saturating_sub(2);
+        let available_width = input_area.width as usize;
 
         let mut cursor_row = input_area.y + 1;
-        let mut cursor_col = input_area.x + 1;
+        let mut cursor_col = input_area.x;
 
         let text_before_cursor = format!("{}{}", prompt, &self.input[..self.cursor_position]);
 

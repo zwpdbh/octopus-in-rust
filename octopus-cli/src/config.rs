@@ -251,6 +251,8 @@ pub struct Config {
     pub extra_skill_dirs: Vec<String>,
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
+    #[serde(default)]
+    pub workspace_dirs: Vec<PathBuf>,
 }
 
 fn default_theme() -> String {
@@ -293,6 +295,7 @@ impl Default for Config {
             merge_all_available_skills: default_merge_all_available_skills(),
             extra_skill_dirs: Vec::new(),
             telemetry: default_telemetry(),
+            workspace_dirs: Vec::new(),
         }
     }
 }
