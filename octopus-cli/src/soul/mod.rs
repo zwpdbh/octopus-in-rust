@@ -2,6 +2,8 @@ pub mod agent;
 pub mod approval;
 pub mod compaction;
 pub mod context;
+pub mod dynamic_injection;
+pub mod dynamic_injections;
 pub mod message;
 pub mod slash;
 pub mod toolset;
@@ -19,6 +21,7 @@ use crate::llm::LLM;
 use crate::session::Session;
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
 use crate::soul::context::Context;
+use crate::soul::dynamic_injection::{DynamicInjectionProvider, InjectionContext};
 use crate::soul::message::{check_message, normalize_history, tool_result_to_message};
 use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call};
 use crate::soul::toolset::KimiToolset;
@@ -47,6 +50,9 @@ pub struct KimiSoul {
     _current_step_no: usize,
     _current_turn_id: Option<String>,
     _last_tool_calls: Vec<(String, String)>,
+    _injection_providers: Vec<Box<dyn DynamicInjectionProvider>>,
+    _pending_plan_activation_injection: bool,
+    _plan_session_id: Option<String>,
 }
 
 impl KimiSoul {
@@ -81,6 +87,9 @@ impl KimiSoul {
         let max_steps = config.loop_control.max_steps_per_turn;
         let max_retries = config.loop_control.max_retries_per_step;
 
+        let plan_mode = session.state.plan_mode;
+        let plan_session_id = session.state.plan_session_id.clone();
+
         Self {
             config,
             session,
@@ -88,7 +97,7 @@ impl KimiSoul {
             context,
             toolset,
             approval,
-            plan_mode: false,
+            plan_mode,
             max_steps_per_turn: max_steps,
             max_retries_per_step: max_retries,
             agent: None,
@@ -101,6 +110,12 @@ impl KimiSoul {
             _current_step_no: 0,
             _current_turn_id: None,
             _last_tool_calls: Vec::new(),
+            _injection_providers: vec![
+                Box::new(crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new()),
+                Box::new(crate::soul::dynamic_injections::afk_mode::AfkModeInjectionProvider::new()),
+            ],
+            _pending_plan_activation_injection: false,
+            _plan_session_id: plan_session_id,
         }
     }
 
@@ -366,6 +381,28 @@ impl KimiSoul {
 
     /// The actual LLM step logic, without any recovery wrapper.
     async fn _run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
+        // ── Dynamic Injection ───────────────────────────────────────────────
+        // Mirrors Python's `_collect_injections()` in `kimisoul.py`.
+        let injections = self._collect_injections().await;
+        if !injections.is_empty() {
+            let reminder_text = injections
+                .iter()
+                .map(|inj| format!("<system-reminder>\n{}\n</system-reminder>", inj.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.context
+                .append_message(Message {
+                    role: "user".to_string(),
+                    content: vec![ContentPart::Text {
+                        text: reminder_text,
+                    }],
+                    tool_call_id: None,
+                    tool_calls: None,
+                })
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+        }
+
         // Build effective history and normalize adjacent user messages.
         // Mirrors Python's `normalize_history()` in `dynamic_injection.py`.
         let history = normalize_history(self.context.history());
@@ -547,32 +584,6 @@ impl KimiSoul {
         self.steer_queue.push(content.to_string());
     }
 
-    pub fn toggle_plan_mode(&mut self) -> bool {
-        self.plan_mode = !self.plan_mode;
-        self.session.state.plan_mode = self.plan_mode;
-        let _ = crate::session_state::save_session_state(&self.session.state, &self.session.dir());
-        self.plan_mode
-    }
-
-    pub fn get_plan_file_path(&self) -> Option<PathBuf> {
-        if self.plan_mode {
-            Some(self.session.dir().join("plan.md"))
-        } else {
-            None
-        }
-    }
-
-    pub fn read_current_plan(&self) -> Option<String> {
-        let path = self.get_plan_file_path()?;
-        std::fs::read_to_string(&path).ok()
-    }
-
-    pub fn clear_current_plan(&self) {
-        if let Some(path) = self.get_plan_file_path() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-
     pub async fn compact_context(&mut self, custom_instruction: &str) -> Result<()> {
         let llm = self.llm.as_ref().ok_or(LLMNotSet::NotSet)?;
         let messages = self.context.history().to_vec();
@@ -610,7 +621,104 @@ impl KimiSoul {
 
         wire_send(CompactionEnd {});
 
+        // Notify injection providers that history has been rebuilt so they can
+        // reset any one-shot throttling state.
+        self._notify_injection_providers_compacted().await;
+
         Ok(())
+    }
+
+    // ========================================================================
+    // Dynamic Injection
+    // ========================================================================
+
+    async fn _collect_injections(&mut self) -> Vec<crate::soul::dynamic_injection::DynamicInjection> {
+        let plan_file_path = self.get_plan_file_path();
+        let ctx = InjectionContext {
+            plan_mode: self.plan_mode,
+            is_afk: self.approval.is_afk(),
+            is_afk_flag: self.approval.is_afk_flag(),
+            plan_file_path: plan_file_path.as_deref(),
+            pending_plan_activation: self.consume_pending_plan_activation_injection(),
+        };
+        let mut injections = Vec::new();
+        for provider in &mut self._injection_providers {
+            match provider.get_injections(self.context.history(), &ctx).await {
+                result => injections.extend(result),
+            }
+        }
+        injections
+    }
+
+    async fn _notify_injection_providers_compacted(&mut self) {
+        for provider in &mut self._injection_providers {
+            provider.on_context_compacted().await;
+        }
+    }
+
+    pub async fn notify_afk_changed(&mut self, enabled: bool) {
+        for provider in &mut self._injection_providers {
+            provider.on_afk_changed(enabled).await;
+        }
+    }
+
+    // ========================================================================
+    // Plan Mode
+    // ========================================================================
+
+    pub fn get_plan_file_path(&self) -> Option<PathBuf> {
+        self._plan_session_id.as_ref().map(|id| {
+            // TODO: use hero-name slug system like Python (heroes.py).
+            // For now, use a deterministic path based on session id.
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".kimi")
+                .join("plans")
+                .join(format!("{id}.md"))
+        })
+    }
+
+    pub fn consume_pending_plan_activation_injection(&mut self) -> bool {
+        if !self.plan_mode || !self._pending_plan_activation_injection {
+            return false;
+        }
+        self._pending_plan_activation_injection = false;
+        true
+    }
+
+    pub fn set_plan_mode(&mut self, enabled: bool) {
+        self.plan_mode = enabled;
+        self.session.state.plan_mode = enabled;
+        if enabled {
+            if self._plan_session_id.is_none() {
+                self._plan_session_id = Some(uuid::Uuid::new_v4().to_string());
+                self.session.state.plan_session_id = self._plan_session_id.clone();
+            }
+            self._pending_plan_activation_injection = true;
+        } else {
+            self._pending_plan_activation_injection = false;
+            self._plan_session_id = None;
+            self.session.state.plan_session_id = None;
+            self.session.state.plan_slug = None;
+        }
+        let _ = self.session.save_state();
+    }
+
+    pub fn toggle_plan_mode(&mut self) -> bool {
+        let new_state = !self.plan_mode;
+        self.set_plan_mode(new_state);
+        new_state
+    }
+
+    pub fn read_current_plan(&self) -> Option<String> {
+        let path = self.get_plan_file_path()?;
+        std::fs::read_to_string(&path).ok()
+    }
+
+    pub fn clear_current_plan(&self) {
+        if let Some(path) = self.get_plan_file_path() {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     pub fn status_snapshot(&self) -> StatusSnapshot {

@@ -192,6 +192,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 if soul.approval.afk {
                     soul.approval.afk = false;
+                    soul.notify_afk_changed(false).await;
                     let msg = if soul.approval.yolo {
                         "afk mode disabled. You are back at the terminal. Yolo is still on."
                     } else {
@@ -200,6 +201,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     crate::wire::wire_send(TextPart { text: msg.to_string() });
                 } else {
                     soul.approval.afk = true;
+                    soul.notify_afk_changed(true).await;
                     crate::wire::wire_send(TextPart {
                         text: "afk mode enabled. AskUserQuestion will be auto-dismissed and tool calls auto-approved.".to_string(),
                     });

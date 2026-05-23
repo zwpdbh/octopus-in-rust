@@ -12,6 +12,14 @@ impl ApprovalState {
     pub fn is_auto_approve(&self) -> bool {
         self.yolo || self.afk
     }
+
+    pub fn is_afk(&self) -> bool {
+        self.afk
+    }
+
+    pub fn is_afk_flag(&self) -> bool {
+        self.afk
+    }
 }
 
 impl Default for ApprovalState {
