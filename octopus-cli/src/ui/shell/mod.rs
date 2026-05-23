@@ -31,6 +31,7 @@ pub struct ShellUI {
     // Completion state
     completions: Vec<(String, String)>,
     completion_index: usize,
+    completion_scroll_offset: usize,
     show_completions: bool,
     // Ctrl-C tips shown below input area (stack on repeated presses)
     ctrl_c_tips: Vec<String>,
@@ -73,6 +74,7 @@ impl ShellUI {
             cached_plan_mode,
             completions: Vec::new(), // Vec<(name, description)>
             completion_index: 0,
+            completion_scroll_offset: 0,
             show_completions: false,
             ctrl_c_tips: Vec::new(),
             show_welcome: true,
@@ -83,10 +85,7 @@ impl ShellUI {
     pub async fn run(&mut self, initial_prompt: Option<String>) -> io::Result<bool> {
         crossterm::terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        crossterm::execute!(
-            stdout,
-            crossterm::terminal::EnterAlternateScreen,
-        )?;
+        crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen,)?;
 
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
@@ -126,16 +125,18 @@ impl ShellUI {
                 Span::styled(model, white),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("  Tip: Spot a bug or have feedback? Type /feedback right in this session – every report makes Kimi better.", gray),
-            ]),
+            Line::from(vec![Span::styled(
+                "  Tip: Spot a bug or have feedback? Type /feedback right in this session – every report makes Kimi better.",
+                gray,
+            )]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("  New version available: {}. Run `cargo install --path octopus-cli` to upgrade.", version),
-                    yellow,
+            Line::from(vec![Span::styled(
+                format!(
+                    "  New version available: {}. Run `cargo install --path octopus-cli` to upgrade.",
+                    version
                 ),
-            ]),
+                yellow,
+            )]),
             Line::from(""),
         ]
     }
@@ -222,12 +223,14 @@ impl ShellUI {
                     if self.completion_index > 0 {
                         self.completion_index -= 1;
                     }
+                    self.adjust_completion_scroll();
                     return;
                 }
                 KeyCode::Down => {
                     if self.completion_index + 1 < self.completions.len() {
                         self.completion_index += 1;
                     }
+                    self.adjust_completion_scroll();
                     return;
                 }
                 KeyCode::Enter | KeyCode::Tab => {
@@ -271,9 +274,8 @@ impl ShellUI {
                 match &self.state {
                     AppState::Idle => {
                         // Ctrl-C never exits; stack tips below input area
-                        self.ctrl_c_tips.push(
-                            "Tip: press Ctrl-D or send 'exit' to quit".to_string(),
-                        );
+                        self.ctrl_c_tips
+                            .push("Tip: press Ctrl-D or send 'exit' to quit".to_string());
                     }
                     AppState::Running(handle) => {
                         handle.abort();
@@ -361,9 +363,11 @@ impl ShellUI {
 
         if self.completions.is_empty() {
             self.show_completions = false;
+            self.completion_scroll_offset = 0;
         } else {
             self.show_completions = true;
             self.completion_index = 0;
+            self.completion_scroll_offset = 0;
         }
     }
 
@@ -413,6 +417,15 @@ impl ShellUI {
         commands
     }
 
+    fn adjust_completion_scroll(&mut self) {
+        const MAX_VISIBLE: usize = 10;
+        if self.completion_index < self.completion_scroll_offset {
+            self.completion_scroll_offset = self.completion_index;
+        } else if self.completion_index >= self.completion_scroll_offset + MAX_VISIBLE {
+            self.completion_scroll_offset = self.completion_index.saturating_sub(MAX_VISIBLE - 1);
+        }
+    }
+
     fn accept_completion(&mut self) {
         if self.completions.is_empty() {
             return;
@@ -422,6 +435,7 @@ impl ShellUI {
         self.input = format!("/{}", name);
         self.cursor_position = self.input.len();
         self.show_completions = false;
+        self.completion_scroll_offset = 0;
     }
 
     fn insert_char(&mut self, c: char) {
@@ -635,16 +649,19 @@ impl ShellUI {
                 .completions
                 .iter()
                 .enumerate()
+                .skip(self.completion_scroll_offset)
+                .take(10)
                 .map(|(i, (name, desc))| {
                     let is_selected = i == self.completion_index;
                     let prefix = if is_selected { "› " } else { "  " };
                     let cmd_text = format!("{}/{}", prefix, name);
                     let cmd_visual_width = cmd_text.width();
-                    let padding =
-                        " ".repeat(cmd_col_width.saturating_sub(cmd_visual_width));
+                    let padding = " ".repeat(cmd_col_width.saturating_sub(cmd_visual_width));
 
                     let cmd_style = if is_selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Gray)
                     };
@@ -691,7 +708,6 @@ impl ShellUI {
             let tip_widget = Paragraph::new(Text::from(tip_lines));
             frame.render_widget(tip_widget, tip_area);
         }
-
     }
 
     fn calculate_input_height(&self) -> u16 {

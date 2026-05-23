@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+pub mod export;
+pub mod info;
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum UiMode {
     Shell,
@@ -186,17 +189,45 @@ pub enum Commands {
     #[command(name = "__web-worker", hide = true)]
     WebWorker { session_id: String },
     /// Export session data
-    Export,
+    Export {
+        /// Session ID to export (defaults to previous session)
+        session_id: Option<String>,
+        /// Output file path
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+        /// Skip confirmation when exporting default session
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Show info about the current session
-    Info,
+    Info {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage plugins
-    Plugin,
+    Plugin {
+        #[command(subcommand)]
+        command: Option<PluginCommands>,
+    },
     /// Run Toad TUI
     Toad,
     /// Run web interface
     Web,
     /// Run visualizer interface
     Vis,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PluginCommands {
+    /// Install a plugin
+    Install { target: String },
+    /// List installed plugins
+    List,
+    /// Remove a plugin
+    Remove { name: String },
+    /// Show plugin info
+    Info { name: String },
 }
 
 pub fn parse_cli() -> Cli {

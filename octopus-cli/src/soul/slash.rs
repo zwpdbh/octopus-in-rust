@@ -1,3 +1,18 @@
+//! Soul-level slash commands — 1:1 Rust rewrite of `kimi_cli/soul/slash.py`.
+//!
+//! In the Python original, soul-level slash commands are async (or sync) callables
+//! registered in a `SlashCommandRegistry[SoulSlashCmdFunc]`. They operate directly
+//! on `KimiSoul` without needing UI access. This module mirrors that design
+//! exactly, translating Python's dynamic typing into Rust's static type system.
+//!
+//! Python original:
+//!   - `type SoulSlashCmdFunc = Callable[[KimiSoul, str], None | Awaitable[None]]`
+//!   - `SlashCommandRegistry[SoulSlashCmdFunc]` with decorator-based registration
+//!
+//! Rust equivalent:
+//!   - `SoulSlashCmdFunc` as an `Arc`-wrapped async trait object (see below)
+//!   - `SlashCommandRegistry` with imperative registration (no proc macros yet)
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -6,12 +21,31 @@ use std::sync::Arc;
 use crate::soul::KimiSoul;
 use crate::wire::{StatusUpdate, TextPart};
 
+/// The Rust equivalent of Python's `SoulSlashCmdFunc`.
+///
+/// Python: `Callable[[KimiSoul, str], None | Awaitable[None]]`
+///
+/// Because Rust has no garbage collector and requires explicit lifetimes,
+/// this type is more verbose. The HRTB (`for<'a>`) lets the closure accept
+/// references with any lifetime — needed because each invocation temporarily
+/// borrows the soul and the argument string.
+///
+/// - `Arc<...>`          replaces Python's implicit reference counting (the
+///                       function lives in the registry and may be cloned).
+/// - `Pin<Box<dyn Future>>` replaces Python's `Awaitable[None]`.
+/// - `+ Send + Sync`      ensures thread-safety, which Python got "for free"
+///                       via the GIL.
 pub type SoulSlashCmdFunc = Arc<
     dyn for<'a> Fn(&'a mut KimiSoul, &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>
         + Send
         + Sync,
 >;
 
+/// Mirrors Python's `SlashCommand[F]` dataclass.
+///
+/// Python stores the raw function object; Rust stores an `Arc`-wrapped trait
+/// object (`SoulSlashCmdFunc`) because function types are sized and must be
+/// erased to live in a uniform collection.
 pub struct SlashCommand {
     pub name: String,
     pub func: SoulSlashCmdFunc,
@@ -19,17 +53,27 @@ pub struct SlashCommand {
     pub aliases: Vec<String>,
 }
 
+/// Mirrors Python's `SlashCommandRegistry[F]`.
+///
+/// Python keeps two internal dicts (`_commands` and `_command_aliases`).
+/// Rust keeps one `HashMap<String, Arc<SlashCommand>>` where both canonical
+/// names and aliases point to the same `Arc<SlashCommand>`, achieving the
+/// same deduplication behaviour.
 pub struct SlashCommandRegistry {
     commands: HashMap<String, Arc<SlashCommand>>,
 }
 
 impl SlashCommandRegistry {
+    /// Equivalent to Python's `SlashCommandRegistry.__init__`.
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),
         }
     }
 
+    /// Equivalent to Python's `@registry.command` decorator applied to a
+    /// function.  Instead of decorating, we imperatively build a `SlashCommand`
+    /// and insert it (and its aliases) into the map.
     pub fn register(&mut self, command: SlashCommand) {
         let arc_cmd = Arc::new(command);
         self.commands.insert(arc_cmd.name.clone(), arc_cmd.clone());
@@ -38,10 +82,13 @@ impl SlashCommandRegistry {
         }
     }
 
+    /// Equivalent to Python's `find_command(name)`.
     pub fn get(&self, name: &str) -> Option<Arc<SlashCommand>> {
         self.commands.get(name).cloned()
     }
 
+    /// Equivalent to Python's `list_commands()` — returns unique primary
+    /// commands, deduplicating aliases that map to the same underlying command.
     pub fn list_commands(&self) -> Vec<Arc<SlashCommand>> {
         let mut seen = HashMap::new();
         for cmd in self.commands.values() {
@@ -57,9 +104,22 @@ impl Default for SlashCommandRegistry {
     }
 }
 
+// =============================================================================
+// Default command registrations
+// =============================================================================
+// Each block below mirrors a Python async function decorated with
+// `@registry.command(...)` in `kimi_cli/soul/slash.py`.
+// Where Python uses `wire_send(TextPart(...))`, the Rust code uses
+// `crate::wire::wire_send(TextPart { text: ... })`.
+// =============================================================================
+
 pub fn build_default_slash_commands() -> SlashCommandRegistry {
     let mut registry = SlashCommandRegistry::new();
 
+    // -------------------------------------------------------------------------
+    // /clear  (aliases: /reset)
+    // Python: `@registry.command(aliases=["reset"]) async def clear(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "clear".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -89,6 +149,11 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: vec!["reset".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /yolo
+    // Python: `@registry.command async def yolo(...)`
+    // Toggles the explicit auto-approve flag.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "yolo".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -116,6 +181,11 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /afk
+    // Python: `@registry.command async def afk(...)`
+    // Toggles afk mode (auto-dismiss AskUserQuestion, auto-approve tool calls).
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "afk".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -141,6 +211,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /plan  [on|off|view|clear]
+    // Python: `@registry.command async def plan(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "plan".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
@@ -213,6 +287,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /compact [focus]
+    // Python: `@registry.command async def compact(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "compact".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
@@ -245,14 +323,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /help  (aliases: /h, /?)
+    // Python soul-level commands do not include /help; it lives in the Shell
+    // layer (`kimi_cli/ui/shell/slash.py`). We include a minimal soul-level
+    // version here so that headless consumers still have basic discoverability.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "help".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                let mut lines = vec![
-                    "Available slash commands:".to_string(),
-                    String::new(),
-                ];
+                let mut lines = vec!["Available slash commands:".to_string(), String::new()];
                 for cmd in soul.slash_registry.list_commands() {
                     lines.push(format!("  /{} - {}", cmd.name, cmd.description));
                     for alias in &cmd.aliases {
@@ -268,19 +349,47 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: vec!["h".to_string(), "?".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /changelog  (aliases: /release-notes)
+    // Python: shell-level command; kept here for parity.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "changelog".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
-                    text: "Release notes are not yet implemented in octopus-cli.".to_string(),
-                });
+                let changelog_paths = [
+                    std::path::PathBuf::from("CHANGELOG.md"),
+                    std::path::PathBuf::from(
+                        "/home/zw/code/rust_programming/octopus/tmp/kimi-cli/CHANGELOG.md",
+                    ),
+                ];
+                let mut found = None;
+                for path in &changelog_paths {
+                    if path.exists() {
+                        if let Ok(content) = tokio::fs::read_to_string(path).await {
+                            found = Some(content);
+                            break;
+                        }
+                    }
+                }
+                let text = match found {
+                    Some(content) => {
+                        let lines: Vec<&str> = content.lines().take(80).collect();
+                        format!("Release notes:\n\n{}", lines.join("\n"))
+                    }
+                    None => "No CHANGELOG.md found.".to_string(),
+                };
+                crate::wire::wire_send(TextPart { text });
             })
         }),
         description: "Show release notes".to_string(),
         aliases: vec!["release-notes".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /debug
+    // Python soul-level command that dumps runtime diagnostics.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "debug".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -290,11 +399,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     "Debug context:".to_string(),
                     String::new(),
                     format!("  Session ID:     {}", soul.session.id),
-                    format!("  Model:          {}", soul.llm.as_ref().map(|l| l.model_name.clone()).unwrap_or_else(|| "none".to_string())),
+                    format!(
+                        "  Model:          {}",
+                        soul.llm
+                            .as_ref()
+                            .map(|l| l.model_name.clone())
+                            .unwrap_or_else(|| "none".to_string())
+                    ),
                     format!("  Plan mode:      {}", soul.plan_mode),
                     format!("  YOLO:           {}", soul.approval.yolo),
                     format!("  AFK:            {}", soul.approval.afk),
-                    format!("  Context tokens: {} / {} ({:.1}%)",
+                    format!(
+                        "  Context tokens: {} / {} ({:.1}%)",
                         snap.context_tokens,
                         snap.max_context_tokens,
                         snap.context_usage * 100.0
@@ -310,6 +426,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /add-dir <path>
+    // Python: `@registry.command(name="add-dir") async def add_dir(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "add-dir".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
@@ -358,6 +478,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /exit  (aliases: /quit)
+    // Python shell-level command. Minimal soul-level placeholder.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "exit".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
@@ -371,6 +495,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: vec!["quit".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /version
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "version".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
@@ -384,11 +511,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /model
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "model".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                let model = soul.llm.as_ref().map(|l| l.model_name.clone()).unwrap_or_else(|| "no model".to_string());
+                let model = soul
+                    .llm
+                    .as_ref()
+                    .map(|l| l.model_name.clone())
+                    .unwrap_or_else(|| "no model".to_string());
                 crate::wire::wire_send(TextPart {
                     text: format!("Current model: {}", model),
                 });
@@ -398,12 +532,24 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /feedback
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "feedback".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|_soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
+                let text = args.trim();
+                if text.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: "Spot a bug or have feedback? Visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
+                    });
+                    return;
+                }
+                // In a full implementation, this would POST to the platform feedback API.
+                // For now, print the GitHub issues URL as fallback.
                 crate::wire::wire_send(TextPart {
-                    text: "Spot a bug or have feedback? Visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
+                    text: "Feedback submission via API is not yet implemented. Please visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
                 });
             })
         }),
@@ -411,6 +557,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /new
+    // Python: `@registry.command async def new(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "new".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -423,7 +573,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     Ok(new_session) => {
                         let id = new_session.id.clone();
                         crate::wire::wire_send(TextPart {
-                            text: format!("New session created: {}. Restart octopus to switch to it.", id),
+                            text: format!(
+                                "New session created: {}. Restart octopus to switch to it.",
+                                id
+                            ),
                         });
                     }
                     Err(e) => {
@@ -438,6 +591,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /title  (aliases: /rename)
+    // Python: `@registry.command(name="title", aliases=["rename"])`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "title".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
@@ -467,6 +624,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: vec!["rename".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /sessions  (aliases: /resume)
+    // Python: `@registry.command(name="sessions", aliases=["resume"])`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "sessions".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -481,8 +642,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 }
                 let mut lines = vec!["Sessions:".to_string(), String::new()];
                 for s in sessions {
-                    let marker = if s.id == soul.session.id { " ← current" } else { "" };
-                    lines.push(format!("  {} - {}{}", &s.id[..8.min(s.id.len())], s.title, marker));
+                    let marker = if s.id == soul.session.id {
+                        " ← current"
+                    } else {
+                        ""
+                    };
+                    lines.push(format!(
+                        "  {} - {}{}",
+                        &s.id[..8.min(s.id.len())],
+                        s.title,
+                        marker
+                    ));
                 }
                 crate::wire::wire_send(TextPart {
                     text: lines.join("\n"),
@@ -493,6 +663,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: vec!["resume".to_string()],
     });
 
+    // -------------------------------------------------------------------------
+    // /web
+    // Python shell-level command. Placeholder until web UI is wired.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "web".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
@@ -506,6 +680,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /vis
+    // Python shell-level command. Placeholder until visualizer is wired.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "vis".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
@@ -519,6 +697,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /mcp
+    // Python: `@registry.command async def mcp(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "mcp".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
@@ -526,7 +708,12 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 if let Some(ref mcp) = soul.status_snapshot().mcp_status {
                     let mut lines = vec!["MCP Servers:".to_string(), String::new()];
                     for server in &mcp.servers {
-                        lines.push(format!("  {} - {} ({} tools)", server.name, server.status, server.tools.len()));
+                        lines.push(format!(
+                            "  {} - {} ({} tools)",
+                            server.name,
+                            server.status,
+                            server.tools.len()
+                        ));
                     }
                     crate::wire::wire_send(TextPart {
                         text: lines.join("\n"),
@@ -542,12 +729,31 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /hooks
+    // Python: `@registry.command def hooks(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "hooks".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
+                if soul.config.hooks.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: "No hooks configured. Add [[hooks]] sections to your config.toml."
+                            .to_string(),
+                    });
+                    return;
+                }
+                let mut lines = vec!["Configured hooks:".to_string(), String::new()];
+                for hook in &soul.config.hooks {
+                    let matcher = hook.matcher.as_deref().unwrap_or("*");
+                    lines.push(format!(
+                        "  event: {}  matcher: {}  command: {}",
+                        hook.event, matcher, hook.command
+                    ));
+                }
                 crate::wire::wire_send(TextPart {
-                    text: "Hooks are not yet implemented in octopus-cli.".to_string(),
+                    text: lines.join("\n"),
                 });
             })
         }),
@@ -555,38 +761,128 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /undo <turn_number>
+    // Python: `@registry.command async def undo(...)`
+    // Forks the session at a previous turn so the user can retry.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "undo".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
-                    text: "Undo is not yet implemented in octopus-cli.".to_string(),
-                });
+                let turns = enumerate_turns(&soul.session.wire_file_path);
+                if turns.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: "No turns found in this session.".to_string(),
+                    });
+                    return;
+                }
+
+                let turn_idx = if args.trim().is_empty() {
+                    turns.len().saturating_sub(1)
+                } else {
+                    match args.trim().parse::<usize>() {
+                        Ok(n) if n > 0 && n <= turns.len() => n - 1,
+                        _ => {
+                            let mut lines = vec!["Available turns:".to_string()];
+                            for (i, (_, text)) in turns.iter().enumerate() {
+                                lines.push(format!("  {}. {}", i + 1, text));
+                            }
+                            lines.push("Usage: /undo <turn_number>".to_string());
+                            crate::wire::wire_send(TextPart {
+                                text: lines.join("\n"),
+                            });
+                            return;
+                        }
+                    }
+                };
+
+                let (wire_line, _user_text) = &turns[turn_idx];
+                let work_dir = soul.session.work_dir.clone();
+
+                // If turn 0 selected, create empty session; else fork up to previous turn
+                let result = if turn_idx == 0 {
+                    match crate::session::Session::create(&work_dir, None).await {
+                        Ok(new_session) => {
+                            let new_dir = new_session.dir();
+                            let mut state = crate::session_state::load_session_state(&new_dir);
+                            state.custom_title = Some(format!("Undo: {}", soul.session.title));
+                            state.title_generated = true;
+                            crate::session_state::save_session_state(&state, &new_dir).ok();
+                            Ok(new_session.id)
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    fork_session(&soul.session, &work_dir, Some(wire_line.saturating_sub(1)), "Undo").await
+                };
+
+                match result {
+                    Ok(new_id) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!(
+                                "Undone to turn {}. New session: {}. Restart with --session {} to switch.",
+                                turn_idx + 1,
+                                new_id,
+                                new_id
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Undo failed: {}", e),
+                        });
+                    }
+                }
             })
         }),
         description: "Undo: fork the session at a previous turn and retry".to_string(),
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /fork
+    // Python: `@registry.command async def fork(...)`
+    // Copies all history to a new session.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "fork".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
-                    text: "Fork is not yet implemented in octopus-cli.".to_string(),
-                });
+                let work_dir = soul.session.work_dir.clone();
+                match fork_session(&soul.session, &work_dir, None, "Fork").await {
+                    Ok(new_id) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!(
+                                "Forked session: {}. Restart with --session {} to switch.",
+                                new_id, new_id
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Fork failed: {}", e),
+                        });
+                    }
+                }
             })
         }),
         description: "Fork the current session (copy all history to a new session)".to_string(),
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /btw
+    // Python: `@registry.command async def btw(...)`
+    // Side questions without interrupting the main conversation.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "btw".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 crate::wire::wire_send(TextPart {
-                    text: "Side questions (/btw) are not yet implemented in octopus-cli.".to_string(),
+                    text: "Side questions (/btw) are not yet implemented in octopus-cli."
+                        .to_string(),
                 });
             })
         }),
@@ -594,12 +890,54 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /editor <command>
+    // Python: `@registry.command async def editor(...)`
+    // Sets the default external editor used for Ctrl-O.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "editor".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
+                let arg = args.trim();
+                if arg.is_empty() {
+                    let current = if soul.config.default_editor.is_empty() {
+                        std::env::var("EDITOR")
+                            .or_else(|_| std::env::var("VISUAL"))
+                            .unwrap_or_else(|_| "auto-detect".to_string())
+                    } else {
+                        soul.config.default_editor.clone()
+                    };
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Current editor: {}. Usage: /editor <command>", current),
+                    });
+                    return;
+                }
+
+                // Validate binary exists
+                let binary = arg.split_whitespace().next().unwrap_or(arg);
+                let in_path = if std::path::PathBuf::from(binary).is_absolute() {
+                    std::path::PathBuf::from(binary).exists()
+                } else {
+                    std::env::var("PATH").ok().map_or(false, |path_env| {
+                        path_env
+                            .split(':')
+                            .any(|dir| std::path::PathBuf::from(dir).join(binary).exists())
+                    })
+                };
+
+                if !in_path {
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Warning: '{}' not found in PATH. Setting anyway.", binary),
+                    });
+                }
+
+                soul.config.default_editor = arg.to_string();
+                if let Some(ref source) = soul.config.source_file {
+                    let _ = crate::config::save_config(&soul.config, Some(source));
+                }
                 crate::wire::wire_send(TextPart {
-                    text: "Editor configuration is not yet implemented in octopus-cli.".to_string(),
+                    text: format!("Editor set to: {}. Restart to apply.", arg),
                 });
             })
         }),
@@ -607,12 +945,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /task
+    // Python shell-level command. Placeholder for background task browser.
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "task".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 crate::wire::wire_send(TextPart {
-                    text: "Background task browser is not yet implemented in octopus-cli.".to_string(),
+                    text: "Background task browser is not yet implemented in octopus-cli."
+                        .to_string(),
                 });
             })
         }),
@@ -620,6 +963,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         aliases: Vec::new(),
     });
 
+    // -------------------------------------------------------------------------
+    // /theme dark|light
+    // Python: `@registry.command def theme(...)`
+    // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "theme".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
@@ -627,7 +974,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 let arg = args.trim().to_lowercase();
                 if arg.is_empty() {
                     crate::wire::wire_send(TextPart {
-                        text: format!("Current theme: {}. Usage: /theme dark | /theme light", soul.config.theme),
+                        text: format!(
+                            "Current theme: {}. Usage: /theme dark | /theme light",
+                            soul.config.theme
+                        ),
                     });
                     return;
                 }
@@ -650,6 +1000,96 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
     registry
 }
 
+// =============================================================================
+// Helper functions
+// =============================================================================
+// These helpers mirror private utility functions in the Python soul/slash.py
+// and session_fork.py modules.
+// =============================================================================
+
+/// Fork a session, optionally truncating history at a given turn index.
+///
+/// Mirrors Python's `fork_session()` in `kimi_cli/session_fork.py`.
+/// Copies `wire.jsonl` (optionally truncated) and `context.jsonl` into a
+/// newly created session directory, then sets a custom title.
+async fn fork_session(
+    source: &crate::session::Session,
+    work_dir: &std::path::Path,
+    turn_index: Option<usize>,
+    title_prefix: &str,
+) -> std::io::Result<String> {
+    use crate::session_state::{load_session_state, save_session_state};
+
+    let source_dir = source.dir();
+    let wire_src = source_dir.join("wire.jsonl");
+    let context_src = source_dir.join("context.jsonl");
+
+    let new_session = crate::session::Session::create(work_dir, None).await?;
+    let new_dir = new_session.dir();
+
+    if wire_src.exists() {
+        let content = tokio::fs::read_to_string(&wire_src).await?;
+        let lines: Vec<&str> = content.lines().collect();
+        let to_write = if let Some(idx) = turn_index {
+            // Keep history up to turn_index (inclusive)
+            lines
+                .into_iter()
+                .take(idx + 1)
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            content
+        };
+        tokio::fs::write(new_dir.join("wire.jsonl"), to_write).await?;
+    }
+    if context_src.exists() {
+        let content = tokio::fs::read_to_string(&context_src).await?;
+        tokio::fs::write(new_dir.join("context.jsonl"), content).await?;
+    }
+
+    let mut state = load_session_state(&new_dir);
+    state.custom_title = Some(format!("{}: {}", title_prefix, source.title));
+    state.title_generated = true;
+    save_session_state(&state, &new_dir).ok();
+
+    Ok(new_session.id)
+}
+
+/// Enumerate user turns from a wire file.
+///
+/// Mirrors Python's `enumerate_turns()` in `kimi_cli/session_fork.py`.
+/// Returns a vec of `(line_number, truncated_user_text)` for every wire line
+/// that contains a `"user_input"` key.
+fn enumerate_turns(wire_path: &std::path::Path) -> Vec<(usize, String)> {
+    let mut turns = Vec::new();
+    if let Ok(content) = std::fs::read_to_string(wire_path) {
+        for (i, line) in content.lines().enumerate() {
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
+                if obj.get("user_input").is_some() {
+                    let text = obj["user_input"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(60)
+                        .collect::<String>();
+                    turns.push((i, text));
+                }
+            }
+        }
+    }
+    turns
+}
+
+// =============================================================================
+// Slash command parsing
+// =============================================================================
+// Mirrors `parse_slash_command_call()` in `kimi_cli/utils/slashcmd.py`.
+// =============================================================================
+
+/// Parse a leading `/command args...` from user input.
+///
+/// Returns `None` if the text does not start with `/` or has no command name.
+/// This is the Rust equivalent of Python's `parse_slash_command_call()`.
 pub fn parse_slash_command_call(text: &str) -> Option<SlashCommandCall> {
     let text = text.trim();
     if !text.starts_with('/') {
@@ -668,6 +1108,10 @@ pub fn parse_slash_command_call(text: &str) -> Option<SlashCommandCall> {
     })
 }
 
+/// The parsed result of `parse_slash_command_call`.
+///
+/// Mirrors Python's `SlashCommandCall` dataclass (without `raw_input`, which
+/// can be reconstructed from `name` and `args` when needed).
 pub struct SlashCommandCall {
     pub name: String,
     pub args: String,

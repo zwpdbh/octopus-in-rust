@@ -82,5 +82,8 @@ kosong = { path = "../kosong" }
 # Unicode display width
 unicode-width = "0.2"
 
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Development
 # Note: many of these are placeholders for future implementation

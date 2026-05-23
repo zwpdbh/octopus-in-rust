@@ -112,6 +112,9 @@ impl KimiSoul {
         }
 
         // Slash command handling
+        // Mirrors Python's `soul.run()` slash-command branch in `kimi_cli/soul/__init__.py`.
+        // Python checks `parse_slash_command_call(user_input)` and then calls the
+        // registered function with `(soul, args)`. Rust does the same via the registry.
         if let Some(command_call) = parse_slash_command_call(text) {
             let cmd_name = command_call.name.clone();
             let cmd_args = command_call.args.clone();

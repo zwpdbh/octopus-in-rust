@@ -20,53 +20,99 @@ fn main() {
     if let Some(command) = cli.command {
         match command {
             Commands::Login { json } => {
-                println!("Login command (json={})", json);
-                // TODO: implement OAuth login
+                if json {
+                    println!(
+                        "{{\"event\":\"error\",\"message\":\"OAuth login is not yet implemented in octopus-cli\"}}"
+                    );
+                } else {
+                    println!("OAuth login is not yet implemented in octopus-cli.");
+                }
                 return;
             }
             Commands::Logout { json } => {
-                println!("Logout command (json={})", json);
-                // TODO: implement OAuth logout
+                if json {
+                    println!(
+                        "{{\"event\":\"error\",\"message\":\"OAuth logout is not yet implemented in octopus-cli\"}}"
+                    );
+                } else {
+                    println!("OAuth logout is not yet implemented in octopus-cli.");
+                }
                 return;
             }
             Commands::Term => {
-                println!("Term command not yet implemented");
+                println!("Term (Toad TUI) is not yet implemented in octopus-cli.");
                 return;
             }
             Commands::Acp => {
-                println!("ACP command not yet implemented");
+                println!("ACP server is not yet implemented in octopus-cli.");
                 return;
             }
             Commands::BackgroundTaskWorker { .. } => {
-                println!("Background task worker not yet implemented");
+                println!("Background task worker is not yet implemented in octopus-cli.");
                 return;
             }
             Commands::WebWorker { .. } => {
-                println!("Web worker not yet implemented");
+                println!("Web worker is not yet implemented in octopus-cli.");
                 return;
             }
-            Commands::Export => {
-                println!("Export command not yet implemented");
+            Commands::Export {
+                session_id,
+                output,
+                yes,
+            } => {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+                let work_dir = cli
+                    .work_dir
+                    .map(|p| p.canonicalize().unwrap_or(p))
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().expect("Failed to get current directory")
+                    });
+                runtime.block_on(async {
+                    if let Err(e) =
+                        octopus_cli::cli::export::run_export(&work_dir, session_id, output, yes)
+                            .await
+                    {
+                        eprintln!("Export failed: {}", e);
+                        std::process::exit(1);
+                    }
+                });
                 return;
             }
-            Commands::Info => {
-                println!("Info command not yet implemented");
+            Commands::Info { json } => {
+                octopus_cli::cli::info::run_info(json);
                 return;
             }
-            Commands::Plugin => {
-                println!("Plugin command not yet implemented");
+            Commands::Plugin { command } => {
+                match command {
+                    Some(octopus_cli::cli::PluginCommands::Install { target }) => {
+                        println!("Plugin install not yet implemented: {}", target);
+                    }
+                    Some(octopus_cli::cli::PluginCommands::List) => {
+                        println!("Plugin list not yet implemented");
+                    }
+                    Some(octopus_cli::cli::PluginCommands::Remove { name }) => {
+                        println!("Plugin remove not yet implemented: {}", name);
+                    }
+                    Some(octopus_cli::cli::PluginCommands::Info { name }) => {
+                        println!("Plugin info not yet implemented: {}", name);
+                    }
+                    None => {
+                        println!("Plugin management commands: install, list, remove, info");
+                    }
+                }
                 return;
             }
             Commands::Toad => {
-                println!("Toad command not yet implemented");
+                println!("Toad TUI is not yet implemented in octopus-cli.");
                 return;
             }
             Commands::Web => {
-                println!("Web command not yet implemented");
+                println!("Web UI server is not yet implemented in octopus-cli.");
                 return;
             }
             Commands::Vis => {
-                println!("Vis command not yet implemented");
+                println!("Visualizer server is not yet implemented in octopus-cli.");
                 return;
             }
         }
@@ -242,17 +288,18 @@ async fn async_main(cli: Cli) {
             println!("No sessions found for the working directory.");
             std::process::exit(0);
         }
-        // TODO: implement interactive session picker with ratatui
-        println!("Session picker not yet implemented. Available sessions:");
-        for s in &sessions {
-            println!(
-                "  {} - {} ({})",
-                &s.id[..8.min(s.id.len())],
-                s.title,
-                s.updated_at
-            );
+        match octopus_cli::ui::picker::pick_session_interactive(sessions) {
+            Ok(Some(id)) => {
+                session_id = Some(id);
+            }
+            Ok(None) => {
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Picker error: {}", e);
+                std::process::exit(1);
+            }
         }
-        std::process::exit(0);
     }
 
     // Main loop with reload support
