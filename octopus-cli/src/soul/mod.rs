@@ -10,13 +10,16 @@ pub use approval::{Approval, ApprovalResult, ApprovalState};
 
 use std::path::PathBuf;
 
+use crate::approval_runtime::{ApprovalRuntime, ApprovalSource};
+use crate::auth::OAuthManager;
 use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
+use crate::hooks::HookEngine;
 use crate::llm::LLM;
 use crate::session::Session;
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
 use crate::soul::context::Context;
-use crate::soul::message::{check_message, tool_result_to_message};
+use crate::soul::message::{check_message, normalize_history, tool_result_to_message};
 use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call};
 use crate::soul::toolset::KimiToolset;
 use crate::wire::{
@@ -36,9 +39,14 @@ pub struct KimiSoul {
     pub max_retries_per_step: usize,
     pub agent: Option<crate::soul::agent::Agent>,
     pub slash_registry: crate::soul::slash::SlashCommandRegistry,
+    pub approval_runtime: Option<ApprovalRuntime>,
+    pub hook_engine: HookEngine,
+    pub oauth: OAuthManager,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
     _current_step_no: usize,
+    _current_turn_id: Option<String>,
+    _last_tool_calls: Vec<(String, String)>,
 }
 
 impl KimiSoul {
@@ -85,9 +93,14 @@ impl KimiSoul {
             max_retries_per_step: max_retries,
             agent: None,
             slash_registry: build_default_slash_commands(),
+            approval_runtime: None,
+            hook_engine: HookEngine::new(),
+            oauth: OAuthManager::new(),
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
             _current_step_no: 0,
+            _current_turn_id: None,
+            _last_tool_calls: Vec::new(),
         }
     }
 
@@ -106,13 +119,6 @@ impl KimiSoul {
             tool_calls: None,
         };
 
-        if let Some(ref llm) = self.llm {
-            let missing = check_message(&user_message, &llm.capabilities);
-            if !missing.is_empty() {
-                return Err(LLMNotSupported::NotSupported(format!("{:?}", missing)).into());
-            }
-        }
-
         // Slash command handling
         // Mirrors Python's `soul.run()` slash-command branch in `kimi_cli/soul/__init__.py`.
         // Python checks `parse_slash_command_call(user_input)` and then calls the
@@ -128,13 +134,35 @@ impl KimiSoul {
             }
         }
 
+        // Track turn lifecycle for interruption telemetry and approval cleanup.
+        // Mirrors Python's `turn_started` / `turn_finished` flags in `kimi_cli/soul/__init__.py`.
+        let created_approval_source = self.approval_runtime.as_ref().map(|_| ApprovalSource {
+            kind: "foreground_turn".to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: None,
+        });
+
         wire_send(TurnBegin {
             user_input: Some(text.to_string()),
         });
 
         let turn_result = self._turn(user_message).await;
 
+        // TurnEnd is sent regardless of success or failure.
+        // If _turn() returned Err, the turn was interrupted before normal completion.
         wire_send(TurnEnd {});
+        if turn_result.is_err() {
+            tracing::warn!(
+                "Turn interrupted at step {}",
+                self._current_step_no
+            );
+            // TODO: telemetry track("turn_interrupted", ...)
+        }
+
+        // Cancel any pending approval requests tied to this turn's approval source.
+        if let (Some(ref source), Some(rt)) = (created_approval_source.as_ref(), self.approval_runtime.as_ref()) {
+            rt.cancel_by_source(&source.kind, &source.id);
+        }
 
         match turn_result {
             Ok(outcome) => {
@@ -152,6 +180,16 @@ impl KimiSoul {
         if self.llm.is_none() {
             return Err(LLMNotSet::NotSet.into());
         }
+
+        if let Some(ref llm) = self.llm {
+            let missing = check_message(&user_message, &llm.capabilities);
+            if !missing.is_empty() {
+                return Err(LLMNotSupported::NotSupported(format!("{:?}", missing)).into());
+            }
+        }
+
+        self._current_turn_id = Some(uuid::Uuid::new_v4().to_string());
+        self._last_tool_calls = Vec::new();
 
         self.context
             .checkpoint(false)
@@ -205,6 +243,13 @@ impl KimiSoul {
                 Ok(result) => result,
                 Err(e) => {
                     wire_send(StepInterrupted {});
+                    // --- StopFailure hook ---
+                    // Fire-and-forget: hook execution must not block error propagation.
+                    let _ = self.hook_engine.trigger(
+                        "StopFailure",
+                        std::any::type_name_of_val(&e).to_string(),
+                        format!("{}", e),
+                    );
                     return Err(e);
                 }
             };
@@ -259,10 +304,71 @@ impl KimiSoul {
         Err(last_error.unwrap_or_else(|| OctopusError::Other("Step failed".to_string())))
     }
 
-    /// Execute a single LLM step without retry logic.
+    /// Execute a single LLM step with connection recovery.
+    ///
+    /// Mirrors Python's `_run_with_connection_recovery()` in `kimisoul.py`.
+    /// Handles 401 → OAuth refresh and connection-error recovery, each once.
     async fn _run_step_once(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
-        // Build effective history
-        let history = self.context.history().to_vec();
+        let mut auth_retried = false;
+        let mut connection_retried = false;
+
+        loop {
+            match self._run_step_once_inner(llm).await {
+                Ok(v) => return Ok(v),
+                Err(OctopusError::APIStatus(ref e))
+                    if e.status_code == 401 && !auth_retried =>
+                {
+                    let has_oauth = llm
+                        .provider_config
+                        .as_ref()
+                        .and_then(|p| p.oauth.as_ref())
+                        .is_some();
+                    if !has_oauth {
+                        return Err(OctopusError::APIStatus(e.clone()));
+                    }
+                    tracing::warn!(
+                        "Received 401 during step {}, attempting token refresh",
+                        self._current_step_no
+                    );
+                    if let Err(refresh_err) = self.oauth.ensure_fresh(true).await {
+                        tracing::error!("OAuth refresh failed: {}", refresh_err);
+                        return Err(OctopusError::APIStatus(e.clone()));
+                    }
+                    auth_retried = true;
+                    continue;
+                }
+                Err(OctopusError::APIConnection(ref e)) if !connection_retried => {
+                    tracing::warn!(
+                        "Connection error during step {}: {}. Attempting recovery.",
+                        self._current_step_no,
+                        e
+                    );
+                    // TODO: chat provider recovery via RetryableChatProvider.
+                    // For now, retry once without explicit provider recovery.
+                    connection_retried = true;
+                    continue;
+                }
+                Err(OctopusError::APITimeout(ref e)) if !connection_retried => {
+                    tracing::warn!(
+                        "Timeout during step {}: {}. Attempting recovery.",
+                        self._current_step_no,
+                        e
+                    );
+                    // TODO: chat provider recovery via RetryableChatProvider.
+                    // For now, retry once without explicit provider recovery.
+                    connection_retried = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// The actual LLM step logic, without any recovery wrapper.
+    async fn _run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
+        // Build effective history and normalize adjacent user messages.
+        // Mirrors Python's `normalize_history()` in `dynamic_injection.py`.
+        let history = normalize_history(self.context.history());
 
         // Call LLM
         let tools_slice: Vec<&dyn crate::tools::Tool> = self.toolset.tools();
@@ -333,7 +439,7 @@ impl KimiSoul {
     }
 
     fn _is_retryable_error(error: &OctopusError) -> bool {
-        use crate::exception::{APIConnectionError, APIEmptyResponseError, APIStatusError, APITimeoutError};
+        use crate::exception::APIStatusError;
         match error {
             OctopusError::APIConnection(_) | OctopusError::APITimeout(_) => true,
             OctopusError::APIEmptyResponse(_) => true,
@@ -365,7 +471,7 @@ impl KimiSoul {
     }
 
     fn _classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
-        use crate::exception::{APIConnectionError, APIEmptyResponseError, APIStatusError, APITimeoutError};
+        use crate::exception::APIStatusError;
         match error {
             OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
                 let typ = match *status_code {

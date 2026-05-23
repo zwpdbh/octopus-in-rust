@@ -96,3 +96,34 @@ pub fn check_message(
     }
     needed.difference(capabilities).cloned().collect()
 }
+
+/// Merge adjacent user messages to produce a clean API input sequence.
+///
+/// Some LLM providers do not allow consecutive user messages. Dynamic
+/// injections (plan-mode reminders, notifications) are stored as standalone
+/// user messages in history; normalization merges them into the adjacent
+/// user message.
+///
+/// Only `user` role messages are merged. Assistant and tool messages are
+/// never merged because their `tool_calls` / `tool_call_id` fields form
+/// linked pairs that must stay intact.
+pub fn normalize_history(history: &[Message]) -> Vec<Message> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result: Vec<Message> = Vec::new();
+    for msg in history {
+        if let Some(last) = result.last_mut() {
+            if last.role == msg.role && msg.role == "user" {
+                // Merge adjacent user messages by concatenating content.
+                // TODO: skip merging if either message is a notification message
+                // (see Python `is_notification_message`).
+                last.content.extend(msg.content.clone());
+                continue;
+            }
+        }
+        result.push(msg.clone());
+    }
+    result
+}
