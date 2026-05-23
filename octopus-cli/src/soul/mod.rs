@@ -21,7 +21,7 @@ use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call}
 use crate::soul::toolset::KimiToolset;
 use crate::wire::{
     CompactionBegin, CompactionEnd, ContentPart, Message, StatusUpdate, SteerInput, StepBegin,
-    StepInterrupted, TurnBegin, TurnEnd, wire_send,
+    StepInterrupted, StepRetry, TurnBegin, TurnEnd, wire_send,
 };
 
 pub struct KimiSoul {
@@ -38,6 +38,7 @@ pub struct KimiSoul {
     pub slash_registry: crate::soul::slash::SlashCommandRegistry,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
+    _current_step_no: usize,
 }
 
 impl KimiSoul {
@@ -86,6 +87,7 @@ impl KimiSoul {
             slash_registry: build_default_slash_commands(),
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
+            _current_step_no: 0,
         }
     }
 
@@ -196,6 +198,7 @@ impl KimiSoul {
                 .await
                 .map_err(|e| OctopusError::Io(e))?;
 
+            self._current_step_no = step_no;
             wire_send(StepBegin { n: step_no });
 
             let step_result = match self._step().await {
@@ -228,8 +231,36 @@ impl KimiSoul {
     }
 
     async fn _step(&mut self) -> Result<Option<StepOutcome>> {
-        let llm = self.llm.as_ref().unwrap();
+        let llm = self.llm.clone().unwrap();
+        let max_attempts = self.max_retries_per_step;
+        let mut last_error: Option<OctopusError> = None;
 
+        for attempt in 1..=max_attempts {
+            match self._run_step_once(&llm).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(e) if Self::_is_retryable_error(&e) && attempt < max_attempts => {
+                    let wait_s = Self::_retry_wait_secs(attempt);
+                    self._emit_step_retry(attempt, max_attempts, wait_s, &e);
+                    tracing::warn!(
+                        "Retrying step {} for the {} time (last error: {:?}). Waiting {:.1}s.",
+                        self._current_step_no,
+                        attempt,
+                        e,
+                        wait_s
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(wait_s)).await;
+                    last_error = Some(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Exhausted all retries
+        Err(last_error.unwrap_or_else(|| OctopusError::Other("Step failed".to_string())))
+    }
+
+    /// Execute a single LLM step without retry logic.
+    async fn _run_step_once(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
         // Build effective history
         let history = self.context.history().to_vec();
 
@@ -237,9 +268,11 @@ impl KimiSoul {
         let tools_slice: Vec<&dyn crate::tools::Tool> = self.toolset.tools();
         let system_prompt = self.agent.as_ref().map(|a| a.system_prompt.as_str());
 
+        let t0 = std::time::Instant::now();
         let completion = llm
             .complete(system_prompt, &history, Some(&tools_slice))
             .await?;
+        let _elapsed = t0.elapsed();
 
         let assistant_message = completion.message;
         let usage = completion.usage;
@@ -296,6 +329,58 @@ impl KimiSoul {
                 stop_reason: "no_tool_calls".to_string(),
                 assistant_message,
             }))
+        }
+    }
+
+    fn _is_retryable_error(error: &OctopusError) -> bool {
+        use crate::exception::{APIConnectionError, APIEmptyResponseError, APIStatusError, APITimeoutError};
+        match error {
+            OctopusError::APIConnection(_) | OctopusError::APITimeout(_) => true,
+            OctopusError::APIEmptyResponse(_) => true,
+            OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
+                matches!(status_code, 429 | 500 | 502 | 503 | 504)
+            }
+            _ => false,
+        }
+    }
+
+    fn _retry_wait_secs(attempt: usize) -> f64 {
+        // Exponential backoff with jitter: initial=0.3, max=5, jitter=0.5
+        let base = 0.3_f64 * 2_f64.powi((attempt - 1) as i32);
+        let capped = base.min(5.0);
+        let jitter = rand::random::<f64>() * 0.5;
+        capped + jitter
+    }
+
+    fn _emit_step_retry(&self, attempt: usize, max_attempts: usize, wait_s: f64, error: &OctopusError) {
+        let (error_type, status_code) = Self::_classify_api_error(error);
+        wire_send(StepRetry {
+            n: self._current_step_no,
+            next_attempt: attempt + 1,
+            max_attempts,
+            wait_s,
+            error_type,
+            status_code,
+        });
+    }
+
+    fn _classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
+        use crate::exception::{APIConnectionError, APIEmptyResponseError, APIStatusError, APITimeoutError};
+        match error {
+            OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
+                let typ = match *status_code {
+                    429 => "rate_limit",
+                    401 | 403 => "auth",
+                    s if s >= 500 => "5xx_server",
+                    s if (400..500).contains(&s) => "4xx_client",
+                    _ => "api",
+                };
+                (typ.to_string(), Some(*status_code))
+            }
+            OctopusError::APIConnection(_) => ("network".to_string(), None),
+            OctopusError::APITimeout(_) => ("timeout".to_string(), None),
+            OctopusError::APIEmptyResponse(_) => ("empty_response".to_string(), None),
+            _ => ("other".to_string(), None),
         }
     }
 

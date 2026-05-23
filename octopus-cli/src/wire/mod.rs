@@ -143,6 +143,17 @@ pub struct StepBegin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepInterrupted {}
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepRetry {
+    pub n: usize,
+    pub next_attempt: usize,
+    pub max_attempts: usize,
+    pub wait_s: f64,
+    pub error_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StatusUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,7 +176,7 @@ pub struct StatusUpdate {
     pub mcp_status: Option<MCPStatusSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenUsage {
     pub input: usize,
     pub output: usize,

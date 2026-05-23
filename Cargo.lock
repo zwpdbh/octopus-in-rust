@@ -1660,6 +1660,7 @@ dependencies = [
  "oauth2",
  "once_cell",
  "pulldown-cmark",
+ "rand",
  "ratatui",
  "regex",
  "reqwest 0.12.28",

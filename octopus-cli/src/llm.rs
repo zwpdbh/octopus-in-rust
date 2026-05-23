@@ -169,7 +169,7 @@ impl LLM {
             None,
         )
         .await
-        .map_err(|e| OctopusError::Other(e.to_string()))?;
+        .map_err(|e| classify_kosong_error(e.to_string()))?;
 
         let tool_calls = result
             .message
@@ -348,4 +348,40 @@ fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::TokenUsage {
         output: usage.output,
         total: usage.total(),
     }
+}
+
+/// Classify a kosong error string into a specific OctopusError variant.
+fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
+    if msg.starts_with("API connection error:") {
+        return crate::exception::OctopusError::APIConnection(
+            crate::exception::APIConnectionError(msg),
+        );
+    }
+    if msg.starts_with("API timeout error:") {
+        return crate::exception::OctopusError::APITimeout(
+            crate::exception::APITimeoutError(msg),
+        );
+    }
+    if msg.starts_with("API status error ") {
+        // Parse "API status error {status_code}: {message}"
+        let rest = &msg["API status error ".len()..];
+        if let Some(colon_pos) = rest.find(':') {
+            let status_part = &rest[..colon_pos];
+            if let Ok(status_code) = status_part.parse::<u16>() {
+                let message = rest[colon_pos + 2..].to_string(); // skip ": "
+                return crate::exception::OctopusError::APIStatus(
+                    crate::exception::APIStatusError {
+                        status_code,
+                        message,
+                    },
+                );
+            }
+        }
+    }
+    if msg == "API returned an empty response" {
+        return crate::exception::OctopusError::APIEmptyResponse(
+            crate::exception::APIEmptyResponseError,
+        );
+    }
+    crate::exception::OctopusError::Other(msg)
 }

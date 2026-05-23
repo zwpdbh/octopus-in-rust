@@ -63,6 +63,25 @@ pub enum ChatProviderError {
     ProviderError(String),
 }
 
+#[derive(Error, Debug, Clone)]
+#[error("API connection error: {0}")]
+pub struct APIConnectionError(pub String);
+
+#[derive(Error, Debug, Clone)]
+#[error("API timeout error: {0}")]
+pub struct APITimeoutError(pub String);
+
+#[derive(Error, Debug, Clone)]
+#[error("API status error {status_code}: {message}")]
+pub struct APIStatusError {
+    pub status_code: u16,
+    pub message: String,
+}
+
+#[derive(Error, Debug, Clone)]
+#[error("API returned an empty response")]
+pub struct APIEmptyResponseError;
+
 #[derive(Error, Debug)]
 pub enum MaxStepsReached {
     #[error("Maximum number of steps reached")]
@@ -150,6 +169,18 @@ pub enum OctopusError {
 
     #[error(transparent)]
     ChatProvider(#[from] ChatProviderError),
+
+    #[error(transparent)]
+    APIConnection(#[from] APIConnectionError),
+
+    #[error(transparent)]
+    APITimeout(#[from] APITimeoutError),
+
+    #[error(transparent)]
+    APIStatus(#[from] APIStatusError),
+
+    #[error(transparent)]
+    APIEmptyResponse(#[from] APIEmptyResponseError),
 
     #[error(transparent)]
     MaxStepsReached(#[from] MaxStepsReached),
