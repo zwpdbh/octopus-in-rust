@@ -186,6 +186,58 @@ impl LLM {
         })
     }
 
+    pub fn generate_streaming<
+        'a,
+        MP: FnMut(kosong::StreamedMessagePart) + Send,
+        TC: FnMut(kosong::ToolCall) + Send,
+    >(
+        &'a self,
+        system_prompt: Option<&'a str>,
+        messages: &'a [crate::wire::Message],
+        tools: Option<&'a [&'a dyn crate::tools::Tool]>,
+        on_message_part: &'a mut MP,
+        on_tool_call: &'a mut TC,
+    ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a {
+        async move {
+            let provider = self.build_kosong_provider()?;
+            let kosong_history: Vec<kosong::Message> =
+                messages.iter().map(wire_to_kosong_message).collect();
+            let kosong_tools: Vec<kosong::Tool> = tools
+                .map(|ts| ts.iter().map(|t| wire_to_kosong_tool(*t)).collect())
+                .unwrap_or_default();
+
+            let on_mp: Option<&mut (dyn FnMut(kosong::StreamedMessagePart) + Send)> =
+                Some(on_message_part);
+            let on_tc: Option<&mut (dyn FnMut(kosong::ToolCall) + Send)> =
+                Some(on_tool_call);
+
+            let result = kosong::generate(
+                provider.as_ref(),
+                system_prompt.unwrap_or(""),
+                &kosong_tools,
+                &kosong_history,
+                on_mp,
+                on_tc,
+            )
+            .await
+            .map_err(|e| classify_kosong_error(e.to_string()))?;
+
+            let tool_calls = result
+                .message
+                .tool_calls
+                .clone()
+                .map(|tcs| tcs.into_iter().map(kosong_to_wire_tool_call).collect())
+                .unwrap_or_default();
+
+            Ok(ChatCompletion {
+                id: result.id,
+                message: kosong_to_wire_message(result.message),
+                usage: result.usage.map(kosong_to_wire_usage),
+                tool_calls,
+            })
+        }
+    }
+
     fn build_kosong_provider(&self) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
         let provider_config = self
             .provider_config
@@ -201,7 +253,7 @@ impl LLM {
                 }
                 Ok(Arc::new(kimi))
             }
-            ProviderType::OpenaiLegacy | ProviderType::OpenaiResponses => {
+            ProviderType::OpenaiLegacy => {
                 let mut openai =
                     kosong::provider::openai_legacy::OpenAILegacy::new(&self.model_name)
                         .with_base_url(&provider_config.base_url);
@@ -210,6 +262,15 @@ impl LLM {
                 }
                 if let Some(ref key) = provider_config.reasoning_key {
                     openai = openai.with_reasoning_key(key);
+                }
+                Ok(Arc::new(openai))
+            }
+            ProviderType::OpenaiResponses => {
+                let mut openai =
+                    kosong::provider::openai_responses::OpenAIResponses::new(&self.model_name)
+                        .with_base_url(&provider_config.base_url);
+                if let Some(ref key) = provider_config.api_key {
+                    openai = openai.with_api_key(key);
                 }
                 Ok(Arc::new(openai))
             }
@@ -225,7 +286,7 @@ impl LLM {
 // Type conversions: wire <-> kosong
 // ============================================================================
 
-fn wire_to_kosong_message(msg: &crate::wire::Message) -> kosong::Message {
+pub(crate) fn wire_to_kosong_message(msg: &crate::wire::Message) -> kosong::Message {
     kosong::Message {
         role: match msg.role.as_str() {
             "system" => kosong::Role::System,
@@ -249,7 +310,7 @@ fn wire_to_kosong_message(msg: &crate::wire::Message) -> kosong::Message {
     }
 }
 
-fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> kosong::ContentPart {
+pub(crate) fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> kosong::ContentPart {
     match part {
         crate::wire::ContentPart::Text { text } => kosong::ContentPart::Text { text: text.clone() },
         crate::wire::ContentPart::ImageUrl { image_url } => kosong::ContentPart::ImageUrl {
@@ -275,7 +336,7 @@ fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> kosong::Conte
     }
 }
 
-fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
+pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
     kosong::ToolCall {
         call_type: tc.call_type.clone(),
         id: tc.id.clone(),
@@ -287,7 +348,7 @@ fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
     }
 }
 
-fn wire_to_kosong_tool(tool: &dyn crate::tools::Tool) -> kosong::Tool {
+pub(crate) fn wire_to_kosong_tool(tool: &dyn crate::tools::Tool) -> kosong::Tool {
     kosong::Tool {
         name: tool.name().to_string(),
         description: tool.description().to_string(),
@@ -295,7 +356,7 @@ fn wire_to_kosong_tool(tool: &dyn crate::tools::Tool) -> kosong::Tool {
     }
 }
 
-fn kosong_to_wire_message(msg: kosong::Message) -> crate::wire::Message {
+pub(crate) fn kosong_to_wire_message(msg: kosong::Message) -> crate::wire::Message {
     crate::wire::Message {
         role: match msg.role {
             kosong::Role::System => "system".to_string(),
@@ -315,7 +376,7 @@ fn kosong_to_wire_message(msg: kosong::Message) -> crate::wire::Message {
     }
 }
 
-fn kosong_to_wire_content_part(part: kosong::ContentPart) -> crate::wire::ContentPart {
+pub(crate) fn kosong_to_wire_content_part(part: kosong::ContentPart) -> crate::wire::ContentPart {
     match part {
         kosong::ContentPart::Text { text } => crate::wire::ContentPart::Text { text },
         kosong::ContentPart::ImageUrl { image_url } => crate::wire::ContentPart::ImageUrl {
@@ -331,7 +392,7 @@ fn kosong_to_wire_content_part(part: kosong::ContentPart) -> crate::wire::Conten
     }
 }
 
-fn kosong_to_wire_tool_call(tc: kosong::ToolCall) -> crate::wire::ToolCall {
+pub(crate) fn kosong_to_wire_tool_call(tc: kosong::ToolCall) -> crate::wire::ToolCall {
     crate::wire::ToolCall {
         id: tc.id,
         call_type: tc.call_type,
@@ -342,7 +403,7 @@ fn kosong_to_wire_tool_call(tc: kosong::ToolCall) -> crate::wire::ToolCall {
     }
 }
 
-fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::TokenUsage {
+pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::TokenUsage {
     crate::wire::TokenUsage {
         input: usage.input(),
         output: usage.output,

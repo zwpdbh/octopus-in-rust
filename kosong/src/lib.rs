@@ -18,7 +18,7 @@ pub use message::{
     ToolCallPart, VideoUrl,
 };
 pub use simple_toolset::SimpleToolset;
-pub use step::{StepResult, step};
+pub use step::{StepResult, step, step_with_callbacks};
 pub use tooling::{
     CallableTool, CallableTool2, CallableTool2Adapter, DisplayBlock, HandleResult, Tool,
     ToolResult, ToolReturnValue, Toolset,

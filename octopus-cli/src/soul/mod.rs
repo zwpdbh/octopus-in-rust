@@ -37,7 +37,7 @@ pub struct KimiSoul {
     pub session: Session,
     pub llm: Option<LLM>,
     pub context: Context,
-    pub toolset: KimiToolset,
+    pub toolset: std::sync::Arc<KimiToolset>,
     pub approval: ApprovalState,
     pub plan_mode: bool,
     pub max_steps_per_turn: usize,
@@ -112,6 +112,7 @@ impl KimiSoul {
             .with_cwd(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         toolset.set_hook_engine(hook_engine.clone());
         toolset.set_session_id(session_id.clone());
+        let toolset = std::sync::Arc::new(toolset);
 
         let notification_root = crate::share::get_share_dir()
             .join("notifications")
@@ -130,7 +131,7 @@ impl KimiSoul {
             session,
             llm,
             context,
-            toolset,
+            toolset: toolset.clone(),
             approval,
             plan_mode,
             max_steps_per_turn: max_steps,
@@ -347,7 +348,10 @@ impl KimiSoul {
 
         // ── MCP deferred loading ──
         // Mirrors Python's background MCP loading in `_agent_loop()`.
-        let mcp_started = self.toolset.start_deferred_mcp_tool_loading().await;
+        let mcp_started = std::sync::Arc::get_mut(&mut self.toolset)
+            .unwrap()
+            .start_deferred_mcp_tool_loading()
+            .await;
         let mut mcp_was_loading = false;
         if mcp_started {
             if let Some(snapshot) = self.toolset.mcp_status_snapshot() {
@@ -362,7 +366,10 @@ impl KimiSoul {
             }
         }
         if mcp_was_loading {
-            self.toolset.wait_for_mcp_tools().await;
+            std::sync::Arc::get_mut(&mut self.toolset)
+                .unwrap()
+                .wait_for_mcp_tools()
+                .await;
             if let Some(mcp_snap) = self.toolset.mcp_status_snapshot() {
                 if mcp_snap.connected > 0 {
                     crate::track!(
@@ -637,13 +644,49 @@ impl KimiSoul {
         // Mirrors Python's `normalize_history()` in `dynamic_injection.py`.
         let history = normalize_history(self.context.history());
 
-        // Call LLM
+        // Call LLM with streaming + early tool dispatch
         let tools_slice: Vec<&dyn crate::tools::Tool> = self.toolset.tools();
         let system_prompt = self.agent.as_ref().map(|a| a.system_prompt.as_str());
 
         let t0 = std::time::Instant::now();
+
+        let mut on_message_part = |part: kosong::StreamedMessagePart| {
+            use kosong::chat_provider::Part;
+            match part {
+                Part::Content(cp) => {
+                    let wire_cp = crate::llm::kosong_to_wire_content_part(cp);
+                    wire_send(wire_cp);
+                }
+                Part::ToolCall(_) | Part::ToolCallPart(_) => {}
+            }
+        };
+
+        // Spawn tool execution tasks as soon as each tool call is assembled
+        // from the stream, so tools start running before the full message
+        // has been received.
+        let toolset = self.toolset.clone();
+        let tool_handles: std::sync::Arc<
+            std::sync::Mutex<Vec<tokio::task::JoinHandle<crate::wire::ToolResult>>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handles = tool_handles.clone();
+
+        let mut on_tool_call = move |tc: kosong::ToolCall| {
+            let toolset = toolset.clone();
+            let wire_tc = crate::llm::kosong_to_wire_tool_call(tc);
+            let handle = tokio::spawn(async move {
+                toolset.handle(&wire_tc).await
+            });
+            handles.lock().unwrap().push(handle);
+        };
+
         let completion_result = llm
-            .complete(system_prompt, &history, Some(&tools_slice))
+            .generate_streaming(
+                system_prompt,
+                &history,
+                Some(&tools_slice),
+                &mut on_message_part,
+                &mut on_tool_call,
+            )
             .await;
         let elapsed = t0.elapsed();
 
@@ -706,11 +749,26 @@ impl KimiSoul {
                 crate::wire::wire_send(result.clone());
             })));
 
-            let mut tool_results = Vec::new();
-            for call in &completion.tool_calls {
-                let result = self.toolset.handle(call).await;
-                tool_results.push(result);
-            }
+            // Await tool handles that were spawned during streaming.
+            let handles = std::sync::Arc::try_unwrap(tool_handles)
+                .unwrap()
+                .into_inner()
+                .unwrap();
+            let tool_results: Vec<crate::wire::ToolResult> = futures::future::join_all(handles)
+                .await
+                .into_iter()
+                .map(|r| match r {
+                    Ok(result) => result,
+                    Err(e) => crate::wire::ToolResult {
+                        tool_call_id: String::new(),
+                        return_value: crate::wire::ToolReturnValue::error(
+                            format!("Tool task panicked: {e}"),
+                            "Tool panic".to_string(),
+                            None,
+                        ),
+                    },
+                })
+                .collect();
 
             self.toolset.set_on_tool_result(None);
             self._last_tool_calls = self.toolset.end_step();

@@ -54,25 +54,35 @@ fn append_dedup_reminder(mut rv: ToolReturnValue) -> ToolReturnValue {
 /// Used for streaming tool results to the UI in real-time.
 pub type OnToolResult = Box<dyn Fn(&ToolResult) + Send + Sync>;
 
-pub struct KimiToolset {
-    registry: crate::tools::ToolRegistry,
-    hidden_tools: HashSet<String>,
-    hook_engine: Option<crate::hooks::HookEngine>,
-    session_id: String,
-    cwd: String,
-    // Deduplication state (mirrors Python KimiToolset)
+/// Mutable state scoped to a single step, protected by a mutex so that
+/// [`KimiToolset::handle`] can take `&self` and be called concurrently.
+struct StepState {
     previous_step_calls: Vec<(String, String)>,
     current_step_calls: Vec<(String, String)>,
     current_step_results: HashMap<(String, String), ToolResult>,
     dedup_triggered: bool,
     step_no: usize,
     turn_id: String,
-    // MCP state
-    mcp_servers: HashMap<String, McpServerInfo>,
+}
+
+/// MCP mutable state, protected by a mutex.
+struct McpState {
     deferred_mcp_load: Option<(Vec<McpConfig>, McpLoadContext)>,
     mcp_loading_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+pub struct KimiToolset {
+    registry: crate::tools::ToolRegistry,
+    hidden_tools: HashSet<String>,
+    hook_engine: Option<crate::hooks::HookEngine>,
+    session_id: String,
+    cwd: String,
+    step_state: std::sync::Mutex<StepState>,
+    // MCP state
+    mcp_servers: HashMap<String, McpServerInfo>,
+    mcp_state: std::sync::Mutex<McpState>,
     // Streaming callback
-    on_tool_result: Option<OnToolResult>,
+    on_tool_result: std::sync::Mutex<Option<OnToolResult>>,
 }
 
 /// Context needed for deferred MCP loading.
@@ -91,16 +101,20 @@ impl KimiToolset {
             cwd: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
-            previous_step_calls: Vec::new(),
-            current_step_calls: Vec::new(),
-            current_step_results: HashMap::new(),
-            dedup_triggered: false,
-            step_no: 0,
-            turn_id: String::new(),
+            step_state: std::sync::Mutex::new(StepState {
+                previous_step_calls: Vec::new(),
+                current_step_calls: Vec::new(),
+                current_step_results: HashMap::new(),
+                dedup_triggered: false,
+                step_no: 0,
+                turn_id: String::new(),
+            }),
             mcp_servers: HashMap::new(),
-            deferred_mcp_load: None,
-            mcp_loading_task: None,
-            on_tool_result: None,
+            mcp_state: std::sync::Mutex::new(McpState {
+                deferred_mcp_load: None,
+                mcp_loading_task: None,
+            }),
+            on_tool_result: std::sync::Mutex::new(None),
         }
     }
 
@@ -108,8 +122,8 @@ impl KimiToolset {
         self.hook_engine = Some(engine);
     }
 
-    pub fn set_on_tool_result(&mut self, cb: Option<OnToolResult>) {
-        self.on_tool_result = cb;
+    pub fn set_on_tool_result(&self, cb: Option<OnToolResult>) {
+        *self.on_tool_result.lock().unwrap() = cb;
     }
 
     pub fn set_session_id(&mut self, id: String) {
@@ -149,83 +163,92 @@ impl KimiToolset {
 
     /// Called before each step to set up deduplication state.
     pub fn begin_step(
-        &mut self,
+        &self,
         previous_calls: Vec<(String, String)>,
         step_no: usize,
         turn_id: String,
     ) {
-        self.previous_step_calls = previous_calls;
-        self.current_step_calls = Vec::new();
-        self.current_step_results = HashMap::new();
-        self.dedup_triggered = false;
-        self.step_no = step_no;
-        self.turn_id = turn_id;
+        let mut state = self.step_state.lock().unwrap();
+        state.previous_step_calls = previous_calls;
+        state.current_step_calls = Vec::new();
+        state.current_step_results = HashMap::new();
+        state.dedup_triggered = false;
+        state.step_no = step_no;
+        state.turn_id = turn_id;
     }
 
     /// Called after each step to capture the calls made in this step.
     pub fn end_step(&self) -> Vec<(String, String)> {
-        self.current_step_calls.clone()
+        self.step_state.lock().unwrap().current_step_calls.clone()
     }
 
     /// Whether a cross-step duplicate was blocked in the current step.
     pub fn dedup_triggered(&self) -> bool {
-        self.dedup_triggered
+        self.step_state.lock().unwrap().dedup_triggered
     }
 
-    pub async fn handle(&mut self, tool_call: &ToolCall) -> ToolResult {
-        set_current_tool_call(Some(tool_call.clone()));
-        let result = self.handle_inner(tool_call).await;
-        set_current_tool_call(None);
-        result
+    pub async fn handle(&self, tool_call: &ToolCall) -> ToolResult {
+        self.handle_inner(tool_call).await
     }
 
-    async fn handle_inner(&mut self, tool_call: &ToolCall) -> ToolResult {
+    async fn handle_inner(&self, tool_call: &ToolCall) -> ToolResult {
         let call_key = (
             tool_call.function.name.clone(),
             tool_call.function.arguments.clone(),
         );
 
         // --- Same-step dedup: wait for the original result and copy it ---
-        if let Some(original) = self.current_step_results.get(&call_key) {
-            tracing::warn!(
-                "Same-step dedup detected for tool '{}' at step {}",
-                call_key.0,
-                self.step_no
-            );
-            let args_hash = format!("{:x}", Sha256::digest(call_key.1.as_bytes()));
-            crate::track!(
-                "tool_call_dedup_detected",
-                session_id = self.session_id,
-                turn_id = self.turn_id,
-                step_no = self.step_no,
-                tool_name = call_key.0,
-                dup_type = "same_step",
-                args_hash = &args_hash[..8.min(args_hash.len())],
-            );
-            return ToolResult {
-                tool_call_id: tool_call.id.clone(),
-                return_value: original.return_value.clone(),
-            };
+        {
+            let state = self.step_state.lock().unwrap();
+            if let Some(original) = state.current_step_results.get(&call_key) {
+                tracing::warn!(
+                    "Same-step dedup detected for tool '{}' at step {}",
+                    call_key.0,
+                    state.step_no
+                );
+                let args_hash = format!("{:x}", Sha256::digest(call_key.1.as_bytes()));
+                crate::track!(
+                    "tool_call_dedup_detected",
+                    session_id = self.session_id,
+                    turn_id = state.turn_id.clone(),
+                    step_no = state.step_no,
+                    tool_name = call_key.0.clone(),
+                    dup_type = "same_step",
+                    args_hash = &args_hash[..8.min(args_hash.len())],
+                );
+                return ToolResult {
+                    tool_call_id: tool_call.id.clone(),
+                    return_value: original.return_value.clone(),
+                };
+            }
         }
 
-        let is_cross_step_dup = self.previous_step_calls.contains(&call_key);
+        let is_cross_step_dup = {
+            let state = self.step_state.lock().unwrap();
+            state.previous_step_calls.contains(&call_key)
+        };
+
         if is_cross_step_dup {
+            let step_no = self.step_state.lock().unwrap().step_no;
             tracing::warn!(
                 "Cross-step dedup detected for tool '{}' at step {}",
                 call_key.0,
-                self.step_no
+                step_no
             );
             let args_hash = format!("{:x}", Sha256::digest(call_key.1.as_bytes()));
+            {
+                let mut state = self.step_state.lock().unwrap();
+                state.dedup_triggered = true;
+            }
             crate::track!(
                 "tool_call_dedup_detected",
                 session_id = self.session_id,
-                turn_id = self.turn_id,
-                step_no = self.step_no,
-                tool_name = call_key.0,
+                turn_id = self.step_state.lock().unwrap().turn_id.clone(),
+                step_no = step_no,
+                tool_name = call_key.0.clone(),
                 dup_type = "cross_step",
                 args_hash = &args_hash[..8.min(args_hash.len())],
             );
-            self.dedup_triggered = true;
         }
 
         let tool = match self.registry.get(&tool_call.function.name) {
@@ -239,9 +262,10 @@ impl KimiToolset {
                         None,
                     ),
                 };
-                self.current_step_results
+                let mut state = self.step_state.lock().unwrap();
+                state.current_step_results
                     .insert(call_key.clone(), result.clone());
-                self.current_step_calls.push(call_key);
+                state.current_step_calls.push(call_key);
                 return result;
             }
         };
@@ -257,9 +281,10 @@ impl KimiToolset {
                         None,
                     ),
                 };
-                self.current_step_results
+                let mut state = self.step_state.lock().unwrap();
+                state.current_step_results
                     .insert(call_key.clone(), result.clone());
-                self.current_step_calls.push(call_key);
+                state.current_step_calls.push(call_key);
                 return result;
             }
         };
@@ -291,9 +316,10 @@ impl KimiToolset {
                                 None,
                             ),
                         };
-                        self.current_step_results
+                        let mut state = self.step_state.lock().unwrap();
+                        state.current_step_results
                             .insert(call_key.clone(), result.clone());
-                        self.current_step_calls.push(call_key);
+                        state.current_step_calls.push(call_key);
                         return result;
                     }
                 }
@@ -302,7 +328,11 @@ impl KimiToolset {
 
         let tool_call_id = tool_call.id.clone();
         let t0 = std::time::Instant::now();
+
+        set_current_tool_call(Some(tool_call.clone()));
         let ret = tool.call(arguments).await;
+        set_current_tool_call(None);
+
         let elapsed = t0.elapsed();
         let duration_ms = elapsed.as_millis() as u64;
 
@@ -381,12 +411,15 @@ impl KimiToolset {
             }
         }
 
-        self.current_step_results
-            .insert(call_key.clone(), result.clone());
-        self.current_step_calls.push(call_key);
+        {
+            let mut state = self.step_state.lock().unwrap();
+            state.current_step_results
+                .insert(call_key.clone(), result.clone());
+            state.current_step_calls.push(call_key);
+        }
 
         // Stream tool result to UI if callback is registered.
-        if let Some(ref cb) = self.on_tool_result {
+        if let Some(ref cb) = *self.on_tool_result.lock().unwrap() {
             cb(&result);
         }
 
@@ -457,36 +490,45 @@ impl KimiToolset {
     }
 
     pub fn defer_mcp_tool_loading(&mut self, configs: Vec<McpConfig>, context: McpLoadContext) {
-        self.deferred_mcp_load = Some((configs, context));
+        self.mcp_state.lock().unwrap().deferred_mcp_load = Some((configs, context));
     }
 
     pub fn has_deferred_mcp_tools(&self) -> bool {
-        self.deferred_mcp_load.is_some()
+        self.mcp_state.lock().unwrap().deferred_mcp_load.is_some()
     }
 
     pub async fn start_deferred_mcp_tool_loading(&mut self) -> bool {
-        if self.deferred_mcp_load.is_none() {
-            return false;
-        }
-        if self.mcp_loading_task.is_some() || !self.mcp_servers.is_empty() {
-            self.deferred_mcp_load = None;
-            return false;
-        }
-
-        let (configs, _context) = self.deferred_mcp_load.take().unwrap();
+        let configs = {
+            let mut mcp = self.mcp_state.lock().unwrap();
+            if mcp.deferred_mcp_load.is_none() {
+                return false;
+            }
+            if mcp.mcp_loading_task.is_some() || !self.mcp_servers.is_empty() {
+                mcp.deferred_mcp_load = None;
+                return false;
+            }
+            let (configs, _context) = mcp.deferred_mcp_load.take().unwrap();
+            configs
+        };
         self.load_mcp_tools(configs, true).await;
         true
     }
 
     pub fn has_pending_mcp_tools(&self) -> bool {
-        self.mcp_loading_task
+        self.mcp_state
+            .lock()
+            .unwrap()
+            .mcp_loading_task
             .as_ref()
             .map(|t| !t.is_finished())
             .unwrap_or(false)
     }
 
     pub async fn wait_for_mcp_tools(&mut self) {
-        let task = self.mcp_loading_task.take();
+        let task = {
+            let mut mcp = self.mcp_state.lock().unwrap();
+            mcp.mcp_loading_task.take()
+        };
         if let Some(t) = task {
             let _ = t.await;
         }
@@ -526,17 +568,21 @@ impl KimiToolset {
         };
 
         if in_background {
-            self.mcp_loading_task = Some(tokio::spawn(connect));
+            self.mcp_state.lock().unwrap().mcp_loading_task = Some(tokio::spawn(connect));
         } else {
             connect.await;
         }
     }
 
     pub async fn cleanup_mcp(&mut self) {
-        self.deferred_mcp_load = None;
-        if let Some(task) = self.mcp_loading_task.take() {
-            task.abort();
-            let _ = task.await;
+        let task = {
+            let mut mcp = self.mcp_state.lock().unwrap();
+            mcp.deferred_mcp_load = None;
+            mcp.mcp_loading_task.take()
+        };
+        if let Some(t) = task {
+            t.abort();
+            let _ = t.await;
         }
         self.mcp_servers.clear();
     }
@@ -545,6 +591,66 @@ impl KimiToolset {
 impl Default for KimiToolset {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// kosong::Toolset adapter
+// ============================================================================
+
+/// A newtype wrapper that lets [`KimiToolset`] serve as a [`kosong::Toolset`].
+pub struct KosongToolsetAdapter {
+    inner: std::sync::Arc<KimiToolset>,
+}
+
+impl KosongToolsetAdapter {
+    pub fn new(inner: std::sync::Arc<KimiToolset>) -> Self {
+        Self { inner }
+    }
+}
+
+impl kosong::Toolset for KosongToolsetAdapter {
+    fn tools(&self) -> Vec<kosong::Tool> {
+        self.inner
+            .tools()
+            .into_iter()
+            .map(|t| kosong::Tool {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.schema(),
+            })
+            .collect()
+    }
+
+    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
+        let inner = self.inner.clone();
+        let wire_tc = crate::wire::ToolCall {
+            id: tool_call.id.clone(),
+            call_type: tool_call.call_type.clone(),
+            function: crate::wire::ToolCallFunction {
+                name: tool_call.function.name.clone(),
+                arguments: tool_call.function.arguments.clone().unwrap_or_default(),
+            },
+        };
+        let handle = tokio::spawn(async move {
+            let result = inner.handle(&wire_tc).await;
+            kosong::tooling::ToolResult {
+                tool_call_id: result.tool_call_id,
+                return_value: kosong::tooling::ToolReturnValue {
+                    is_error: result.return_value.is_error,
+                    output: result.return_value.output.map(|o| match o {
+                        crate::wire::ToolOutput::Text(t) => serde_json::Value::String(t),
+                        crate::wire::ToolOutput::Parts(parts) => {
+                            serde_json::to_value(parts).unwrap_or(serde_json::Value::Null)
+                        }
+                    }),
+                    message: result.return_value.message,
+                    display: Vec::new(),
+                    extras: None,
+                },
+            }
+        });
+        kosong::HandleResult::Pending(handle)
     }
 }
 
