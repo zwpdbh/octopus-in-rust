@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub mod client;
+
 /// Load MCP config from the global config file (`~/.kimi/mcp.json`).
 pub fn load_mcp_config() -> McpConfig {
     let path = crate::share::get_share_dir().join("mcp.json");
@@ -70,10 +72,30 @@ fn default_transport() -> String {
 }
 
 /// Runtime state for an MCP server.
-#[derive(Debug, Clone)]
 pub struct McpServerInfo {
     pub status: McpServerStatus,
     pub tools: Vec<McpToolInfo>,
+    pub client: Option<crate::mcp::client::McpClient>,
+}
+
+impl Clone for McpServerInfo {
+    fn clone(&self) -> Self {
+        Self {
+            status: self.status.clone(),
+            tools: self.tools.clone(),
+            client: self.client.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for McpServerInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerInfo")
+            .field("status", &self.status)
+            .field("tools", &self.tools)
+            .field("client", &self.client.is_some())
+            .finish()
+    }
 }
 
 impl McpServerInfo {
@@ -81,6 +103,7 @@ impl McpServerInfo {
         Self {
             status,
             tools: Vec::new(),
+            client: None,
         }
     }
 }
@@ -112,4 +135,73 @@ pub struct McpToolInfo {
     pub name: String,
     pub description: String,
     pub schema: serde_json::Value,
+}
+
+// ============================================================================
+// MCP Tool wrapper (implements Tool trait)
+// ============================================================================
+
+use async_trait::async_trait;
+
+/// A tool proxy that delegates to an MCP server.
+#[derive(Clone)]
+pub struct McpTool {
+    name: String,
+    description: String,
+    schema: serde_json::Value,
+    client: crate::mcp::client::McpClient,
+}
+
+impl std::fmt::Debug for McpTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpTool")
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .finish()
+    }
+}
+
+impl McpTool {
+    pub fn new(
+        name: String,
+        description: String,
+        schema: serde_json::Value,
+        client: crate::mcp::client::McpClient,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            schema,
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl crate::tools::Tool for McpTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        self.schema.clone()
+    }
+
+    async fn call(&self, arguments: serde_json::Value) -> Result<String, String> {
+        match self.client.call_tool(&self.name, arguments).await {
+            Ok(result) => {
+                let text = result.to_text();
+                if result.is_error.unwrap_or(false) {
+                    Err(text)
+                } else {
+                    Ok(text)
+                }
+            }
+            Err(e) => Err(format!("MCP tool error: {}", e)),
+        }
+    }
 }

@@ -297,12 +297,43 @@ fn default_allow() -> String {
 }
 
 // ============================================================================
+// Approval types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestEvent {
+    pub id: String,
+    pub tool_call_id: String,
+    pub sender: String,
+    pub action: String,
+    pub description: String,
+    pub source_kind: String,
+    pub source_id: String,
+    #[serde(default)]
+    pub display: Vec<DisplayBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalResponseEvent {
+    pub request_id: String,
+    pub response: String,
+    #[serde(default)]
+    pub feedback: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayBlock {
+    pub title: String,
+    pub content: String,
+}
+
+// ============================================================================
 // Root wire hub
 // ============================================================================
 
 use tokio::sync::broadcast;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RootWireHub {
     tx: broadcast::Sender<serde_json::Value>,
 }

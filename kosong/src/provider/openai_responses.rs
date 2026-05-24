@@ -209,15 +209,13 @@ impl OpenAIResponses {
             .collect()
     }
 
-    fn build_request(
-        &self,
-        system_prompt: &str,
-        tools: &[Tool],
-        history: &[Message],
-    ) -> Value {
+    fn build_request(&self, system_prompt: &str, tools: &[Tool], history: &[Message]) -> Value {
         let mut body = serde_json::Map::new();
         body.insert("model".to_string(), Value::String(self.model.clone()));
-        body.insert("input".to_string(), Value::Array(self.build_input(system_prompt, history)));
+        body.insert(
+            "input".to_string(),
+            Value::Array(self.build_input(system_prompt, history)),
+        );
         body.insert("store".to_string(), Value::Bool(false));
 
         if !tools.is_empty() {
@@ -240,7 +238,9 @@ impl OpenAIResponses {
                 );
                 body.insert(
                     "include".to_string(),
-                    Value::Array(vec![Value::String("reasoning.encrypted_content".to_string())]),
+                    Value::Array(vec![Value::String(
+                        "reasoning.encrypted_content".to_string(),
+                    )]),
                 );
             }
         }
@@ -318,7 +318,10 @@ impl ChatProvider for OpenAIResponses {
             let id = Some(resp.id.clone());
             let usage = resp.usage.as_ref().map(|u| TokenUsage {
                 input_other: u.input_tokens.saturating_sub(
-                    u.input_tokens_details.as_ref().and_then(|d| d.cached_tokens).unwrap_or(0) as usize
+                    u.input_tokens_details
+                        .as_ref()
+                        .and_then(|d| d.cached_tokens)
+                        .unwrap_or(0) as usize,
                 ),
                 output: u.output_tokens,
                 input_cache_read: u

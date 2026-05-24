@@ -197,7 +197,8 @@ impl LLM {
         tools: Option<&'a [&'a dyn crate::tools::Tool]>,
         on_message_part: &'a mut MP,
         on_tool_call: &'a mut TC,
-    ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a {
+    ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a
+    {
         async move {
             let provider = self.build_kosong_provider()?;
             let kosong_history: Vec<kosong::Message> =
@@ -208,8 +209,7 @@ impl LLM {
 
             let on_mp: Option<&mut (dyn FnMut(kosong::StreamedMessagePart) + Send)> =
                 Some(on_message_part);
-            let on_tc: Option<&mut (dyn FnMut(kosong::ToolCall) + Send)> =
-                Some(on_tool_call);
+            let on_tc: Option<&mut (dyn FnMut(kosong::ToolCall) + Send)> = Some(on_tool_call);
 
             let result = kosong::generate(
                 provider.as_ref(),

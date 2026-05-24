@@ -28,8 +28,8 @@ use crate::soul::message::{check_message, normalize_history, tool_result_to_mess
 use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call};
 use crate::soul::toolset::KimiToolset;
 use crate::wire::{
-    CompactionBegin, CompactionEnd, ContentPart, Message, StatusUpdate, SteerInput, StepBegin,
-    StepInterrupted, StepRetry, TurnBegin, TurnEnd, wire_send,
+    CompactionBegin, CompactionEnd, ContentPart, Message, RootWireHub, StatusUpdate, SteerInput,
+    StepBegin, StepInterrupted, StepRetry, TurnBegin, TurnEnd, wire_send,
 };
 
 pub struct KimiSoul {
@@ -38,13 +38,13 @@ pub struct KimiSoul {
     pub llm: Option<LLM>,
     pub context: Context,
     pub toolset: std::sync::Arc<KimiToolset>,
-    pub approval: ApprovalState,
+    pub approval: Approval,
     pub plan_mode: bool,
     pub max_steps_per_turn: usize,
     pub max_retries_per_step: usize,
     pub agent: Option<crate::soul::agent::Agent>,
     pub slash_registry: crate::soul::slash::SlashCommandRegistry,
-    pub approval_runtime: Option<ApprovalRuntime>,
+    pub root_wire_hub: Option<RootWireHub>,
     pub hook_engine: HookEngine,
     pub notification_manager: NotificationManager,
     pub oauth: OAuthManager,
@@ -67,13 +67,17 @@ impl KimiSoul {
         llm: Option<LLM>,
         approval: ApprovalState,
     ) -> Self {
+        let mut approval_wrapper = Approval::with_state(approval);
+        let approval_runtime = ApprovalRuntime::new();
+        let root_wire_hub = RootWireHub::new();
+        approval_runtime.bind_root_wire_hub(&root_wire_hub);
+        approval_wrapper.set_runtime(approval_runtime);
         let context_file = session.context_file.clone();
         let mut context = Context::new(context_file);
         let _ = context.restore_sync();
 
-        let denwa_renji = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::soul::agent::DenwaRenji::new(),
-        ));
+        let denwa_renji =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::soul::agent::DenwaRenji::new()));
 
         let mut toolset = KimiToolset::new();
         toolset.register(Box::new(crate::tools::shell::ShellTool::new()));
@@ -95,10 +99,7 @@ impl KimiSoul {
         toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
             denwa_renji.clone(),
         )));
-        let checkpoint_with_user_message = toolset
-            .tools()
-            .iter()
-            .any(|t| t.name() == "SendDMail");
+        let checkpoint_with_user_message = toolset.tools().iter().any(|t| t.name() == "SendDMail");
 
         let max_steps = config.loop_control.max_steps_per_turn;
         let max_retries = config.loop_control.max_retries_per_step;
@@ -112,6 +113,7 @@ impl KimiSoul {
             .with_cwd(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         toolset.set_hook_engine(hook_engine.clone());
         toolset.set_session_id(session_id.clone());
+        toolset.set_approval(Some(approval_wrapper.share()));
         let toolset = std::sync::Arc::new(toolset);
 
         let notification_root = crate::share::get_share_dir()
@@ -132,13 +134,13 @@ impl KimiSoul {
             llm,
             context,
             toolset: toolset.clone(),
-            approval,
+            approval: approval_wrapper,
             plan_mode,
             max_steps_per_turn: max_steps,
             max_retries_per_step: max_retries,
             agent: None,
             slash_registry: build_default_slash_commands(),
-            approval_runtime: None,
+            root_wire_hub: Some(root_wire_hub),
             hook_engine,
             notification_manager,
             oauth: OAuthManager::new(),
@@ -214,7 +216,7 @@ impl KimiSoul {
         }
 
         // Track turn lifecycle for interruption telemetry and approval cleanup.
-        let created_approval_source = self.approval_runtime.as_ref().map(|_| ApprovalSource {
+        let created_approval_source = Some(ApprovalSource {
             kind: "foreground_turn".to_string(),
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: None,
@@ -273,11 +275,10 @@ impl KimiSoul {
         }
 
         // Cancel any pending approval requests tied to this turn's approval source.
-        if let (Some(ref source), Some(rt)) = (
-            created_approval_source.as_ref(),
-            self.approval_runtime.as_ref(),
-        ) {
-            rt.cancel_by_source(&source.kind, &source.id);
+        if let Some(ref source) = created_approval_source {
+            self.approval
+                .runtime()
+                .cancel_by_source(&source.kind, &source.id);
         }
 
         let result = match turn_result {
@@ -498,12 +499,11 @@ impl KimiSoul {
     }
 
     async fn _step(&mut self) -> Result<Option<StepOutcome>> {
-        let llm = self.llm.clone().unwrap();
         let max_attempts = self.max_retries_per_step;
         let mut last_error: Option<OctopusError> = None;
 
         for attempt in 1..=max_attempts {
-            match self._run_step_once(&llm).await {
+            match self._run_step_once().await {
                 Ok(outcome) => return Ok(outcome),
                 Err(e) if Self::_is_retryable_error(&e) && attempt < max_attempts => {
                     let wait_s = Self::_retry_wait_secs(attempt);
@@ -530,17 +530,23 @@ impl KimiSoul {
     ///
     /// Mirrors Python's `_run_with_connection_recovery()` in `kimisoul.py`.
     /// Handles 401 → OAuth refresh and connection-error recovery, each once.
-    async fn _run_step_once(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
+    async fn _run_step_once(&mut self) -> Result<Option<StepOutcome>> {
         let mut auth_retried = false;
         let mut connection_retried = false;
 
         loop {
-            match self._run_step_once_inner(llm).await {
+            let llm = self
+                .llm
+                .clone()
+                .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
+            let result = self._run_step_once_inner(&llm).await;
+            match result {
                 Ok(v) => return Ok(v),
                 Err(OctopusError::APIStatus(ref e)) if e.status_code == 401 && !auth_retried => {
-                    let has_oauth = llm
-                        .provider_config
+                    let has_oauth = self
+                        .llm
                         .as_ref()
+                        .and_then(|l| l.provider_config.as_ref())
                         .and_then(|p| p.oauth.as_ref())
                         .is_some();
                     if !has_oauth {
@@ -550,9 +556,23 @@ impl KimiSoul {
                         "Received 401 during step {}, attempting token refresh",
                         self._current_step_no
                     );
-                    if let Err(refresh_err) = self.oauth.ensure_fresh(true).await {
-                        tracing::error!("OAuth refresh failed: {}", refresh_err);
-                        return Err(OctopusError::APIStatus(e.clone()));
+                    let llm = self
+                        .llm
+                        .as_ref()
+                        .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
+                    match self.oauth.ensure_fresh(llm, true).await {
+                        Ok(Some(new_token)) => {
+                            if let Some(ref mut provider) =
+                                self.llm.as_mut().unwrap().provider_config
+                            {
+                                provider.api_key = Some(new_token);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(refresh_err) => {
+                            tracing::error!("OAuth refresh failed: {}", refresh_err);
+                            return Err(OctopusError::APIStatus(e.clone()));
+                        }
                     }
                     auth_retried = true;
                     continue;
@@ -673,9 +693,7 @@ impl KimiSoul {
         let mut on_tool_call = move |tc: kosong::ToolCall| {
             let toolset = toolset.clone();
             let wire_tc = crate::llm::kosong_to_wire_tool_call(tc);
-            let handle = tokio::spawn(async move {
-                toolset.handle(&wire_tc).await
-            });
+            let handle = tokio::spawn(async move { toolset.handle(&wire_tc).await });
             handles.lock().unwrap().push(handle);
         };
 
@@ -794,8 +812,10 @@ impl KimiSoul {
 
             // Handle pending D-Mail
             if let Some(dmail) = self.denwa_renji.lock().unwrap().fetch_pending_dmail() {
-                assert!(dmail.checkpoint_id < self.context.n_checkpoints(),
-                    "DenwaRenji guarantees checkpoint_id < n_checkpoints");
+                assert!(
+                    dmail.checkpoint_id < self.context.n_checkpoints(),
+                    "DenwaRenji guarantees checkpoint_id < n_checkpoints"
+                );
                 return Err(crate::exception::BackToTheFuture {
                     checkpoint_id: dmail.checkpoint_id,
                     messages: vec![Message {
@@ -814,7 +834,8 @@ impl KimiSoul {
                         tool_call_id: None,
                         tool_calls: None,
                     }],
-                }.into());
+                }
+                .into());
             }
 
             // Continue loop
@@ -945,9 +966,9 @@ impl KimiSoul {
 
     /// Sync the in-memory approval state to the session and persist it.
     fn _sync_approval_state(&mut self) {
-        self.session.state.approval.yolo = self.approval.yolo;
-        self.session.state.approval.afk = self.approval.afk;
-        self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions.clone();
+        self.session.state.approval.yolo = self.approval.yolo();
+        self.session.state.approval.afk = self.approval.afk();
+        self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions();
         let _ = self.session.save_state();
     }
 
@@ -1168,8 +1189,8 @@ impl KimiSoul {
             } else {
                 0.0
             },
-            yolo_enabled: self.approval.yolo,
-            afk_enabled: self.approval.afk,
+            yolo_enabled: self.approval.yolo(),
+            afk_enabled: self.approval.afk(),
             plan_mode: self.plan_mode,
             context_tokens: token_count,
             max_context_tokens: max_size,

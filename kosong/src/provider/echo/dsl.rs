@@ -1,5 +1,9 @@
-use crate::chat_provider::{APIConnectionError, APIStatusError, APITimeoutError, ChatProviderError, Part};
-use crate::message::{AudioUrl, ContentPart, FunctionBody, ImageUrl, ToolCall, ToolCallPart, TokenUsage, VideoUrl};
+use crate::chat_provider::{
+    APIConnectionError, APIStatusError, APITimeoutError, ChatProviderError, Part,
+};
+use crate::message::{
+    AudioUrl, ContentPart, FunctionBody, ImageUrl, TokenUsage, ToolCall, ToolCallPart, VideoUrl,
+};
 use serde_json::Value;
 
 /// Parse an echo DSL script into a list of parts, an optional message id, and optional usage.
@@ -66,7 +70,12 @@ pub fn parse_echo_script(
     Ok((parts, message_id, usage))
 }
 
-fn parse_part(kind: &str, payload: &str, lineno: usize, raw_line: &str) -> Result<Part, ChatProviderError> {
+fn parse_part(
+    kind: &str,
+    payload: &str,
+    lineno: usize,
+    raw_line: &str,
+) -> Result<Part, ChatProviderError> {
     match kind {
         "text" => Ok(Part::Content(ContentPart::Text {
             text: strip_quotes(payload).to_string(),
@@ -108,13 +117,12 @@ fn parse_usage(payload: &str) -> Result<TokenUsage, ChatProviderError> {
     let int_value = |key: &str| -> Result<usize, ChatProviderError> {
         let value = mapping.get(key).unwrap_or(&Value::Null);
         match value {
-            Value::Number(n) => n
-                .as_u64()
-                .map(|v| v as usize)
-                .ok_or_else(|| ChatProviderError::new(format!(
+            Value::Number(n) => n.as_u64().map(|v| v as usize).ok_or_else(|| {
+                ChatProviderError::new(format!(
                     "Usage field '{}' must be an integer, got {}",
                     key, value
-                ))),
+                ))
+            }),
             _ => Err(ChatProviderError::new(format!(
                 "Usage field '{}' must be an integer, got {}",
                 key, value
@@ -130,18 +138,20 @@ fn parse_usage(payload: &str) -> Result<TokenUsage, ChatProviderError> {
     })
 }
 
-fn parse_url_payload(payload: &str, kind: &str) -> Result<(String, Option<String>), ChatProviderError> {
+fn parse_url_payload(
+    payload: &str,
+    kind: &str,
+) -> Result<(String, Option<String>), ChatProviderError> {
     let value = parse_value(payload)?;
     match value {
         Value::Object(mapping) => {
-            let url = mapping
-                .get("url")
+            let url = mapping.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+                ChatProviderError::new(format!("{} requires a url field, got {:?}", kind, mapping))
+            })?;
+            let content_id = mapping
+                .get("id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ChatProviderError::new(format!(
-                    "{} requires a url field, got {:?}",
-                    kind, mapping
-                )))?;
-            let content_id = mapping.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                .map(|s| s.to_string());
             Ok((url.to_string(), content_id))
         }
         Value::String(s) => Ok((s, None)),
@@ -152,23 +162,32 @@ fn parse_url_payload(payload: &str, kind: &str) -> Result<(String, Option<String
     }
 }
 
-fn parse_tool_call(payload: &str, lineno: usize, raw_line: &str) -> Result<ToolCall, ChatProviderError> {
+fn parse_tool_call(
+    payload: &str,
+    lineno: usize,
+    raw_line: &str,
+) -> Result<ToolCall, ChatProviderError> {
     let mapping = parse_mapping(payload, "tool_call")?;
-    let function = mapping
-        .get("function")
-        .and_then(|v| v.as_object())
-        .cloned();
+    let function = mapping.get("function").and_then(|v| v.as_object()).cloned();
 
     let tool_call_id = mapping
         .get("id")
         .and_then(|v| v.as_str())
-        .or_else(|| function.as_ref().and_then(|f| f.get("id").and_then(|v| v.as_str())))
+        .or_else(|| {
+            function
+                .as_ref()
+                .and_then(|f| f.get("id").and_then(|v| v.as_str()))
+        })
         .map(|s| s.to_string());
 
     let name = mapping
         .get("name")
         .and_then(|v| v.as_str())
-        .or_else(|| function.as_ref().and_then(|f| f.get("name").and_then(|v| v.as_str())))
+        .or_else(|| {
+            function
+                .as_ref()
+                .and_then(|f| f.get("name").and_then(|v| v.as_str()))
+        })
         .map(|s| s.to_string());
 
     let arguments = mapping
@@ -181,14 +200,18 @@ fn parse_tool_call(payload: &str, lineno: usize, raw_line: &str) -> Result<ToolC
         .cloned()
         .or_else(|| function.as_ref().and_then(|f| f.get("extras").cloned()));
 
-    let tool_call_id = tool_call_id.ok_or_else(|| ChatProviderError::new(format!(
-        "tool_call requires string id at line {}: {:?}",
-        lineno, raw_line
-    )))?;
-    let name = name.ok_or_else(|| ChatProviderError::new(format!(
-        "tool_call requires string name at line {}: {:?}",
-        lineno, raw_line
-    )))?;
+    let tool_call_id = tool_call_id.ok_or_else(|| {
+        ChatProviderError::new(format!(
+            "tool_call requires string id at line {}: {:?}",
+            lineno, raw_line
+        ))
+    })?;
+    let name = name.ok_or_else(|| {
+        ChatProviderError::new(format!(
+            "tool_call requires string name at line {}: {:?}",
+            lineno, raw_line
+        ))
+    })?;
 
     let arguments = match arguments {
         Some(Value::String(s)) => Some(s),
@@ -212,9 +235,7 @@ fn parse_tool_call(payload: &str, lineno: usize, raw_line: &str) -> Result<ToolC
 fn parse_tool_call_part(payload: &str) -> Result<ToolCallPart, ChatProviderError> {
     let value = parse_value(payload)?;
     let arguments_part = match value {
-        Value::Object(mapping) => mapping
-            .get("arguments_part")
-            .cloned(),
+        Value::Object(mapping) => mapping.get("arguments_part").cloned(),
         other => Some(other),
     };
 
@@ -229,7 +250,10 @@ fn parse_tool_call_part(payload: &str) -> Result<ToolCallPart, ChatProviderError
     Ok(ToolCallPart { arguments_part })
 }
 
-fn parse_mapping(raw: &str, context: &str) -> Result<serde_json::Map<String, Value>, ChatProviderError> {
+fn parse_mapping(
+    raw: &str,
+    context: &str,
+) -> Result<serde_json::Map<String, Value>, ChatProviderError> {
     let raw = raw.trim();
 
     // Try JSON first
@@ -309,12 +333,12 @@ fn raise_simulated_error(
 
     if lower == "connection" {
         return Err(ChatProviderError::new(
-            APIConnectionError(message.to_string()).to_string()
+            APIConnectionError(message.to_string()).to_string(),
         ));
     }
     if lower == "timeout" {
         return Err(ChatProviderError::new(
-            APITimeoutError(message.to_string()).to_string()
+            APITimeoutError(message.to_string()).to_string(),
         ));
     }
 
@@ -335,6 +359,6 @@ fn raise_simulated_error(
             },
             request_id: None,
         }
-        .to_string()
+        .to_string(),
     ))
 }

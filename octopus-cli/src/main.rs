@@ -20,22 +20,46 @@ fn main() {
     if let Some(command) = cli.command {
         match command {
             Commands::Login { json } => {
-                if json {
-                    println!(
-                        "{{\"event\":\"error\",\"message\":\"OAuth login is not yet implemented in octopus-cli\"}}"
-                    );
-                } else {
-                    println!("OAuth login is not yet implemented in octopus-cli.");
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                let manager = octopus_cli::auth::OAuthManager::new();
+                match runtime.block_on(manager.login("kimi-code")) {
+                    Ok(()) => {
+                        if json {
+                            println!(
+                                "{{\"event\":\"success\",\"message\":\"Logged in successfully\"}}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if json {
+                            println!("{{\"event\":\"error\",\"message\":\"{}\"}}", e);
+                        } else {
+                            eprintln!("Login failed: {}", e);
+                        }
+                        std::process::exit(1);
+                    }
                 }
                 return;
             }
             Commands::Logout { json } => {
-                if json {
-                    println!(
-                        "{{\"event\":\"error\",\"message\":\"OAuth logout is not yet implemented in octopus-cli\"}}"
-                    );
-                } else {
-                    println!("OAuth logout is not yet implemented in octopus-cli.");
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                let manager = octopus_cli::auth::OAuthManager::new();
+                match runtime.block_on(manager.logout("kimi-code")) {
+                    Ok(()) => {
+                        if json {
+                            println!(
+                                "{{\"event\":\"success\",\"message\":\"Logged out successfully\"}}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if json {
+                            println!("{{\"event\":\"error\",\"message\":\"{}\"}}", e);
+                        } else {
+                            eprintln!("Logout failed: {}", e);
+                        }
+                        std::process::exit(1);
+                    }
                 }
                 return;
             }

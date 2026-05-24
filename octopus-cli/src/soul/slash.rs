@@ -158,9 +158,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "yolo".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.yolo {
-                    soul.approval.yolo = false;
-                    if soul.approval.afk {
+                if soul.approval.yolo() {
+                    soul.approval.set_yolo(false);
+                    if soul.approval.afk() {
                         crate::wire::wire_send(TextPart {
                             text: "Yolo disabled, but afk is still on — tool calls remain auto-approved. Use /afk to turn off afk.".to_string(),
                         });
@@ -170,7 +170,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         });
                     }
                 } else {
-                    soul.approval.yolo = true;
+                    soul.approval.set_yolo(true);
                     crate::wire::wire_send(TextPart {
                         text: "You only live once! All actions will be auto-approved.".to_string(),
                     });
@@ -191,17 +191,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "afk".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.afk {
-                    soul.approval.afk = false;
+                if soul.approval.afk() {
+                    soul.approval.set_afk(false);
                     soul.notify_afk_changed(false).await;
-                    let msg = if soul.approval.yolo {
+                    let msg = if soul.approval.yolo() {
                         "afk mode disabled. You are back at the terminal. Yolo is still on."
                     } else {
                         "afk mode disabled. You are back at the terminal."
                     };
                     crate::wire::wire_send(TextPart { text: msg.to_string() });
                 } else {
-                    soul.approval.afk = true;
+                    soul.approval.set_afk(true);
                     soul.notify_afk_changed(true).await;
                     crate::wire::wire_send(TextPart {
                         text: "afk mode enabled. AskUserQuestion will be auto-dismissed and tool calls auto-approved.".to_string(),
@@ -411,8 +411,8 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             .unwrap_or_else(|| "none".to_string())
                     ),
                     format!("  Plan mode:      {}", soul.plan_mode),
-                    format!("  YOLO:           {}", soul.approval.yolo),
-                    format!("  AFK:            {}", soul.approval.afk),
+                    format!("  YOLO:           {}", soul.approval.yolo()),
+                    format!("  AFK:            {}", soul.approval.afk()),
                     format!(
                         "  Context tokens: {} / {} ({:.1}%)",
                         snap.context_tokens,

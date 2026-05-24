@@ -1,4 +1,6 @@
-use crate::chat_provider::{ChatProvider, ChatProviderError, Part, StreamedMessage, ThinkingEffort};
+use crate::chat_provider::{
+    ChatProvider, ChatProviderError, Part, StreamedMessage, ThinkingEffort,
+};
 use crate::message::{Message, Role, TokenUsage};
 use crate::tooling::Tool;
 use async_trait::async_trait;
@@ -53,13 +55,13 @@ impl ChatProvider for EchoChatProvider {
     ) -> Result<StreamedMessage, ChatProviderError> {
         if history.is_empty() {
             return Err(ChatProviderError::new(
-                "EchoChatProvider requires at least one message in history."
+                "EchoChatProvider requires at least one message in history.",
             ));
         }
         let last = history.last().unwrap();
         if last.role != Role::User {
             return Err(ChatProviderError::new(
-                "EchoChatProvider expects the last history message to be user."
+                "EchoChatProvider expects the last history message to be user.",
             ));
         }
 
@@ -67,7 +69,7 @@ impl ChatProvider for EchoChatProvider {
         let (parts, message_id, usage) = dsl::parse_echo_script(&script_text)?;
         if parts.is_empty() {
             return Err(ChatProviderError::new(
-                "EchoChatProvider DSL produced no streamable parts."
+                "EchoChatProvider DSL produced no streamable parts.",
             ));
         }
 
@@ -148,7 +150,7 @@ impl ChatProvider for ScriptedEchoChatProvider {
         let (parts, message_id, usage) = dsl::parse_echo_script(&script_text)?;
         if parts.is_empty() {
             return Err(ChatProviderError::new(
-                "ScriptedEchoChatProvider DSL produced no streamable parts."
+                "ScriptedEchoChatProvider DSL produced no streamable parts.",
             ));
         }
 
@@ -157,12 +159,8 @@ impl ChatProvider for ScriptedEchoChatProvider {
 
     fn with_thinking(&self, _effort: ThinkingEffort) -> Arc<dyn ChatProvider> {
         let mut cloned = self.clone();
-        cloned.scripts = Arc::new(Mutex::new(
-            self.scripts.lock().unwrap().clone()
-        ));
-        cloned.turn = Arc::new(Mutex::new(
-            *self.turn.lock().unwrap()
-        ));
+        cloned.scripts = Arc::new(Mutex::new(self.scripts.lock().unwrap().clone()));
+        cloned.turn = Arc::new(Mutex::new(*self.turn.lock().unwrap()));
         Arc::new(cloned)
     }
 }

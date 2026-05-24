@@ -46,7 +46,7 @@
 
 - [ ] Rich console integration (colors, markdown, syntax highlighting)
 - [ ] Live view with streaming output
-- [ ] Approval panel (interactive yes/no)
+- [x] Approval panel (interactive yes/no)
 - [ ] AskUserQuestion panel
 - [ ] BTW modal
 - [ ] Tool call visualization

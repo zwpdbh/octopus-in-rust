@@ -39,6 +39,10 @@ pub struct ShellUI {
     show_welcome: bool,
     // Input area width for cursor calculation
     last_frame_width: u16,
+    // Approval flow
+    approval_runtime: Option<crate::approval_runtime::ApprovalRuntime>,
+    wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<serde_json::Value>>,
+    pending_approval: Option<crate::wire::ApprovalRequestEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +64,8 @@ impl ShellUI {
             .map(|l| l.model_name.clone())
             .unwrap_or_else(|| "no model".to_string());
         let cached_plan_mode = soul.plan_mode;
+        let approval_runtime = Some(soul.approval.runtime().clone());
+        let wire_hub_receiver = soul.root_wire_hub.as_ref().map(|h| h.subscribe());
         Self {
             soul: Some(soul),
             soul_arc: None,
@@ -79,6 +85,9 @@ impl ShellUI {
             ctrl_c_tips: Vec::new(),
             show_welcome: true,
             last_frame_width: 80,
+            approval_runtime,
+            wire_hub_receiver,
+            pending_approval: None,
         }
     }
 
@@ -160,6 +169,17 @@ impl ShellUI {
                         self.handle_key_event(key).await;
                     }
                 }
+                Ok(value) = async {
+                    if let Some(rx) = self.wire_hub_receiver.as_mut() {
+                        rx.recv().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    if let Ok(req) = serde_json::from_value::<crate::wire::ApprovalRequestEvent>(value) {
+                        self.pending_approval = Some(req);
+                    }
+                }
             }
         }
 
@@ -216,6 +236,45 @@ impl ShellUI {
     }
 
     async fn handle_key_event(&mut self, key: KeyEvent) {
+        // Handle approval prompt first
+        if let Some(ref pending) = self.pending_approval {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(ref rt) = self.approval_runtime {
+                        rt.resolve(
+                            &pending.id,
+                            crate::approval_runtime::ApprovalResponse::Approve,
+                        );
+                    }
+                    self.pending_approval = None;
+                    return;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    if let Some(ref rt) = self.approval_runtime {
+                        rt.resolve(
+                            &pending.id,
+                            crate::approval_runtime::ApprovalResponse::Reject {
+                                feedback: "User rejected".to_string(),
+                            },
+                        );
+                    }
+                    self.pending_approval = None;
+                    return;
+                }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    if let Some(ref rt) = self.approval_runtime {
+                        rt.resolve(
+                            &pending.id,
+                            crate::approval_runtime::ApprovalResponse::ApproveForSession,
+                        );
+                    }
+                    self.pending_approval = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // If completions are showing, handle navigation first
         if self.show_completions {
             match key.code {
@@ -708,6 +767,90 @@ impl ShellUI {
             let tip_widget = Paragraph::new(Text::from(tip_lines));
             frame.render_widget(tip_widget, tip_area);
         }
+
+        // Approval overlay
+        if let Some(ref pending) = self.pending_approval {
+            self.draw_approval_overlay(frame, pending);
+        }
+    }
+
+    fn draw_approval_overlay(
+        &self,
+        frame: &mut Frame,
+        pending: &crate::wire::ApprovalRequestEvent,
+    ) {
+        let area = frame.area();
+        let width = (area.width as f32 * 0.7).min(80.0).max(40.0) as u16;
+        let height = 12u16.min(area.height.saturating_sub(4)).max(6);
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let overlay_area = Rect::new(x, y, width, height);
+
+        // Clear background
+        frame.render_widget(ratatui::widgets::Clear, overlay_area);
+
+        let block = Block::default()
+            .title_top(Line::from(Span::styled(
+                "── Approval Required ──",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Action: ", Style::default().fg(Color::Cyan)),
+            Span::styled(pending.action.clone(), Style::default().fg(Color::White)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Tool:   ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                pending.tool_call_id.clone(),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
+        lines.push(Line::from(""));
+
+        // Truncate description if too long
+        let desc = &pending.description;
+        let max_desc_len = (width as usize).saturating_sub(4);
+        let desc_display = if desc.len() > max_desc_len {
+            format!("{}...", &desc[..max_desc_len.saturating_sub(3)])
+        } else {
+            desc.clone()
+        };
+        lines.push(Line::from(Span::styled(
+            desc_display,
+            Style::default().fg(Color::White),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Approve  ", Style::default().fg(Color::White)),
+            Span::styled(
+                "[N]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Reject  ", Style::default().fg(Color::White)),
+            Span::styled(
+                "[A]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Approve for session", Style::default().fg(Color::White)),
+        ]));
+
+        let paragraph = Paragraph::new(Text::from(lines)).block(block);
+        frame.render_widget(paragraph, overlay_area);
     }
 
     fn calculate_input_height(&self) -> u16 {

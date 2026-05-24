@@ -142,13 +142,12 @@ impl OctopusCLI {
             auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
-        let mut soul = KimiSoul::new(
+        let soul = KimiSoul::new(
             config.clone(),
             session.clone(),
             llm.clone(),
             approval.clone(),
         );
-        soul.approval_runtime = Some(crate::approval_runtime::ApprovalRuntime::new());
 
         let approval_runtime = ApprovalRuntime { yolo, afk };
 

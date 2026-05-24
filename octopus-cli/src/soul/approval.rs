@@ -174,6 +174,18 @@ impl Approval {
         *self.runtime_afk.read().unwrap()
     }
 
+    pub fn yolo(&self) -> bool {
+        self.state.read().unwrap().yolo
+    }
+
+    pub fn afk(&self) -> bool {
+        self.state.read().unwrap().afk
+    }
+
+    pub fn auto_approve_actions(&self) -> Vec<String> {
+        self.state.read().unwrap().auto_approve_actions.clone()
+    }
+
     fn notify_change(&self) {
         if let Some(ref cb) = self.on_change {
             cb();
@@ -185,7 +197,7 @@ impl Approval {
         sender: &str,
         action: &str,
         description: &str,
-        display: Option<Vec<crate::approval_runtime::DisplayBlock>>,
+        display: Option<Vec<crate::wire::DisplayBlock>>,
     ) -> ApprovalResult {
         let tool_call = crate::soul::toolset::get_current_tool_call();
 
@@ -193,11 +205,12 @@ impl Approval {
             return ApprovalResult::new(true, "");
         }
 
-        let state = self.state.read().unwrap();
-        if state.auto_approve_actions.contains(&action.to_string()) {
-            return ApprovalResult::new(true, "");
+        {
+            let state = self.state.read().unwrap();
+            if state.auto_approve_actions.contains(&action.to_string()) {
+                return ApprovalResult::new(true, "");
+            }
         }
-        drop(state);
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let display_blocks = display.unwrap_or_default();
@@ -220,7 +233,7 @@ impl Approval {
             source,
         );
 
-        match self.runtime.wait_for_response(&request_id).await {
+        match self.runtime.wait_for_response(&request_id, None).await {
             Ok(response) => match response {
                 ApprovalResponse::Approve => ApprovalResult::new(true, ""),
                 ApprovalResponse::ApproveForSession => {

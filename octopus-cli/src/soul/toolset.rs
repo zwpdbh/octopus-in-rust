@@ -83,6 +83,8 @@ pub struct KimiToolset {
     mcp_state: std::sync::Mutex<McpState>,
     // Streaming callback
     on_tool_result: std::sync::Mutex<Option<OnToolResult>>,
+    // Approval
+    approval: std::sync::Mutex<Option<crate::soul::approval::Approval>>,
 }
 
 /// Context needed for deferred MCP loading.
@@ -115,7 +117,17 @@ impl KimiToolset {
                 mcp_loading_task: None,
             }),
             on_tool_result: std::sync::Mutex::new(None),
+            approval: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn set_approval(&self, approval: Option<crate::soul::approval::Approval>) {
+        *self.approval.lock().unwrap() = approval;
+    }
+
+    /// Tools that require user approval before execution.
+    fn requires_approval(name: &str) -> bool {
+        matches!(name, "Shell" | "WriteFile" | "StrReplaceFile" | "Agent")
     }
 
     pub fn set_hook_engine(&mut self, engine: crate::hooks::HookEngine) {
@@ -263,7 +275,8 @@ impl KimiToolset {
                     ),
                 };
                 let mut state = self.step_state.lock().unwrap();
-                state.current_step_results
+                state
+                    .current_step_results
                     .insert(call_key.clone(), result.clone());
                 state.current_step_calls.push(call_key);
                 return result;
@@ -282,7 +295,8 @@ impl KimiToolset {
                     ),
                 };
                 let mut state = self.step_state.lock().unwrap();
-                state.current_step_results
+                state
+                    .current_step_results
                     .insert(call_key.clone(), result.clone());
                 state.current_step_calls.push(call_key);
                 return result;
@@ -317,11 +331,43 @@ impl KimiToolset {
                             ),
                         };
                         let mut state = self.step_state.lock().unwrap();
-                        state.current_step_results
+                        state
+                            .current_step_results
                             .insert(call_key.clone(), result.clone());
                         state.current_step_calls.push(call_key);
                         return result;
                     }
+                }
+            }
+        }
+
+        // --- Approval check ---
+        let approval_opt = self.approval.lock().unwrap().clone();
+        if let Some(ref approval) = approval_opt {
+            if Self::requires_approval(&tool_call.function.name) {
+                let description = format!(
+                    "{}({})",
+                    tool_call.function.name, tool_call.function.arguments
+                );
+                let result = approval
+                    .request("Octopus", &tool_call.function.name, &description, None)
+                    .await;
+                if !result.approved {
+                    let return_value = ToolReturnValue::error(
+                        result.feedback.clone(),
+                        "Tool call rejected".to_string(),
+                        None,
+                    );
+                    let result = ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        return_value,
+                    };
+                    let mut state = self.step_state.lock().unwrap();
+                    state
+                        .current_step_results
+                        .insert(call_key.clone(), result.clone());
+                    state.current_step_calls.push(call_key);
+                    return result;
                 }
             }
         }
@@ -413,7 +459,8 @@ impl KimiToolset {
 
         {
             let mut state = self.step_state.lock().unwrap();
-            state.current_step_results
+            state
+                .current_step_results
                 .insert(call_key.clone(), result.clone());
             state.current_step_calls.push(call_key);
         }
@@ -534,7 +581,7 @@ impl KimiToolset {
         }
     }
 
-    async fn load_mcp_tools(&mut self, configs: Vec<McpConfig>, in_background: bool) {
+    async fn load_mcp_tools(&mut self, configs: Vec<McpConfig>, _in_background: bool) {
         // Set up pending server entries from config.
         for config in &configs {
             for (server_name, _server_config) in &config.servers {
@@ -547,31 +594,89 @@ impl KimiToolset {
             }
         }
 
-        let connect = async move {
-            tracing::info!("MCP tool loading started");
-            for config in configs {
-                for (server_name, server_config) in config.servers {
-                    tracing::info!(
-                        "Connecting to MCP server '{}' (transport: {})",
-                        server_name,
-                        server_config.transport
-                    );
-                    // TODO: implement real MCP client connection using a Rust MCP library.
-                    // For now, mark all servers as failed with a clear message.
+        tracing::info!("MCP tool loading started");
+        for config in configs {
+            for (server_name, server_config) in config.servers {
+                tracing::info!(
+                    "Connecting to MCP server '{}' (transport: {})",
+                    server_name,
+                    server_config.transport
+                );
+
+                if let Some(info) = self.mcp_servers.get_mut(&server_name) {
+                    info.status = McpServerStatus::Connecting;
+                }
+
+                if server_config.transport != "stdio" {
                     tracing::warn!(
-                        "MCP client not yet implemented in Rust; server '{}' marked as failed",
+                        "MCP transport '{}' not yet supported; server '{}' marked as failed",
+                        server_config.transport,
                         server_name
                     );
+                    if let Some(info) = self.mcp_servers.get_mut(&server_name) {
+                        info.status = McpServerStatus::Failed;
+                    }
+                    continue;
+                }
+
+                let command = server_config.command.unwrap_or_default();
+                let args = server_config.args.unwrap_or_default();
+                let env = server_config.env.unwrap_or_default();
+
+                match crate::mcp::client::McpClient::connect_stdio(&command, &args, &env).await {
+                    Ok(client) => match client.list_tools().await {
+                        Ok(tools) => {
+                            for tool in &tools {
+                                let schema = serde_json::json!({
+                                    "name": tool.name,
+                                    "description": tool.description.clone().unwrap_or_default(),
+                                    "parameters": tool.input_schema.clone(),
+                                });
+                                let mcp_tool = crate::mcp::McpTool::new(
+                                    tool.name.clone(),
+                                    tool.description.clone().unwrap_or_default(),
+                                    schema.clone(),
+                                    client.clone(),
+                                );
+                                self.registry.register(Box::new(mcp_tool));
+
+                                if let Some(info) = self.mcp_servers.get_mut(&server_name) {
+                                    info.tools.push(crate::mcp::McpToolInfo {
+                                        name: tool.name.clone(),
+                                        description: tool.description.clone().unwrap_or_default(),
+                                        schema,
+                                    });
+                                    info.client = Some(client.clone());
+                                    info.status = McpServerStatus::Connected;
+                                }
+                            }
+                            tracing::info!(
+                                "MCP server '{}' connected with {} tools",
+                                server_name,
+                                tools.len()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to list tools from MCP server '{}': {}",
+                                server_name,
+                                e
+                            );
+                            if let Some(info) = self.mcp_servers.get_mut(&server_name) {
+                                info.status = McpServerStatus::Failed;
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to connect to MCP server '{}': {}", server_name, e);
+                        if let Some(info) = self.mcp_servers.get_mut(&server_name) {
+                            info.status = McpServerStatus::Failed;
+                        }
+                    }
                 }
             }
-            tracing::info!("MCP tool loading finished");
-        };
-
-        if in_background {
-            self.mcp_state.lock().unwrap().mcp_loading_task = Some(tokio::spawn(connect));
-        } else {
-            connect.await;
         }
+        tracing::info!("MCP tool loading finished");
     }
 
     pub async fn cleanup_mcp(&mut self) {
@@ -583,6 +688,12 @@ impl KimiToolset {
         if let Some(t) = task {
             t.abort();
             let _ = t.await;
+        }
+
+        for (_, info) in self.mcp_servers.iter_mut() {
+            if let Some(client) = info.client.take() {
+                let _ = client.shutdown().await;
+            }
         }
         self.mcp_servers.clear();
     }
