@@ -137,9 +137,9 @@ impl OctopusCLI {
         };
 
         let approval = ApprovalState {
-            yolo,
-            afk,
-            auto_approve_actions: Vec::new(),
+            yolo: session.state.approval.yolo || yolo,
+            afk: session.state.approval.afk || afk,
+            auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
         let mut soul = KimiSoul::new(

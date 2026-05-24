@@ -27,17 +27,51 @@ pub struct BuiltinSystemPromptArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct DenwaRenji;
+pub struct Dmail {
+    pub checkpoint_id: usize,
+    pub message: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("DenwaRenji error: {0}")]
+pub struct DenwaRenjiError(pub String);
+
+#[derive(Debug, Clone)]
+pub struct DenwaRenji {
+    pending_dmail: Option<Dmail>,
+    n_checkpoints: usize,
+}
 
 impl DenwaRenji {
     pub fn new() -> Self {
-        Self
+        Self {
+            pending_dmail: None,
+            n_checkpoints: 0,
+        }
     }
 
-    pub fn set_n_checkpoints(&self, _n: usize) {}
+    pub fn send_dmail(&mut self, dmail: Dmail) -> Result<(), DenwaRenjiError> {
+        if self.pending_dmail.is_some() {
+            return Err(DenwaRenjiError(
+                "Only one D-Mail can be sent at a time".to_string(),
+            ));
+        }
+        if dmail.checkpoint_id >= self.n_checkpoints {
+            return Err(DenwaRenjiError(format!(
+                "There is no checkpoint with the given ID (max: {})",
+                self.n_checkpoints.saturating_sub(1)
+            )));
+        }
+        self.pending_dmail = Some(dmail);
+        Ok(())
+    }
 
-    pub fn fetch_pending_dmail(&self) -> Option<Dmail> {
-        None
+    pub fn set_n_checkpoints(&mut self, n: usize) {
+        self.n_checkpoints = n;
+    }
+
+    pub fn fetch_pending_dmail(&mut self) -> Option<Dmail> {
+        self.pending_dmail.take()
     }
 }
 
@@ -45,12 +79,6 @@ impl Default for DenwaRenji {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Dmail {
-    pub checkpoint_id: usize,
-    pub message: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,12 +90,18 @@ pub struct Environment {
 
 impl Environment {
     pub async fn detect() -> Self {
-        Self {
-            os_kind: std::env::consts::OS.to_string(),
-            shell_name: "bash".to_string(),
-            shell_path: "/bin/bash".to_string(),
-        }
+        Self::detect_blocking()
     }
+}
+
+fn detect_shell() -> (String, String) {
+    let shell_path = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell_name = std::path::Path::new(&shell_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sh")
+        .to_string();
+    (shell_name, shell_path)
 }
 
 pub struct Runtime {
@@ -138,10 +172,11 @@ impl Runtime {
 
 impl Environment {
     pub fn detect_blocking() -> Self {
+        let (shell_name, shell_path) = detect_shell();
         Self {
             os_kind: std::env::consts::OS.to_string(),
-            shell_name: "bash".to_string(),
-            shell_path: "/bin/bash".to_string(),
+            shell_name,
+            shell_path,
         }
     }
 }

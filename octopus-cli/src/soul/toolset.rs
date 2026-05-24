@@ -50,6 +50,10 @@ fn append_dedup_reminder(mut rv: ToolReturnValue) -> ToolReturnValue {
     rv
 }
 
+/// Callback fired when a single tool result is ready.
+/// Used for streaming tool results to the UI in real-time.
+pub type OnToolResult = Box<dyn Fn(&ToolResult) + Send + Sync>;
+
 pub struct KimiToolset {
     registry: crate::tools::ToolRegistry,
     hidden_tools: HashSet<String>,
@@ -67,6 +71,8 @@ pub struct KimiToolset {
     mcp_servers: HashMap<String, McpServerInfo>,
     deferred_mcp_load: Option<(Vec<McpConfig>, McpLoadContext)>,
     mcp_loading_task: Option<tokio::task::JoinHandle<()>>,
+    // Streaming callback
+    on_tool_result: Option<OnToolResult>,
 }
 
 /// Context needed for deferred MCP loading.
@@ -94,11 +100,16 @@ impl KimiToolset {
             mcp_servers: HashMap::new(),
             deferred_mcp_load: None,
             mcp_loading_task: None,
+            on_tool_result: None,
         }
     }
 
     pub fn set_hook_engine(&mut self, engine: crate::hooks::HookEngine) {
         self.hook_engine = Some(engine);
+    }
+
+    pub fn set_on_tool_result(&mut self, cb: Option<OnToolResult>) {
+        self.on_tool_result = cb;
     }
 
     pub fn set_session_id(&mut self, id: String) {
@@ -373,6 +384,11 @@ impl KimiToolset {
         self.current_step_results
             .insert(call_key.clone(), result.clone());
         self.current_step_calls.push(call_key);
+
+        // Stream tool result to UI if callback is registered.
+        if let Some(ref cb) = self.on_tool_result {
+            cb(&result);
+        }
 
         result
     }

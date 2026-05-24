@@ -175,6 +175,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         text: "You only live once! All actions will be auto-approved.".to_string(),
                     });
                 }
+                soul._sync_approval_state();
             })
         }),
         description: "Toggle YOLO mode (auto-approve all actions)".to_string(),
@@ -206,6 +207,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         text: "afk mode enabled. AskUserQuestion will be auto-dismissed and tool calls auto-approved.".to_string(),
                     });
                 }
+                soul._sync_approval_state();
             })
         }),
         description: "Toggle afk mode (auto-dismiss AskUserQuestion, auto-approve tool calls)"

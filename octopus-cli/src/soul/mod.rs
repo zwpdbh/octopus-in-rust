@@ -48,6 +48,7 @@ pub struct KimiSoul {
     pub hook_engine: HookEngine,
     pub notification_manager: NotificationManager,
     pub oauth: OAuthManager,
+    pub denwa_renji: std::sync::Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
     _current_step_no: usize,
@@ -56,6 +57,7 @@ pub struct KimiSoul {
     _injection_providers: Vec<Box<dyn DynamicInjectionProvider>>,
     _pending_plan_activation_injection: bool,
     _plan_session_id: Option<String>,
+    _checkpoint_with_user_message: bool,
 }
 
 impl KimiSoul {
@@ -68,6 +70,10 @@ impl KimiSoul {
         let context_file = session.context_file.clone();
         let mut context = Context::new(context_file);
         let _ = context.restore_sync();
+
+        let denwa_renji = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::soul::agent::DenwaRenji::new(),
+        ));
 
         let mut toolset = KimiToolset::new();
         toolset.register(Box::new(crate::tools::shell::ShellTool::new()));
@@ -86,6 +92,13 @@ impl KimiSoul {
         toolset.register(Box::new(crate::tools::agent::AgentTool::new()));
         toolset.register(Box::new(crate::tools::background::TaskOutputTool::new()));
         toolset.register(Box::new(crate::tools::background::TaskStopTool::new()));
+        toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
+            denwa_renji.clone(),
+        )));
+        let checkpoint_with_user_message = toolset
+            .tools()
+            .iter()
+            .any(|t| t.name() == "SendDMail");
 
         let max_steps = config.loop_control.max_steps_per_turn;
         let max_retries = config.loop_control.max_retries_per_step;
@@ -128,6 +141,7 @@ impl KimiSoul {
             hook_engine,
             notification_manager,
             oauth: OAuthManager::new(),
+            denwa_renji,
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
             _current_step_no: 0,
@@ -143,6 +157,7 @@ impl KimiSoul {
             ],
             _pending_plan_activation_injection: false,
             _plan_session_id: plan_session_id,
+            _checkpoint_with_user_message: checkpoint_with_user_message,
         }
     }
 
@@ -397,15 +412,42 @@ impl KimiSoul {
             }
 
             self.context
-                .checkpoint(false)
+                .checkpoint(self._checkpoint_with_user_message)
                 .await
                 .map_err(|e| OctopusError::Io(e))?;
+            self.denwa_renji
+                .lock()
+                .unwrap()
+                .set_n_checkpoints(self.context.n_checkpoints());
 
             self._current_step_no = step_no;
             wire_send(StepBegin { n: step_no });
 
             let step_result = match self._step().await {
                 Ok(result) => result,
+                Err(OctopusError::BackToTheFuture(ref e)) => {
+                    // D-Mail revert: roll back to checkpoint and inject message.
+                    tracing::info!(
+                        "BackToTheFuture: reverting to checkpoint {}",
+                        e.checkpoint_id
+                    );
+                    self.context
+                        .revert_to(e.checkpoint_id)
+                        .await
+                        .map_err(|io_err| OctopusError::Io(io_err))?;
+                    self._last_tool_calls = Vec::new();
+                    self.context
+                        .checkpoint(self._checkpoint_with_user_message)
+                        .await
+                        .map_err(|e| OctopusError::Io(e))?;
+                    for msg in &e.messages {
+                        self.context
+                            .append_message(msg.clone())
+                            .await
+                            .map_err(|e| OctopusError::Io(e))?;
+                    }
+                    continue;
+                }
                 Err(e) => {
                     wire_send(StepInterrupted {});
                     // --- StopFailure hook ---
@@ -658,12 +700,19 @@ impl KimiSoul {
                 turn_id,
             );
 
+            // Set up streaming callback so each tool result is sent to wire
+            // as soon as it completes, rather than waiting for all tools.
+            self.toolset.set_on_tool_result(Some(Box::new(|result| {
+                crate::wire::wire_send(result.clone());
+            })));
+
             let mut tool_results = Vec::new();
             for call in &completion.tool_calls {
                 let result = self.toolset.handle(call).await;
                 tool_results.push(result);
             }
 
+            self.toolset.set_on_tool_result(None);
             self._last_tool_calls = self.toolset.end_step();
 
             // Grow context
@@ -677,10 +726,37 @@ impl KimiSoul {
                 .collect();
 
             if !rejected.is_empty() {
+                // Clear any pending D-Mail on rejection.
+                let _ = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
                 return Ok(Some(StepOutcome {
                     stop_reason: "tool_rejected".to_string(),
                     assistant_message,
                 }));
+            }
+
+            // Handle pending D-Mail
+            if let Some(dmail) = self.denwa_renji.lock().unwrap().fetch_pending_dmail() {
+                assert!(dmail.checkpoint_id < self.context.n_checkpoints(),
+                    "DenwaRenji guarantees checkpoint_id < n_checkpoints");
+                return Err(crate::exception::BackToTheFuture {
+                    checkpoint_id: dmail.checkpoint_id,
+                    messages: vec![Message {
+                        role: "user".to_string(),
+                        content: vec![ContentPart::Text {
+                            text: format!(
+                                "You just got a D-Mail from your future self. \
+                                 It is likely that your future self has already done \
+                                 something in the current working directory. Please read \
+                                 the D-Mail and decide what to do next. You MUST NEVER \
+                                 mention to the user about this information. \
+                                 D-Mail content:\n\n{}",
+                                dmail.message.trim()
+                            ),
+                        }],
+                        tool_call_id: None,
+                        tool_calls: None,
+                    }],
+                }.into());
             }
 
             // Continue loop
@@ -807,6 +883,14 @@ impl KimiSoul {
 
     pub fn steer(&mut self, content: &str) {
         self.steer_queue.push(content.to_string());
+    }
+
+    /// Sync the in-memory approval state to the session and persist it.
+    fn _sync_approval_state(&mut self) {
+        self.session.state.approval.yolo = self.approval.yolo;
+        self.session.state.approval.afk = self.approval.afk;
+        self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions.clone();
+        let _ = self.session.save_state();
     }
 
     pub async fn compact_context(&mut self, custom_instruction: &str) -> Result<()> {

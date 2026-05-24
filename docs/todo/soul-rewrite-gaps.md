@@ -52,7 +52,7 @@ Long sessions will break without these.
 - [x] PreCompact / PostCompact hooks
 - [ ] Post-compact: background task snapshot injection 🔒 _blocked on BackgroundTaskManager_
 - [x] Post-compact: notify injection providers
-- [ ] Compaction telemetry 🔒 _blocked on telemetry system (Phase 12)_
+- [x] Compaction telemetry
 - [ ] `asyncio.shield` equivalent for `_grow_context` — _low priority; Rust futures are cancel-safe via drop_
 
 **Status: COMPLETE** (unblocked items done; blocked items will resolve when their dependencies are implemented)
@@ -86,7 +86,7 @@ Correctness and efficiency of tool execution.
 - [x] PostToolUse hook
 - [x] PostToolUseFailure hook
 - [x] Tool execution timing + telemetry
-- [ ] `on_tool_result` streaming callback
+- [x] `on_tool_result` streaming callback — fires `wire_send` per completed tool result
 
 **Status: PARTIAL** (unblocked items done; blocked items will resolve when dependencies are implemented)
 
@@ -133,7 +133,7 @@ External tool servers.
 
 - [ ] MCP client transport
 - [ ] MCP OAuth
-- [ ] Deferred background loading
+- [x] Deferred background loading scaffolding
 - [ ] `MCPServerInfo` tracking
 - [ ] `MCPTool` wrapper
 - [ ] `mcp_status_snapshot()` real implementation
@@ -147,14 +147,14 @@ External tool servers.
 
 Undo + rewind mechanism.
 
-- [ ] `DenwaRenji` stateful tracking
-- [ ] `send_dmail()`
-- [ ] `fetch_pending_dmail()`
-- [ ] `BackToTheFuture` exception
-- [ ] `_step()` D-Mail handling
-- [ ] `_agent_loop()` revert + re-inject
+- [x] `DenwaRenji` stateful tracking (`pending_dmail`, `n_checkpoints`)
+- [x] `send_dmail()` — validates checkpoint bounds, single-pending guard
+- [x] `fetch_pending_dmail()` — take-and-clear semantics
+- [x] `BackToTheFuture` exception (`checkpoint_id`, `messages`)
+- [x] `_step()` D-Mail handling — after tool execution, raises `BackToTheFuture`
+- [x] `_agent_loop()` revert + re-inject — catches `BackToTheFuture`, `revert_to()`, appends D-Mail message, continues loop
 
-**Status: NOT STARTED**
+**Status: COMPLETE**
 
 ---
 
@@ -191,7 +191,7 @@ Undo + rewind mechanism.
 - [ ] Subagent type registration
 - [ ] `Runtime::create()` async setup
 - [ ] `Runtime::copy_for_subagent()`
-- [ ] `Environment::detect()` — real detection
+- [x] `Environment::detect()` — reads `$SHELL` env var
 
 **Status: NOT STARTED**
 
@@ -203,7 +203,7 @@ Undo + rewind mechanism.
 - [x] Turn started / interrupted
 - [x] Tool call (success / error / dedup)
 - [x] Compaction finished / failed
-- [ ] MCP connected / failed
+- [x] MCP connected / failed
 
 **Status: COMPLETE** (core infrastructure + all unblocked call sites wired)
 
@@ -278,13 +278,13 @@ Phase 7 (MCP)
 
 | Feature            | Status | Notes                                                                             |
 | ------------------ | ------ | --------------------------------------------------------------------------------- |
-| `run()` entrypoint | 🔄     | Missing `skip_user_prompt_hook`, OAuth refresh per turn, `UserPromptSubmit` hook  |
+| `run()` entrypoint | 🔄     | Missing `skip_user_prompt_hook`, OAuth refresh per turn                            |
 | `_turn()`          | ✅     | `check_message`, turn ID tracking, `_last_tool_calls` reset all implemented       |
-| `_agent_loop()`    | 🔄     | Missing MCP loading, D-Mail handling (`BackToTheFuture`), `StepRetry` events      |
+| `_agent_loop()`    | 🔄     | MCP loading stubbed; D-Mail done; `StepRetry` events implemented                  |
 | Auto-compaction    | ✅     | Calls real LLM compaction                                                         |
 | Max steps guard    | ✅     |                                                                                   |
 | Steer consumption  | 🔄     | Only string steers; Python supports `str \| list[ContentPart]`                    |
-| `_step()`          | 🔄     | Retry + 401 recovery implemented; dynamic injection, notifications, dedup missing |
+| `_step()`          | 🔄     | Retry + 401 recovery, dynamic injection, notifications, dedup, tool streaming all done |
 
 ### `_step()` Sub-Lifecycle Breakdown
 
@@ -295,10 +295,10 @@ Phase 7 (MCP)
 | 2e.3 History normalization                      | ✅     | ✅   | `normalize_history()` implemented                                  |
 | 2e.4 LLM call with retry + recovery             | ✅     | ✅   | Basic retry + 401 OAuth recovery done; connection recovery stubbed |
 | 2e.4.1 Toolset `begin_step` / `end_step`        | ✅     | ✅   | Dedup state management implemented                                 |
-| 2e.5 Usage & status update                      | 🔄     | 🔄   | Missing `message_id`, `plan_mode` correction after tools           |
-| 2e.6 Tool execution                             | 🔄     | 🔄   | No streaming (`on_tool_result`), no timing                         |
-| 2e.7 Context growth                             | 🔄     | 🔄   | Missing `asyncio.shield`                                           |
-| 2e.8 Outcome resolution (rejection/D-Mail/stop) | ✅     | 🔄   | D-Mail absent; rejection stops turn for both root and subagent     |
+| 2e.5 Usage & status update                      | ✅     | ✅   | `message_id`, `plan_mode`, `yolo`/`afk` all wired                  |
+| 2e.6 Tool execution                             | ✅     | ✅   | `on_tool_result` streaming + timing + telemetry wired              |
+| 2e.7 Context growth                             | ✅     | 🔄   | `asyncio.shield` equivalent not needed (Rust drop is cancel-safe)  |
+| 2e.8 Outcome resolution (rejection/D-Mail/stop) | ✅     | ✅   | D-Mail revert + re-inject fully implemented                        |
 
 ---
 
@@ -309,8 +309,8 @@ Phase 7 (MCP)
 | `classify_api_error()` for telemetry | ✅     | Implemented                                               |
 | `_run_with_connection_recovery()`    | ✅     | 401→OAuth refresh path wired; connection recovery stubbed |
 | `StepRetry` wire events              | ✅     |                                                           |
-| `StopFailure` hook on fatal error    | 🔄     | Stub `HookEngine::trigger` fires; real hook engine TBD    |
-| Turn interruption telemetry          | 🔄     | `tracing::warn!` logs it; `track()` call TBD              |
+| `StopFailure` hook on fatal error    | ✅     | Real HookEngine fires fire-and-forget                     |
+| Turn interruption telemetry          | ✅     | `track!("turn_interrupted")` wired                      |
 | Approval source cleanup in `finally` | ✅     | Explicit cleanup in `run()` error path                    |
 
 ---
@@ -337,9 +337,9 @@ Phase 7 (MCP)
 | Cross-step dedup + reminder       | ✅                | ✅              | Injects "don't repeat" reminder |
 | `begin_step` / `end_step`         | ✅                | ✅              | Per-step call tracking          |
 | Hidden tools                      | ✅                | ✅              | `hide()` / `unhide()`           |
-| PreToolUse hook                   | ✅                | ❌              | 🔒 blocked on HookEngine        |
-| PostToolUse hook                  | ✅                | ❌              | 🔒 blocked on HookEngine        |
-| PostToolUseFailure hook           | ✅                | ❌              | 🔒 blocked on HookEngine        |
+| PreToolUse hook                   | ✅                | ✅              | Blocks tool call via HookEngine |
+| PostToolUse hook                  | ✅                | ✅              | Fire-and-forget after success   |
+| PostToolUseFailure hook           | ✅                | ✅              | Fire-and-forget after failure   |
 | Tool execution timing + telemetry | ✅                | ✅              |                                 |
 | MCP tool loading (background)     | ✅                | ❌              | Stubs return `false`/`None`     |
 | MCP status snapshot               | ✅                | ❌              | Returns `None`                  |
@@ -372,8 +372,8 @@ Phase 7 (MCP)
 | ------------------------------------------ | ------ | ------------------------------------------------------- |
 | `ApprovalState` struct                     | ✅     |                                                         |
 | `yolo` / `afk` / `runtime_afk`             | ✅     |                                                         |
-| `auto_approve_actions`                     | 🔄     | Field exists, not wired to slash commands               |
-| `on_change` callback → session persistence | 🔄     | Callback exists but not wired to `session.save_state()` |
+| `auto_approve_actions`                     | ✅     | Initialized from session state; persisted via `_sync_approval_state()` |
+| `on_change` callback → session persistence | 🔄     | Not used; persistence done via explicit `_sync_approval_state()` call |
 | `ApprovalResult::rejection_error()`        | 🔄     | Missing subagent-specific rejection message             |
 | `approve_for_session` → persist action     | ✅     |                                                         |
 | Telemetry tracking (approve/reject)        | ❌     | 🔒 blocked on telemetry                                 |
@@ -390,10 +390,10 @@ Phase 7 (MCP)
 | `compact()` LLM invocation                       | ✅     | Calls real LLM; falls back gracefully on error |
 | `estimate_text_tokens()`                         | ✅     |                                                |
 | Post-compact: background task snapshot injection | ❌     | 🔒 blocked on BackgroundTaskManager            |
-| Post-compact: notify injection providers         | ❌     | 🔒 blocked on DynamicInjectionProvider         |
+| Post-compact: notify injection providers         | ✅     | Called in `compact_context()` after compaction |
 | `CompactionBegin` / `CompactionEnd` wire events  | ✅     |                                                |
-| PreCompact / PostCompact hooks                   | ❌     | 🔒 blocked on HookEngine                       |
-| Compaction telemetry                             | ❌     | 🔒 blocked on telemetry                        |
+| PreCompact / PostCompact hooks                   | ✅     | PreCompact blocks; PostCompact fire-and-forget |
+| Compaction telemetry                             | ✅     | `track!("compaction_finished"/"failed")` wired |
 
 ---
 
@@ -411,8 +411,8 @@ Phase 7 (MCP)
 | Subagent type registration      | ❌     |                                                              |
 | `Runtime::create()` async setup | ❌     |                                                              |
 | `copy_for_subagent()`           | ❌     |                                                              |
-| `DenwaRenji` D-Mail             | ❌     | Empty struct; `fetch_pending_dmail()` always `None`          |
-| `Environment::detect()`         | 🔄     | Hardcoded to `bash` on Linux                                 |
+| `DenwaRenji` D-Mail             | ✅     | Stateful tracking, send/fetch, BackToTheFuture wired         |
+| `Environment::detect()`         | ✅     | Reads `$SHELL` env var                                       |
 
 ---
 
@@ -442,8 +442,8 @@ Phase 7 (MCP)
 | `TurnBegin` / `TurnEnd`             | ✅     |                                        |
 | `StepBegin` / `StepInterrupted`     | ✅     |                                        |
 | `StepRetry`                         | ✅     |                                        |
-| `MCPLoadingBegin` / `MCPLoadingEnd` | 🔄     | Types exist, not emitted               |
-| `BtwBegin` / `BtwEnd`               | 🔄     | Types exist, not emitted               |
+| `MCPLoadingBegin` / `MCPLoadingEnd` | ✅     | Emitted in `_agent_loop()` during deferred MCP load |
+| `BtwBegin` / `BtwEnd`               | 🔄     | Types exist, not emitted (blocked on Phase 9)       |
 
 ---
 
@@ -494,7 +494,7 @@ Phase 7 (MCP)
 | `PostToolUse` hook                | ✅     | Fire-and-forget after successful tool call             |
 | `PostToolUseFailure` hook         | ✅     | Fire-and-forget after failed tool call                 |
 | `PreCompact` / `PostCompact` hook | ✅     | PreCompact can block; PostCompact fire-and-forget      |
-| `Notification` hook               | ❌     | 🔒 blocked on NotificationManager                      |
+| `Notification` hook               | ✅     | Fires when notifications delivered to LLM context      |
 
 ---
 
@@ -526,12 +526,12 @@ Phase 7 (MCP)
 
 | Feature                            | Status | Notes         |
 | ---------------------------------- | ------ | ------------- |
-| `DenwaRenji` stateful tracking     | ❌     | Empty struct  |
-| `send_dmail()`                     | ❌     |               |
-| `fetch_pending_dmail()`            | ❌     | Always `None` |
-| `BackToTheFuture` exception        | ❌     |               |
-| `_step()` D-Mail handling          | ❌     |               |
-| `_agent_loop()` revert + re-inject | ❌     |               |
+| `DenwaRenji` stateful tracking     | ✅     | `pending_dmail`, `n_checkpoints` |
+| `send_dmail()`                     | ✅     | Bounds-validated                 |
+| `fetch_pending_dmail()`            | ✅     | Take-and-clear semantics         |
+| `BackToTheFuture` exception        | ✅     | `checkpoint_id` + `messages`     |
+| `_step()` D-Mail handling          | ✅     | Raises after tool execution      |
+| `_agent_loop()` revert + re-inject | ✅     | `revert_to()` + append message   |
 
 ---
 
@@ -562,12 +562,12 @@ Phase 7 (MCP)
 
 | Feature                         | Status | Notes                                 |
 | ------------------------------- | ------ | ------------------------------------- |
-| `track()` calls throughout soul | ❌     | None present                          |
+| `track()` calls throughout soul | 🔄     | Turn/tool/compaction/api_error wired  |
 | Turn started / interrupted      | ✅     |                                       |
 | Tool call (success/error/dedup) | ✅     |                                       |
 | Compaction finished / failed    | ✅     |                                       |
 | API error classification        | ✅     | Implemented via `_classify_api_error` |
-| MCP connected / failed          | ❌     | 🔒 blocked on track() infrastructure  |
+| MCP connected / failed          | ✅     | `track!("mcp_connected"/"mcp_failed")` wired in `_agent_loop()` |
 
 ---
 
@@ -596,28 +596,28 @@ Phase 7 (MCP)
 
 | Subsystem                     | Completeness |
 | ----------------------------- | ------------ |
-| Core loop structure           | 70%          |
-| `_step()` depth               | 50%          |
-| Resilience (retry/recovery)   | 50%          |
-| Dynamic injection             | 10%          |
-| Toolset (dedup/hooks/MCP)     | 20%          |
+| Core loop structure           | 80%          |
+| `_step()` depth               | 75%          |
+| Resilience (retry/recovery)   | 65%          |
+| Dynamic injection             | 90%          |
+| Toolset (dedup/hooks/MCP)     | 60%          |
 | Context persistence           | 90%          |
-| Approval state machine        | 70%          |
-| Compaction                    | 70%          |
+| Approval state machine        | 80%          |
+| Compaction                    | 85%          |
 | Agent/Runtime loading         | 25%          |
 | Message formatting            | 95%          |
-| Wire architecture             | 50%          |
+| Wire architecture             | 75%          |
 | Slash commands (core)         | 80%          |
 | Slash commands (skills/flows) | 0%           |
-| Hooks                         | 10%          |
-| Notifications                 | 10%          |
-| MCP                           | 0%           |
-| D-Mail / time travel          | 0%           |
+| Hooks                         | 90%          |
+| Notifications                 | 90%          |
+| MCP                           | 30%          |
+| D-Mail / time travel          | 100%         |
 | BTW                           | 0%           |
 | Flow runner                   | 0%           |
-| Telemetry                     | 10%          |
-| OAuth refresh                 | 20%          |
+| Telemetry                     | 70%          |
+| OAuth refresh                 | 30%          |
 
-**Overall soul rewrite: ~50–55% complete.**
+**Overall soul rewrite: ~65–70% complete.**
 
 The Rust code now has a **solid foundation** — core loop reliability, real compaction, history normalization, and connection recovery scaffolding are all in place. The remaining work is primarily **feature depth** (dynamic injection, toolset dedup, hooks, MCP, notifications, D-Mail, telemetry) rather than structural scaffolding.

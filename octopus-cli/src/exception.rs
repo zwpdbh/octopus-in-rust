@@ -94,6 +94,13 @@ pub enum RunCancelled {
     Cancelled,
 }
 
+#[derive(Error, Debug, Clone)]
+#[error("BackToTheFuture: revert to checkpoint {checkpoint_id}")]
+pub struct BackToTheFuture {
+    pub checkpoint_id: usize,
+    pub messages: Vec<crate::wire::Message>,
+}
+
 #[derive(Error, Debug)]
 pub enum QueueShutDown {
     #[error("Queue has been shut down")]
@@ -193,6 +200,9 @@ pub enum OctopusError {
 
     #[error(transparent)]
     RunCancelled(#[from] RunCancelled),
+
+    #[error(transparent)]
+    BackToTheFuture(#[from] BackToTheFuture),
 
     #[error(transparent)]
     QueueShutDown(#[from] QueueShutDown),
