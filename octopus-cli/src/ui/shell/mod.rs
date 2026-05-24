@@ -15,6 +15,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::soul::KimiSoul;
 
+pub mod render;
+
 pub struct ShellUI {
     soul: Option<KimiSoul>,
     soul_arc: Option<Arc<tokio::sync::Mutex<Option<KimiSoul>>>>,
@@ -43,6 +45,12 @@ pub struct ShellUI {
     approval_runtime: Option<crate::approval_runtime::ApprovalRuntime>,
     wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<serde_json::Value>>,
     pending_approval: Option<crate::wire::ApprovalRequestEvent>,
+    // Input history
+    history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: String,
+    // External editor
+    open_external_editor: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +74,7 @@ impl ShellUI {
         let cached_plan_mode = soul.plan_mode;
         let approval_runtime = Some(soul.approval.runtime().clone());
         let wire_hub_receiver = soul.root_wire_hub.as_ref().map(|h| h.subscribe());
+        let history = Self::load_history();
         Self {
             soul: Some(soul),
             soul_arc: None,
@@ -88,6 +97,10 @@ impl ShellUI {
             approval_runtime,
             wire_hub_receiver,
             pending_approval: None,
+            history,
+            history_index: None,
+            history_draft: String::new(),
+            open_external_editor: false,
         }
     }
 
@@ -114,6 +127,18 @@ impl ShellUI {
         )?;
         terminal.show_cursor()?;
 
+        // Shutdown background tasks
+        if let Some(ref mut soul) = self.soul {
+            soul.shutdown().await;
+        } else if let Some(arc) = self.soul_arc.take() {
+            if let Ok(mut guard) = arc.try_lock() {
+                if let Some(ref mut soul) = guard.as_mut() {
+                    soul.shutdown().await;
+                }
+            }
+        }
+
+        self.save_history();
         println!("Bye!");
 
         result
@@ -167,6 +192,10 @@ impl ShellUI {
                 Some(Ok(event)) = reader.next() => {
                     if let Event::Key(key) = event {
                         self.handle_key_event(key).await;
+                    }
+                    if self.open_external_editor {
+                        self.open_external_editor = false;
+                        self.run_external_editor(terminal).await?;
                     }
                 }
                 Ok(value) = async {
@@ -320,6 +349,49 @@ impl ShellUI {
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_mode();
             }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match crate::utils::clipboard::paste_text() {
+                    Ok(text) => {
+                        for c in text.chars() {
+                            self.insert_char(c);
+                        }
+                        self.refresh_completions();
+                    }
+                    Err(e) => {
+                        self.messages
+                            .push(("system".to_string(), format!("Paste failed: {}", e)));
+                    }
+                }
+            }
+            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Find the last assistant message and copy it to clipboard
+                let last_assistant = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|(role, _)| role == "assistant")
+                    .map(|(_, content)| content.clone());
+                match last_assistant {
+                    Some(text) => match crate::utils::clipboard::copy_text(&text) {
+                        Ok(()) => {
+                            self.messages.push((
+                                "system".to_string(),
+                                "Copied last assistant message to clipboard.".to_string(),
+                            ));
+                        }
+                        Err(e) => {
+                            self.messages
+                                .push(("system".to_string(), format!("Copy failed: {}", e)));
+                        }
+                    },
+                    None => {
+                        self.messages.push((
+                            "system".to_string(),
+                            "No assistant message to copy.".to_string(),
+                        ));
+                    }
+                }
+            }
             KeyCode::BackTab => {
                 if let Some(ref mut soul) = self.soul {
                     soul.toggle_plan_mode();
@@ -327,7 +399,7 @@ impl ShellUI {
                 }
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // TODO: open external editor
+                self.open_external_editor = true;
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 match &self.state {
@@ -383,10 +455,10 @@ impl ShellUI {
                 self.cursor_position = self.input.len();
             }
             KeyCode::Up => {
-                // TODO: history navigation
+                self.history_navigate_up();
             }
             KeyCode::Down => {
-                // TODO: history navigation
+                self.history_navigate_down();
             }
             _ => {}
         }
@@ -522,11 +594,186 @@ impl ShellUI {
         };
     }
 
+    fn history_path() -> std::path::PathBuf {
+        crate::share::get_share_dir().join("shell_history.txt")
+    }
+
+    fn load_history() -> Vec<String> {
+        let path = Self::history_path();
+        if !path.exists() {
+            return Vec::new();
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(content) => content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.to_string())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn save_history(&self) {
+        let path = Self::history_path();
+        const MAX_HISTORY: usize = 1000;
+        let start = self.history.len().saturating_sub(MAX_HISTORY);
+        let content = self.history[start..].join("\n");
+        let _ = std::fs::write(&path, content);
+    }
+
+    fn push_history(&mut self, input: String) {
+        if input.is_empty() {
+            return;
+        }
+        // Avoid duplicate consecutive entries
+        if self.history.last().map(|s| s.as_str()) == Some(&input) {
+            return;
+        }
+        self.history.push(input);
+    }
+
+    fn history_navigate_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        if self.history_index.is_none() {
+            self.history_draft = self.input.clone();
+            self.history_index = Some(self.history.len().saturating_sub(1));
+        } else {
+            let idx = self.history_index.unwrap();
+            if idx > 0 {
+                self.history_index = Some(idx - 1);
+            }
+        }
+        if let Some(idx) = self.history_index {
+            self.input = self.history[idx].clone();
+            self.cursor_position = self.input.len();
+        }
+    }
+
+    fn history_navigate_down(&mut self) {
+        match self.history_index {
+            None => {}
+            Some(idx) => {
+                if idx + 1 < self.history.len() {
+                    self.history_index = Some(idx + 1);
+                    self.input = self.history[idx + 1].clone();
+                    self.cursor_position = self.input.len();
+                } else {
+                    self.history_index = None;
+                    self.input = self.history_draft.clone();
+                    self.cursor_position = self.input.len();
+                }
+            }
+        }
+    }
+
+    fn get_editor_command() -> Option<String> {
+        std::env::var("VISUAL")
+            .ok()
+            .or_else(|| std::env::var("EDITOR").ok())
+            .or_else(|| {
+                // Fallback: try common editors
+                for editor in &["vim", "vi", "nano", "emacs"] {
+                    if std::process::Command::new(editor)
+                        .arg("--version")
+                        .output()
+                        .is_ok()
+                    {
+                        return Some(editor.to_string());
+                    }
+                }
+                None
+            })
+    }
+
+    async fn run_external_editor(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> io::Result<()> {
+        let editor = match Self::get_editor_command() {
+            Some(cmd) => cmd,
+            None => {
+                self.messages.push((
+                    "system".to_string(),
+                    "No editor found. Set $VISUAL or $EDITOR.".to_string(),
+                ));
+                return Ok(());
+            }
+        };
+
+        // Create temp file with current input
+        let temp_path =
+            std::env::temp_dir().join(format!("octopus_shell_input_{}.txt", std::process::id()));
+        if let Err(e) = std::fs::write(&temp_path, &self.input) {
+            self.messages.push((
+                "system".to_string(),
+                format!("Failed to write temp file: {}", e),
+            ));
+            return Ok(());
+        }
+
+        // Suspend TUI
+        crossterm::terminal::disable_raw_mode()?;
+        crossterm::execute!(
+            terminal.backend_mut(),
+            crossterm::terminal::LeaveAlternateScreen,
+        )?;
+        terminal.show_cursor()?;
+
+        // Launch editor and wait
+        let status = tokio::process::Command::new(&editor)
+            .arg(&temp_path)
+            .status()
+            .await;
+
+        // Restore TUI
+        crossterm::terminal::enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+        let backend = CrosstermBackend::new(stdout);
+        *terminal = Terminal::new(backend)?;
+
+        match status {
+            Ok(s) if s.success() => match std::fs::read_to_string(&temp_path) {
+                Ok(content) => {
+                    self.input = content.trim_end().to_string();
+                    self.cursor_position = self.input.len();
+                }
+                Err(e) => {
+                    self.messages.push((
+                        "system".to_string(),
+                        format!("Failed to read temp file: {}", e),
+                    ));
+                }
+            },
+            Ok(_) => {
+                self.messages.push((
+                    "system".to_string(),
+                    "Editor exited with error. Input unchanged.".to_string(),
+                ));
+            }
+            Err(e) => {
+                self.messages.push((
+                    "system".to_string(),
+                    format!("Failed to launch editor '{}': {}", editor, e),
+                ));
+            }
+        }
+
+        let _ = std::fs::remove_file(&temp_path);
+        Ok(())
+    }
+
     async fn submit_input(&mut self) {
         let input = self.input.trim().to_string();
         if input.is_empty() {
             return;
         }
+
+        // Reset history navigation
+        self.history_index = None;
+        self.history_draft.clear();
 
         self.show_welcome = false;
         self.show_completions = false;
@@ -551,6 +798,8 @@ impl ShellUI {
                 }
             }
         }
+
+        self.push_history(input.clone());
 
         let mode_str = match self.mode {
             ShellMode::Agent => "agent",
@@ -600,6 +849,7 @@ impl ShellUI {
                 "assistant" => "🤖 ",
                 "error" => "❌ ",
                 "system" => "ℹ️  ",
+                "btw" => "💡 ",
                 _ => "",
             };
             let style = match role.as_str() {
@@ -608,14 +858,31 @@ impl ShellUI {
                 "assistant" => Style::default().fg(Color::White),
                 "error" => Style::default().fg(Color::Red),
                 "system" => Style::default().fg(Color::Yellow),
+                "btw" => Style::default().fg(Color::Magenta),
                 _ => Style::default(),
             };
 
-            for line in content.lines() {
-                text_lines.push(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(line.to_string(), style),
-                ]));
+            if role == "assistant" {
+                // Rich markdown rendering for assistant messages
+                let rendered = render::render_markdown(content);
+                for line in rendered {
+                    let mut prefixed = line;
+                    if let Some(first) = prefixed.spans.first_mut() {
+                        first.content = format!("{}{}", prefix, first.content).into();
+                    } else {
+                        prefixed
+                            .spans
+                            .insert(0, Span::styled(prefix.to_string(), style));
+                    }
+                    text_lines.push(prefixed);
+                }
+            } else {
+                for line in content.lines() {
+                    text_lines.push(Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(line.to_string(), style),
+                    ]));
+                }
             }
             text_lines.push(Line::from(""));
         }

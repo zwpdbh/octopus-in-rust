@@ -55,7 +55,7 @@ impl PrintUI {
             return Ok(1);
         }
 
-        match self.soul.run(&input).await {
+        let result = match self.soul.run(&input).await {
             Ok(response) => {
                 match self.output_format {
                     OutputFormat::Text => {
@@ -81,6 +81,9 @@ impl PrintUI {
                 eprintln!("Error: {}", e);
                 Ok(1)
             }
-        }
+        };
+
+        self.soul.shutdown().await;
+        result
     }
 }

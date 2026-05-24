@@ -1,6 +1,6 @@
 # 12 — Subagents
 
-## Status: ⬜ Not Started
+## Status: 🔄 Partial
 
 ## Python Source Files
 
@@ -20,13 +20,22 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/subagents/mod.rs` | Subagent module placeholder | ~? | ⬜ Empty / stub |
+| `octopus-cli/src/subagents/mod.rs` | Subagent module placeholder | ~43 | 🔄 Stubs only |
+| `octopus-cli/src/tools/agent/mod.rs` | `AgentTool` — subagent execution | ~160 | ✅ |
+
+## What's Done
+
+- [x] `AgentTool` — creates new `KimiSoul` with fresh session
+- [x] Foreground subagent — waits for result, returns to parent
+- [x] Background subagent — `tokio::spawn`, returns immediately
+- [x] Reuses parent config, LLM, approval state, work_dir
+- [x] `AgentParams` for tool-call-based subagent invocation
 
 ## What's Missing
 
-- [ ] Subagent definition / spec parsing
-- [ ] Subagent registry
-- [ ] Subagent runner with isolated context
+- [ ] Subagent definition / spec parsing from YAML
+- [ ] Subagent registry (`SubagentStore`)
+- [ ] Subagent builder
 - [ ] Git context extraction
 - [ ] Output formatting (XML-like tags)
-- [ ] Store for subagent results
+- [ ] Background subagent → parent notification (wire event)

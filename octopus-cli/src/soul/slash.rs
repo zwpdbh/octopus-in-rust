@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::soul::KimiSoul;
-use crate::wire::{StatusUpdate, TextPart};
+use crate::wire::{BtwBegin, BtwEnd, StatusUpdate, TextPart};
 
 /// The Rust equivalent of Python's `SoulSlashCmdFunc`.
 ///
@@ -962,12 +962,57 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
     // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "btw".to_string(),
-        func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
-                    text: "Side questions (/btw) are not yet implemented in octopus-cli."
-                        .to_string(),
+                let question = args.trim();
+                if question.is_empty() {
+                    crate::wire::wire_send(TextPart {
+                        text: "Usage: /btw <question>".to_string(),
+                    });
+                    return;
+                }
+
+                crate::wire::wire_send(BtwBegin {
+                    question: question.to_string(),
                 });
+
+                let Some(ref llm) = soul.llm else {
+                    crate::wire::wire_send(TextPart {
+                        text: "No LLM configured. Set a model first.".to_string(),
+                    });
+                    crate::wire::wire_send(BtwEnd {});
+                    return;
+                };
+
+                let messages = vec![crate::wire::Message {
+                    role: "user".to_string(),
+                    content: vec![crate::wire::ContentPart::Text {
+                        text: question.to_string(),
+                    }],
+                    tool_call_id: None,
+                    tool_calls: None,
+                }];
+
+                match llm
+                    .complete(
+                        Some("You are a helpful assistant. Answer the user's question concisely."),
+                        &messages,
+                        None,
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        let answer = result.message.extract_text("\n");
+                        crate::wire::wire_send(TextPart { text: answer });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Side question failed: {}", e),
+                        });
+                    }
+                }
+
+                crate::wire::wire_send(BtwEnd {});
             })
         }),
         description: "Ask a side question without interrupting the main conversation".to_string(),
@@ -1026,6 +1071,71 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             })
         }),
         description: "Set default external editor for Ctrl-O".to_string(),
+        aliases: Vec::new(),
+    });
+
+    // -------------------------------------------------------------------------
+    // /copy [all | last]
+    // Copy the last assistant message (or entire conversation) to clipboard.
+    // -------------------------------------------------------------------------
+    registry.register(SlashCommand {
+        name: "copy".to_string(),
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
+            Box::pin(async move {
+                let arg = args.trim();
+                let text = if arg == "all" {
+                    // Copy entire conversation context
+                    soul.context
+                        .history()
+                        .iter()
+                        .map(|m| {
+                            let role = &m.role;
+                            let content = m.extract_text("\n");
+                            format!("{}: {}", role, content)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                } else {
+                    // Copy last assistant message
+                    let last = soul
+                        .context
+                        .history()
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "assistant")
+                        .map(|m| m.extract_text("\n"));
+                    match last {
+                        Some(content) => content,
+                        None => {
+                            crate::wire::wire_send(TextPart {
+                                text: "No assistant message found to copy.".to_string(),
+                            });
+                            return;
+                        }
+                    }
+                };
+
+                match crate::utils::clipboard::copy_text(&text) {
+                    Ok(()) => {
+                        crate::wire::wire_send(TextPart {
+                            text: if arg == "all" {
+                                "Copied entire conversation to clipboard.".to_string()
+                            } else {
+                                "Copied last assistant message to clipboard.".to_string()
+                            },
+                        });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Failed to copy to clipboard: {}", e),
+                        });
+                    }
+                }
+            })
+        }),
+        description:
+            "Copy last assistant message (or /copy all for entire conversation) to clipboard"
+                .to_string(),
         aliases: Vec::new(),
     });
 

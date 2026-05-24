@@ -21,15 +21,19 @@ This directory tracks the progress of rewriting `kimi-cli` (Python) into `octopu
 | 05 | Session Management | 🔄 | ~600 | ~470 |
 | 06 | Config / Constants / Exceptions | 🔄 | ~1,000 | ~640 |
 | 07 | LLM Integration | 🔄 | ~500 | ~350 |
-| 08 | Auth / OAuth | ⬜ | ~800 | ~0 |
-| 09 | UI / Shell | 🔄 | ~3,500 | ~780 |
-| 10 | Web / Visualizer | ⬜ | ~1,500 | ~0 |
-| 11 | Background Tasks | ⬜ | ~800 | ~110 |
-| 12 | Subagents | ⬜ | ~1,200 | ~0 |
-| 13 | Hooks | 🔄 | ~400 | ~0 |
-| 14 | ACP / MCP | ⬜ | ~800 | ~0 |
-| 15 | Utils | 🔄 | ~2,500 | ~0 |
-| 16 | Telemetry / Notifications / Plugins / Skills | ⬜ | ~1,500 | ~0 |
+| 08 | Auth / OAuth | ✅ | ~800 | ~570 |
+| 09 | UI / Shell | 🔄 | ~3,500 | ~920 |
+| 10 | Web / Visualizer | ❌ | ~1,500 | ~0 |
+| 11 | Background Tasks | 🔄 | ~800 | ~270 |
+| 12 | Subagents | 🔄 | ~1,200 | ~220 |
+| 13 | Hooks | ✅ | ~400 | ~800 |
+| 14 | MCP Client | ✅ | ~800 | ~440 |
+| 14 | ACP Server | ❌ | ~800 | ~0 |
+| 15 | Utils | 🔄 | ~2,500 | ~80 |
+| 16 | Telemetry | ✅ | ~500 | ~950 |
+| 16 | Notifications | 🔄 | ~500 | ~500 |
+| 16 | Plugins | ❌ | ~400 | ~0 |
+| 16 | Skills | 🔄 | ~300 | ~180 |
 
 ## File Mapping Index
 

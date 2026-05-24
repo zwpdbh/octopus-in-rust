@@ -49,6 +49,8 @@ pub struct KimiSoul {
     pub notification_manager: NotificationManager,
     pub oauth: OAuthManager,
     pub denwa_renji: std::sync::Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
+    pub skills: crate::skills::SkillRegistry,
+    pub bg_manager: crate::background::BackgroundTaskManager,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
     _current_step_no: usize,
@@ -67,7 +69,7 @@ impl KimiSoul {
         llm: Option<LLM>,
         approval: ApprovalState,
     ) -> Self {
-        let mut approval_wrapper = Approval::with_state(approval);
+        let mut approval_wrapper = Approval::with_state(approval.clone());
         let approval_runtime = ApprovalRuntime::new();
         let root_wire_hub = RootWireHub::new();
         approval_runtime.bind_root_wire_hub(&root_wire_hub);
@@ -79,8 +81,12 @@ impl KimiSoul {
         let denwa_renji =
             std::sync::Arc::new(std::sync::Mutex::new(crate::soul::agent::DenwaRenji::new()));
 
+        let bg_manager = crate::background::BackgroundTaskManager::new();
+
         let mut toolset = KimiToolset::new();
-        toolset.register(Box::new(crate::tools::shell::ShellTool::new()));
+        toolset.register(Box::new(crate::tools::shell::ShellTool::new(
+            bg_manager.clone(),
+        )));
         toolset.register(Box::new(crate::tools::file::ReadFileTool::new()));
         toolset.register(Box::new(crate::tools::file::WriteFileTool::new()));
         toolset.register(Box::new(crate::tools::file::StrReplaceFileTool::new()));
@@ -93,9 +99,18 @@ impl KimiSoul {
         toolset.register(Box::new(crate::tools::think::ThinkTool::new()));
         toolset.register(Box::new(crate::tools::plan::EnterPlanModeTool::new()));
         toolset.register(Box::new(crate::tools::plan::ExitPlanModeTool::new()));
-        toolset.register(Box::new(crate::tools::agent::AgentTool::new()));
-        toolset.register(Box::new(crate::tools::background::TaskOutputTool::new()));
-        toolset.register(Box::new(crate::tools::background::TaskStopTool::new()));
+        toolset.register(Box::new(crate::tools::agent::AgentTool::new(
+            config.clone(),
+            llm.clone(),
+            approval.clone(),
+            session.work_dir.clone(),
+        )));
+        toolset.register(Box::new(crate::tools::background::TaskOutputTool::new(
+            bg_manager.clone(),
+        )));
+        toolset.register(Box::new(crate::tools::background::TaskStopTool::new(
+            bg_manager.clone(),
+        )));
         toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
             denwa_renji.clone(),
         )));
@@ -115,6 +130,33 @@ impl KimiSoul {
         toolset.set_session_id(session_id.clone());
         toolset.set_approval(Some(approval_wrapper.share()));
         let toolset = std::sync::Arc::new(toolset);
+
+        // Discover skills
+        let mut skills = crate::skills::SkillRegistry::new();
+        let mut skill_dirs = Vec::new();
+        // User skills
+        let user_skills_dir = dirs::home_dir()
+            .map(|h| h.join(".kimi").join("skills"))
+            .filter(|p| p.is_dir());
+        if let Some(dir) = user_skills_dir {
+            skill_dirs.push(dir);
+        }
+        // Project skills
+        let project_skills_dir = session.work_dir.join(".kimi").join("skills");
+        if project_skills_dir.is_dir() {
+            skill_dirs.push(project_skills_dir);
+        }
+        // Extra skill dirs from config
+        for dir in &config.extra_skill_dirs {
+            let path = PathBuf::from(dir);
+            if path.is_dir() {
+                skill_dirs.push(path);
+            }
+        }
+        if config.merge_all_available_skills {
+            skills.discover(&skill_dirs);
+        }
+        tracing::info!("Discovered {} skills", skills.len());
 
         let notification_root = crate::share::get_share_dir()
             .join("notifications")
@@ -145,6 +187,8 @@ impl KimiSoul {
             notification_manager,
             oauth: OAuthManager::new(),
             denwa_renji,
+            skills,
+            bg_manager,
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
             _current_step_no: 0,
@@ -162,6 +206,10 @@ impl KimiSoul {
             _plan_session_id: plan_session_id,
             _checkpoint_with_user_message: checkpoint_with_user_message,
         }
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.bg_manager.shutdown().await;
     }
 
     pub async fn run(&mut self, user_input: &str) -> Result<String> {

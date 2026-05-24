@@ -87,6 +87,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Randomness for retry jitter
 rand = "0.8"
+arboard = "3.6.1"
 
 # Development
 # Note: many of these are placeholders for future implementation

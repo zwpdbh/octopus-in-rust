@@ -18,18 +18,23 @@ pub struct TaskStopParams {
     pub reason: String,
 }
 
-pub struct TaskOutputTool;
-pub struct TaskStopTool;
+pub struct TaskOutputTool {
+    bg_manager: crate::background::BackgroundTaskManager,
+}
+
+pub struct TaskStopTool {
+    bg_manager: crate::background::BackgroundTaskManager,
+}
 
 impl TaskOutputTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(bg_manager: crate::background::BackgroundTaskManager) -> Self {
+        Self { bg_manager }
     }
 }
 
 impl TaskStopTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(bg_manager: crate::background::BackgroundTaskManager) -> Self {
+        Self { bg_manager }
     }
 }
 
@@ -62,10 +67,50 @@ impl Tool for TaskOutputTool {
         let params: TaskOutputParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
 
-        Ok(format!(
-            "Output for task {} would appear here.",
-            params.task_id
-        ))
+        let (status, output) = self
+            .bg_manager
+            .get_output(&params.task_id)
+            .await
+            .ok_or_else(|| format!("Task '{}' not found", params.task_id))?;
+
+        let status_str = match status {
+            crate::background::TaskStatus::Running => "running".to_string(),
+            crate::background::TaskStatus::Completed(code) => {
+                format!("completed (exit code {})", code)
+            }
+            crate::background::TaskStatus::Failed(ref e) => format!("failed: {}", e),
+            crate::background::TaskStatus::Killed => "killed".to_string(),
+        };
+
+        if params.block {
+            // If block=true, poll until the task is no longer running
+            let mut current_status = status;
+            let mut current_output = output;
+            while matches!(current_status, crate::background::TaskStatus::Running) {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let result = self
+                    .bg_manager
+                    .get_output(&params.task_id)
+                    .await
+                    .ok_or_else(|| format!("Task '{}' disappeared", params.task_id))?;
+                current_status = result.0;
+                current_output = result.1;
+            }
+            let final_status = match current_status {
+                crate::background::TaskStatus::Completed(code) => {
+                    format!("completed (exit code {})", code)
+                }
+                crate::background::TaskStatus::Failed(ref e) => format!("failed: {}", e),
+                crate::background::TaskStatus::Killed => "killed".to_string(),
+                _ => "unknown".to_string(),
+            };
+            return Ok(format!(
+                "Status: {}\n\nOutput:\n{}",
+                final_status, current_output
+            ));
+        }
+
+        Ok(format!("Status: {}\n\nOutput:\n{}", status_str, output))
     }
 }
 
@@ -97,6 +142,11 @@ impl Tool for TaskStopTool {
     async fn call(&self, arguments: Value) -> Result<String, String> {
         let params: TaskStopParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
+
+        self.bg_manager
+            .stop(&params.task_id)
+            .await
+            .map_err(|e| format!("Failed to stop task: {}", e))?;
 
         Ok(format!(
             "Task {} stopped. Reason: {}",

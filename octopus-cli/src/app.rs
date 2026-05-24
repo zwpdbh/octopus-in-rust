@@ -223,10 +223,12 @@ impl OctopusCLI {
     }
 
     pub async fn shutdown_background_tasks(&mut self) {
-        // TODO: implement background task shutdown
+        if let Some(ref mut soul) = self.soul {
+            soul.shutdown().await;
+        }
     }
 
     pub async fn await_bg_tasks_shutdown(&mut self, _timeout: f64) {
-        // TODO: implement bg task shutdown waiting
+        // Background task cleanup is handled synchronously by KimiSoul::shutdown()
     }
 }

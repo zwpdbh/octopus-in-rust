@@ -27,11 +27,13 @@ fn default_timeout() -> u64 {
     60
 }
 
-pub struct ShellTool;
+pub struct ShellTool {
+    bg_manager: crate::background::BackgroundTaskManager,
+}
 
 impl ShellTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(bg_manager: crate::background::BackgroundTaskManager) -> Self {
+        Self { bg_manager }
     }
 }
 
@@ -86,9 +88,13 @@ impl Tool for ShellTool {
         }
 
         if params.run_in_background {
+            let task_id = self
+                .bg_manager
+                .spawn(params.command.clone(), params.description.clone())
+                .await?;
             return Ok(format!(
-                "Background task started: `{}`\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
-                params.command
+                "Background task started: `{}`\ntask_id: {}\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
+                params.command, task_id
             ));
         }
 

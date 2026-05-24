@@ -1,28 +1,32 @@
 # 16 — Telemetry / Notifications / Plugins / Skills
 
-## Status: ⬜ Not Started
+## Status: 🔄 Partial
+
+---
 
 ## Telemetry
 
-### Python Source Files
-
-| File | Description | LOC |
-|------|-------------|-----|
-| `kimi_cli/telemetry/__init__.py` | Telemetry entry | ~100 |
-| `kimi_cli/transport.py` | Transport layer | ~100 |
-| `kimi_cli/sink.py` | Event sink | ~100 |
-| `kimi_cli/crash.py` | Crash reporting | ~100 |
+### Status: ✅ Complete
 
 ### Rust Target Files
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/telemetry/mod.rs` | Telemetry placeholder | ~? | ⬜ Empty / stub |
+| `octopus-cli/src/telemetry/mod.rs` | Global state, `track!` macro, context | ~258 | ✅ |
+| `octopus-cli/src/telemetry/sink.rs` | EventSink with buffering + enrichment | ~164 | ✅ |
+| `octopus-cli/src/telemetry/transport.rs` | HTTP POST + retry + disk fallback | ~322 | ✅ |
+
+### What's Done
+
+- [x] `track!` macro with Python-like ergonomics
+- [x] HTTP transport with exponential backoff
+- [x] Disk fallback for failed events (~/.kimi/telemetry/)
+- [x] Startup retry of disk events
+- [x] Context enrichment (app, version, platform, model)
+- [x] Wired call sites: tool_call, tool_call_dedup_detected, turn_interrupted, api_error, compaction_finished, compaction_failed
 
 ### What's Missing
 
-- [ ] Event tracking (`track()` calls)
-- [ ] Telemetry transport (HTTP batching)
 - [ ] Crash reporting (panic hook)
 - [ ] Opt-out configuration
 
@@ -30,26 +34,16 @@
 
 ## Notifications
 
-### Python Source Files
-
-| File | Description | LOC |
-|------|-------------|-----|
-| `kimi_cli/notifications/__init__.py` | Notifications package | ~50 |
-| `kimi_cli/notifications/manager.py` | Notification manager | ~200 |
-| `kimi_cli/notifications/store.py` | Notification store | ~150 |
-| `kimi_cli/notifications/models.py` | Notification models | ~100 |
-| `kimi_cli/notifications/notifier.py` | Notifier | ~100 |
-| `kimi_cli/notifications/wire.py` | Wire delivery | ~50 |
-| `kimi_cli/notifications/llm.py` | LLM notification helpers | ~50 |
+### Status: 🔄 Partial
 
 ### Rust Target Files
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/notifications/mod.rs` | Notification models (Event, Delivery, View, SinkState) | ~80 | ✅ |
-| `octopus-cli/src/notifications/store.rs` | File-based notification store (JSON per notification) | ~120 | ✅ |
-| `octopus-cli/src/notifications/manager.rs` | NotificationManager with claim/ack/deliver | ~150 | ✅ |
-| `octopus-cli/src/notifications/llm.rs` | `build_notification_message()` + ID extraction | ~60 | ✅ |
+| `octopus-cli/src/notifications/mod.rs` | Notification models | ~80 | ✅ |
+| `octopus-cli/src/notifications/store.rs` | File-based JSON store | ~120 | ✅ |
+| `octopus-cli/src/notifications/manager.rs` | Claim/ack/deliver/recover | ~176 | ✅ |
+| `octopus-cli/src/notifications/llm.rs` | `build_notification_message()` | ~64 | ✅ |
 
 ### What's Done
 
@@ -57,13 +51,12 @@
 - [x] Persistent store (file-based JSON)
 - [x] Delivery to LLM context in `_step()`
 - [x] `build_notification_message()` with XML format
-- [x] Ack notification IDs on context restore
+- [x] Ack on context restore
 - [x] Dedupe key support
-- [x] Claim/ack lifecycle with stale recovery
 
 ### What's Missing
 
-- [ ] Delivery to wire (pump loop) — blocked on wire channel implementation
+- [ ] Delivery to wire (pump loop)
 - [ ] LLM-generated notification summaries
 - [ ] Background task output tailing in notification messages
 
@@ -71,20 +64,7 @@
 
 ## Plugins
 
-### Python Source Files
-
-| File | Description | LOC |
-|------|-------------|-----|
-| `kimi_cli/plugin/__init__.py` | Plugin package | ~50 |
-| `kimi_cli/plugin/manager.py` | Plugin manager | ~200 |
-| `kimi_cli/plugin/tool.py` | Plugin tool exposure | ~100 |
-| `kimi_cli/cli/plugin.py` | `kimi plugin` command | ~100 |
-
-### Rust Target Files
-
-| File | Description | LOC | Status |
-|------|-------------|-----|--------|
-| `octopus-cli/src/plugin/mod.rs` | Plugin placeholder | ~? | ⬜ Empty / stub |
+### Status: ❌ Not Started
 
 ### What's Missing
 
@@ -96,22 +76,22 @@
 
 ## Skills
 
-### Python Source Files
-
-| File | Description | LOC |
-|------|-------------|-----|
-| `kimi_cli/skill/__init__.py` | Skill package | ~100 |
-| `kimi_cli/skills/kimi-cli-help/SKILL.md` | CLI help skill | ~200 |
+### Status: 🔄 Partial
 
 ### Rust Target Files
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/skills/mod.rs` | Skills placeholder | ~? | ⬜ Empty / stub |
+| `octopus-cli/src/skills/mod.rs` | Skill discovery + registry | ~180 | ✅ |
+
+### What's Done
+
+- [x] Skill discovery from `~/.kimi/skills/` and `<work_dir>/.kimi/skills/`
+- [x] Subdirectory form (`<name>/SKILL.md`) and flat form (`<name>.md`)
+- [x] YAML frontmatter parsing for name/description
+- [x] `format_for_system_prompt()` for LLM context injection
 
 ### What's Missing
 
-- [ ] Skill discovery (`SKILL.md` parsing)
-- [ ] Skill registry
 - [ ] `skill:*` slash command namespace
-- [ ] Skill context injection
+- [ ] Skill context injection at runtime (currently only injects into system prompt)

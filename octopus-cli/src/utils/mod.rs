@@ -1,3 +1,5 @@
+pub mod clipboard;
+
 pub mod path {
     use std::path::{Path, PathBuf};
 
