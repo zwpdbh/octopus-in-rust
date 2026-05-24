@@ -1,4 +1,6 @@
-use crate::approval_runtime::{ApprovalCancelledError, ApprovalRuntime, ApprovalSource};
+use crate::approval_runtime::{
+    ApprovalCancelledError, ApprovalResponse, ApprovalRuntime, ApprovalSource,
+};
 use crate::exception::ToolRejectedError;
 
 #[derive(Debug, Clone)]
@@ -219,9 +221,9 @@ impl Approval {
         );
 
         match self.runtime.wait_for_response(&request_id).await {
-            Ok((response, feedback)) => match response.as_str() {
-                "approve" => ApprovalResult::new(true, ""),
-                "approve_for_session" => {
+            Ok(response) => match response {
+                ApprovalResponse::Approve => ApprovalResult::new(true, ""),
+                ApprovalResponse::ApproveForSession => {
                     let mut state = self.state.write().unwrap();
                     if !state.auto_approve_actions.contains(&action.to_string()) {
                         state.auto_approve_actions.push(action.to_string());
@@ -230,8 +232,7 @@ impl Approval {
                     self.notify_change();
                     ApprovalResult::new(true, "")
                 }
-                "reject" => ApprovalResult::new(false, feedback),
-                _ => ApprovalResult::new(false, ""),
+                ApprovalResponse::Reject { feedback } => ApprovalResult::new(false, feedback),
             },
             Err(ApprovalCancelledError) => {
                 let record = self.runtime.get_request(&request_id);

@@ -63,7 +63,7 @@ pub struct LLMProvider {
     pub oauth: Option<OAuthRef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LLMModel {
     pub provider: String,
     pub model: String,
@@ -205,6 +205,12 @@ pub struct HookDef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
     pub command: String,
+    #[serde(default = "default_hook_timeout")]
+    pub timeout: u64,
+}
+
+fn default_hook_timeout() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

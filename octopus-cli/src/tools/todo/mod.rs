@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::session_state::TodoStatus;
 use crate::tools::Tool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,7 +13,7 @@ pub struct SetTodoListParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub title: String,
-    pub status: String,
+    pub status: TodoStatus,
 }
 
 pub struct SetTodoListTool;
@@ -47,6 +48,8 @@ impl Tool for SetTodoListTool {
                             "properties": {
                                 "title": { "type": "string" },
                                 "status": { "type": "string", "enum": ["pending", "in_progress", "done"] }
+                                // Note: JSON schema stays as strings for LLM compatibility;
+                                // deserialization maps to TodoStatus enum.
                             },
                             "required": ["title", "status"]
                         }

@@ -20,3 +20,9 @@ pub fn get_logs_dir() -> PathBuf {
 pub fn get_history_dir() -> PathBuf {
     get_share_dir().join("user-history")
 }
+
+pub fn get_telemetry_dir() -> PathBuf {
+    let path = get_share_dir().join("telemetry");
+    let _ = std::fs::create_dir_all(&path);
+    path
+}

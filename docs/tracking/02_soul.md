@@ -79,9 +79,9 @@
 
 - [ ] Notification pump (`_pump_notifications_to_wire`)
 - [ ] Cancel event handling (`asyncio.Event` equivalent)
-- [ ] Dynamic system prompt injection (`dynamic_injection.py`)
-- [ ] AFK disabled reminder injection
-- [ ] Plan mode dynamic injection
+- [x] Dynamic system prompt injection (`dynamic_injection.py`)
+- [x] AFK disabled reminder injection
+- [x] Plan mode dynamic injection
 - [ ] `/btw` side-question modal
-- [ ] `/model` interactive switching
+- [x] `/model` alias-based switching
 - [ ] Shell-level slash commands (`ui/shell/slash.py`) — some exist as soul-level stubs

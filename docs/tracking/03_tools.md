@@ -65,7 +65,8 @@
 
 ## What's Missing
 
-- [ ] `SearchWebTool` / `FetchURLTool` full implementation
+- [ ] `SearchWebTool` full implementation (stub — needs service config wiring)
+- [x] `FetchURLTool` full implementation (HTTP GET with content extraction)
 - [ ] `display` tool
 - [ ] `dmail` tool
 - [ ] `test` tool

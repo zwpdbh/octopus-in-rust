@@ -95,6 +95,12 @@ pub enum RunCancelled {
 }
 
 #[derive(Error, Debug)]
+pub enum QueueShutDown {
+    #[error("Queue has been shut down")]
+    ShutDown,
+}
+
+#[derive(Error, Debug)]
 pub enum ToolRejectedError {
     #[error("Tool call rejected by user")]
     Rejected {
@@ -187,6 +193,9 @@ pub enum OctopusError {
 
     #[error(transparent)]
     RunCancelled(#[from] RunCancelled),
+
+    #[error(transparent)]
+    QueueShutDown(#[from] QueueShutDown),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

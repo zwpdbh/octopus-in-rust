@@ -19,20 +19,25 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/wire/mod.rs` | Wire types, `wire_send()` global | ~238 | 🔄 Types defined; global sender simplified |
+| `octopus-cli/src/wire/mod.rs` | Wire types, `wire_send()` global, thread-local isolation | ~280 | 🔄 Types + file backend + per-run isolation |
+| `octopus-cli/src/wire/file.rs` | `WireFile` with `wire.jsonl` append | ~100 | ✅ JSONL streaming with metadata header |
 
 ## What's Done
 
 - [x] Core wire types (`TextPart`, `StatusUpdate`, `TurnBegin`, `TurnEnd`, etc.)
-- [x] `wire_send()` global function (simplified from Python's ContextVar-based wire)
+- [x] `wire_send()` global function — now writes to `wire.jsonl` via current `WireFile`
 - [x] Tool result / tool call types
 - [x] Message / ContentPart types
+- [x] `WireFile` backend (`wire.jsonl` with metadata header + timestamped records)
+- [x] Per-run wire isolation (thread-local `CURRENT_WIRE_FILE`)
+- [x] `QueueShutDown` exception type
+- [x] `BtwBegin` / `BtwEnd` wire types
+- [x] `MCPLoadingBegin` / `MCPLoadingEnd` wire types
 
 ## What's Missing
 
-- [ ] Wire channel with backpressure (`Wire` class with soul_side/ui_side queues)
-- [ ] Wire file backend (`wire.jsonl` streaming)
+- [ ] Wire channel with backpressure (`Wire` class with soul_side/ui_side broadcast queues)
 - [ ] Wire server for web/vis communication
 - [ ] Root hub for multi-agent routing
 - [ ] JSON-RPC protocol layer
-- [ ] ContextVar equivalent for per-run wire isolation
+- [ ] Notification pump (`_pump_notifications_to_wire()`)

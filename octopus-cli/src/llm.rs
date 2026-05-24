@@ -358,9 +358,7 @@ fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
         );
     }
     if msg.starts_with("API timeout error:") {
-        return crate::exception::OctopusError::APITimeout(
-            crate::exception::APITimeoutError(msg),
-        );
+        return crate::exception::OctopusError::APITimeout(crate::exception::APITimeoutError(msg));
     }
     if msg.starts_with("API status error ") {
         // Parse "API status error {status_code}: {message}"

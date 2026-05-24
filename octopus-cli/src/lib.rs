@@ -8,6 +8,7 @@ pub mod constant;
 pub mod exception;
 pub mod hooks;
 pub mod llm;
+pub mod mcp;
 pub mod metadata;
 pub mod notifications;
 pub mod plugin;

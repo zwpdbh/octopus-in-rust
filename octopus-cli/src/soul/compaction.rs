@@ -1,3 +1,4 @@
+use crate::exception::OctopusError;
 use crate::llm::LLM;
 use crate::soul::context::estimate_text_tokens;
 use crate::soul::message::system;
@@ -47,14 +48,14 @@ impl SimpleCompaction {
         messages: &[Message],
         llm: &LLM,
         custom_instruction: &str,
-    ) -> CompactionResult {
+    ) -> Result<CompactionResult, OctopusError> {
         let (compact_message, to_preserve) = self.prepare(messages, custom_instruction);
 
         if compact_message.is_none() {
-            return CompactionResult {
+            return Ok(CompactionResult {
                 messages: to_preserve.into_iter().cloned().collect(),
                 usage: None,
-            };
+            });
         }
 
         // Call LLM to generate a compacted summary of the old context.
@@ -65,7 +66,7 @@ impl SimpleCompaction {
         match llm.complete(Some(system_prompt), &history, None).await {
             Ok(completion) => {
                 let mut content = vec![system(
-                    "Previous context has been compacted. Here is the compaction output:"
+                    "Previous context has been compacted. Here is the compaction output:",
                 )];
                 // Drop thinking parts if any (mirrors Python's `if not isinstance(part, ThinkPart)`)
                 for part in &completion.message.content {
@@ -84,31 +85,14 @@ impl SimpleCompaction {
                 let mut result_messages = vec![compacted_summary];
                 result_messages.extend(to_preserve.into_iter().cloned());
 
-                CompactionResult {
+                Ok(CompactionResult {
                     messages: result_messages,
                     usage: completion.usage,
-                }
+                })
             }
             Err(e) => {
                 tracing::error!("Compaction LLM call failed: {}", e);
-                // Fallback: preserve original messages with a failure marker
-                let mut result_messages = vec![Message {
-                    role: "user".to_string(),
-                    content: vec![
-                        system("Previous context has been compacted. Here is the compaction output:"),
-                        ContentPart::Text {
-                            text: "[Context compaction failed; preserving original messages.]"
-                                .to_string(),
-                        },
-                    ],
-                    tool_call_id: None,
-                    tool_calls: None,
-                }];
-                result_messages.extend(to_preserve.into_iter().cloned());
-                CompactionResult {
-                    messages: result_messages,
-                    usage: None,
-                }
+                Err(OctopusError::Other(format!("Compaction failed: {}", e)))
             }
         }
     }

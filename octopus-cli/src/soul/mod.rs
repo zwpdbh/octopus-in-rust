@@ -18,6 +18,8 @@ use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
 use crate::hooks::HookEngine;
 use crate::llm::LLM;
+use crate::notifications::llm::{build_notification_message, extract_notification_ids};
+use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
 use crate::soul::context::Context;
@@ -44,6 +46,7 @@ pub struct KimiSoul {
     pub slash_registry: crate::soul::slash::SlashCommandRegistry,
     pub approval_runtime: Option<ApprovalRuntime>,
     pub hook_engine: HookEngine,
+    pub notification_manager: NotificationManager,
     pub oauth: OAuthManager,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
@@ -89,6 +92,25 @@ impl KimiSoul {
 
         let plan_mode = session.state.plan_mode;
         let plan_session_id = session.state.plan_session_id.clone();
+        let session_id = session.id.clone();
+        let hooks = config.hooks.clone();
+
+        let hook_engine = HookEngine::new(hooks)
+            .with_cwd(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        toolset.set_hook_engine(hook_engine.clone());
+        toolset.set_session_id(session_id.clone());
+
+        let notification_root = crate::share::get_share_dir()
+            .join("notifications")
+            .join(&session_id);
+        let notification_manager =
+            NotificationManager::new(notification_root, config.notifications.clone());
+
+        // Ack any notification IDs already present in restored context.
+        let ack_ids = extract_notification_ids(context.history());
+        if !ack_ids.is_empty() {
+            notification_manager.ack_ids("llm", &ack_ids);
+        }
 
         Self {
             config,
@@ -103,7 +125,8 @@ impl KimiSoul {
             agent: None,
             slash_registry: build_default_slash_commands(),
             approval_runtime: None,
-            hook_engine: HookEngine::new(),
+            hook_engine,
+            notification_manager,
             oauth: OAuthManager::new(),
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
@@ -111,8 +134,12 @@ impl KimiSoul {
             _current_turn_id: None,
             _last_tool_calls: Vec::new(),
             _injection_providers: vec![
-                Box::new(crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new()),
-                Box::new(crate::soul::dynamic_injections::afk_mode::AfkModeInjectionProvider::new()),
+                Box::new(
+                    crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new(),
+                ),
+                Box::new(
+                    crate::soul::dynamic_injections::afk_mode::AfkModeInjectionProvider::new(),
+                ),
             ],
             _pending_plan_activation_injection: false,
             _plan_session_id: plan_session_id,
@@ -125,6 +152,30 @@ impl KimiSoul {
             return Ok(String::new());
         }
 
+        // Set up wire channel for this run.
+        let wire_file = crate::wire::file::WireFile::new(self.session.wire_file_path.clone());
+        let wire = crate::wire::channel::Wire::new(Some(wire_file));
+        let soul_side = wire.soul_side();
+        crate::wire::set_current_wire_soul_side(Some(soul_side.clone()));
+
+        // Start notification pump — delivers pending notifications to wire.
+        let pump_handle = self._start_notification_pump(soul_side.clone());
+
+        let result = self._run_turn(text).await;
+
+        // Cleanup
+        if let Some(handle) = pump_handle {
+            handle.abort();
+        }
+        crate::wire::set_current_wire_soul_side(None);
+        // Dropping `wire` drops the broadcast senders, which causes the
+        // recorder task to exit cleanly after flushing.
+        drop(wire);
+
+        result
+    }
+
+    async fn _run_turn(&mut self, text: &str) -> Result<String> {
         let user_message = Message {
             role: "user".to_string(),
             content: vec![ContentPart::Text {
@@ -135,9 +186,6 @@ impl KimiSoul {
         };
 
         // Slash command handling
-        // Mirrors Python's `soul.run()` slash-command branch in `kimi_cli/soul/__init__.py`.
-        // Python checks `parse_slash_command_call(user_input)` and then calls the
-        // registered function with `(soul, args)`. Rust does the same via the registry.
         if let Some(command_call) = parse_slash_command_call(text) {
             let cmd_name = command_call.name.clone();
             let cmd_args = command_call.args.clone();
@@ -150,12 +198,34 @@ impl KimiSoul {
         }
 
         // Track turn lifecycle for interruption telemetry and approval cleanup.
-        // Mirrors Python's `turn_started` / `turn_finished` flags in `kimi_cli/soul/__init__.py`.
         let created_approval_source = self.approval_runtime.as_ref().map(|_| ApprovalSource {
             kind: "foreground_turn".to_string(),
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: None,
         });
+
+        // --- UserPromptSubmit hook ---
+        if self.hook_engine.has_hooks_for("UserPromptSubmit") {
+            let input_data = crate::hooks::events::user_prompt_submit(
+                &self.session.id,
+                &std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string()),
+                text,
+            );
+            let results = self
+                .hook_engine
+                .trigger("UserPromptSubmit", text, input_data)
+                .await;
+            for r in &results {
+                if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
+                    wire_send(crate::wire::TextPart {
+                        text: format!("UserPromptSubmit hook blocked: {}", reason),
+                    });
+                    return Ok(String::new());
+                }
+            }
+        }
 
         wire_send(TurnBegin {
             user_input: Some(text.to_string()),
@@ -164,22 +234,37 @@ impl KimiSoul {
         let turn_result = self._turn(user_message).await;
 
         // TurnEnd is sent regardless of success or failure.
-        // If _turn() returned Err, the turn was interrupted before normal completion.
         wire_send(TurnEnd {});
         if turn_result.is_err() {
-            tracing::warn!(
-                "Turn interrupted at step {}",
-                self._current_step_no
+            tracing::warn!("Turn interrupted at step {}", self._current_step_no);
+            crate::track!(
+                "turn_interrupted",
+                step_no = self._current_step_no,
+                session_id = self.session.id,
             );
-            // TODO: telemetry track("turn_interrupted", ...)
+        } else {
+            // --- Stop hook (normal turn completion) ---
+            let input_data = crate::hooks::events::stop(
+                &self.session.id,
+                &std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string()),
+                false,
+            );
+            let _ = self
+                .hook_engine
+                .fire_and_forget_trigger("Stop", "", input_data);
         }
 
         // Cancel any pending approval requests tied to this turn's approval source.
-        if let (Some(ref source), Some(rt)) = (created_approval_source.as_ref(), self.approval_runtime.as_ref()) {
+        if let (Some(ref source), Some(rt)) = (
+            created_approval_source.as_ref(),
+            self.approval_runtime.as_ref(),
+        ) {
             rt.cancel_by_source(&source.kind, &source.id);
         }
 
-        match turn_result {
+        let result = match turn_result {
             Ok(outcome) => {
                 if let Some(msg) = outcome.final_message {
                     Ok(msg.extract_text(" "))
@@ -188,7 +273,30 @@ impl KimiSoul {
                 }
             }
             Err(e) => Err(e),
-        }
+        };
+
+        result
+    }
+
+    fn _start_notification_pump(
+        &self,
+        soul_side: crate::wire::channel::WireSoulSide,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        // Only root pumps notifications to wire.
+        let nm = self.notification_manager.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let _ = nm
+                    .deliver_pending("wire", 8, |view| {
+                        let notification = crate::notifications::wire::to_wire_notification(view);
+                        soul_side.send(serde_json::to_value(&notification).unwrap_or_default());
+                        std::future::ready(())
+                    })
+                    .await;
+            }
+        }))
     }
 
     async fn _turn(&mut self, user_message: Message) -> Result<TurnOutcome> {
@@ -221,6 +329,48 @@ impl KimiSoul {
     async fn _agent_loop(&mut self) -> Result<TurnOutcome> {
         // Discard stale steers
         self.steer_queue.clear();
+
+        // ── MCP deferred loading ──
+        // Mirrors Python's background MCP loading in `_agent_loop()`.
+        let mcp_started = self.toolset.start_deferred_mcp_tool_loading().await;
+        let mut mcp_was_loading = false;
+        if mcp_started {
+            if let Some(snapshot) = self.toolset.mcp_status_snapshot() {
+                mcp_was_loading = snapshot.loading;
+                if mcp_was_loading {
+                    wire_send(crate::wire::StatusUpdate {
+                        mcp_status: Some(snapshot),
+                        ..Default::default()
+                    });
+                    wire_send(crate::wire::MCPLoadingBegin {});
+                }
+            }
+        }
+        if mcp_was_loading {
+            self.toolset.wait_for_mcp_tools().await;
+            if let Some(mcp_snap) = self.toolset.mcp_status_snapshot() {
+                if mcp_snap.connected > 0 {
+                    crate::track!(
+                        "mcp_connected",
+                        server_count = mcp_snap.connected,
+                        total_count = mcp_snap.total,
+                    );
+                }
+                let failed = mcp_snap.total.saturating_sub(mcp_snap.connected);
+                if failed > 0 {
+                    crate::track!(
+                        "mcp_failed",
+                        failed_count = failed,
+                        total_count = mcp_snap.total,
+                    );
+                }
+                wire_send(crate::wire::StatusUpdate {
+                    mcp_status: Some(mcp_snap),
+                    ..Default::default()
+                });
+                wire_send(crate::wire::MCPLoadingEnd {});
+            }
+        }
 
         let mut step_no = 0;
         loop {
@@ -260,10 +410,18 @@ impl KimiSoul {
                     wire_send(StepInterrupted {});
                     // --- StopFailure hook ---
                     // Fire-and-forget: hook execution must not block error propagation.
-                    let _ = self.hook_engine.trigger(
+                    let input_data = crate::hooks::events::stop_failure(
+                        &self.session.id,
+                        &std::env::current_dir()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| ".".to_string()),
+                        std::any::type_name_of_val(&e),
+                        &format!("{}", e),
+                    );
+                    let _ = self.hook_engine.fire_and_forget_trigger(
                         "StopFailure",
-                        std::any::type_name_of_val(&e).to_string(),
-                        format!("{}", e),
+                        std::any::type_name_of_val(&e),
+                        input_data,
                     );
                     return Err(e);
                 }
@@ -330,9 +488,7 @@ impl KimiSoul {
         loop {
             match self._run_step_once_inner(llm).await {
                 Ok(v) => return Ok(v),
-                Err(OctopusError::APIStatus(ref e))
-                    if e.status_code == 401 && !auth_retried =>
-                {
+                Err(OctopusError::APIStatus(ref e)) if e.status_code == 401 && !auth_retried => {
                     let has_oauth = llm
                         .provider_config
                         .as_ref()
@@ -403,6 +559,38 @@ impl KimiSoul {
                 .map_err(|e| OctopusError::Io(e))?;
         }
 
+        // --- Notification delivery (root only) ---
+        // Mirrors Python's notification delivery in `_step()`.
+        // Deliver pending notifications to LLM context before the LLM call.
+        if self.notification_manager.has_pending_for_sink("llm") {
+            let notifs = self.notification_manager.claim_for_sink("llm", 8);
+            for view in notifs {
+                let msg = build_notification_message(&view);
+                if let Err(e) = self.context.append_message(msg).await {
+                    tracing::warn!("Failed to append notification to context: {}", e);
+                }
+                // Fire Notification hook (fire-and-forget)
+                if self.hook_engine.has_hooks_for("Notification") {
+                    let input_data = crate::hooks::events::notification(
+                        &self.session.id,
+                        &std::env::current_dir()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| ".".to_string()),
+                        "llm",
+                        &view.event.event_type,
+                        &view.event.title,
+                        &view.event.body,
+                        &view.event.severity,
+                    );
+                    let _ = self.hook_engine.fire_and_forget_trigger(
+                        "Notification",
+                        &view.event.event_type,
+                        input_data,
+                    );
+                }
+            }
+        }
+
         // Build effective history and normalize adjacent user messages.
         // Mirrors Python's `normalize_history()` in `dynamic_injection.py`.
         let history = normalize_history(self.context.history());
@@ -412,10 +600,32 @@ impl KimiSoul {
         let system_prompt = self.agent.as_ref().map(|a| a.system_prompt.as_str());
 
         let t0 = std::time::Instant::now();
-        let completion = llm
+        let completion_result = llm
             .complete(system_prompt, &history, Some(&tools_slice))
-            .await?;
-        let _elapsed = t0.elapsed();
+            .await;
+        let elapsed = t0.elapsed();
+
+        let completion = match completion_result {
+            Ok(c) => c,
+            Err(e) => {
+                let (error_type, status_code) = Self::_classify_api_error(&e);
+                if let Some(sc) = status_code {
+                    crate::track!(
+                        "api_error",
+                        error_type = error_type,
+                        status_code = sc,
+                        duration_ms = elapsed.as_millis() as u64,
+                    );
+                } else {
+                    crate::track!(
+                        "api_error",
+                        error_type = error_type,
+                        duration_ms = elapsed.as_millis() as u64,
+                    );
+                }
+                return Err(e);
+            }
+        };
 
         let assistant_message = completion.message;
         let usage = completion.usage;
@@ -441,11 +651,20 @@ impl KimiSoul {
 
         // Execute tool calls
         if !completion.tool_calls.is_empty() {
+            let turn_id = self._current_turn_id.clone().unwrap_or_default();
+            self.toolset.begin_step(
+                self._last_tool_calls.clone(),
+                self._current_step_no,
+                turn_id,
+            );
+
             let mut tool_results = Vec::new();
             for call in &completion.tool_calls {
                 let result = self.toolset.handle(call).await;
                 tool_results.push(result);
             }
+
+            self._last_tool_calls = self.toolset.end_step();
 
             // Grow context
             self._grow_context(&assistant_message, &tool_results)
@@ -495,7 +714,13 @@ impl KimiSoul {
         capped + jitter
     }
 
-    fn _emit_step_retry(&self, attempt: usize, max_attempts: usize, wait_s: f64, error: &OctopusError) {
+    fn _emit_step_retry(
+        &self,
+        attempt: usize,
+        max_attempts: usize,
+        wait_s: f64,
+        error: &OctopusError,
+    ) {
         let (error_type, status_code) = Self::_classify_api_error(error);
         wire_send(StepRetry {
             n: self._current_step_no,
@@ -587,13 +812,59 @@ impl KimiSoul {
     pub async fn compact_context(&mut self, custom_instruction: &str) -> Result<()> {
         let llm = self.llm.as_ref().ok_or(LLMNotSet::NotSet)?;
         let messages = self.context.history().to_vec();
+        let token_count = self.context.token_count();
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
+        // --- PreCompact hook ---
+        if self.hook_engine.has_hooks_for("PreCompact") {
+            let input_data = crate::hooks::events::pre_compact(
+                &self.session.id,
+                &cwd,
+                custom_instruction,
+                token_count,
+            );
+            let results = self
+                .hook_engine
+                .trigger("PreCompact", custom_instruction, input_data)
+                .await;
+            for r in &results {
+                if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
+                    tracing::warn!("PreCompact hook blocked compaction: {}", reason);
+                    return Err(OctopusError::Other(format!(
+                        "PreCompact hook blocked: {}",
+                        reason
+                    )));
+                }
+            }
+        }
 
         wire_send(CompactionBegin {});
 
-        let result = self
+        let compact_t0 = std::time::Instant::now();
+        let compact_result = self
             .compaction
             .compact(&messages, llm, custom_instruction)
             .await;
+        let compact_duration = compact_t0.elapsed();
+
+        let result = match compact_result {
+            Ok(r) => r,
+            Err(e) => {
+                crate::track!(
+                    "compaction_failed",
+                    trigger_type = custom_instruction,
+                    before_tokens = token_count,
+                    duration_ms = compact_duration.as_millis() as u64,
+                    retry_count = 0,
+                    error_type = std::any::type_name_of_val(&e),
+                );
+                return Err(e);
+            }
+        };
+
+        let estimated = result.estimated_token_count();
 
         self.context
             .clear()
@@ -609,7 +880,6 @@ impl KimiSoul {
             .checkpoint(false)
             .await
             .map_err(|e| OctopusError::Io(e))?;
-        let estimated = result.estimated_token_count();
         self.context
             .append_message(result.messages)
             .await
@@ -620,6 +890,30 @@ impl KimiSoul {
             .map_err(|e| OctopusError::Io(e))?;
 
         wire_send(CompactionEnd {});
+
+        crate::track!(
+            "compaction_finished",
+            trigger_type = custom_instruction,
+            before_tokens = token_count,
+            after_tokens = estimated,
+            duration_ms = compact_duration.as_millis() as u64,
+            retry_count = 0,
+        );
+
+        // --- PostCompact hook ---
+        {
+            let input_data = crate::hooks::events::post_compact(
+                &self.session.id,
+                &cwd,
+                custom_instruction,
+                estimated,
+            );
+            let _ = self.hook_engine.fire_and_forget_trigger(
+                "PostCompact",
+                custom_instruction,
+                input_data,
+            );
+        }
 
         // Notify injection providers that history has been rebuilt so they can
         // reset any one-shot throttling state.
@@ -632,7 +926,9 @@ impl KimiSoul {
     // Dynamic Injection
     // ========================================================================
 
-    async fn _collect_injections(&mut self) -> Vec<crate::soul::dynamic_injection::DynamicInjection> {
+    async fn _collect_injections(
+        &mut self,
+    ) -> Vec<crate::soul::dynamic_injection::DynamicInjection> {
         let plan_file_path = self.get_plan_file_path();
         let ctx = InjectionContext {
             plan_mode: self.plan_mode,

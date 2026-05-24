@@ -1,4 +1,6 @@
-use crate::soul::dynamic_injection::{DynamicInjection, DynamicInjectionProvider, InjectionContext};
+use crate::soul::dynamic_injection::{
+    DynamicInjection, DynamicInjectionProvider, InjectionContext,
+};
 use crate::wire::Message;
 
 const AFK_INJECTION_TYPE: &str = "afk_mode";

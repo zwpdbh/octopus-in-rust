@@ -1,4 +1,29 @@
+pub mod channel;
+pub mod file;
+
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::wire::channel::WireSoulSide;
+
+// ============================================================================
+// Current wire soul side (per-run isolation)
+// ============================================================================
+
+thread_local! {
+    static CURRENT_WIRE_SOUL_SIDE: std::cell::RefCell<Option<WireSoulSide>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set the current wire soul side for the duration of a soul run.
+pub fn set_current_wire_soul_side(soul_side: Option<WireSoulSide>) {
+    CURRENT_WIRE_SOUL_SIDE.with(|w| *w.borrow_mut() = soul_side);
+}
+
+/// Get the current wire soul side, if any.
+pub fn get_current_wire_soul_side() -> Option<WireSoulSide> {
+    CURRENT_WIRE_SOUL_SIDE.with(|w| w.borrow().clone())
+}
 
 // ============================================================================
 // Core message types (shared between wire protocol and soul)
@@ -217,20 +242,87 @@ pub struct MCPLoadingBegin {}
 pub struct MCPLoadingEnd {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtwBegin {
+    pub question: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtwEnd {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPart {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: String,
+    pub category: String,
+    #[serde(rename = "type")]
+    pub notification_type: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub created_at: f64,
+    #[serde(default)]
+    pub payload: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookTriggered {
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub hook_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResolved {
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default = "default_allow")]
+    pub action: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+}
+
+fn default_allow() -> String {
+    "allow".to_string()
+}
+
 // ============================================================================
-// Root wire hub stub
+// Root wire hub
 // ============================================================================
 
-#[derive(Debug, Clone)]
-pub struct RootWireHub;
+use tokio::sync::broadcast;
+
+#[derive(Clone)]
+pub struct RootWireHub {
+    tx: broadcast::Sender<serde_json::Value>,
+}
 
 impl RootWireHub {
     pub fn new() -> Self {
-        Self
+        let (tx, _) = broadcast::channel(256);
+        Self { tx }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<serde_json::Value> {
+        self.tx.subscribe()
+    }
+
+    pub fn publish(&self, msg: serde_json::Value) {
+        let _ = self.tx.send(msg);
+    }
+
+    pub fn shutdown(&self) {
+        // Dropping all clones closes receivers.
     }
 }
 
@@ -244,6 +336,16 @@ impl Default for RootWireHub {
 // Wire send function
 // ============================================================================
 
-pub fn wire_send<T: Serialize>(_event: T) {
-    // TODO: implement wire protocol dispatch
+pub fn wire_send<T: Serialize>(event: T) {
+    let value = match serde_json::to_value(&event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to serialize wire message: {}", e);
+            return;
+        }
+    };
+
+    if let Some(soul_side) = get_current_wire_soul_side() {
+        soul_side.send(value);
+    }
 }

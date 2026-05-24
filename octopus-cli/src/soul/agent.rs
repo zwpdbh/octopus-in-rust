@@ -6,7 +6,7 @@ use crate::auth::OAuthManager;
 use crate::background::BackgroundTaskManager;
 use crate::config::Config;
 use crate::llm::LLM;
-use crate::notifications::NotificationManager;
+use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::skills::Skill;
 use crate::soul::approval::Approval;
@@ -104,6 +104,11 @@ impl Runtime {
         builtin_args: BuiltinSystemPromptArgs,
     ) -> Self {
         let subagent_store = Some(SubagentStore::new(&session));
+        let notification_root = crate::share::get_share_dir()
+            .join("notifications")
+            .join(&session.id);
+        let notifications =
+            NotificationManager::new(notification_root, config.notifications.clone());
         Self {
             config,
             oauth: OAuthManager::new(),
@@ -114,7 +119,7 @@ impl Runtime {
             approval,
             labor_market: LaborMarket::new(),
             environment: Environment::detect_blocking(),
-            notifications: NotificationManager::new(),
+            notifications,
             background_tasks: BackgroundTaskManager::new(),
             skills: HashMap::new(),
             additional_dirs: Vec::new(),

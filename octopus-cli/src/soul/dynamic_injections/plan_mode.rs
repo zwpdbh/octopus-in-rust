@@ -1,4 +1,6 @@
-use crate::soul::dynamic_injection::{DynamicInjection, DynamicInjectionProvider, InjectionContext};
+use crate::soul::dynamic_injection::{
+    DynamicInjection, DynamicInjectionProvider, InjectionContext,
+};
 use crate::wire::Message;
 
 /// Inject a reminder every N assistant turns.
@@ -34,10 +36,7 @@ impl DynamicInjectionProvider for PlanModeInjectionProvider {
         }
 
         let plan_path_str = ctx.plan_file_path.map(|p| p.to_string_lossy().to_string());
-        let plan_exists = ctx
-            .plan_file_path
-            .map(|p| p.exists())
-            .unwrap_or(false);
+        let plan_exists = ctx.plan_file_path.map(|p| p.exists()).unwrap_or(false);
 
         // Manual toggles schedule a one-shot activation reminder for the next LLM step.
         if ctx.pending_plan_activation {
@@ -191,9 +190,7 @@ fn full_reminder(plan_file_path: Option<&str>, plan_exists: bool) -> String {
 }
 
 fn sparse_reminder(plan_file_path: Option<&str>) -> String {
-    let mut parts = vec![
-        "Plan mode still active (see full instructions earlier).".to_string(),
-    ];
+    let mut parts = vec!["Plan mode still active (see full instructions earlier).".to_string()];
     if let Some(path) = plan_file_path {
         parts.push(format!("Read-only except plan file ({path})."));
     } else {
@@ -232,9 +229,7 @@ fn reentry_reminder(plan_file_path: Option<&str>) -> String {
             "A plan file exists at {path} from a previous planning session."
         ));
     } else {
-        lines.push(
-            "A plan file from a previous planning session already exists.".to_string(),
-        );
+        lines.push("A plan file from a previous planning session already exists.".to_string());
     }
 
     lines.extend_from_slice(&[

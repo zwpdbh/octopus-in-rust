@@ -514,23 +514,103 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
     });
 
     // -------------------------------------------------------------------------
-    // /model
+    // /model [show | list | <alias>]
+    // Python: `@registry.command @shell_mode_registry.command async def model(...)`
     // -------------------------------------------------------------------------
     registry.register(SlashCommand {
         name: "model".to_string(),
-        func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
+        func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
-                let model = soul
-                    .llm
-                    .as_ref()
-                    .map(|l| l.model_name.clone())
-                    .unwrap_or_else(|| "no model".to_string());
-                crate::wire::wire_send(TextPart {
-                    text: format!("Current model: {}", model),
-                });
+                let arg = args.trim();
+
+                // --- show current model ---
+                if arg.is_empty() || arg == "show" {
+                    let model = soul
+                        .llm
+                        .as_ref()
+                        .map(|l| {
+                            let alias = crate::llm::model_display_name(
+                                Some(&l.model_name),
+                                l.model_config.as_ref(),
+                            );
+                            if alias.is_empty() {
+                                l.model_name.clone()
+                            } else {
+                                alias
+                            }
+                        })
+                        .unwrap_or_else(|| "no model".to_string());
+                    crate::wire::wire_send(TextPart {
+                        text: format!("Current model: {}", model),
+                    });
+                    return;
+                }
+
+                // --- list available models ---
+                if arg == "list" {
+                    if soul.config.models.is_empty() {
+                        crate::wire::wire_send(TextPart {
+                            text: "No models configured.".to_string(),
+                        });
+                        return;
+                    }
+                    let mut lines = vec!["Available models:".to_string()];
+                    for name in soul.config.models.keys() {
+                        let model_cfg = &soul.config.models[name];
+                        let display = model_cfg.display_name.as_ref().unwrap_or(&model_cfg.model);
+                        let current_marker = soul
+                            .llm
+                            .as_ref()
+                            .and_then(|l| l.model_config.as_ref())
+                            .map(|c| c == model_cfg)
+                            .unwrap_or(false);
+                        let marker = if current_marker { " (current)" } else { "" };
+                        lines.push(format!("  - {}{}", display, marker));
+                    }
+                    crate::wire::wire_send(TextPart {
+                        text: lines.join("\n"),
+                    });
+                    return;
+                }
+
+                // --- switch model ---
+                let alias = arg;
+                match crate::llm::clone_llm_with_model_alias(
+                    soul.llm.as_ref(),
+                    &soul.config,
+                    Some(alias),
+                ) {
+                    Ok(Some(new_llm)) => {
+                        soul.llm = Some(new_llm);
+                        // Persist to config if loaded from default location.
+                        if soul.config.is_from_default_location {
+                            let mut cfg = soul.config.clone();
+                            cfg.default_model = alias.to_string();
+                            let _ = crate::config::save_config(&cfg, None);
+                        }
+                        let display = crate::llm::model_display_name(
+                            Some(alias),
+                            soul.config.models.get(alias),
+                        );
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Switched to model: {}", display),
+                        });
+                    }
+                    Ok(None) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Model '{}' not found in configuration.", alias),
+                        });
+                    }
+                    Err(e) => {
+                        crate::wire::wire_send(TextPart {
+                            text: format!("Failed to switch model '{}': {}", alias, e),
+                        });
+                    }
+                }
             })
         }),
-        description: "Show or switch the current model".to_string(),
+        description: "Show or switch the current model. Usage: /model [show | list | <alias>]"
+            .to_string(),
         aliases: Vec::new(),
     });
 

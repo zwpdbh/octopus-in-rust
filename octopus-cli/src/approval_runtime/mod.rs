@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::wire::RootWireHub;
 
 #[derive(Debug, Clone)]
@@ -13,6 +15,14 @@ pub struct ApprovalSource {
 #[derive(Debug, thiserror::Error)]
 #[error("Approval request cancelled")]
 pub struct ApprovalCancelledError;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "data")]
+pub enum ApprovalResponse {
+    Approve,
+    ApproveForSession,
+    Reject { feedback: String },
+}
 
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
@@ -78,10 +88,10 @@ impl ApprovalRuntime {
     pub async fn wait_for_response(
         &self,
         _request_id: &str,
-    ) -> Result<(String, String), ApprovalCancelledError> {
+    ) -> Result<ApprovalResponse, ApprovalCancelledError> {
         // TODO: implement real approval flow
         // For now, stub: return approved with no feedback
-        Ok(("approve".to_string(), "".to_string()))
+        Ok(ApprovalResponse::Approve)
     }
 
     pub fn cancel_by_source(&self, _kind: &str, _id: &str) {

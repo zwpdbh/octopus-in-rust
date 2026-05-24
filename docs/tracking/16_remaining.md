@@ -46,14 +46,26 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/notifications/mod.rs` | Notifications placeholder | ~? | ⬜ Empty / stub |
+| `octopus-cli/src/notifications/mod.rs` | Notification models (Event, Delivery, View, SinkState) | ~80 | ✅ |
+| `octopus-cli/src/notifications/store.rs` | File-based notification store (JSON per notification) | ~120 | ✅ |
+| `octopus-cli/src/notifications/manager.rs` | NotificationManager with claim/ack/deliver | ~150 | ✅ |
+| `octopus-cli/src/notifications/llm.rs` | `build_notification_message()` + ID extraction | ~60 | ✅ |
+
+### What's Done
+
+- [x] Notification models (Event, Delivery, View, SinkState)
+- [x] Persistent store (file-based JSON)
+- [x] Delivery to LLM context in `_step()`
+- [x] `build_notification_message()` with XML format
+- [x] Ack notification IDs on context restore
+- [x] Dedupe key support
+- [x] Claim/ack lifecycle with stale recovery
 
 ### What's Missing
 
-- [ ] Notification manager
-- [ ] Persistent store
-- [ ] Delivery to wire (pump loop)
+- [ ] Delivery to wire (pump loop) — blocked on wire channel implementation
 - [ ] LLM-generated notification summaries
+- [ ] Background task output tailing in notification messages
 
 ---
 
