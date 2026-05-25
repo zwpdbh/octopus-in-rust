@@ -18,7 +18,7 @@ Three entities participate in every approval decision:
 
 | Actor | File | Role |
 |-------|------|------|
-| `ApprovalRuntime` | `approval_runtime/mod.rs` | The **judge** — stores requests, waits for resolution |
+| `ApprovalRuntime` | `approval_runtime/runtime.rs` | The **judge** — stores requests, waits for resolution |
 | `Approval` (wrapper) | `soul/approval.rs` | The **clerk** — checks yolo/afk state, routes to runtime |
 | `ShellUI` | `ui/shell/mod.rs` | The **jury** — renders the prompt, collects user input |
 
@@ -89,7 +89,7 @@ The overlay **pauses the entire TUI** until resolved. This is critical — you d
 
 ### The Vault: `OAuthManager`
 
-File: `octopus-cli/src/auth/mod.rs` (~251 lines)
+File: `octopus-cli/src/auth/manager.rs` (~251 lines)
 
 The `OAuthManager` handles token storage, refresh, and API key resolution:
 

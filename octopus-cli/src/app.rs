@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use tracing;
 
-use crate::cli::UiMode;
-use crate::config::{Config, LLMModel, LLMProvider, load_config};
+use crate::cli::{ConfigSource, UiMode};
+use crate::config::{Config, LLMModel, LLMProvider, load_config, load_config_from_string};
 use crate::exception::Result;
 use crate::llm::{LLM, augment_provider_with_env_vars, create_llm};
 use crate::session::Session;
@@ -61,8 +61,7 @@ impl ApprovalRuntime {
 impl OctopusCLI {
     pub async fn create(
         session: Session,
-        config: Option<Config>,
-        config_path: Option<PathBuf>,
+        config_source: Option<ConfigSource>,
         model_name: Option<String>,
         thinking: Option<bool>,
         yolo: bool,
@@ -76,9 +75,10 @@ impl OctopusCLI {
         agent_file: Option<PathBuf>,
         mcp_configs: Vec<crate::mcp::McpConfig>,
     ) -> Result<Self> {
-        let mut config = match config {
-            Some(c) => c,
-            None => load_config(config_path.as_deref())?,
+        let mut config = match config_source {
+            Some(ConfigSource::Inline(s)) => load_config_from_string(&s)?,
+            Some(ConfigSource::File(p)) => load_config(Some(&p))?,
+            None => load_config(None)?,
         };
 
         if let Some(max_steps) = max_steps_per_turn {
@@ -140,14 +140,14 @@ impl OctopusCLI {
             None
         };
 
-        let approval = ApprovalState {
+        let approval_state = ApprovalState {
             yolo: session.state.approval.yolo || yolo,
             afk: session.state.approval.afk || afk,
             auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
         // Build the heavyweight runtime for agent loading.
-        let approval_wrapper = crate::soul::approval::Approval::with_state(approval.clone());
+        let approval_wrapper = crate::soul::approval::Approval::with_state(approval_state.clone());
         let builtin_args = crate::soul::agent::BuiltinSystemPromptArgs {
             kimi_now: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             kimi_work_dir: session.work_dir.clone(),
@@ -182,7 +182,7 @@ impl OctopusCLI {
                         config.clone(),
                         session.clone(),
                         llm.clone(),
-                        approval.clone(),
+                        approval_state.clone(),
                         mcp_configs.clone(),
                     )
                 }
@@ -194,7 +194,7 @@ impl OctopusCLI {
                 config.clone(),
                 session.clone(),
                 llm.clone(),
-                approval.clone(),
+                approval_state.clone(),
                 mcp_configs.clone(),
             )
         };
@@ -203,7 +203,7 @@ impl OctopusCLI {
             config.clone(),
             session.clone(),
             llm.clone(),
-            approval.clone(),
+            approval_state.clone(),
             agent,
             None,
         );

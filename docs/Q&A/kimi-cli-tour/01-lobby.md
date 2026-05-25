@@ -80,6 +80,13 @@ pub struct AppRuntime {
 ### The Soul Factory
 
 ```rust
+// Resolve config from mutually exclusive --config / --config-file
+let config = match config_source {
+    Some(ConfigSource::Inline(s)) => load_config_from_string(&s)?,
+    Some(ConfigSource::File(p)) => load_config(Some(&p))?,
+    None => load_config(None)?,
+};
+
 let llm = create_llm(&provider, &model)?;
 let approval_state = session.state.approval_state();
 
@@ -98,7 +105,9 @@ let soul = KimiSoul::new(config, session, llm, approval_state, agent, None);
 
 The `KimiSoul` is the heart of the building — we'll visit it in Tour 2. Here in the lobby, it's constructed with **all dependencies injected upfront**. No global variables, no `threading.local()`, no late initialization.
 
-Notice the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. Plus:
+Notice the **config resolution step**: `--config` (inline string) and `--config-file` (path) are modeled as a single `ConfigSource` enum. This follows the Rust principle of *making invalid states unrepresentable* — the compiler ensures you handle exactly one source, not zero and not two.
+
+Notice also the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. Plus:
 - **WASM plugins** are discovered from `~/.kimi/plugins/`
 - **MCP servers** are connected from CLI `--mcp-config` arguments
 - **Subagent types** are registered in the `LaborMarket`

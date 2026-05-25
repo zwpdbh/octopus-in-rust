@@ -10,7 +10,7 @@ In this room, we'll watch the agent **observe** (read user input), **think** (ca
 
 ## 🧠 The Central Computer: `KimiSoul`
 
-File: `octopus-cli/src/soul/mod.rs` (~1,290 lines)
+File: `octopus-cli/src/soul/kimisoul.rs` (~1,290 lines)
 
 The `KimiSoul` struct is the control room's main console. Every field is a piece of equipment:
 

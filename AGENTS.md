@@ -109,3 +109,31 @@ When refactoring existing code:
 #### Exception
 
 Raw primitives are acceptable only at serialization boundaries or external API interop — convert to an enum immediately at the boundary.
+
+---
+
+### Keep `mod.rs` Thin — Index Modules Only
+
+**Rule:** `mod.rs` contains **only** `pub mod` declarations and `pub use` re-exports. Logic lives in sibling files.
+
+**Why:** The index says *what* is exposed; sibling files say *how* it works.
+
+```rust
+// Bad: 1,300-line mod.rs with mixed declarations + logic
+pub mod toolset;
+pub struct KimiSoul { /* ... */ }
+impl KimiSoul { /* 800 lines */ }
+
+// Good: mod.rs is an index
+pub mod agent;
+pub mod toolset;
+mod kimisoul;
+pub use kimisoul::KimiSoul;
+```
+
+**Migration:**
+1. Move the dominant struct/impl to a sibling file (`kimisoul.rs`, `manager.rs`, `engine.rs`).
+2. In `mod.rs`: `mod sibling_file; pub use sibling_file::MainItem;`
+3. Let the compiler guide visibility fixes — promote private items to `pub(crate)` if other modules need them.
+
+Callers stay unchanged because `mod.rs` re-exports.

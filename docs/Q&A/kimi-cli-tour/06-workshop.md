@@ -12,7 +12,7 @@ These systems share a philosophy: **the main agent shouldn't wait.**
 
 ## 🔧 Part 1: Background Tasks
 
-File: `octopus-cli/src/background/mod.rs` (~205 lines)
+File: `octopus-cli/src/background/manager.rs` (~205 lines)
 
 The `BackgroundTaskManager` is the workshop foreman. It tracks running processes and their output.
 

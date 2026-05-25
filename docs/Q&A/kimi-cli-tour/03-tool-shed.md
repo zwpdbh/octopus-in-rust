@@ -274,7 +274,7 @@ The MCP client:
 
 ## 🧩 The Plugin Dock: WASM Plugins
 
-File: `octopus-cli/src/plugin/mod.rs` (~180 lines)
+File: `octopus-cli/src/plugin/discovery.rs` (~280 lines) + `plugin/manifest.rs`
 
 The Tool Shed has a **Plugin Dock** for WebAssembly (WASM) plugins. These are sandboxed, portable extensions written in any language that compiles to WASM.
 

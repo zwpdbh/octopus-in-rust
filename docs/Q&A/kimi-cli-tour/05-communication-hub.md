@@ -91,7 +91,7 @@ Every wire event is **appended to `wire.jsonl`** in the session directory. This 
 
 ## 📢 The Broadcast Station: `RootWireHub`
 
-File: `octopus-cli/src/wire/mod.rs` (inlined)
+File: `octopus-cli/src/wire/hub.rs` + `wire/types.rs`
 
 While the wire connects soul → UI for a single turn, the `RootWireHub` connects **out-of-turn events**:
 

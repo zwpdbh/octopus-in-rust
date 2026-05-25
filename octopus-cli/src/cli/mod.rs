@@ -19,6 +19,32 @@ pub enum UiMode {
     Wire,
 }
 
+/// Mutually exclusive ways to provide a config.
+///
+/// Either an inline TOML/JSON string (`--config`) or a path to a file
+/// (`--config-file`). These are mutually exclusive at the CLI level.
+///
+/// # Examples
+///
+/// ```bash
+/// # Inline config (ephemeral, useful for scripts)
+/// kimi --config 'default_model = "kimi-code"'
+///
+/// # Config file (persistent, project-specific)
+/// kimi --config-file ~/.kimi/work-config.toml
+/// ```
+#[derive(Debug, Clone)]
+pub enum ConfigSource {
+    /// Raw TOML/JSON string passed directly on the command line.
+    ///
+    /// Example: `--config 'default_model = "kimi-code"'`
+    Inline(String),
+    /// Path to a TOML/JSON file on disk.
+    ///
+    /// Example: `--config-file ~/.kimi/config.toml`
+    File(PathBuf),
+}
+
 impl UiMode {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -99,10 +125,16 @@ pub struct Cli {
     )]
     pub continue_: bool,
 
-    #[arg(long, help = "Config TOML/JSON string to load.")]
+    #[arg(
+        long,
+        help = "Config TOML/JSON string to load. Example: --config 'default_model = \"kimi-code\"'"
+    )]
     pub config: Option<String>,
 
-    #[arg(long, help = "Config TOML/JSON file to load.")]
+    #[arg(
+        long,
+        help = "Config TOML/JSON file to load. Example: --config-file ~/.kimi/config.toml"
+    )]
     pub config_file: Option<PathBuf>,
 
     #[arg(short = 'm', long, help = "LLM model to use.")]
@@ -201,6 +233,18 @@ impl Cli {
             UiMode::Wire
         } else {
             UiMode::Shell
+        }
+    }
+
+    /// Convert the mutually exclusive `--config` / `--config-file` options
+    /// into a single `ConfigSource` enum.
+    pub fn config_source(&self) -> Option<ConfigSource> {
+        match (self.config.as_ref(), self.config_file.as_ref()) {
+            (Some(s), None) => Some(ConfigSource::Inline(s.clone())),
+            (None, Some(p)) => Some(ConfigSource::File(p.clone())),
+            (None, None) => None,
+            // clap's `group` attribute (or manual conflict check) prevents both.
+            (Some(_), Some(_)) => unreachable!("--config and --config-file are mutually exclusive"),
         }
     }
 }

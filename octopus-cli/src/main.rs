@@ -3,7 +3,6 @@ use std::process;
 
 use octopus_cli::app::{OctopusCLI, enable_logging};
 use octopus_cli::cli::{AgentChoice, Cli, Commands, InputFormat, OutputFormat, UiMode};
-use octopus_cli::config::load_config_from_string;
 use octopus_cli::constant::get_version;
 use octopus_cli::session::Session;
 
@@ -164,20 +163,15 @@ async fn async_main(cli: Cli) {
     let agent_conflict = cli.agent.is_some() && cli.agent_file.is_some();
     let continue_conflict =
         cli.continue_ && (cli.session.is_some() || cli.session.as_deref() == Some(""));
-    let config_conflict = cli.config.is_some() && cli.config_file.is_some();
 
-    match (agent_conflict, continue_conflict, config_conflict) {
-        (false, false, false) => {}
-        (true, _, _) => {
+    match (agent_conflict, continue_conflict) {
+        (false, false) => {}
+        (true, _) => {
             print_fatal_error("Cannot combine --agent and --agent-file");
             process::exit(1);
         }
-        (_, true, _) => {
+        (_, true) => {
             print_fatal_error("Cannot combine --continue and --session");
-            process::exit(1);
-        }
-        (_, _, true) => {
-            print_fatal_error("Cannot combine --config and --config-file");
             process::exit(1);
         }
     }
@@ -248,19 +242,8 @@ async fn async_main(cli: Cli) {
         (cli.output_format.clone(), cli.final_message_only)
     };
 
-    // Load config
-    let config = if let Some(ref config_string) = cli.config {
-        match load_config_from_string(config_string) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!("Invalid config: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        None
-    };
-    let config_path = cli.config_file;
+    // Resolve config source
+    let config_source = cli.config_source();
 
     // Determine session
     let mut session_id = cli.session.clone();
@@ -400,8 +383,7 @@ async fn async_main(cli: Cli) {
 
         let mut instance = match OctopusCLI::create(
             session,
-            config.clone(),
-            config_path.clone(),
+            config_source.clone(),
             cli.model.clone(),
             cli.thinking,
             cli.yolo,
