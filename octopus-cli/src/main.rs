@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process;
 
 use octopus_cli::app::{OctopusCLI, enable_logging};
-use octopus_cli::cli::{AgentChoice, Cli, Commands, InputFormat, OutputFormat};
+use octopus_cli::cli::{AgentChoice, Cli, Commands, InputFormat, OutputFormat, UiMode};
 use octopus_cli::config::load_config_from_string;
 use octopus_cli::constant::get_version;
 use octopus_cli::session::Session;
@@ -156,33 +156,30 @@ async fn async_main(cli: Cli) {
 
     let work_dir = cli
         .work_dir
+        .clone()
         .map(|p| p.canonicalize().unwrap_or(p))
         .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
 
     // Conflict checks
-    let mut conflicts = Vec::new();
-    if [cli.print, cli.acp, cli.wire]
-        .iter()
-        .filter(|&&x| x)
-        .count()
-        > 1
-    {
-        conflicts.push("Cannot combine --print, --acp, --wire".to_string());
-    }
-    if cli.agent.is_some() && cli.agent_file.is_some() {
-        conflicts.push("Cannot combine --agent and --agent-file".to_string());
-    }
-    if cli.continue_ && (cli.session.is_some() || cli.session.as_deref() == Some("")) {
-        conflicts.push("Cannot combine --continue and --session".to_string());
-    }
-    if cli.config.is_some() && cli.config_file.is_some() {
-        conflicts.push("Cannot combine --config and --config-file".to_string());
-    }
-    if !conflicts.is_empty() {
-        for c in &conflicts {
-            print_fatal_error(c);
+    let agent_conflict = cli.agent.is_some() && cli.agent_file.is_some();
+    let continue_conflict =
+        cli.continue_ && (cli.session.is_some() || cli.session.as_deref() == Some(""));
+    let config_conflict = cli.config.is_some() && cli.config_file.is_some();
+
+    match (agent_conflict, continue_conflict, config_conflict) {
+        (false, false, false) => {}
+        (true, _, _) => {
+            print_fatal_error("Cannot combine --agent and --agent-file");
+            process::exit(1);
         }
-        process::exit(1);
+        (_, true, _) => {
+            print_fatal_error("Cannot combine --continue and --session");
+            process::exit(1);
+        }
+        (_, _, true) => {
+            print_fatal_error("Cannot combine --config and --config-file");
+            process::exit(1);
+        }
     }
 
     // Determine agent file
@@ -226,19 +223,11 @@ async fn async_main(cli: Cli) {
     let _mcp_configs = mcp_configs;
 
     // Determine UI mode
-    let mut ui_mode = if cli.print {
-        "print"
-    } else if cli.acp {
-        "acp"
-    } else if cli.wire {
-        "wire"
-    } else {
-        "shell"
-    };
+    let mut ui_mode = cli.ui_mode();
 
     // Handle quiet mode
-    let (print_mode, output_format_val, final_message_only) = if cli.quiet {
-        if cli.acp || cli.wire {
+    let (output_format_val, final_message_only) = if cli.quiet {
+        if matches!(ui_mode, UiMode::Acp | UiMode::Wire) {
             eprintln!("Quiet mode cannot be combined with ACP or Wire UI");
             std::process::exit(1);
         }
@@ -246,10 +235,10 @@ async fn async_main(cli: Cli) {
             eprintln!("Quiet mode implies --output-format text");
             std::process::exit(1);
         }
-        ui_mode = "print";
-        (true, Some(OutputFormat::Text), true)
+        ui_mode = UiMode::Print;
+        (Some(OutputFormat::Text), true)
     } else {
-        (cli.print, cli.output_format.clone(), cli.final_message_only)
+        (cli.output_format.clone(), cli.final_message_only)
     };
 
     // Load config
@@ -288,21 +277,32 @@ async fn async_main(cli: Cli) {
     }
 
     // Input/output format validation
-    if cli.input_format.is_some() && ui_mode != "print" {
-        eprintln!("Input format is only supported for print UI");
-        std::process::exit(1);
-    }
-    if cli.output_format.is_some() && ui_mode != "print" && !cli.quiet {
-        eprintln!("Output format is only supported for print UI");
-        std::process::exit(1);
-    }
-    if cli.final_message_only && ui_mode != "print" && !cli.quiet {
-        eprintln!("Final-message-only output is only supported for print UI");
-        std::process::exit(1);
-    }
-    if picker_mode && ui_mode != "shell" {
-        eprintln!("--session without a session ID is only supported for shell UI");
-        std::process::exit(1);
+    match (
+        ui_mode,
+        picker_mode,
+        cli.input_format.is_some(),
+        cli.output_format.is_some(),
+        cli.final_message_only,
+    ) {
+        (UiMode::Shell, false, false, false, false) => {}
+        (UiMode::Print, false, _, _, _) => {}
+        (UiMode::Acp | UiMode::Wire, false, false, false, false) => {}
+        (_, _, true, _, _) => {
+            eprintln!("Input format is only supported for print UI");
+            std::process::exit(1);
+        }
+        (_, _, _, true, _) => {
+            eprintln!("Output format is only supported for print UI");
+            std::process::exit(1);
+        }
+        (_, _, _, _, true) => {
+            eprintln!("Final-message-only output is only supported for print UI");
+            std::process::exit(1);
+        }
+        (_, true, _, _, _) => {
+            eprintln!("--session without a session ID is only supported for shell UI");
+            std::process::exit(1);
+        }
     }
 
     // Handle picker mode
@@ -326,13 +326,29 @@ async fn async_main(cli: Cli) {
         }
     }
 
-    // Main loop with reload support
     let last_session_id = session_id.clone();
+
+    // Determine how to obtain the session.
+    enum SessionSource {
+        Resume(String),
+        Continue,
+        New,
+    }
+
+    let session_source = if let Some(ref sid) = last_session_id {
+        SessionSource::Resume(sid.clone())
+    } else if continue_ {
+        SessionSource::Continue
+    } else {
+        SessionSource::New
+    };
+
+    // Main loop with reload support
     let exit_code;
 
     loop {
-        let session = if let Some(ref sid) = last_session_id {
-            match Session::find(&work_dir, sid).await {
+        let session = match session_source {
+            SessionSource::Resume(ref sid) => match Session::find(&work_dir, sid).await {
                 Some(s) => {
                     tracing::info!("Resuming session: {}", sid);
                     s
@@ -347,9 +363,8 @@ async fn async_main(cli: Cli) {
                         }
                     }
                 }
-            }
-        } else if continue_ {
-            match Session::continue_(&work_dir).await {
+            },
+            SessionSource::Continue => match Session::continue_(&work_dir).await {
                 Some(s) => {
                     tracing::info!("Continuing previous session: {}", s.id);
                     s
@@ -358,9 +373,8 @@ async fn async_main(cli: Cli) {
                     eprintln!("No previous session found for the working directory");
                     std::process::exit(1);
                 }
-            }
-        } else {
-            match Session::create(&work_dir, None).await {
+            },
+            SessionSource::New => match Session::create(&work_dir, None).await {
                 Ok(s) => {
                     tracing::info!("Created new session: {}", s.id);
                     s
@@ -369,10 +383,13 @@ async fn async_main(cli: Cli) {
                     eprintln!("Failed to create session: {}", e);
                     std::process::exit(1);
                 }
-            }
+            },
         };
 
-        let resumed = last_session_id.is_some() || continue_;
+        let resumed = matches!(
+            session_source,
+            SessionSource::Resume(_) | SessionSource::Continue
+        );
 
         let mut instance = match OctopusCLI::create(
             session,
@@ -384,7 +401,7 @@ async fn async_main(cli: Cli) {
             cli.afk,
             cli.plan,
             resumed,
-            ui_mode.to_string(),
+            ui_mode,
             cli.max_steps_per_turn,
             cli.max_retries_per_step,
             cli.max_ralph_iterations,
@@ -398,24 +415,23 @@ async fn async_main(cli: Cli) {
             }
         };
 
-        let result = if print_mode {
-            instance
-                .run_print(
-                    cli.input_format.clone().unwrap_or(InputFormat::Text),
-                    output_format_val.clone().unwrap_or(OutputFormat::Text),
-                    prompt.clone(),
-                    final_message_only,
-                )
-                .await
-        } else if ui_mode == "acp" {
-            instance.run_acp().await.map(|_| 0)
-        } else if ui_mode == "wire" {
-            instance.run_wire_stdio().await.map(|_| 0)
-        } else {
-            instance
+        let result = match ui_mode {
+            UiMode::Print => {
+                instance
+                    .run_print(
+                        cli.input_format.clone().unwrap_or(InputFormat::Text),
+                        output_format_val.clone().unwrap_or(OutputFormat::Text),
+                        prompt.clone(),
+                        final_message_only,
+                    )
+                    .await
+            }
+            UiMode::Acp => instance.run_acp().await.map(|_| 0),
+            UiMode::Wire => instance.run_wire_stdio().await.map(|_| 0),
+            UiMode::Shell => instance
                 .run_shell(prompt.clone(), None)
                 .await
-                .map(|ok| if ok { 0 } else { 1 })
+                .map(|ok| if ok { 0 } else { 1 }),
         };
 
         match result {

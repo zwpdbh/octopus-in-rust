@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::approval_runtime::ApprovalRuntime;
 use crate::auth::OAuthManager;
 use crate::background::BackgroundTaskManager;
+use crate::cli::UiMode;
 use crate::config::Config;
 use crate::llm::LLM;
 use crate::notifications::manager::NotificationManager;
@@ -125,7 +126,7 @@ pub struct Runtime {
     pub subagent_id: Option<String>,
     pub subagent_type: Option<String>,
     pub role: String,
-    pub ui_mode: String,
+    pub ui_mode: UiMode,
     pub resumed: bool,
 }
 
@@ -164,7 +165,7 @@ impl Runtime {
             subagent_id: None,
             subagent_type: None,
             role: "root".to_string(),
-            ui_mode: "shell".to_string(),
+            ui_mode: UiMode::Shell,
             resumed: false,
         }
     }

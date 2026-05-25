@@ -33,12 +33,11 @@ fn main() {
 ### The Grand Staircase: Runtime Dispatch
 
 ```rust
-let result = if print_mode {
-    instance.run_print(...).await
-} else if ui_mode == "acp" {
-    instance.run_acp().await
-} else {
-    instance.run_shell(prompt.clone(), None).await
+let result = match ui_mode {
+    UiMode::Print => instance.run_print(...).await,
+    UiMode::Acp   => instance.run_acp().await,
+    UiMode::Wire  => instance.run_wire_stdio().await,
+    UiMode::Shell => instance.run_shell(prompt.clone(), None).await,
 };
 ```
 
@@ -67,7 +66,7 @@ pub struct Runtime {
     pub session: Session,
     pub llm: Option<LLM>,
     pub approval: ApprovalRuntime,
-    pub ui_mode: String,
+    pub ui_mode: UiMode,
     pub resumed: bool,
 }
 ```

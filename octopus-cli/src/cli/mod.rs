@@ -5,12 +5,29 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub mod export;
 pub mod info;
 
-#[derive(Debug, Clone, ValueEnum)]
+/// The mutually exclusive UI modes the CLI can run in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum UiMode {
+    /// Interactive shell (default).
+    #[default]
     Shell,
+    /// Non-interactive print mode.
     Print,
+    /// ACP server mode.
     Acp,
+    /// Wire server mode.
     Wire,
+}
+
+impl UiMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UiMode::Shell => "shell",
+            UiMode::Print => "print",
+            UiMode::Acp => "acp",
+            UiMode::Wire => "wire",
+        }
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -27,9 +44,22 @@ pub enum OutputFormat {
     StreamJson,
 }
 
+/// Builtin agent personalities.
+///
+/// Each variant selects a predefined agent configuration that controls
+/// behavior, system prompts, and available tools.
 #[derive(Debug, Clone, ValueEnum)]
 pub enum AgentChoice {
+    /// The standard general-purpose agent.
+    ///
+    /// Suitable for most coding tasks with balanced tool usage
+    /// and default system instructions.
     Default,
+    /// An agent styled after a mad scientist persona.
+    ///
+    /// More verbose, exploratory, and opinionated. Good for
+    /// brainstorming, deep analysis, or when you want detailed
+    /// reasoning with a distinctive voice.
     Okabe,
 }
 
@@ -105,13 +135,13 @@ pub struct Cli {
     )]
     pub prompt: Option<String>,
 
-    #[arg(long, help = "Run in print mode (non-interactive).")]
+    #[arg(long, group = "ui", help = "Run in print mode (non-interactive).")]
     pub print: bool,
 
-    #[arg(long, help = "Run as ACP server.")]
+    #[arg(long, group = "ui", help = "Run as ACP server.")]
     pub acp: bool,
 
-    #[arg(long, help = "Run as Wire server.")]
+    #[arg(long, group = "ui", help = "Run as Wire server.")]
     pub wire: bool,
 
     #[arg(long, help = "Input format to use.")]
@@ -129,7 +159,7 @@ pub struct Cli {
     )]
     pub quiet: bool,
 
-    #[arg(long, help = "Builtin agent specification to use.")]
+    #[arg(long, help = "Builtin agent specification to use (default, okabe).")]
     pub agent: Option<AgentChoice>,
 
     #[arg(long, help = "Custom agent specification file.")]
@@ -155,6 +185,24 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+impl Cli {
+    /// Resolve the effective UI mode from the mutually exclusive flags.
+    ///
+    /// `--quiet` is treated as an alias for `--print` with additional
+    /// output restrictions, so it also resolves to `UiMode::Print`.
+    pub fn ui_mode(&self) -> UiMode {
+        if self.quiet || self.print {
+            UiMode::Print
+        } else if self.acp {
+            UiMode::Acp
+        } else if self.wire {
+            UiMode::Wire
+        } else {
+            UiMode::Shell
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

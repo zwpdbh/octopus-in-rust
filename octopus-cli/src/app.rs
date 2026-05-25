@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use tracing;
 
+use crate::cli::UiMode;
 use crate::config::{Config, LLMModel, LLMProvider, load_config};
 use crate::exception::Result;
 use crate::llm::{LLM, augment_provider_with_env_vars, create_llm};
@@ -36,7 +37,7 @@ pub struct Runtime {
     pub session: Session,
     pub llm: Option<LLM>,
     pub approval: ApprovalRuntime,
-    pub ui_mode: String,
+    pub ui_mode: UiMode,
     pub resumed: bool,
 }
 
@@ -67,7 +68,7 @@ impl OctopusCLI {
         afk: bool,
         plan_mode: bool,
         resumed: bool,
-        ui_mode: String,
+        ui_mode: UiMode,
         max_steps_per_turn: Option<usize>,
         max_retries_per_step: Option<usize>,
         max_ralph_iterations: Option<i32>,

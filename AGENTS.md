@@ -2,36 +2,41 @@
 
 ## Rust Best Practices
 
-### Use Enum + Associated Variants to Represent Status
+### Model States with Enums and Match on Them
 
-**Rule:** Always represent states, statuses, and mutually exclusive conditions as `enum` types with associated data. Never use boolean flags, string constants, or integer codes to model status.
+**Rule:**
+1. Represent mutually exclusive states, statuses, and conditions as `enum` variants with associated data.
+2. Branch on those enums with `match` (or `if let`). Avoid `if-else` chains built from boolean flags, string comparisons, or integer codes.
+
+Never use scattered booleans, `String` constants, or raw integers to model status.
 
 #### Why
 
 - **Type safety:** Invalid states become unrepresentable.
-- **Exhaustive checking:** The compiler forces handling of every variant via `match`.
-- **Domain modeling:** Status and its associated data live together, not scattered across fields.
-- **Refactoring safety:** Adding a new state causes compile errors in all relevant branches.
+- **Exhaustiveness:** `match` forces you to handle every variant. Adding a state becomes a compile error, not a silent bug.
+- **Readability:** A `match` arm pairs the state with its behavior; `if-else` chains make the reader reconstruct the state matrix.
 
 #### Bad
 
 ```rust
-// Boolean flags — allows impossible states (is_active=true && is_deleted=true)
+// Boolean flags — impossible states allowed
 struct Order {
     is_active: bool,
     is_deleted: bool,
-    is_pending: bool,
 }
 
-// String constants — typo-prone, not exhaustive
+// String constants — typo-prone
 struct Task {
     status: String, // "pending", "running", "done"
 }
 
-// Integer codes — opaque and error-prone
-struct Job {
-    status_code: u8, // 0=pending, 1=running, 2=done
-}
+// Reconstructing state from scattered booleans
+let mode = if cli.print { "print" } else if cli.acp { "acp" } else { "shell" };
+if mode == "acp" { ... }
+
+// Independent if chains for related conditions
+if cli.agent.is_some() && cli.agent_file.is_some() { ... }
+if cli.config.is_some() && cli.config_file.is_some() { ... }
 ```
 
 #### Good
@@ -40,30 +45,62 @@ struct Job {
 enum OrderStatus {
     Active { placed_at: DateTime<Utc> },
     Deleted { reason: String, deleted_at: DateTime<Utc> },
-    Pending { reservation_id: Uuid },
 }
 
 struct Order {
     id: Uuid,
     status: OrderStatus,
 }
-```
 
-Use `match` exhaustively:
-
-```rust
 match order.status {
     OrderStatus::Active { placed_at } => { /* ... */ }
     OrderStatus::Deleted { reason, deleted_at } => { /* ... */ }
-    OrderStatus::Pending { reservation_id } => { /* ... */ }
 }
+```
+
+Model mutually exclusive CLI modes as an enum and branch exhaustively:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiMode {
+    Shell,
+    Print,
+    Acp,
+    Wire,
+}
+
+match ui_mode {
+    UiMode::Print => instance.run_print(...).await,
+    UiMode::Acp   => instance.run_acp().await,
+    UiMode::Wire  => instance.run_wire_stdio().await,
+    UiMode::Shell => instance.run_shell(...).await,
+}
+```
+
+For multiple related boolean conditions, precompute and match on tuples:
+
+```rust
+let agent_conflict  = cli.agent.is_some() && cli.agent_file.is_some();
+let config_conflict = cli.config.is_some() && cli.config_file.is_some();
+
+match (agent_conflict, config_conflict) {
+    (false, false) => {}
+    (true, _) => { /* handle agent conflict */ }
+    (_, true) => { /* handle config conflict */ }
+}
+```
+
+Use `matches!` for one-off predicates:
+
+```rust
+if matches!(ui_mode, UiMode::Acp | UiMode::Wire) { /* ... */ }
 ```
 
 #### Migration Strategy
 
-When you encounter existing code using boolean flags, strings, or integer codes for status:
+When refactoring existing code:
 
-1. Define the `enum` with variants representing all valid states.
+1. Define the `enum` covering all valid states.
 2. Move associated data into the relevant variant.
 3. Replace the old field(s) with a single `status: YourEnum` field.
 4. Let the compiler guide you to fix all `match` or `if` sites.
@@ -71,6 +108,4 @@ When you encounter existing code using boolean flags, strings, or integer codes 
 
 #### Exception
 
-Raw primitives are acceptable only for:
-- Serialization boundaries (e.g., `From<YourEnum> for u8` for protocol encoding).
-- External API interop where the format is fixed — convert to enum immediately at the boundary.
+Raw primitives are acceptable only at serialization boundaries or external API interop — convert to an enum immediately at the boundary.
