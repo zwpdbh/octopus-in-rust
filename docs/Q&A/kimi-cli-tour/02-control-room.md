@@ -22,6 +22,7 @@ pub struct KimiSoul {
     pub context: Context,        // Short-term memory
     pub toolset: Arc<KimiToolset>, // The toolbox (Tour 3)
     pub approval: Approval,      // Security officer (Tour 4)
+    pub agent: Agent,            // Agent identity (name, system prompt, toolset)
     pub root_wire_hub: Option<RootWireHub>, // Intercom system (Tour 5)
     pub notification_manager: NotificationManager, // Mailroom (Tour 5)
     pub oauth: OAuthManager,     // Credential vault (Tour 4)

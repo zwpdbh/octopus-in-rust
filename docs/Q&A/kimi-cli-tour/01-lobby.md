@@ -49,19 +49,19 @@ This is the **central dispatcher**. Notice how it consumes `instance` — the `O
 
 File: `octopus-cli/src/app.rs` (~250 lines)
 
-If `main.rs` is the doorman, `app.rs` is the concierge who prepares your room key (the `Runtime`) and hands it to the bellhop (the UI).
+If `main.rs` is the doorman, `app.rs` is the concierge who prepares your room key (the `AppRuntime`) and hands it to the bellhop (the UI).
 
-### Building the Runtime
+### Building the AppRuntime
 
 ```rust
 pub struct OctopusCLI {
     pub soul: Option<KimiSoul>,
-    pub runtime: Runtime,
+    pub runtime: AppRuntime,
     pub env_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Runtime {
+pub struct AppRuntime {
     pub config: Config,
     pub session: Session,
     pub llm: Option<LLM>,
@@ -73,19 +73,29 @@ pub struct Runtime {
 
 🐍 **Python's way:** The `App` class in `app.py` (~807 lines) dynamically assembles providers, handles config reloading, and manages UI mode switching with exception-based flow control (`Reload`, `SwitchToWeb`).
 
-🦀 **Rust's way:** A plain struct with explicit fields. No magic methods, no dynamic assembly. The `Runtime` is built once and passed around by value or reference.
+🦀 **Rust's way:** A plain struct with explicit fields. No magic methods, no dynamic assembly. The `AppRuntime` is built once and passed around by value or reference.
 
-✨ **Where Rust shines:** **No hidden state mutations.** In Python, `app.config` could change mid-flight via a reload hook. In Rust, `config` is owned by `Runtime`, and you must explicitly opt into mutation. This makes the data flow **visible** to both the compiler and the reader.
+✨ **Where Rust shines:** **No hidden state mutations.** In Python, `app.config` could change mid-flight via a reload hook. In Rust, `config` is owned by `AppRuntime`, and you must explicitly opt into mutation. This makes the data flow **visible** to both the compiler and the reader.
 
 ### The Soul Factory
 
 ```rust
 let llm = create_llm(&provider, &model)?;
 let approval_state = session.state.approval_state();
-let soul = KimiSoul::new(config, session, Some(llm), approval_state);
+
+// Build the heavyweight runtime for tool creation
+let app_runtime = AppRuntime::new(config.clone(), session.clone(), llm.clone(), ...);
+
+// Load agent from YAML spec (tools, system prompt, subagents)
+let agent = load_agent(agent_file, app_runtime).await?;
+
+// Inject the fully-loaded agent into the soul
+let soul = KimiSoul::new(config, session, llm, approval_state, agent);
 ```
 
 The `KimiSoul` is the heart of the building — we'll visit it in Tour 2. Here in the lobby, it's constructed with **all dependencies injected upfront**. No global variables, no `threading.local()`, no late initialization.
+
+Notice the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. This mirrors Python's `load_agent(agent_file, runtime)` architecture.
 
 ---
 

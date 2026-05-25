@@ -192,8 +192,6 @@ async fn async_main(cli: Cli) {
             None => None,
         }
     };
-    let _agent_file = agent_file;
-
     // Parse MCP configs
     let mut mcp_configs: Vec<serde_json::Value> = Vec::new();
     for file in &cli.mcp_config_file {
@@ -405,6 +403,7 @@ async fn async_main(cli: Cli) {
             cli.max_steps_per_turn,
             cli.max_retries_per_step,
             cli.max_ralph_iterations,
+            agent_file.clone(),
         )
         .await
         {

@@ -59,19 +59,27 @@ pub struct KimiToolset {
 
 ### Registration
 
+In Python, tools were hardcoded in `KimiSoul.__init__`. In the Rust rewrite, tools are **loaded from the agent spec**:
+
 ```rust
+// In soul/agent.rs::load_agent()
+let spec = load_agent_spec(agent_file)?;
 let mut toolset = KimiToolset::new();
-toolset.register(Box::new(ShellTool::new(bg_manager.clone())));
-toolset.register(Box::new(ReadFileTool::new()));
-toolset.register(Box::new(WriteFileTool::new()));
-// ... 15+ tools
+
+for tool_name in spec.tools {
+    if let Some(tool) = build_tool(&tool_name, &runtime) {
+        toolset.register(tool);
+    }
+}
 ```
 
-🐍 **Python's way:** Tools are registered via `toolset.register_tool(MyTool())` in a list comprehension or loop.
+`build_tool()` maps Python-style names (`kimi_cli.tools.shell:Shell`) to Rust constructors. The agent spec drives the toolbox — no hardcoded list.
 
-🦀 **Rust's way:** Same pattern, but `Box<dyn Tool>` is a **fat pointer** — two pointers (data + vtable). This has a cost: every tool call goes through virtual dispatch.
+🐍 **Python's way:** Tools are registered via `toolset.register_tool(MyTool())` in a list comprehension or loop. Agent spec parsing + dynamic import via `importlib`.
 
-✨ **Where Rust shines:** **Zero-cost for the common case.** The `tool_map` is a `HashMap<String, usize>` — name to index. Looking up a tool is O(1) hashmap access, then direct indexing into the `tools` Vec. The `Box<dyn>` indirection only happens at the final `call()` boundary.
+🦀 **Rust's way:** Static name-to-constructor mapping in `build_tool()`. No dynamic imports — the compiler ensures every mapped tool exists. `Box<dyn Tool>` is a **fat pointer** (data + vtable), but lookup is O(1) via `HashMap<String, usize>`.
+
+✨ **Where Rust shines:** **Agent-driven toolset.** Change `agents/default/agent.yaml` and the soul boots with a different toolbox — no recompilation needed for config changes, but the compiler still validates every tool constructor at build time.
 
 ---
 

@@ -42,7 +42,7 @@ pub struct KimiSoul {
     pub plan_mode: bool,
     pub max_steps_per_turn: usize,
     pub max_retries_per_step: usize,
-    pub agent: Option<crate::soul::agent::Agent>,
+    pub agent: crate::soul::agent::Agent,
     pub slash_registry: crate::soul::slash::SlashCommandRegistry,
     pub root_wire_hub: Option<RootWireHub>,
     pub hook_engine: HookEngine,
@@ -68,6 +68,7 @@ impl KimiSoul {
         session: Session,
         llm: Option<LLM>,
         approval: ApprovalState,
+        mut agent: crate::soul::agent::Agent,
     ) -> Self {
         let mut approval_wrapper = Approval::with_state(approval.clone());
         let approval_runtime = ApprovalRuntime::new();
@@ -78,42 +79,45 @@ impl KimiSoul {
         let mut context = Context::new(context_file);
         let _ = context.restore_sync();
 
+        let bg_manager = agent.runtime.background_tasks.clone();
         let denwa_renji =
-            std::sync::Arc::new(std::sync::Mutex::new(crate::soul::agent::DenwaRenji::new()));
+            std::sync::Arc::new(std::sync::Mutex::new(agent.runtime.denwa_renji.clone()));
 
-        let bg_manager = crate::background::BackgroundTaskManager::new();
-
-        let mut toolset = KimiToolset::new();
-        toolset.register(Box::new(crate::tools::shell::ShellTool::new(
-            bg_manager.clone(),
-        )));
-        toolset.register(Box::new(crate::tools::file::ReadFileTool::new()));
-        toolset.register(Box::new(crate::tools::file::WriteFileTool::new()));
-        toolset.register(Box::new(crate::tools::file::StrReplaceFileTool::new()));
-        toolset.register(Box::new(crate::tools::file::GlobTool::new()));
-        toolset.register(Box::new(crate::tools::file::GrepTool::new()));
-        toolset.register(Box::new(crate::tools::web::SearchWebTool::new()));
-        toolset.register(Box::new(crate::tools::web::FetchURLTool::new()));
-        toolset.register(Box::new(crate::tools::ask_user::AskUserTool::new()));
-        toolset.register(Box::new(crate::tools::todo::SetTodoListTool::new()));
-        toolset.register(Box::new(crate::tools::think::ThinkTool::new()));
-        toolset.register(Box::new(crate::tools::plan::EnterPlanModeTool::new()));
-        toolset.register(Box::new(crate::tools::plan::ExitPlanModeTool::new()));
-        toolset.register(Box::new(crate::tools::agent::AgentTool::new(
-            config.clone(),
-            llm.clone(),
-            approval.clone(),
-            session.work_dir.clone(),
-        )));
-        toolset.register(Box::new(crate::tools::background::TaskOutputTool::new(
-            bg_manager.clone(),
-        )));
-        toolset.register(Box::new(crate::tools::background::TaskStopTool::new(
-            bg_manager.clone(),
-        )));
-        toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
-            denwa_renji.clone(),
-        )));
+        let mut toolset = std::mem::take(&mut agent.toolset);
+        // Ensure core tools are present even if the agent spec omitted them.
+        let has_shell = toolset.find("Shell").is_some();
+        let has_task_output = toolset.find("TaskOutput").is_some();
+        let has_task_stop = toolset.find("TaskStop").is_some();
+        let has_agent = toolset.find("Agent").is_some();
+        let has_dmail = toolset.find("SendDMail").is_some();
+        if !has_shell {
+            toolset.register(Box::new(crate::tools::shell::ShellTool::new(
+                bg_manager.clone(),
+            )));
+        }
+        if !has_task_output {
+            toolset.register(Box::new(crate::tools::background::TaskOutputTool::new(
+                bg_manager.clone(),
+            )));
+        }
+        if !has_task_stop {
+            toolset.register(Box::new(crate::tools::background::TaskStopTool::new(
+                bg_manager.clone(),
+            )));
+        }
+        if !has_agent {
+            toolset.register(Box::new(crate::tools::agent::AgentTool::new(
+                config.clone(),
+                llm.clone(),
+                approval.clone(),
+                session.work_dir.clone(),
+            )));
+        }
+        if !has_dmail {
+            toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
+                denwa_renji.clone(),
+            )));
+        }
         let checkpoint_with_user_message = toolset.tools().iter().any(|t| t.name() == "SendDMail");
 
         let max_steps = config.loop_control.max_steps_per_turn;
@@ -180,7 +184,7 @@ impl KimiSoul {
             plan_mode,
             max_steps_per_turn: max_steps,
             max_retries_per_step: max_retries,
-            agent: None,
+            agent,
             slash_registry: build_default_slash_commands(),
             root_wire_hub: Some(root_wire_hub),
             hook_engine,
@@ -714,7 +718,7 @@ impl KimiSoul {
 
         // Call LLM with streaming + early tool dispatch
         let tools_slice: Vec<&dyn crate::tools::Tool> = self.toolset.tools();
-        let system_prompt = self.agent.as_ref().map(|a| a.system_prompt.as_str());
+        let system_prompt = Some(self.agent.system_prompt.as_str());
 
         let t0 = std::time::Instant::now();
 
@@ -1081,12 +1085,10 @@ impl KimiSoul {
             .clear()
             .await
             .map_err(|e| OctopusError::Io(e))?;
-        if let Some(ref agent) = self.agent {
-            self.context
-                .write_system_prompt(&agent.system_prompt)
-                .await
-                .map_err(|e| OctopusError::Io(e))?;
-        }
+        self.context
+            .write_system_prompt(&self.agent.system_prompt)
+            .await
+            .map_err(|e| OctopusError::Io(e))?;
         self.context
             .checkpoint(false)
             .await

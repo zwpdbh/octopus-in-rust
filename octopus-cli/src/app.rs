@@ -8,6 +8,7 @@ use crate::config::{Config, LLMModel, LLMProvider, load_config};
 use crate::exception::Result;
 use crate::llm::{LLM, augment_provider_with_env_vars, create_llm};
 use crate::session::Session;
+
 use crate::soul::{ApprovalState, KimiSoul};
 
 pub fn enable_logging(debug: bool, redirect_stderr: bool) {
@@ -27,12 +28,12 @@ pub fn enable_logging(debug: bool, redirect_stderr: bool) {
 
 pub struct OctopusCLI {
     pub soul: Option<KimiSoul>,
-    pub runtime: Runtime,
+    pub runtime: AppRuntime,
     pub env_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Runtime {
+pub struct AppRuntime {
     pub config: Config,
     pub session: Session,
     pub llm: Option<LLM>,
@@ -72,6 +73,7 @@ impl OctopusCLI {
         max_steps_per_turn: Option<usize>,
         max_retries_per_step: Option<usize>,
         max_ralph_iterations: Option<i32>,
+        agent_file: Option<PathBuf>,
     ) -> Result<Self> {
         let mut config = match config {
             Some(c) => c,
@@ -143,23 +145,100 @@ impl OctopusCLI {
             auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
+        // Build the heavyweight runtime for agent loading.
+        let approval_wrapper = crate::soul::approval::Approval::with_state(approval.clone());
+        let builtin_args = crate::soul::agent::BuiltinSystemPromptArgs {
+            kimi_now: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            kimi_work_dir: session.work_dir.clone(),
+            kimi_work_dir_ls: String::new(),
+            kimi_agents_md: String::new(),
+            kimi_skills: String::new(),
+            kimi_additional_dirs_info: String::new(),
+            kimi_os: std::env::consts::OS.to_string(),
+            kimi_shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+        };
+        let app_runtime = crate::soul::agent::AppRuntime::new(
+            config.clone(),
+            session.clone(),
+            llm.clone(),
+            approval_wrapper,
+            builtin_args,
+        );
+
+        // Load agent from spec, or fall back to a default agent.
+        let agent = if let Some(ref path) = agent_file {
+            match crate::soul::agent::load_agent(path, app_runtime).await {
+                Ok(agent) => agent,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to load agent from {}: {}, using default",
+                        path.display(),
+                        e
+                    );
+                    crate::soul::agent::Agent::new_basic(
+                        "default".to_string(),
+                        "You are a helpful assistant.".to_string(),
+                        config.clone(),
+                        session.clone(),
+                        llm.clone(),
+                        approval.clone(),
+                    )
+                }
+            }
+        } else {
+            crate::soul::agent::Agent::new_basic(
+                "default".to_string(),
+                "You are a helpful assistant.".to_string(),
+                config.clone(),
+                session.clone(),
+                llm.clone(),
+                approval.clone(),
+            )
+        };
+
         let soul = KimiSoul::new(
             config.clone(),
             session.clone(),
             llm.clone(),
             approval.clone(),
+            agent,
         );
 
         let approval_runtime = ApprovalRuntime { yolo, afk };
 
-        let runtime = Runtime {
-            config,
-            session,
-            llm,
+        let runtime = AppRuntime {
+            config: config.clone(),
+            session: session.clone(),
+            llm: llm.clone(),
             approval: approval_runtime,
             ui_mode,
             resumed,
         };
+
+        // Initialize telemetry
+        let telemetry_disabled =
+            !config.telemetry || std::env::var("KIMI_DISABLE_TELEMETRY").is_ok();
+        if telemetry_disabled {
+            crate::telemetry::disable();
+        } else {
+            let device_id = crate::telemetry::get_or_create_device_id();
+            crate::telemetry::set_context(device_id.clone(), session.id.clone());
+            let transport = crate::telemetry::transport::AsyncTransport::new(
+                device_id,
+                std::sync::Arc::new(|| None),
+                crate::share::get_telemetry_dir(),
+            );
+            let ui_mode_str = format!("{:?}", ui_mode).to_lowercase();
+            let sink = crate::telemetry::sink::EventSink::new(
+                transport,
+                String::new(),
+                model.model.clone(),
+                ui_mode_str.clone(),
+            );
+            sink.start_periodic_flush();
+            crate::telemetry::attach_sink(sink);
+            crate::telemetry::track_session_started_once(&ui_mode_str, resumed);
+        }
 
         Ok(OctopusCLI {
             soul: Some(soul),

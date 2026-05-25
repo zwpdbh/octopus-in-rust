@@ -34,7 +34,7 @@
 |--------|-----|------|-----|--------|-----|
 | `__init__.py` | — | `lib.rs` | 31 | 🔄 | Package init only |
 | `__main__.py` | — | `main.rs` | 430 | 🔄 | CLI entry; login/logout wired to OAuth |
-| **app.py** | **807** | **app.rs** | **233** | **🔄** | **Runtime builder; background tasks wired** |
+| **app.py** | **807** | **app.rs** | **276** | **🔄** | **Runtime builder; telemetry + agent loading wired** |
 | **config.py** | **429** | **config.rs** | **433** | **🔄** | **Models done; no live config reload** |
 | `constant.py` | — | `constant.rs` | — | ✅ | Constants ported |
 | `exception.py` | — | `exception.rs` | 223 | 🔄 | Core errors done; `BackToTheFuture` added |
@@ -408,7 +408,7 @@
 | **Hooks** | 4 | 4 | ✅ 95% | Wire-side hooks deferred |
 | **Notifications** | 6 | 5 | ✅ 85% | Push notifier (desktop popup) |
 | **Approval** | 3 | 1 | ✅ 100% | Wire request/response + ShellUI overlay |
-| **Telemetry** | 4 | 3 | ✅ 90% | Crash reporting (panic hook) |
+| **Telemetry** | 4 | 3 | ✅ 95% | Init wired (`set_context`, `attach_sink`, `track_session_started_once`). Crash reporting (panic hook) missing. |
 | **Background Tasks** | 7 | 3 | ✅ 85% | No task browser UI; no persistence |
 | **Subagents** | 8 | 2 | ✅ 80% | No registry/builder/output formatting |
 | **Skills/Flows** | 5 | 1 | ✅ 80% | No flowcharts (Mermaid/D2) |
@@ -451,7 +451,7 @@
 | 12 | **Session fork/clone** | ✅ | — | `fork_session()` + `enumerate_turns()` in `slash.rs`. `/fork` copies session. `/undo <n>` forks at turn N and switches. |
 | 13 | **Crash reporting** (panic hook) | ❌ | — | `telemetry/crash.py` not ported. |
 | 14 | **Push notifier** | ❌ | — | `notifications/notifier.py` not ported. Desktop notifications when background tasks complete. |
-| 15 | **Agent/Runtime loading** (Jinja2, AGENTS.md) | 🔄 | — | `agents/mod.rs` returns hardcoded default. YAML files exist but are ignored. Low daily impact. |
+| 15 | **Agent/Runtime loading** (Jinja2, AGENTS.md) | 🔄 | — | `agents/mod.rs` loads spec via `load_agent_spec()`; `Agent::new_basic()` creates minimal agent. YAML parsing still stubbed. |
 | 16 | ~~**Web UI server**~~ | ❌ | — | **Out of scope** — would require Dioxus/Leptos WASM frontend + Axum backend. |
 | 17 | ~~**Visualizer server**~~ | ❌ | — | **Out of scope** — same stack as web server. |
 | 18 | ~~**ACP server**~~ | ❌ | — | **Out of scope** — ACP is an IDE/editor protocol; TUI doesn't need it. |

@@ -36,8 +36,8 @@
 
 ## What's Missing
 
-- [ ] Wire channel with backpressure (`Wire` class with soul_side/ui_side broadcast queues)
+- [x] Wire channel with backpressure (`Wire` class with soul_side/ui_side broadcast queues)
 - [ ] Wire server for web/vis communication
-- [ ] Root hub for multi-agent routing
+- [x] Root hub for multi-agent routing
 - [ ] JSON-RPC protocol layer
 - [ ] Notification pump (`_pump_notifications_to_wire()`)

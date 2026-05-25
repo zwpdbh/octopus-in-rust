@@ -130,9 +130,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     });
                     return;
                 }
-                if let Some(prompt) = soul.agent.as_ref().map(|a| a.system_prompt.clone()) {
-                    let _ = soul.context.write_system_prompt(&prompt).await;
-                }
+                let _ = soul
+                    .context
+                    .write_system_prompt(&soul.agent.system_prompt)
+                    .await;
                 crate::wire::wire_send(TextPart {
                     text: "The context has been cleared.".to_string(),
                 });

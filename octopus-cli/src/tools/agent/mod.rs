@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::soul::agent::Agent;
 use crate::soul::approval::ApprovalState;
 use crate::tools::Tool;
 
@@ -139,7 +140,15 @@ async fn run_subagent(
         .await
         .map_err(|e| format!("Failed to create subagent session: {}", e))?;
 
-    let mut subagent = crate::soul::KimiSoul::new(config, session, llm, approval_state);
+    let agent = Agent::new_basic(
+        "subagent".to_string(),
+        "You are a helpful assistant.".to_string(),
+        config.clone(),
+        session.clone(),
+        llm.clone(),
+        approval_state.clone(),
+    );
+    let mut subagent = crate::soul::KimiSoul::new(config, session, llm, approval_state, agent);
 
     let result = subagent.run(prompt).await;
 

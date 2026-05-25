@@ -186,6 +186,10 @@ impl Approval {
         self.state.read().unwrap().auto_approve_actions.clone()
     }
 
+    pub fn state(&self) -> ApprovalState {
+        self.state.read().unwrap().clone()
+    }
+
     fn notify_change(&self) {
         if let Some(ref cb) = self.on_change {
             cb();
