@@ -74,6 +74,7 @@ impl OctopusCLI {
         max_retries_per_step: Option<usize>,
         max_ralph_iterations: Option<i32>,
         agent_file: Option<PathBuf>,
+        mcp_configs: Vec<crate::mcp::McpConfig>,
     ) -> Result<Self> {
         let mut config = match config {
             Some(c) => c,
@@ -167,7 +168,7 @@ impl OctopusCLI {
 
         // Load agent from spec, or fall back to a default agent.
         let agent = if let Some(ref path) = agent_file {
-            match crate::soul::agent::load_agent(path, app_runtime).await {
+            match crate::soul::agent::load_agent(path, app_runtime, mcp_configs.clone()).await {
                 Ok(agent) => agent,
                 Err(e) => {
                     tracing::warn!(
@@ -182,6 +183,7 @@ impl OctopusCLI {
                         session.clone(),
                         llm.clone(),
                         approval.clone(),
+                        mcp_configs.clone(),
                     )
                 }
             }
@@ -193,6 +195,7 @@ impl OctopusCLI {
                 session.clone(),
                 llm.clone(),
                 approval.clone(),
+                mcp_configs.clone(),
             )
         };
 
@@ -202,6 +205,7 @@ impl OctopusCLI {
             llm.clone(),
             approval.clone(),
             agent,
+            None,
         );
 
         let approval_runtime = ApprovalRuntime { yolo, afk };

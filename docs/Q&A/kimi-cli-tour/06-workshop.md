@@ -132,58 +132,194 @@ This pattern avoids holding a sync mutex across an `.await` point, which would d
 
 ## 🧬 Part 2: Subagents
 
-File: `octopus-cli/src/tools/agent/mod.rs` (~160 lines)
+Files: `octopus-cli/src/tools/agent/mod.rs`, `octopus-cli/src/subagents/mod.rs`, `octopus-cli/src/soul/agent.rs`
 
-A **subagent** is a recursive agent call — a second `KimiSoul` spawned to handle a sub-task.
+A **subagent** is a recursive agent call — a second `KimiSoul` spawned to handle a sub-task. But unlike a naive recursion, the Rust implementation now has a full **type registry, policy enforcement, and runtime sharing** system.
 
-### The Spawner
+### The Architecture
+
+```mermaid
+flowchart TD
+    A[Parent Agent<br/>KimiSoul] -->|AgentTool call| B[LaborMarket Lookup]
+    B -->|Registered type| C[Load Agent Spec]
+    B -->|Unknown type| D[Basic Fallback]
+    C --> E[Resolve LLM<br/>override > default > inherit]
+    C --> F[Apply ToolPolicy<br/>AllowList or Inherit]
+    E --> G[Runtime.copy_for_subagent<br/>shared LaborMarket, skills, notifications]
+    D --> G
+    F --> H[Create KimiSoul]
+    G --> H
+    H --> I{Foreground?}
+    I -->|Yes| J[await result]
+    I -->|No| K[SubagentStore.register<br/>tokio::spawn]
+    K --> L[SubagentStore.complete/fail]
+    J --> M[Return to parent]
+    L --> N[Parent notified via<br/>notification system]
+```
+
+### The Type Registry: `LaborMarket`
 
 ```rust
-async fn run_subagent(
-    config: Config,
-    llm: Option<LLM>,
-    approval_state: ApprovalState,
-    work_dir: PathBuf,
-    prompt: &str,
-) -> Result<String, String> {
-    let session = Session::create(&work_dir, None)
-        .await
-        .map_err(|e| format!("Failed to create session: {}", e))?;
+#[derive(Debug, Clone)]
+pub struct LaborMarket {
+    types: Arc<Mutex<HashMap<String, AgentTypeDefinition>>>,
+}
 
-    let mut soul = KimiSoul::new(config, session, llm, approval_state);
-    soul.run(prompt).await
-        .map_err(|e| format!("Subagent failed: {}", e))
+#[derive(Debug, Clone)]
+pub struct AgentTypeDefinition {
+    pub name: String,
+    pub description: Option<String>,
+    pub agent_file: PathBuf,        // Path to YAML spec
+    pub when_to_use: Option<String>,
+    pub default_model: Option<String>,
+    pub tool_policy: ToolPolicy,
 }
 ```
 
-This is **agentic recursion**. The parent agent creates a child agent with:
-- **Fresh session** — isolated context, no pollution of parent's conversation
-- **Same config** — same model, same tools, same rules
-- **Same approval** — child must also ask for permission
+The `LaborMarket` is populated when an agent spec is loaded. Each `subagents:` entry in the YAML becomes a registered type:
+
+```yaml
+# agents/coder/agent.yaml
+subagents:
+  researcher:
+    description: "Deep research on a topic"
+    path: "agents/researcher/agent.yaml"
+```
+
+```rust
+// In soul/agent.rs::load_agent()
+for (subagent_name, subagent_spec) in spec.subagents {
+    let builtin_spec = load_agent_spec(&subagent_spec.path)?;
+    let tool_policy = if let Some(ref allowed) = builtin_spec.allowed_tools {
+        ToolPolicy::AllowList { tools: allowed.clone() }
+    } else {
+        ToolPolicy::Inherit
+    };
+    runtime.labor_market.add_builtin_type(AgentTypeDefinition {
+        name: subagent_name,
+        description: Some(subagent_spec.description),
+        agent_file: subagent_spec.path,
+        when_to_use: builtin_spec.when_to_use,
+        default_model: builtin_spec.model,
+        tool_policy,
+    });
+}
+```
+
+### Policy Enforcement: What Can the Child Touch?
+
+When a subagent spawns, its toolset is filtered by `ToolPolicy`:
+
+```rust
+// In KimiSoul::new()
+if let Some(policy) = tool_policy {
+    match policy {
+        ToolPolicy::Inherit => {}
+        ToolPolicy::AllowList { tools } => {
+            toolset.hide_all_except(&tools);
+        }
+    }
+}
+```
+
+- **`Inherit`** — child sees all tools the parent has (default)
+- **`AllowList { tools }`** — child sees only the named tools
+
+This happens **after** all fallback tools are registered, so core tools like `Shell` and `TaskOutput` are also subject to the policy.
+
+✨ **Where Rust shines:** The `ToolPolicy` enum forces exhaustive handling. If you add a `DenyList` variant tomorrow, the compiler will point to every `match` that needs updating. In Python, a new policy mode might silently default to "allow all."
+
+### Model Resolution: Whose Brain?
+
+The child's LLM is resolved in priority order:
+
+```rust
+// User override from AgentTool call
+let model_alias = params.model.as_deref()
+    // Type default from agent spec
+    .or(def.default_model.as_deref());
+
+let subagent_llm = clone_llm_with_model_alias(
+    parent_llm.as_ref(),
+    &config,
+    model_alias,
+)?;
+```
+
+1. **`params.model`** — user explicitly requested a model (e.g., `"kimi-for-coding"`)
+2. **`def.default_model`** — the agent spec defines a default (e.g., a researcher agent uses a cheaper model)
+3. **Parent's LLM** — inherit whatever the parent is using
+
+### Runtime Sharing: Not a Fresh Start
+
+```rust
+pub fn copy_for_subagent(
+    &self,
+    session: Session,
+    llm: Option<LLM>,
+    approval: Approval,
+    builtin_args: BuiltinSystemPromptArgs,
+    subagent_type: Option<String>,
+) -> Self {
+    Self {
+        config: self.config.clone(),
+        oauth: OAuthManager::new(),     // Fresh OAuth (tokens are per-agent)
+        llm,
+        session,
+        builtin_args,
+        denwa_renji: self.denwa_renji.clone(),         // Shared
+        approval,
+        labor_market: self.labor_market.clone(),       // Shared
+        environment: self.environment.clone(),
+        notifications: self.notifications.clone(),     // Shared
+        background_tasks: self.background_tasks.clone(), // Shared
+        skills: self.skills.clone(),                   // Shared
+        subagent_store: self.subagent_store.clone(),   // Shared
+        // ... new wire hub, subagent_id, etc.
+    }
+}
+```
+
+The child agent **shares** the parent's `LaborMarket` (so it can spawn the same subagent types), `skills`, `notifications`, `background_tasks`, and `denwa_renji`. But it gets a **fresh** session, OAuth manager, and wire hub.
+
+🐍 **Python's way:** Subagents get a fresh `AppRuntime` with empty registries. They can't spawn the same subagent types unless explicitly configured.
+
+🦀 **Rust's way:** Selective sharing via `copy_for_subagent()`. The child is both isolated (fresh session) and connected (shared registries).
 
 ### Foreground vs. Background
 
 ```rust
 // Foreground: parent waits
-let result = run_subagent(config, llm, approval, work_dir, prompt).await?;
+let result = run_subagent_with_market(parent_runtime, "coder", "Refactor this", None).await?;
 
-// Background: parent continues
-let handle = tokio::spawn(async move {
-    let result = run_subagent(config, llm, approval, work_dir, prompt).await;
-    tracing::info!("Background subagent completed: {}", result);
-    // TODO: send notification to parent
-});
+// Background: parent continues, child is tracked
+if params.run_in_background {
+    tokio::spawn(async move {
+        let result = run_subagent_with_market(parent_runtime, "coder", "Refactor this", None).await;
+        // SubagentStore is updated automatically
+    });
+}
 ```
 
-🐍 **Python's way:** Subagents are managed by `SubagentStore` with registry, builder pattern, and output formatting.
+### The Ledger: `SubagentStore`
 
-🦀 **Rust's way:** A simple function call. No registry, no builder — just create a soul and run it.
+```rust
+#[derive(Debug, Clone)]
+pub struct SubagentStore {
+    entries: Arc<Mutex<HashMap<String, SubagentEntry>>>,
+}
 
-✨ **Where Rust shines:** **Recursive async is safe.** Each `KimiSoul::run()` is a future compiled into a state machine. The stack doesn't grow. You can nest subagents 10 levels deep without stack overflow. In Python, deep recursion risks `RecursionError` or C stack exhaustion.
+pub struct SubagentEntry {
+    pub id: String,           // Session ID
+    pub description: String,
+    pub subagent_type: String,
+    pub status: SubagentStatus,  // Running | Completed | Failed
+    pub result: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+```
 
-### The Missing Piece: Parent Notification
-
-There's a `// TODO: send notification to parent` in the background subagent code. When a background subagent finishes, the parent should be notified via the wire or notification system. This is a P2 gap — the core functionality works, but the "your subagent is done" UX is missing.
+Every subagent (foreground or background) is registered in the `SubagentStore` when it starts and updated when it completes. Background subagents can be queried, listed, and their results retrieved.
 
 ---
 
@@ -211,9 +347,10 @@ Both systems feed **back into the main agent** through:
 ## 🎁 Souvenir Shop: What to Remember
 
 1. **Background tasks are OS processes + Tokio readers.** The process does the work; Tokio tasks capture output concurrently.
-2. **Subagents are recursive souls.** Each subagent is a full `KimiSoul` with fresh memory. This is powerful but resource-intensive — don't spawn 100 subagents.
+2. **Subagents are policy-enforced recursive souls.** `LaborMarket` registers types from YAML specs. `ToolPolicy` filters tools. Model override resolution follows user → spec → parent. Runtime sharing keeps the child connected to parent's registries.
 3. **Lock discipline matters.** Never hold a `std::sync::Mutex` across `.await`. Clone the `Arc`, drop the lock, then await.
 4. **Tasks are lightweight, processes are heavy.** 1,000 Tokio tasks = ~1MB. 1,000 OS processes = ~50GB. The workshop uses processes for isolation (shell commands) and tasks for I/O (readers).
+5. **SubagentStore tracks every spawn.** Every subagent is registered on start and updated on completion. Background subagents are fully observable.
 
 ---
 

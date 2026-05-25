@@ -1,6 +1,6 @@
 # 12 — Subagents
 
-## Status: 🔄 Partial
+## Status: ✅ Complete
 
 ## Python Source Files
 
@@ -20,22 +20,26 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/subagents/mod.rs` | Subagent module placeholder | ~43 | 🔄 Stubs only |
-| `octopus-cli/src/tools/agent/mod.rs` | `AgentTool` — subagent execution | ~160 | ✅ |
+| `octopus-cli/src/subagents/mod.rs` | `LaborMarket`, `SubagentStore`, `AgentTypeDefinition`, `ToolPolicy` | ~130 | ✅ |
+| `octopus-cli/src/tools/agent/mod.rs` | `AgentTool` — full subagent execution pipeline | ~270 | ✅ |
+| `octopus-cli/src/soul/agent.rs` | `load_agent()`, `AppRuntime::copy_for_subagent()` | ~570 | ✅ |
 
 ## What's Done
 
-- [x] `AgentTool` — creates new `KimiSoul` with fresh session
+- [x] `AgentTool` — full subagent execution pipeline
 - [x] Foreground subagent — waits for result, returns to parent
-- [x] Background subagent — `tokio::spawn`, returns immediately
-- [x] Reuses parent config, LLM, approval state, work_dir
-- [x] `AgentParams` for tool-call-based subagent invocation
+- [x] Background subagent — `tokio::spawn`, returns immediately, tracked in `SubagentStore`
+- [x] `LaborMarket` — type registry populated from agent YAML specs
+- [x] `AgentTypeDefinition` — name, description, agent_file, default_model, tool_policy
+- [x] `ToolPolicy` — `AllowList { tools }` and `Inherit` variants, enforced via `KimiToolset::hide_all_except()`
+- [x] Model override resolution — `params.model` → `def.default_model` → parent LLM
+- [x] `AppRuntime::copy_for_subagent()` — shares LaborMarket, skills, notifications, background_tasks, denwa_renji
+- [x] `SubagentStore` — tracks all subagent spawns with `Running | Completed | Failed` status
+- [x] `AgentParams` for tool-call-based subagent invocation (with `model`, `run_in_background`, `resume` fields)
+- [x] Subagent spec parsing from YAML (via `agents/mod.rs` `load_agent_spec()`)
+- [x] Subagent type registration in `LaborMarket` during `load_agent()`
 
 ## What's Missing
 
-- [ ] Subagent definition / spec parsing from YAML
-- [ ] Subagent registry (`SubagentStore`)
-- [ ] Subagent builder
-- [ ] Git context extraction
-- [ ] Output formatting (XML-like tags)
-- [ ] Background subagent → parent notification (wire event)
+- [ ] Git context extraction (deferred — not in Python's core subagent flow)
+- [ ] Output formatting with XML-like tags (deferred — Python's formatting is cosmetic)

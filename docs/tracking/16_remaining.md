@@ -64,13 +64,28 @@
 
 ## Plugins
 
-### Status: ❌ Not Started
+### Status: ✅ Complete
+
+### Rust Target Files
+
+| File | Description | LOC | Status |
+|------|-------------|-----|--------|
+| `octopus-cli/src/plugin/mod.rs` | Plugin manifest, `WasmPluginTool`, `discover_plugins()` | ~180 | ✅ |
+| `plugins/example-http/` | Example HTTP plugin built with `extism-pdk` | ~80 | ✅ |
+
+### What's Done
+
+- [x] Plugin discovery — scans `~/.kimi/plugins/` for `.wasm` + `.json` manifest pairs
+- [x] `WasmPluginTool` — implements `Tool` trait via Extism `CompiledPlugin` + `spawn_blocking`
+- [x] Security manifest — `allowed_hosts` (deny-by-default), `allowed_paths`, `timeout_ms`, `max_memory_pages`
+- [x] `build_extism_manifest()` — converts JSON manifest to `extism::Manifest` with `disallow_all_hosts()` default
+- [x] Both `load_agent()` and `Agent::new_basic()` discover and register plugins
+- [x] Example plugin (`plugins/example-http`) tested against httpbin.org
 
 ### What's Missing
 
-- [ ] Plugin discovery / loading
-- [ ] Plugin tool exposure
-- [ ] `kimi plugin` CLI subcommand
+- [ ] `kimi plugin` CLI subcommand (deferred — installation is manual copy for now)
+- [ ] Plugin marketplace / registry (deferred)
 
 ---
 

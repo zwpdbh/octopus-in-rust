@@ -4,11 +4,11 @@
 >
 > **Legend:** ✅ Complete | 🔄 Partial / Stub | ❌ Missing | **Bold** = critical path
 >
-> **Last updated:** 2026-05-24
+> **Last updated:** 2026-05-25
 >
-> **P0 = complete | P1 = complete | P2-P3 = remaining polish**
+> **P0 = complete | P1 = complete | P2 = nearly complete | P3 = remaining polish**
 >
-> **Quick status:** ~95% of core TUI features done. All daily-use features work: chat, tools, approval, OAuth, MCP, background tasks, subagents, skills, clipboard, history, editor, markdown rendering, `/btw`. Remaining gaps are polish (task browser, crash reporting, theme switching, agent YAML) and out-of-scope items (web/vis/ACP servers).
+> **Quick status:** ~97% of core TUI features done. All daily-use features work: chat, tools, approval, OAuth, MCP, background tasks, subagents (with LaborMarket, ToolPolicy, model override), skills, clipboard, history, editor, markdown rendering, `/btw`, WASM plugins. Remaining gaps are polish (task browser, crash reporting, theme switching) and out-of-scope items (web/vis/ACP servers).
 
 ---
 
@@ -24,7 +24,7 @@
 
 **Scope note:** Web server, Visualizer server, and ACP server are **out of scope** for the TUI-focused rewrite. These would require WASM frontend + Axum backend stacks that are better suited to a separate project.
 
-**Major remaining gaps (TUI):** `/task` browser, crash reporting, real-time theme switching, and agent YAML loading.
+**Major remaining gaps (TUI):** `/task` browser, crash reporting, real-time theme switching.
 
 ---
 
@@ -44,7 +44,7 @@
 | `session_state.py` | — | `session_state.rs` | 181 | 🔄 | Approval state synced |
 | `session_fork.py` | 325 | `soul/slash.rs` | — | ✅ | `fork_session()` + `enumerate_turns()` inlined |
 | `share.py` | — | `share.rs` | 28 | ✅ | Share dir helpers |
-| `agentspec.py` | — | `agents/mod.rs` | 20 | 🔄 | Agent YAML loading stubbed |
+| `agentspec.py` | — | `agents/mod.rs` | ~85 | ✅ | Agent YAML loading with inheritance, Jinja2 system prompt rendering, subagent registration |
 | `mcp_oauth.py` | — | — | — | ❌ | MCP OAuth flow missing |
 
 ---
@@ -159,9 +159,11 @@
 
 | Python | LOC | Rust | LOC | Status | Gap |
 |--------|-----|------|-----|--------|-----|
-| `__init__.py` | — | `mod.rs` | — | ❌ | Empty stub |
-| `manager.py` | 200 | — | — | ❌ | Plugin discovery/loading |
-| `tool.py` | 100 | — | — | ❌ | Plugin tool exposure |
+| `__init__.py` | — | `plugin/mod.rs` | ~180 | ✅ | Extism WASM plugin system |
+| `manager.py` | 200 | `plugin/mod.rs` | — | ✅ | `discover_plugins()` scans `~/.kimi/plugins/` |
+| `tool.py` | 100 | `plugin/mod.rs` | — | ✅ | `WasmPluginTool` implements `Tool` trait |
+
+**Status:** ✅ Complete. WASM plugins are discovered at startup from `~/.kimi/plugins/`. Each plugin consists of a `.wasm` file + `.json` manifest. The manifest defines `allowed_hosts` (deny-by-default), `allowed_paths`, `timeout_ms`, and `max_memory_pages`. Extism's sandbox ensures plugins cannot access host resources beyond their manifest permissions.
 
 ---
 
@@ -193,7 +195,7 @@
 |--------|-----|------|-----|--------|-----|
 | `__init__.py` | 304 | — | — | ✅ | Module exports in `mod.rs` |
 | **kimisoul.py** | **1710** | **mod.rs** | **1290** | **✅** | **Core loop complete; all P0/P1 wired** |
-| `agent.py` | 519 | `agent.rs` | 202 | 🔄 | `load_agent()` stubbed; no Jinja2. `DenwaRenji` inlined. |
+| `agent.py` | 519 | `agent.rs` | ~570 | ✅ | `load_agent()` full pipeline: YAML spec → Jinja2 system prompt → tool mapping → subagent registration → WASM plugins → MCP deferred loading. `DenwaRenji` inlined. |
 | `approval.py` | 267 | `approval.rs` | 255 | ✅ | Full approval flow with wire events and ShellUI overlay |
 | `btw.py` | — | `soul/slash.rs` | — | ✅ | `/btw` one-off LLM call with `BtwBegin`/`BtwEnd` |
 | `compaction.py` | — | `compaction.rs` | 169 | ✅ | Real LLM compaction with hooks + telemetry |
@@ -234,14 +236,15 @@
 | Python | LOC | Rust | LOC | Status | Gap |
 |--------|-----|------|-----|--------|-----|
 | `__init__.py` | — | `mod.rs` | 43 | 🔄 | `LaborMarket`, `SubagentStore` stubs |
-| `core.py` | 300 | `tools/agent/mod.rs` | 160 | ✅ | Subagent execution via new `KimiSoul` |
-| `builder.py` | 200 | — | — | ❌ | Subagent builder (deferred) |
-| `runner.py` | 428 | `tools/agent/mod.rs` | — | ✅ | Foreground + background runner |
-| `registry.py` | 100 | — | — | ❌ | Subagent registry (deferred) |
-| `models.py` | 100 | — | — | 🔄 | `AgentParams` in `tools/agent/mod.rs` |
-| `output.py` | 100 | — | — | ❌ | Output formatting (deferred) |
+| `__init__.py` | — | `subagents/mod.rs` | ~130 | ✅ | `LaborMarket`, `SubagentStore`, `AgentTypeDefinition`, `ToolPolicy` |
+| `core.py` | 300 | `tools/agent/mod.rs` | ~270 | ✅ | Subagent execution with type registry + policy enforcement |
+| `builder.py` | 200 | `soul/agent.rs` | — | ✅ | `load_agent()` builds subagent from YAML spec |
+| `runner.py` | 428 | `tools/agent/mod.rs` | — | ✅ | Foreground + background runner with store tracking |
+| `registry.py` | 100 | `subagents/mod.rs` | — | ✅ | `LaborMarket` registers types from agent specs |
+| `models.py` | 100 | `subagents/mod.rs` | — | ✅ | `AgentTypeDefinition`, `SubagentEntry`, `SubagentStatus` |
+| `output.py` | 100 | — | — | ❌ | Output formatting (deferred — cosmetic) |
 | `git_context.py` | 100 | — | — | ❌ | Git context helper (deferred) |
-| `store.py` | 100 | — | — | 🔄 | `SubagentStore` stub exists |
+| `store.py` | 100 | `subagents/mod.rs` | — | ✅ | `SubagentStore` with `Running/Completed/Failed` tracking |
 
 ---
 
@@ -410,7 +413,7 @@
 | **Approval** | 3 | 1 | ✅ 100% | Wire request/response + ShellUI overlay |
 | **Telemetry** | 4 | 3 | ✅ 95% | Init wired (`set_context`, `attach_sink`, `track_session_started_once`). Crash reporting (panic hook) missing. |
 | **Background Tasks** | 7 | 3 | ✅ 85% | No task browser UI; no persistence |
-| **Subagents** | 8 | 2 | ✅ 80% | No registry/builder/output formatting |
+| **Subagents** | 8 | 3 | ✅ 95% | Output formatting, git context deferred |
 | **Skills/Flows** | 5 | 1 | ✅ 80% | No flowcharts (Mermaid/D2) |
 | **MCP/ACP** | 9 | 2 | 🔄 70% | Stdio client ✅; ACP server, MCP OAuth deferred |
 | **Web/Visualizer** | 14 | — | ❌ N/A | Out of scope for TUI rewrite |
@@ -436,7 +439,7 @@
 | # | Feature | Status | Blocked On | Notes |
 |---|---------|--------|-----------|-------|
 | 4 | **Background Tasks** | ✅ | `background/mod.rs` + `tools/shell/mod.rs` + `tools/background/mod.rs` | `BackgroundTaskManager` spawns real `tokio::process::Child` processes, captures stdout/stderr via reader tasks. `ShellTool` with `run_in_background=true` creates tasks. `TaskOutputTool` and `TaskStopTool` query and kill tasks. |
-| 5 | **Subagents** | ✅ | `tools/agent/mod.rs` | `AgentTool` creates a new `KimiSoul` with a fresh session and runs the prompt. Supports foreground (waits for result) and background (`tokio::spawn`) modes. Full runner/registry/store are future work. |
+| 5 | **Subagents** | ✅ | `tools/agent/mod.rs` + `subagents/mod.rs` + `soul/agent.rs` | Full pipeline: `LaborMarket` registers types from YAML specs → `AgentTool` looks up type → loads spec via `load_agent()` → resolves model override → applies `ToolPolicy` via `hide_all_except()` → shares parent runtime via `copy_for_subagent()` → tracks in `SubagentStore`. |
 | 6 | **Skills discovery** | ✅ | `skills/mod.rs` | `SkillRegistry::discover()` scans `~/.kimi/skills/` and `<work_dir>/.kimi/skills/` for `SKILL.md` (subdirectory) and `*.md` (flat) layouts. Parses simple YAML frontmatter for `name` and `description`. Flowcharts (Mermaid/D2) are future work. |
 | 7 | **Side Questions (`/btw`)** | ✅ | — | One-off `llm.complete()` call with `BtwBegin`/`BtwEnd` wire events. Answer rendered with `btw` role (💡 magenta). |
 | 8 | **Rich rendering** (markdown, syntax highlighting, diff) | ✅ | — | `ui/shell/render.rs` uses `pulldown-cmark` + `syntect`. Code blocks highlighted, diff blocks colored (+ green, − red), inline formatting supported. |
@@ -451,7 +454,7 @@
 | 12 | **Session fork/clone** | ✅ | — | `fork_session()` + `enumerate_turns()` in `slash.rs`. `/fork` copies session. `/undo <n>` forks at turn N and switches. |
 | 13 | **Crash reporting** (panic hook) | ❌ | — | `telemetry/crash.py` not ported. |
 | 14 | **Push notifier** | ❌ | — | `notifications/notifier.py` not ported. Desktop notifications when background tasks complete. |
-| 15 | **Agent/Runtime loading** (Jinja2, AGENTS.md) | 🔄 | — | `agents/mod.rs` loads spec via `load_agent_spec()`; `Agent::new_basic()` creates minimal agent. YAML parsing still stubbed. |
+| 15 | **Agent/Runtime loading** (Jinja2, AGENTS.md) | ✅ | — | `load_agent()` full 5-step pipeline: YAML spec parsing with inheritance → Jinja2 system prompt rendering with `${...}` delimiters → built-in tool mapping → subagent registration in `LaborMarket` → WASM plugin discovery → MCP deferred loading. |
 | 16 | ~~**Web UI server**~~ | ❌ | — | **Out of scope** — would require Dioxus/Leptos WASM frontend + Axum backend. |
 | 17 | ~~**Visualizer server**~~ | ❌ | — | **Out of scope** — same stack as web server. |
 | 18 | ~~**ACP server**~~ | ❌ | — | **Out of scope** — ACP is an IDE/editor protocol; TUI doesn't need it. |
@@ -467,7 +470,7 @@
 | 23 | **Hero name slug system** | ❌ | — | `tools/plan/heroes.py` not ported. |
 | 24 | **Signal handling** | ❌ | — | `utils/signals.py` not ported. |
 | 25 | **Windows path handling** | ❌ | — | `utils/windows_paths.py` not ported. |
-| 26 | **Plugin system** | ❌ | — | `plugin/mod.rs` stub. |
+| 26 | **Plugin system** | ✅ | — | Extism WASM plugin system with deny-by-default security manifest. Example HTTP plugin tested against httpbin.org. |
 | 27 | **Toad TUI** | ❌ | — | `term`/`toad` subcommands stubbed. |
 
 ---

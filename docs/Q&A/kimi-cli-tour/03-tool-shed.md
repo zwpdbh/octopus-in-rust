@@ -198,30 +198,54 @@ Simple, but critical: the agent uses this to **read code, configs, and logs**.
 
 ## 🌟 Star Tool: `AgentTool` (The Recursive Wrench)
 
-File: `octopus-cli/src/tools/agent/mod.rs` (~160 lines)
+File: `octopus-cli/src/tools/agent/mod.rs` (~270 lines)
 
-The `AgentTool` is the **most mind-bending tool** in the shed. It creates a **new `KimiSoul`** — a recursive agent call!
+The `AgentTool` is the **most mind-bending tool** in the shed. It creates a **new `KimiSoul`** — a recursive agent call! But unlike a naive recursion, it now goes through a full **type registry and policy enforcement** pipeline.
+
+### The Subagent Spawner (Today)
 
 ```rust
-async fn run_subagent(config, llm, approval, work_dir, prompt) -> Result<String, String> {
-    let session = Session::create(&work_dir, None).await?;
-    let mut soul = KimiSoul::new(config, session, llm, approval);
-    soul.run(prompt).await
-        .map_err(|e| format!("Subagent failed: {}", e))
+pub struct AgentTool {
+    parent_runtime: AppRuntime,  // Shared runtime with LaborMarket, skills, etc.
+}
+
+#[async_trait]
+impl Tool for AgentTool {
+    async fn call(&self, arguments: Value) -> Result<String, String> {
+        let params: AgentParams = serde_json::from_value(arguments)?;
+        let parent_runtime = self.parent_runtime.clone();
+
+        // Background or foreground?
+        if params.run_in_background {
+            tokio::spawn(async move {
+                run_subagent_with_market(parent_runtime, &params).await
+            });
+            Ok("Launched in background".to_string())
+        } else {
+            run_subagent_with_market(parent_runtime, &params).await
+        }
+    }
 }
 ```
 
-When the main agent calls `AgentTool`, it spawns a **fresh soul** with:
-- A brand-new session (isolated context)
-- The same LLM configuration
-- The same approval settings
-- The same working directory
+When the main agent calls `AgentTool`, the child agent inherits:
+- **`LaborMarket`** — the same subagent type registry (so child can spawn its own subagents)
+- **`skills`** — inherited knowledge directories
+- **`notifications`** — shared mailroom for cross-agent messaging
+- **`background_tasks`** — shared workshop foreman
+- **`denwa_renji`** — shared D-Mail/phone system
+- **`config`** — same building blueprints
+
+But it gets:
+- **Fresh session** — isolated context, no pollution of parent's conversation
+- **Model override** — if the agent spec or user params specify a different model
+- **ToolPolicy enforcement** — only allowed tools visible to the child
 
 🐍 **Python's way:** Subagents are managed by a `SubagentStore` with registry, builder, and output formatting.
 
-🦀 **Rust's way:** A simple async function that creates a `KimiSoul` and calls `run()`. No registry, no builder — just **nested agent loops**.
+🦀 **Rust's way:** A type-driven pipeline. `LaborMarket` registers subagent types from YAML specs. `AgentTool` looks up types, loads their specs, enforces `ToolPolicy`, and resolves model overrides — all before the child soul takes its first breath.
 
-✨ **Where Rust shines:** **Stack safety.** Recursive async calls in Rust are bounded by the Tokio runtime's stack. In Python, deep recursion can hit the C stack limit or cause `RecursionError`. Rust's async functions are **state machines** compiled into structs — no stack growth per call.
+✨ **Where Rust shines:** **Policy enforcement is compile-time verified.** The `ToolPolicy` enum (`AllowList | Inherit`) is matched exhaustively. Adding a new policy variant is a compile error everywhere it's not handled — in Python, a missing branch would silently fall through to "allow all."
 
 ---
 
@@ -248,12 +272,98 @@ The MCP client:
 
 ---
 
+## 🧩 The Plugin Dock: WASM Plugins
+
+File: `octopus-cli/src/plugin/mod.rs` (~180 lines)
+
+The Tool Shed has a **Plugin Dock** for WebAssembly (WASM) plugins. These are sandboxed, portable extensions written in any language that compiles to WASM.
+
+### Security-First by Design
+
+Every plugin ships with a JSON manifest that defines its permissions:
+
+```json
+{
+  "name": "HttpRequest",
+  "description": "Make HTTP requests",
+  "schema": { ... },
+  "allowed_hosts": ["api.github.com", "httpbin.org"],
+  "allowed_paths": {},
+  "timeout_ms": 30000,
+  "max_memory_pages": 64
+}
+```
+
+The manifest uses **deny-by-default** security:
+- `allowed_hosts: []` or omitted → **no network access**
+- `allowed_paths: {}` → **no filesystem access**
+- `timeout_ms` → hard limit on execution time
+- `max_memory_pages` → memory ceiling
+
+```rust
+pub fn build_extism_manifest(manifest: &PluginManifest) -> extism::Manifest {
+    let mut m = extism::Manifest::new([wasm_path])
+        .with_timeout(Duration::from_millis(timeout));
+    
+    match allowed_hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            m = m.with_allowed_hosts(hosts);
+        }
+        _ => {
+            m = m.disallow_all_hosts();  // Deny by default!
+        }
+    }
+    m
+}
+```
+
+🐍 **Python's way:** Python plugins run with full process privileges. Sandboxing requires separate processes, seccomp, or containers.
+
+🦀 **Rust's way:** Extism provides **capability-based sandboxing** at the WASM boundary. The plugin can't access anything not explicitly allowed in its manifest. Even if the plugin code is malicious, it's trapped in a memory-safe sandbox with no host access.
+
+✨ **Where Rust shines:** **Defense in depth without containers.** WASM plugins are lighter than Docker (~KB vs ~MB), start faster (~ms vs ~s), and still provide strong isolation. The manifest is human-readable and auditable — you know exactly what a plugin can do before you install it.
+
+### Plugin Discovery
+
+Plugins live in `~/.kimi/plugins/` as `.wasm` + `.json` pairs:
+
+```
+~/.kimi/plugins/
+├── HttpRequest.wasm
+├── HttpRequest.json
+├── GitStatus.wasm
+└── GitStatus.json
+```
+
+At startup, `discover_plugins()` scans this directory and registers every valid plugin as a `Tool`:
+
+```rust
+pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn Tool>> {
+    let mut tools = Vec::new();
+    for entry in fs::read_dir(plugins_dir).unwrap_or_else(|_| return vec![]) {
+        let path = entry.path();
+        if path.extension() == Some("wasm".as_ref()) {
+            let manifest_path = path.with_extension("json");
+            if let Ok(tool) = WasmPluginTool::load(&path, &manifest_path) {
+                tools.push(Box::new(tool) as Box<dyn Tool>);
+            }
+        }
+    }
+    tools
+}
+```
+
+Both agent-spec-loaded agents **and** basic fallback agents scan for plugins. So even if you don't specify an agent file, your WASM plugins are available.
+
+---
+
 ## 🎁 Souvenir Shop: What to Remember
 
-1. **The `Tool` trait is the universal interface.** Every tool — built-in, MCP, or future plugin — speaks the same language: `name()`, `description()`, `parameters_schema()`, `call()`.
+1. **The `Tool` trait is the universal interface.** Every tool — built-in, MCP, WASM plugin, or subagent — speaks the same language: `name()`, `description()`, `schema()`, `call()`.
 2. **Execution is middleware-heavy.** Hooks, approval, dedup, and telemetry wrap every tool call. The tool itself only handles the core logic.
 3. **Background tasks are first-class.** `ShellTool` can foreground or background with a single flag. The `BackgroundTaskManager` handles the lifecycle.
-4. **Subagents are recursive souls.** `AgentTool` creates a new `KimiSoul` — the same brain, fresh memory. This is agentic recursion made simple.
+4. **Subagents are policy-enforced recursive souls.** `AgentTool` looks up types in `LaborMarket`, enforces `ToolPolicy`, resolves model overrides, and shares the parent's runtime via `copy_for_subagent()`.
+5. **WASM plugins are sandboxed by default.** Deny-by-default security manifest + Extism runtime = portable, auditable, safe extensions.
 
 ---
 

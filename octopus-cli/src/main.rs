@@ -218,7 +218,16 @@ async fn async_main(cli: Cli) {
             }
         }
     }
-    let _mcp_configs = mcp_configs;
+    let mcp_configs: Vec<octopus_cli::mcp::McpConfig> = mcp_configs
+        .into_iter()
+        .map(|val| match serde_json::from_value(val) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("Invalid MCP config structure: {}", e);
+                std::process::exit(1);
+            }
+        })
+        .collect();
 
     // Determine UI mode
     let mut ui_mode = cli.ui_mode();
@@ -404,6 +413,7 @@ async fn async_main(cli: Cli) {
             cli.max_retries_per_step,
             cli.max_ralph_iterations,
             agent_file.clone(),
+            mcp_configs.clone(),
         )
         .await
         {

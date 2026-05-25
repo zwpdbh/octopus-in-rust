@@ -2,28 +2,29 @@ use crate::config::OAuthRef;
 use crate::exception::{OctopusError, Result};
 use crate::llm::LLM;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub mod oauth;
 pub mod platforms;
 
 /// Manages OAuth tokens for platform authentication.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OAuthManager {
     /// In-memory cache of access tokens by key.
-    access_tokens: std::sync::Mutex<HashMap<String, String>>,
+    access_tokens: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// In-process lock to prevent concurrent refresh attempts.
-    refresh_lock: tokio::sync::Mutex<()>,
+    refresh_lock: Arc<tokio::sync::Mutex<()>>,
     /// Tombstones for recently-rejected refresh tokens: (refresh_token, rejection_time).
-    rejected_refresh_tokens: std::sync::Mutex<HashMap<String, (String, Instant)>>,
+    rejected_refresh_tokens: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
 }
 
 impl OAuthManager {
     pub fn new() -> Self {
         Self {
-            access_tokens: std::sync::Mutex::new(HashMap::new()),
-            refresh_lock: tokio::sync::Mutex::new(()),
-            rejected_refresh_tokens: std::sync::Mutex::new(HashMap::new()),
+            access_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            rejected_refresh_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 

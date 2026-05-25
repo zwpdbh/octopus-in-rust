@@ -69,6 +69,7 @@ impl KimiSoul {
         llm: Option<LLM>,
         approval: ApprovalState,
         mut agent: crate::soul::agent::Agent,
+        tool_policy: Option<crate::subagents::ToolPolicy>,
     ) -> Self {
         let mut approval_wrapper = Approval::with_state(approval.clone());
         let approval_runtime = ApprovalRuntime::new();
@@ -107,10 +108,7 @@ impl KimiSoul {
         }
         if !has_agent {
             toolset.register(Box::new(crate::tools::agent::AgentTool::new(
-                config.clone(),
-                llm.clone(),
-                approval.clone(),
-                session.work_dir.clone(),
+                agent.runtime.clone(),
             )));
         }
         if !has_dmail {
@@ -118,6 +116,17 @@ impl KimiSoul {
                 denwa_renji.clone(),
             )));
         }
+
+        // Enforce tool policy for subagents.
+        if let Some(policy) = tool_policy {
+            match policy {
+                crate::subagents::ToolPolicy::Inherit => {}
+                crate::subagents::ToolPolicy::AllowList { tools } => {
+                    toolset.hide_all_except(&tools);
+                }
+            }
+        }
+
         let checkpoint_with_user_message = toolset.tools().iter().any(|t| t.name() == "SendDMail");
 
         let max_steps = config.loop_control.max_steps_per_turn;

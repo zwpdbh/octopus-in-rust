@@ -86,16 +86,24 @@ let approval_state = session.state.approval_state();
 // Build the heavyweight runtime for tool creation
 let app_runtime = AppRuntime::new(config.clone(), session.clone(), llm.clone(), ...);
 
-// Load agent from YAML spec (tools, system prompt, subagents)
-let agent = load_agent(agent_file, app_runtime).await?;
+// Parse MCP configs from CLI args (--mcp-config, --mcp-config-file)
+let mcp_configs = parse_mcp_configs(&cli)?;
+
+// Load agent from YAML spec (tools, system prompt, subagents, WASM plugins, MCP servers)
+let agent = load_agent(agent_file, app_runtime, mcp_configs).await?;
 
 // Inject the fully-loaded agent into the soul
-let soul = KimiSoul::new(config, session, llm, approval_state, agent);
+let soul = KimiSoul::new(config, session, llm, approval_state, agent, None);
 ```
 
 The `KimiSoul` is the heart of the building — we'll visit it in Tour 2. Here in the lobby, it's constructed with **all dependencies injected upfront**. No global variables, no `threading.local()`, no late initialization.
 
-Notice the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. This mirrors Python's `load_agent(agent_file, runtime)` architecture.
+Notice the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. Plus:
+- **WASM plugins** are discovered from `~/.kimi/plugins/`
+- **MCP servers** are connected from CLI `--mcp-config` arguments
+- **Subagent types** are registered in the `LaborMarket`
+
+This mirrors Python's `load_agent(agent_file, runtime)` architecture but extends it with plugin discovery and deferred MCP loading.
 
 ---
 

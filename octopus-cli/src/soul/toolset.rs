@@ -160,6 +160,22 @@ impl KimiToolset {
         }
     }
 
+    /// Hide all tools except those in the allowlist.
+    pub fn hide_all_except(&mut self, allowed: &[String]) {
+        let allowed: std::collections::HashSet<_> = allowed.iter().collect();
+        let all_names: Vec<String> = self
+            .registry
+            .list()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        for name in all_names {
+            if !allowed.contains(&name) {
+                self.hide(&name);
+            }
+        }
+    }
+
     /// Restore a hidden tool to the LLM tool list.
     pub fn unhide(&mut self, tool_name: &str) {
         self.hidden_tools.remove(tool_name);
