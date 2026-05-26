@@ -228,9 +228,9 @@ impl KimiSoul {
         crate::wire::set_current_wire_soul_side(Some(soul_side.clone()));
 
         // Start notification pump — delivers pending notifications to wire.
-        let pump_handle = self._start_notification_pump(soul_side.clone());
+        let pump_handle = self.start_notification_pump(soul_side.clone());
 
-        let result = self._run_turn(text).await;
+        let result = self.run_turn(text).await;
 
         // Cleanup
         if let Some(handle) = pump_handle {
@@ -244,7 +244,7 @@ impl KimiSoul {
         result
     }
 
-    async fn _run_turn(&mut self, text: &str) -> Result<String> {
+    async fn run_turn(&mut self, text: &str) -> Result<String> {
         let user_message = Message {
             role: "user".to_string(),
             content: vec![ContentPart::Text {
@@ -300,7 +300,7 @@ impl KimiSoul {
             user_input: Some(text.to_string()),
         });
 
-        let turn_result = self._turn(user_message).await;
+        let turn_result = self.turn(user_message).await;
 
         // TurnEnd is sent regardless of success or failure.
         wire_send(TurnEnd {});
@@ -346,7 +346,7 @@ impl KimiSoul {
         result
     }
 
-    fn _start_notification_pump(
+    fn start_notification_pump(
         &self,
         soul_side: crate::wire::channel::WireSoulSide,
     ) -> Option<tokio::task::JoinHandle<()>> {
@@ -367,7 +367,7 @@ impl KimiSoul {
         }))
     }
 
-    async fn _turn(&mut self, user_message: Message) -> Result<TurnOutcome> {
+    async fn turn(&mut self, user_message: Message) -> Result<TurnOutcome> {
         if self.llm.is_none() {
             return Err(LLMNotSet::NotSet.into());
         }
@@ -391,10 +391,10 @@ impl KimiSoul {
             .await
             .map_err(|e| OctopusError::Io(e))?;
 
-        self._agent_loop().await
+        self.agent_loop().await
     }
 
-    async fn _agent_loop(&mut self) -> Result<TurnOutcome> {
+    async fn agent_loop(&mut self) -> Result<TurnOutcome> {
         // Discard stale steers
         self.steer_queue.clear();
 
@@ -482,7 +482,7 @@ impl KimiSoul {
             self._current_step_no = step_no;
             wire_send(StepBegin { n: step_no });
 
-            let step_result = match self._step().await {
+            let step_result = match self.step().await {
                 Ok(result) => result,
                 Err(OctopusError::BackToTheFuture(ref e)) => {
                     // D-Mail revert: roll back to checkpoint and inject message.
@@ -529,7 +529,7 @@ impl KimiSoul {
             };
 
             // Consume pending steers
-            let has_steers = self._consume_pending_steers().await;
+            let has_steers = self.consume_pending_steers().await;
             if has_steers {
                 continue;
             }
@@ -547,16 +547,16 @@ impl KimiSoul {
         }
     }
 
-    async fn _step(&mut self) -> Result<Option<StepOutcome>> {
+    async fn step(&mut self) -> Result<Option<StepOutcome>> {
         let max_attempts = self.max_retries_per_step;
         let mut last_error: Option<OctopusError> = None;
 
         for attempt in 1..=max_attempts {
-            match self._run_step_once().await {
+            match self.run_step_once().await {
                 Ok(outcome) => return Ok(outcome),
-                Err(e) if Self::_is_retryable_error(&e) && attempt < max_attempts => {
-                    let wait_s = Self::_retry_wait_secs(attempt);
-                    self._emit_step_retry(attempt, max_attempts, wait_s, &e);
+                Err(e) if Self::is_retryable_error(&e) && attempt < max_attempts => {
+                    let wait_s = Self::retry_wait_secs(attempt);
+                    self.emit_step_retry(attempt, max_attempts, wait_s, &e);
                     tracing::warn!(
                         "Retrying step {} for the {} time (last error: {:?}). Waiting {:.1}s.",
                         self._current_step_no,
@@ -579,7 +579,7 @@ impl KimiSoul {
     ///
     /// Mirrors Python's `_run_with_connection_recovery()` in `kimisoul.py`.
     /// Handles 401 → OAuth refresh and connection-error recovery, each once.
-    async fn _run_step_once(&mut self) -> Result<Option<StepOutcome>> {
+    async fn run_step_once(&mut self) -> Result<Option<StepOutcome>> {
         let mut auth_retried = false;
         let mut connection_retried = false;
 
@@ -588,7 +588,7 @@ impl KimiSoul {
                 .llm
                 .clone()
                 .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
-            let result = self._run_step_once_inner(&llm).await;
+            let result = self.run_step_once_inner(&llm).await;
             match result {
                 Ok(v) => return Ok(v),
                 Err(OctopusError::APIStatus(ref e)) if e.status_code == 401 && !auth_retried => {
@@ -654,10 +654,10 @@ impl KimiSoul {
     }
 
     /// The actual LLM step logic, without any recovery wrapper.
-    async fn _run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
+    async fn run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
         // ── Dynamic Injection ───────────────────────────────────────────────
         // Mirrors Python's `_collect_injections()` in `kimisoul.py`.
-        let injections = self._collect_injections().await;
+        let injections = self.collect_injections().await;
         if !injections.is_empty() {
             let reminder_text = injections
                 .iter()
@@ -760,7 +760,7 @@ impl KimiSoul {
         let completion = match completion_result {
             Ok(c) => c,
             Err(e) => {
-                let (error_type, status_code) = Self::_classify_api_error(&e);
+                let (error_type, status_code) = Self::classify_api_error(&e);
                 if let Some(sc) = status_code {
                     crate::track!(
                         "api_error",
@@ -794,7 +794,7 @@ impl KimiSoul {
             token_usage: usage.clone(),
             message_id: completion.id,
             plan_mode: Some(self.plan_mode),
-            context_usage: Some(self._context_usage()),
+            context_usage: Some(self.context_usage()),
             context_tokens: Some(self.context.token_count()),
             max_context_tokens: self.llm.as_ref().map(|l| l.max_context_size),
             ..Default::default()
@@ -841,8 +841,7 @@ impl KimiSoul {
             self._last_tool_calls = self.toolset.end_step();
 
             // Grow context
-            self._grow_context(&assistant_message, &tool_results)
-                .await?;
+            self.grow_context(&assistant_message, &tool_results).await?;
 
             // Check for rejections
             let rejected: Vec<_> = tool_results
@@ -898,7 +897,7 @@ impl KimiSoul {
         }
     }
 
-    fn _is_retryable_error(error: &OctopusError) -> bool {
+    fn is_retryable_error(error: &OctopusError) -> bool {
         use crate::exception::APIStatusError;
         match error {
             OctopusError::APIConnection(_) | OctopusError::APITimeout(_) => true,
@@ -910,7 +909,7 @@ impl KimiSoul {
         }
     }
 
-    fn _retry_wait_secs(attempt: usize) -> f64 {
+    fn retry_wait_secs(attempt: usize) -> f64 {
         // Exponential backoff with jitter: initial=0.3, max=5, jitter=0.5
         let base = 0.3_f64 * 2_f64.powi((attempt - 1) as i32);
         let capped = base.min(5.0);
@@ -918,14 +917,14 @@ impl KimiSoul {
         capped + jitter
     }
 
-    fn _emit_step_retry(
+    fn emit_step_retry(
         &self,
         attempt: usize,
         max_attempts: usize,
         wait_s: f64,
         error: &OctopusError,
     ) {
-        let (error_type, status_code) = Self::_classify_api_error(error);
+        let (error_type, status_code) = Self::classify_api_error(error);
         wire_send(StepRetry {
             n: self._current_step_no,
             next_attempt: attempt + 1,
@@ -936,7 +935,7 @@ impl KimiSoul {
         });
     }
 
-    fn _classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
+    fn classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
         use crate::exception::APIStatusError;
         match error {
             OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
@@ -956,7 +955,7 @@ impl KimiSoul {
         }
     }
 
-    async fn _grow_context(
+    async fn grow_context(
         &mut self,
         assistant_message: &Message,
         tool_results: &[crate::wire::ToolResult],
@@ -987,7 +986,7 @@ impl KimiSoul {
         Ok(())
     }
 
-    async fn _consume_pending_steers(&mut self) -> bool {
+    async fn consume_pending_steers(&mut self) -> bool {
         let mut consumed = false;
         while let Some(content) = self.steer_queue.pop() {
             let steer_msg = Message {
@@ -1014,7 +1013,7 @@ impl KimiSoul {
     }
 
     /// Sync the in-memory approval state to the session and persist it.
-    pub(super) fn _sync_approval_state(&mut self) {
+    pub(super) fn sync_approval_state(&mut self) {
         self.session.state.approval.yolo = self.approval.yolo();
         self.session.state.approval.afk = self.approval.afk();
         self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions();
@@ -1127,7 +1126,7 @@ impl KimiSoul {
 
         // Notify injection providers that history has been rebuilt so they can
         // reset any one-shot throttling state.
-        self._notify_injection_providers_compacted().await;
+        self.notify_injection_providers_compacted().await;
 
         Ok(())
     }
@@ -1136,7 +1135,7 @@ impl KimiSoul {
     // Dynamic Injection
     // ========================================================================
 
-    async fn _collect_injections(
+    async fn collect_injections(
         &mut self,
     ) -> Vec<crate::soul::dynamic_injection::DynamicInjection> {
         let plan_file_path = self.get_plan_file_path();
@@ -1156,7 +1155,7 @@ impl KimiSoul {
         injections
     }
 
-    async fn _notify_injection_providers_compacted(&mut self) {
+    async fn notify_injection_providers_compacted(&mut self) {
         for provider in &mut self._injection_providers {
             provider.on_context_compacted().await;
         }
@@ -1245,7 +1244,7 @@ impl KimiSoul {
         }
     }
 
-    fn _context_usage(&self) -> f64 {
+    fn context_usage(&self) -> f64 {
         let max_size = self.llm.as_ref().map(|l| l.max_context_size).unwrap_or(0);
         if max_size > 0 {
             self.context.token_count() as f64 / max_size as f64

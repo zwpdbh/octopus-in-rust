@@ -84,7 +84,7 @@ impl Default for SessionState {
     }
 }
 
-fn _migrate_legacy_metadata<'a>(session_dir: &'a Path, state: &'a mut SessionState) -> &'a str {
+fn migrate_legacy_metadata<'a>(session_dir: &'a Path, state: &'a mut SessionState) -> &'a str {
     let metadata_file = session_dir.join(LEGACY_METADATA_FILENAME);
     if !metadata_file.exists() {
         return "skip";
@@ -163,7 +163,7 @@ pub fn load_session_state(session_dir: &Path) -> SessionState {
         SessionState::default()
     };
 
-    let migration = _migrate_legacy_metadata(session_dir, &mut state);
+    let migration = migrate_legacy_metadata(session_dir, &mut state);
     if migration == "migrated" || migration == "no_change" {
         if migration == "migrated" {
             let _ = save_session_state(&state, session_dir);

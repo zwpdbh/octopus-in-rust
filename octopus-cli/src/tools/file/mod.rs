@@ -149,7 +149,7 @@ impl GrepTool {
     }
 }
 
-fn _resolve_path(path: &str) -> PathBuf {
+fn resolve_path(path: &str) -> PathBuf {
     let p = PathBuf::from(path);
     if p.is_absolute() {
         p
@@ -160,7 +160,7 @@ fn _resolve_path(path: &str) -> PathBuf {
     }
 }
 
-fn _read_file_lines(path: &Path, line_offset: i32, n_lines: usize) -> Result<String, String> {
+fn read_file_lines(path: &Path, line_offset: i32, n_lines: usize) -> Result<String, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
@@ -232,7 +232,7 @@ impl Tool for ReadFileTool {
         let params: ReadFileParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
 
-        let path = _resolve_path(&params.path);
+        let path = resolve_path(&params.path);
 
         if !path.exists() {
             return Err(format!("`{}` does not exist.", params.path));
@@ -241,7 +241,7 @@ impl Tool for ReadFileTool {
             return Err(format!("`{}` is not a file.", params.path));
         }
 
-        _read_file_lines(&path, params.line_offset, params.n_lines)
+        read_file_lines(&path, params.line_offset, params.n_lines)
     }
 }
 
@@ -275,7 +275,7 @@ impl Tool for WriteFileTool {
         let params: WriteFileParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
 
-        let path = _resolve_path(&params.path);
+        let path = resolve_path(&params.path);
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -345,7 +345,7 @@ impl Tool for StrReplaceFileTool {
         let params: StrReplaceFileParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
 
-        let path = _resolve_path(&params.path);
+        let path = resolve_path(&params.path);
 
         if !path.exists() {
             return Err(format!("`{}` does not exist.", params.path));
@@ -480,7 +480,7 @@ impl Tool for GrepTool {
         let params: GrepParams =
             serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
 
-        let path = _resolve_path(&params.path);
+        let path = resolve_path(&params.path);
 
         let mut args = vec!["rg".to_string()];
 

@@ -151,11 +151,11 @@ impl ApprovalRuntime {
             match tokio::time::timeout(duration, rx).await {
                 Ok(Ok(response)) => Ok(response),
                 Ok(Err(_)) => {
-                    self._cancel_request(request_id, "approval channel closed");
+                    self.cancel_request(request_id, "approval channel closed");
                     Err(ApprovalCancelledError)
                 }
                 Err(_) => {
-                    self._cancel_request(request_id, "approval timed out");
+                    self.cancel_request(request_id, "approval timed out");
                     Err(ApprovalCancelledError)
                 }
             }
@@ -163,7 +163,7 @@ impl ApprovalRuntime {
             match rx.await {
                 Ok(response) => Ok(response),
                 Err(_) => {
-                    self._cancel_request(request_id, "approval channel closed");
+                    self.cancel_request(request_id, "approval channel closed");
                     Err(ApprovalCancelledError)
                 }
             }
@@ -232,7 +232,7 @@ impl ApprovalRuntime {
         };
 
         for request_id in request_ids {
-            self._cancel_request(&request_id, "turn ended");
+            self.cancel_request(&request_id, "turn ended");
         }
     }
 
@@ -251,7 +251,7 @@ impl ApprovalRuntime {
             .collect()
     }
 
-    fn _cancel_request(&self, request_id: &str, feedback: &str) {
+    fn cancel_request(&self, request_id: &str, feedback: &str) {
         let mut inner = self.inner.lock().unwrap();
         let request = match inner.requests.get_mut(request_id) {
             Some(r) if r.status == ApprovalStatus::Pending => r,

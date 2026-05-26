@@ -48,7 +48,7 @@ impl OAuthManager {
     /// When `force` is true, always refresh regardless of expiry.
     /// Returns the new access token if a refresh was performed.
     pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<Option<String>> {
-        let oauth_ref = match self._kimi_code_ref(llm) {
+        let oauth_ref = match self.kimi_code_ref(llm) {
             Some(r) => r,
             None => return Ok(None),
         };
@@ -60,10 +60,10 @@ impl OAuthManager {
         };
 
         // Check if refresh token was recently rejected
-        if self._should_suppress_persisted_token(&oauth_ref.key, &token) {
+        if self.should_suppress_persisted_token(&oauth_ref.key, &token) {
             self.access_tokens.lock().unwrap().remove(&oauth_ref.key);
 
-            if !self._can_retry_rejected_refresh_token(&oauth_ref.key, &token.refresh_token) {
+            if !self.can_retry_rejected_refresh_token(&oauth_ref.key, &token.refresh_token) {
                 if force {
                     return Err(OctopusError::Other(
                         "Refresh token was recently rejected. Please log in again.".to_string(),
@@ -73,11 +73,11 @@ impl OAuthManager {
             }
         } else {
             // Cache the valid access token
-            self._cache_access_token(&oauth_ref.key, &token);
+            self.cache_access_token(&oauth_ref.key, &token);
         }
 
         // Decide whether to refresh
-        self._refresh_tokens(&oauth_ref, token, force).await
+        self.refresh_tokens(&oauth_ref, token, force).await
     }
 
     /// Log in to a platform.
@@ -85,7 +85,7 @@ impl OAuthManager {
         match platform_id {
             "kimi-code" => {
                 let token = oauth::login_kimi_code().await?;
-                self._cache_access_token(oauth::KIMI_CODE_OAUTH_KEY, &token);
+                self.cache_access_token(oauth::KIMI_CODE_OAUTH_KEY, &token);
                 println!("Successfully logged in to Kimi Code.");
                 Ok(())
             }
@@ -135,7 +135,7 @@ impl OAuthManager {
     // Internal
     // ============================================================================
 
-    fn _kimi_code_ref(&self, llm: &LLM) -> Option<OAuthRef> {
+    fn kimi_code_ref(&self, llm: &LLM) -> Option<OAuthRef> {
         // Find the provider config that matches the current LLM's provider
         llm.provider_config.as_ref().and_then(|p| {
             if p.provider_type == crate::config::ProviderType::Kimi {
@@ -146,14 +146,14 @@ impl OAuthManager {
         })
     }
 
-    fn _cache_access_token(&self, key: &str, token: &oauth::OAuthToken) {
+    fn cache_access_token(&self, key: &str, token: &oauth::OAuthToken) {
         self.access_tokens
             .lock()
             .unwrap()
             .insert(key.to_string(), token.access_token.clone());
     }
 
-    fn _should_suppress_persisted_token(&self, key: &str, token: &oauth::OAuthToken) -> bool {
+    fn should_suppress_persisted_token(&self, key: &str, token: &oauth::OAuthToken) -> bool {
         let rejected = self.rejected_refresh_tokens.lock().unwrap();
         if let Some((rejected_token, _)) = rejected.get(key) {
             return rejected_token == &token.refresh_token;
@@ -161,7 +161,7 @@ impl OAuthManager {
         false
     }
 
-    fn _can_retry_rejected_refresh_token(&self, key: &str, refresh_token: &str) -> bool {
+    fn can_retry_rejected_refresh_token(&self, key: &str, refresh_token: &str) -> bool {
         let rejected = self.rejected_refresh_tokens.lock().unwrap();
         if let Some((rejected_token, time)) = rejected.get(key) {
             if rejected_token == refresh_token {
@@ -172,18 +172,18 @@ impl OAuthManager {
         true
     }
 
-    fn _mark_refresh_token_rejected(&self, key: &str, refresh_token: &str) {
+    fn mark_refresh_token_rejected(&self, key: &str, refresh_token: &str) {
         self.rejected_refresh_tokens
             .lock()
             .unwrap()
             .insert(key.to_string(), (refresh_token.to_string(), Instant::now()));
     }
 
-    fn _clear_rejected_refresh_token(&self, key: &str) {
+    fn clear_rejected_refresh_token(&self, key: &str) {
         self.rejected_refresh_tokens.lock().unwrap().remove(key);
     }
 
-    async fn _refresh_tokens(
+    async fn refresh_tokens(
         &self,
         ref_ref: &OAuthRef,
         token: oauth::OAuthToken,
@@ -205,8 +205,8 @@ impl OAuthManager {
 
         // If the token on disk is different, someone else refreshed it
         if current.refresh_token != refresh_token_value {
-            self._clear_rejected_refresh_token(&ref_ref.key);
-            self._cache_access_token(&ref_ref.key, &current);
+            self.clear_rejected_refresh_token(&ref_ref.key);
+            self.cache_access_token(&ref_ref.key, &current);
             return Ok(Some(current.access_token));
         }
 
@@ -224,15 +224,15 @@ impl OAuthManager {
         // Perform refresh
         match oauth::refresh_token(&refresh_token_value).await {
             Ok(refreshed) => {
-                self._clear_rejected_refresh_token(&ref_ref.key);
+                self.clear_rejected_refresh_token(&ref_ref.key);
                 oauth::save_tokens(&ref_ref.key, &refreshed)?;
-                self._cache_access_token(&ref_ref.key, &refreshed);
+                self.cache_access_token(&ref_ref.key, &refreshed);
                 Ok(Some(refreshed.access_token.clone()))
             }
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("401") || msg.contains("403") {
-                    self._mark_refresh_token_rejected(&ref_ref.key, &refresh_token_value);
+                    self.mark_refresh_token_rejected(&ref_ref.key, &refresh_token_value);
                     self.access_tokens.lock().unwrap().remove(&ref_ref.key);
                     if force {
                         return Err(e);

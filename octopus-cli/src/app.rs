@@ -63,10 +63,8 @@ impl OctopusCLI {
         session: Session,
         config_source: Option<ConfigSource>,
         model_name: Option<String>,
-        thinking: Option<bool>,
         yolo: bool,
         afk: bool,
-        plan_mode: bool,
         resumed: bool,
         ui_mode: UiMode,
         max_steps_per_turn: Option<usize>,
@@ -178,17 +176,11 @@ impl OctopusCLI {
 
         // 3. Resolve derived settings.
         // 3.1 Merge CLI flags with config defaults.
-        let _thinking = thinking.unwrap_or(config.default_thinking);
         let yolo = yolo || config.default_yolo;
-        let _plan_mode = if resumed {
-            false
-        } else {
-            plan_mode || config.default_plan_mode
-        };
 
         // 3.2 Instantiate the LLM client only when provider and model are configured.
         let llm = if !provider.base_url.is_empty() && !model.model.is_empty() {
-            create_llm(&provider, &model, thinking, Some(&session.id))
+            create_llm(&provider, &model)
         } else {
             None
         };

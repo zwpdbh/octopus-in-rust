@@ -30,12 +30,12 @@ impl SkillRegistry {
     pub fn discover(&mut self, dirs: &[PathBuf]) {
         for dir in dirs {
             if dir.is_dir() {
-                self._discover_dir(dir);
+                self.discover_dir(dir);
             }
         }
     }
 
-    fn _discover_dir(&mut self, dir: &Path) {
+    fn discover_dir(&mut self, dir: &Path) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -43,13 +43,13 @@ impl SkillRegistry {
                     // Subdirectory form: <name>/SKILL.md
                     let skill_md = path.join("SKILL.md");
                     if skill_md.is_file() {
-                        if let Some(skill) = Self::_parse_skill_md(&skill_md) {
+                        if let Some(skill) = Self::parse_skill_md(&skill_md) {
                             self.skills.insert(skill.name.clone(), skill);
                         }
                     }
                 } else if path.extension() == Some("md".as_ref()) {
                     // Flat form: <name>.md
-                    if let Some(skill) = Self::_parse_skill_md(&path) {
+                    if let Some(skill) = Self::parse_skill_md(&path) {
                         self.skills.insert(skill.name.clone(), skill);
                     }
                 }
@@ -57,7 +57,7 @@ impl SkillRegistry {
         }
     }
 
-    fn _parse_skill_md(path: &Path) -> Option<Skill> {
+    fn parse_skill_md(path: &Path) -> Option<Skill> {
         let content = std::fs::read_to_string(path).ok()?;
         let mut name = None;
         let mut description = None;

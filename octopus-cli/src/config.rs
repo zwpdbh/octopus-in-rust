@@ -336,7 +336,7 @@ pub fn get_default_config() -> Config {
     Config::default()
 }
 
-fn _migrate_json_config_to_toml() {
+fn migrate_json_config_to_toml() {
     let old = get_share_dir().join("config.json");
     let new = get_share_dir().join("config.toml");
     if !old.exists() || new.exists() {
@@ -363,7 +363,7 @@ pub fn load_config(config_file: Option<&Path>) -> Result<Config> {
     let is_default_config_file = config_file == default_config_file;
 
     if is_default_config_file && !config_file.exists() {
-        _migrate_json_config_to_toml();
+        migrate_json_config_to_toml();
     }
 
     if !config_file.exists() {

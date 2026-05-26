@@ -104,12 +104,7 @@ pub fn derive_model_capabilities(model: &LLMModel) -> HashSet<ModelCapability> {
     capabilities
 }
 
-pub fn create_llm(
-    provider: &LLMProvider,
-    model: &LLMModel,
-    _thinking: Option<bool>,
-    _session_id: Option<&str>,
-) -> Option<LLM> {
+pub fn create_llm(provider: &LLMProvider, model: &LLMModel) -> Option<LLM> {
     let capabilities = derive_model_capabilities(model);
     Some(LLM {
         model_name: model.model.clone(),
@@ -135,7 +130,7 @@ pub fn clone_llm_with_model_alias(
     let provider = config.providers.get(&model.provider).ok_or_else(|| {
         crate::exception::OctopusError::Other(format!("Provider not found: {}", model.provider))
     })?;
-    Ok(create_llm(provider, model, None, None))
+    Ok(create_llm(provider, model))
 }
 
 #[derive(Debug, Clone)]

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::metadata::{WorkDirMeta, load_metadata, save_metadata};
 use crate::session_state::{SessionState, load_session_state, save_session_state};
 
-fn _migrate_session_context_file(work_dir_meta: &WorkDirMeta, session_id: &str) {
+fn migrate_session_context_file(work_dir_meta: &WorkDirMeta, session_id: &str) {
     let old = work_dir_meta
         .sessions_dir()
         .join(format!("{}.jsonl", session_id));
@@ -177,7 +177,7 @@ impl Session {
         let metadata = load_metadata();
         let work_dir_meta = metadata.get_work_dir_meta(&work_dir)?.clone();
 
-        _migrate_session_context_file(&work_dir_meta, session_id);
+        migrate_session_context_file(&work_dir_meta, session_id);
 
         let session_dir = work_dir_meta.sessions_dir().join(session_id);
         if !session_dir.is_dir() {
@@ -236,7 +236,7 @@ impl Session {
 
         let mut sessions = Vec::new();
         for session_id in session_ids {
-            _migrate_session_context_file(&work_dir_meta, &session_id);
+            migrate_session_context_file(&work_dir_meta, &session_id);
             let session_dir = work_dir_meta.sessions_dir().join(&session_id);
             if !session_dir.is_dir() {
                 continue;
