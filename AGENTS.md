@@ -276,6 +276,92 @@ Even in case 2, convert to a typed struct as soon as the shape is known.
 
 ---
 
+### Use Strong Enums for Channel and IPC Messages
+
+**Rule:** When messages flow through channels (`tokio::sync::broadcast`, `mpsc`, etc.), use a single `enum` that lists every possible message type. Do not use `serde_json::Value`, `String`, or raw bytes as the common carrier type.
+
+If JSON backward compatibility is required (e.g., log files), use `#[serde(untagged)]` on the enum so serialization stays identical while deserialization gains type safety.
+
+#### Why
+
+- **Exhaustiveness:** `match event` forces every consumer to acknowledge every message type. Adding a new variant becomes a compile error across all receivers, not a silent deserialization failure.
+- **Discoverability:** A new developer can open the enum definition and immediately see the complete protocol. With `Value`, they must grep every `wire_send` call site to reconstruct the protocol.
+- **Refactoring safety:** Rename a variant and the compiler shows every producer and consumer. Rename a JSON field string and you rely on runtime tests to catch missed sites.
+
+#### Bad
+
+```rust
+pub struct Wire {
+    raw_tx: broadcast::Sender<serde_json::Value>,
+    merged_tx: broadcast::Sender<serde_json::Value>,
+}
+
+pub fn wire_send<T: Serialize>(event: T) {
+    let value = serde_json::to_value(&event).unwrap();
+    soul_side.send(value);
+}
+
+// Producer: any struct can be sent
+wire_send(TextPart { text: "hello".to_string() });
+wire_send(TurnBegin { user_input: Some("hi".to_string()) });
+
+// Consumer: trial-and-error deserialization
+if let Ok(req) = serde_json::from_value::<ApprovalRequestEvent>(value.clone()) {
+    self.pending_approval = Some(req);
+} else if let Ok(text) = serde_json::from_value::<TextPart>(value) {
+    self.append_text(text.text);
+}
+```
+
+#### Good
+
+```rust
+// File: octopus-cli/src/wire/types.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WireEvent {
+    TextPart(TextPart),
+    TurnBegin(TurnBegin),
+    TurnEnd(TurnEnd),
+    StepBegin(StepBegin),
+    StatusUpdate(StatusUpdate),
+    ApprovalRequest(ApprovalRequestEvent),
+    ApprovalResponse(ApprovalResponseEvent),
+    // ... every message type in one place
+}
+
+pub struct Wire {
+    raw_tx: broadcast::Sender<WireEvent>,
+    merged_tx: broadcast::Sender<WireEvent>,
+}
+
+pub fn wire_send(event: WireEvent) {
+    soul_side.send(event);
+}
+
+// Producer: variant is explicit
+wire_send(WireEvent::TextPart(TextPart { text: "hello".to_string() }));
+wire_send(WireEvent::TurnBegin(TurnBegin { user_input: Some("hi".to_string()) }));
+
+// Consumer: exhaustive match
+match event {
+    WireEvent::ApprovalRequest(req) => self.pending_approval = Some(req),
+    WireEvent::TextPart(text) => self.append_text(text.text),
+    WireEvent::TurnEnd(_) => self.end_turn(),
+    // Compiler forces you to handle every variant
+}
+```
+
+#### Exception
+
+Raw bytes or `Value` are acceptable only when:
+1. The channel crosses a true process/network boundary where the peer is not Rust (e.g., WebSocket, gRPC).
+2. The protocol is intentionally schemaless (e.g., plugin extensibility where third parties define message shapes).
+
+Even then, deserialize to a strong enum at the earliest possible point inside your process.
+
+---
+
 ### Keep `mod.rs` Thin — Index Modules Only
 
 **Rule:** `mod.rs` contains **only** `pub mod` declarations and `pub use` re-exports. Logic lives in sibling files.

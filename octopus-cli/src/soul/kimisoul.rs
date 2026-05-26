@@ -42,13 +42,13 @@ pub struct KimiSoul {
     pub bg_manager: crate::background::BackgroundTaskManager,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
-    _current_step_no: usize,
-    _current_turn_id: Option<String>,
-    _last_tool_calls: Vec<(String, String)>,
-    _injection_providers: Vec<Box<dyn DynamicInjectionProvider>>,
-    _pending_plan_activation_injection: bool,
-    _plan_session_id: Option<String>,
-    _checkpoint_with_user_message: bool,
+    current_step_no: usize,
+    current_turn_id: Option<String>,
+    last_tool_calls: Vec<(String, String)>,
+    injection_providers: Vec<Box<dyn DynamicInjectionProvider>>,
+    pending_plan_activation_injection: bool,
+    plan_session_id: Option<String>,
+    checkpoint_with_user_message: bool,
 }
 
 impl KimiSoul {
@@ -194,10 +194,10 @@ impl KimiSoul {
             bg_manager,
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
-            _current_step_no: 0,
-            _current_turn_id: None,
-            _last_tool_calls: Vec::new(),
-            _injection_providers: vec![
+            current_step_no: 0,
+            current_turn_id: None,
+            last_tool_calls: Vec::new(),
+            injection_providers: vec![
                 Box::new(
                     crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new(),
                 ),
@@ -205,9 +205,9 @@ impl KimiSoul {
                     crate::soul::dynamic_injections::afk_mode::AfkModeInjectionProvider::new(),
                 ),
             ],
-            _pending_plan_activation_injection: false,
-            _plan_session_id: plan_session_id,
-            _checkpoint_with_user_message: checkpoint_with_user_message,
+            pending_plan_activation_injection: false,
+            plan_session_id,
+            checkpoint_with_user_message,
         }
     }
 
@@ -288,27 +288,27 @@ impl KimiSoul {
                 .await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
-                    wire_send(crate::wire::TextPart {
+                    wire_send(crate::wire::WireEvent::TextPart(crate::wire::TextPart {
                         text: format!("UserPromptSubmit hook blocked: {}", reason),
-                    });
+                    }));
                     return Ok(String::new());
                 }
             }
         }
 
-        wire_send(TurnBegin {
+        wire_send(crate::wire::WireEvent::TurnBegin(TurnBegin {
             user_input: Some(text.to_string()),
-        });
+        }));
 
         let turn_result = self.turn(user_message).await;
 
         // TurnEnd is sent regardless of success or failure.
-        wire_send(TurnEnd {});
+        wire_send(crate::wire::WireEvent::TurnEnd(TurnEnd {}));
         if turn_result.is_err() {
-            tracing::warn!("Turn interrupted at step {}", self._current_step_no);
+            tracing::warn!("Turn interrupted at step {}", self.current_step_no);
             crate::track!(
                 "turn_interrupted",
-                step_no = self._current_step_no,
+                step_no = self.current_step_no,
                 session_id = self.session.id,
             );
         } else {
@@ -359,7 +359,7 @@ impl KimiSoul {
                 let _ = nm
                     .deliver_pending("wire", 8, |view| {
                         let notification = crate::notifications::wire::to_wire_notification(view);
-                        soul_side.send(serde_json::to_value(&notification).unwrap_or_default());
+                        soul_side.send(crate::wire::WireEvent::Notification(notification));
                         std::future::ready(())
                     })
                     .await;
@@ -379,8 +379,8 @@ impl KimiSoul {
             }
         }
 
-        self._current_turn_id = Some(uuid::Uuid::new_v4().to_string());
-        self._last_tool_calls = Vec::new();
+        self.current_turn_id = Some(uuid::Uuid::new_v4().to_string());
+        self.last_tool_calls = Vec::new();
 
         self.context
             .checkpoint(false)
@@ -409,11 +409,15 @@ impl KimiSoul {
             if let Some(snapshot) = self.toolset.mcp_status_snapshot() {
                 mcp_was_loading = snapshot.loading;
                 if mcp_was_loading {
-                    wire_send(crate::wire::StatusUpdate {
-                        mcp_status: Some(snapshot),
-                        ..Default::default()
-                    });
-                    wire_send(crate::wire::MCPLoadingBegin {});
+                    wire_send(crate::wire::WireEvent::StatusUpdate(
+                        crate::wire::StatusUpdate {
+                            mcp_status: Some(snapshot),
+                            ..Default::default()
+                        },
+                    ));
+                    wire_send(crate::wire::WireEvent::McpLoadingBegin(
+                        crate::wire::MCPLoadingBegin {},
+                    ));
                 }
             }
         }
@@ -438,11 +442,15 @@ impl KimiSoul {
                         total_count = mcp_snap.total,
                     );
                 }
-                wire_send(crate::wire::StatusUpdate {
-                    mcp_status: Some(mcp_snap),
-                    ..Default::default()
-                });
-                wire_send(crate::wire::MCPLoadingEnd {});
+                wire_send(crate::wire::WireEvent::StatusUpdate(
+                    crate::wire::StatusUpdate {
+                        mcp_status: Some(mcp_snap),
+                        ..Default::default()
+                    },
+                ));
+                wire_send(crate::wire::WireEvent::McpLoadingEnd(
+                    crate::wire::MCPLoadingEnd {},
+                ));
             }
         }
 
@@ -471,7 +479,7 @@ impl KimiSoul {
             }
 
             self.context
-                .checkpoint(self._checkpoint_with_user_message)
+                .checkpoint(self.checkpoint_with_user_message)
                 .await
                 .map_err(|e| OctopusError::Io(e))?;
             self.denwa_renji
@@ -479,8 +487,8 @@ impl KimiSoul {
                 .unwrap()
                 .set_n_checkpoints(self.context.n_checkpoints());
 
-            self._current_step_no = step_no;
-            wire_send(StepBegin { n: step_no });
+            self.current_step_no = step_no;
+            wire_send(crate::wire::WireEvent::StepBegin(StepBegin { n: step_no }));
 
             let step_result = match self.step().await {
                 Ok(result) => result,
@@ -494,9 +502,9 @@ impl KimiSoul {
                         .revert_to(e.checkpoint_id)
                         .await
                         .map_err(|io_err| OctopusError::Io(io_err))?;
-                    self._last_tool_calls = Vec::new();
+                    self.last_tool_calls = Vec::new();
                     self.context
-                        .checkpoint(self._checkpoint_with_user_message)
+                        .checkpoint(self.checkpoint_with_user_message)
                         .await
                         .map_err(|e| OctopusError::Io(e))?;
                     for msg in &e.messages {
@@ -508,7 +516,7 @@ impl KimiSoul {
                     continue;
                 }
                 Err(e) => {
-                    wire_send(StepInterrupted {});
+                    wire_send(crate::wire::WireEvent::StepInterrupted(StepInterrupted {}));
                     // --- StopFailure hook ---
                     // Fire-and-forget: hook execution must not block error propagation.
                     let input_data = crate::hooks::events::stop_failure(
@@ -559,7 +567,7 @@ impl KimiSoul {
                     self.emit_step_retry(attempt, max_attempts, wait_s, &e);
                     tracing::warn!(
                         "Retrying step {} for the {} time (last error: {:?}). Waiting {:.1}s.",
-                        self._current_step_no,
+                        self.current_step_no,
                         attempt,
                         e,
                         wait_s
@@ -603,7 +611,7 @@ impl KimiSoul {
                     }
                     tracing::warn!(
                         "Received 401 during step {}, attempting token refresh",
-                        self._current_step_no
+                        self.current_step_no
                     );
                     let llm = self
                         .llm
@@ -629,7 +637,7 @@ impl KimiSoul {
                 Err(OctopusError::APIConnection(ref e)) if !connection_retried => {
                     tracing::warn!(
                         "Connection error during step {}: {}. Attempting recovery.",
-                        self._current_step_no,
+                        self.current_step_no,
                         e
                     );
                     // TODO: chat provider recovery via RetryableChatProvider.
@@ -640,7 +648,7 @@ impl KimiSoul {
                 Err(OctopusError::APITimeout(ref e)) if !connection_retried => {
                     tracing::warn!(
                         "Timeout during step {}: {}. Attempting recovery.",
-                        self._current_step_no,
+                        self.current_step_no,
                         e
                     );
                     // TODO: chat provider recovery via RetryableChatProvider.
@@ -724,7 +732,7 @@ impl KimiSoul {
             match part {
                 Part::Content(cp) => {
                     let wire_cp = crate::llm::kosong_to_wire_content_part(cp);
-                    wire_send(wire_cp);
+                    wire_send(crate::wire::WireEvent::ContentPart(wire_cp));
                 }
                 Part::ToolCall(_) | Part::ToolCallPart(_) => {}
             }
@@ -799,21 +807,18 @@ impl KimiSoul {
             max_context_tokens: self.llm.as_ref().map(|l| l.max_context_size),
             ..Default::default()
         };
-        wire_send(status_update);
+        wire_send(crate::wire::WireEvent::StatusUpdate(status_update));
 
         // Execute tool calls
         if !completion.tool_calls.is_empty() {
-            let turn_id = self._current_turn_id.clone().unwrap_or_default();
-            self.toolset.begin_step(
-                self._last_tool_calls.clone(),
-                self._current_step_no,
-                turn_id,
-            );
+            let turn_id = self.current_turn_id.clone().unwrap_or_default();
+            self.toolset
+                .begin_step(self.last_tool_calls.clone(), self.current_step_no, turn_id);
 
             // Set up streaming callback so each tool result is sent to wire
             // as soon as it completes, rather than waiting for all tools.
             self.toolset.set_on_tool_result(Some(Box::new(|result| {
-                crate::wire::wire_send(result.clone());
+                crate::wire::wire_send(crate::wire::WireEvent::ToolResult(result.clone()));
             })));
 
             // Await tool handles that were spawned during streaming.
@@ -838,7 +843,7 @@ impl KimiSoul {
                 .collect();
 
             self.toolset.set_on_tool_result(None);
-            self._last_tool_calls = self.toolset.end_step();
+            self.last_tool_calls = self.toolset.end_step();
 
             // Grow context
             self.grow_context(&assistant_message, &tool_results).await?;
@@ -925,14 +930,14 @@ impl KimiSoul {
         error: &OctopusError,
     ) {
         let (error_type, status_code) = Self::classify_api_error(error);
-        wire_send(StepRetry {
-            n: self._current_step_no,
+        wire_send(crate::wire::WireEvent::StepRetry(StepRetry {
+            n: self.current_step_no,
             next_attempt: attempt + 1,
             max_attempts,
             wait_s,
             error_type,
             status_code,
-        });
+        }));
     }
 
     fn classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
@@ -1000,9 +1005,9 @@ impl KimiSoul {
             if let Err(e) = self.context.append_message(steer_msg).await {
                 tracing::warn!("Failed to append steer message: {}", e);
             }
-            wire_send(SteerInput {
+            wire_send(crate::wire::WireEvent::SteerInput(SteerInput {
                 user_input: content,
-            });
+            }));
             consumed = true;
         }
         consumed
@@ -1051,7 +1056,7 @@ impl KimiSoul {
             }
         }
 
-        wire_send(CompactionBegin {});
+        wire_send(crate::wire::WireEvent::CompactionBegin(CompactionBegin {}));
 
         let compact_t0 = std::time::Instant::now();
         let compact_result = self
@@ -1098,7 +1103,7 @@ impl KimiSoul {
             .await
             .map_err(|e| OctopusError::Io(e))?;
 
-        wire_send(CompactionEnd {});
+        wire_send(crate::wire::WireEvent::CompactionEnd(CompactionEnd {}));
 
         crate::track!(
             "compaction_finished",
@@ -1147,7 +1152,7 @@ impl KimiSoul {
             pending_plan_activation: self.consume_pending_plan_activation_injection(),
         };
         let mut injections = Vec::new();
-        for provider in &mut self._injection_providers {
+        for provider in &mut self.injection_providers {
             match provider.get_injections(self.context.history(), &ctx).await {
                 result => injections.extend(result),
             }
@@ -1156,13 +1161,13 @@ impl KimiSoul {
     }
 
     async fn notify_injection_providers_compacted(&mut self) {
-        for provider in &mut self._injection_providers {
+        for provider in &mut self.injection_providers {
             provider.on_context_compacted().await;
         }
     }
 
     pub async fn notify_afk_changed(&mut self, enabled: bool) {
-        for provider in &mut self._injection_providers {
+        for provider in &mut self.injection_providers {
             provider.on_afk_changed(enabled).await;
         }
     }
@@ -1172,7 +1177,7 @@ impl KimiSoul {
     // ========================================================================
 
     pub fn get_plan_file_path(&self) -> Option<PathBuf> {
-        self._plan_session_id.as_ref().map(|id| {
+        self.plan_session_id.as_ref().map(|id| {
             // TODO: use hero-name slug system like Python (heroes.py).
             // For now, use a deterministic path based on session id.
             dirs::home_dir()
@@ -1184,10 +1189,10 @@ impl KimiSoul {
     }
 
     pub fn consume_pending_plan_activation_injection(&mut self) -> bool {
-        if !self.plan_mode || !self._pending_plan_activation_injection {
+        if !self.plan_mode || !self.pending_plan_activation_injection {
             return false;
         }
-        self._pending_plan_activation_injection = false;
+        self.pending_plan_activation_injection = false;
         true
     }
 
@@ -1195,14 +1200,14 @@ impl KimiSoul {
         self.plan_mode = enabled;
         self.session.state.plan_mode = enabled;
         if enabled {
-            if self._plan_session_id.is_none() {
-                self._plan_session_id = Some(uuid::Uuid::new_v4().to_string());
-                self.session.state.plan_session_id = self._plan_session_id.clone();
+            if self.plan_session_id.is_none() {
+                self.plan_session_id = Some(uuid::Uuid::new_v4().to_string());
+                self.session.state.plan_session_id = self.plan_session_id.clone();
             }
-            self._pending_plan_activation_injection = true;
+            self.pending_plan_activation_injection = true;
         } else {
-            self._pending_plan_activation_injection = false;
-            self._plan_session_id = None;
+            self.pending_plan_activation_injection = false;
+            self.plan_session_id = None;
             self.session.state.plan_session_id = None;
             self.session.state.plan_slug = None;
         }

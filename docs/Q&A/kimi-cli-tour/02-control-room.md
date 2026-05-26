@@ -54,7 +54,7 @@ pub async fn run(&mut self, user_input: &str) -> Result<String> {
     let pump_handle = self._start_notification_pump(...);
 
     // 3. Run the turn
-    let result = self._run_turn(text).await;
+    let result = self.run_turn(text).await;
 
     // 4. Cleanup
     wire.shutdown().await;
@@ -74,13 +74,13 @@ The `run()` method is the **control room's daily routine**. It:
 
 ---
 
-## 🎯 One Turn: `_run_turn()`
+## 🎯 One Turn: `run_turn()`
 
 A **turn** is one user message → agent response cycle. Think of it as one round of dialogue.
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
-async fn _run_turn(&mut self, text: &str) -> Result<String> {
+async fn run_turn(&mut self, text: &str) -> Result<String> {
     // 1. Parse slash commands
     if let Some(call) = parse_slash_command_call(text) {
         return self._handle_slash_command(call).await;
@@ -90,7 +90,7 @@ async fn _run_turn(&mut self, text: &str) -> Result<String> {
     let user_message = Message { role: "user".to_string(), content: ... };
 
     // 3. Execute the turn
-    let outcome = self._turn(user_message).await?;
+    let outcome = self.turn(user_message).await?;
 
     // 4. Return the final text
     Ok(outcome.final_message)
@@ -124,7 +124,7 @@ registry.register(SlashCommand {
 
 ## 🧩 One Step: The ReAct Loop
 
-Inside `_turn()`, the real magic happens in **steps**. A single turn can have multiple steps if the agent decides to use tools:
+Inside `turn()`, the real magic happens in **steps**. A single turn can have multiple steps if the agent decides to use tools:
 
 ```
 Step 1: LLM says "I'll search the web"
@@ -135,13 +135,13 @@ Step 3: LLM says "Here's my answer..."
         → Done!
 ```
 
-### `_step()`: Retry with Grace
+### `step()`: Retry with Grace
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
-async fn _step(&mut self) -> Result<Option<StepOutcome>> {
+async fn step(&mut self) -> Result<Option<StepOutcome>> {
     for attempt in 1..=max_attempts {
-        match self._run_step_once().await {
+        match self.run_step_once().await {
             Ok(outcome) => return Ok(outcome),
             Err(e) if Self::_is_retryable_error(&e) && attempt < max_attempts => {
                 let wait_s = Self::_retry_wait_secs(attempt);
@@ -155,7 +155,7 @@ async fn _step(&mut self) -> Result<Option<StepOutcome>> {
 
 This is **resilience engineering**. If the LLM API flakes, the soul waits and retries with exponential backoff.
 
-### `_run_step_once_inner()`: The LLM Call
+### `run_step_once_inner()`: The LLM Call
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
@@ -181,7 +181,7 @@ let mut on_message_part = |part: kosong::StreamedMessagePart| {
     match part {
         Part::Content(cp) => {
             let wire_cp = crate::llm::kosong_to_wire_content_part(cp);
-            wire_send(wire_cp);  // Broadcast to UI in real-time!
+            wire_send(WireEvent::ContentPart(wire_cp));  // Broadcast to UI in real-time!
         }
         Part::ToolCall(_) | Part::ToolCallPart(_) => {}
     }
@@ -257,7 +257,7 @@ pub trait DynamicInjectionProvider {
 
 ## 🎁 Souvenir Shop: What to Remember
 
-1. **The soul is a state machine.** `run()` → `_run_turn()` → `_step()` → `_run_step_once()` is a layered hierarchy. Each layer handles one concern.
+1. **The soul is a state machine.** `run()` → `run_turn()` → `step()` → `run_step_once()` is a layered hierarchy. Each layer handles one concern.
 2. **Streaming is first-class.** The soul doesn't just call the LLM; it *dances* with it, processing chunks as they arrive and spawning tools mid-stream.
 3. **The borrow checker is the safety officer.** Concurrent tool execution, shared state (`Arc<KimiToolset>`), and async lifetimes are all verified at compile time.
 4. **~1,290 lines vs. ~1,710 lines.** The Rust soul is 25% smaller than Python's `kimisoul.py` + `__init__.py`, yet includes features (OAuth recovery, notification pump, skill injection) that were scattered across Python's codebase.

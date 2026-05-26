@@ -43,7 +43,7 @@ pub struct ShellUI {
     last_frame_width: u16,
     // Approval flow
     approval_runtime: Option<crate::approval_runtime::ApprovalRuntime>,
-    wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<serde_json::Value>>,
+    wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<crate::wire::WireEvent>>,
     pending_approval: Option<crate::wire::ApprovalRequestEvent>,
     // Input history
     history: Vec<String>,
@@ -198,14 +198,14 @@ impl ShellUI {
                         self.run_external_editor(terminal).await?;
                     }
                 }
-                Ok(value) = async {
+                Ok(event) = async {
                     if let Some(rx) = self.wire_hub_receiver.as_mut() {
                         rx.recv().await
                     } else {
                         std::future::pending().await
                     }
                 } => {
-                    if let Ok(req) = serde_json::from_value::<crate::wire::ApprovalRequestEvent>(value) {
+                    if let crate::wire::WireEvent::ApprovalRequest(req) = event {
                         self.pending_approval = Some(req);
                     }
                 }

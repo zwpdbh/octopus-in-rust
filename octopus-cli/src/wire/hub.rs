@@ -1,6 +1,6 @@
-use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::wire::WireEvent;
 use crate::wire::channel::WireSoulSide;
 
 // ============================================================================
@@ -27,7 +27,7 @@ pub fn get_current_wire_soul_side() -> Option<WireSoulSide> {
 
 #[derive(Clone, Debug)]
 pub struct RootWireHub {
-    tx: broadcast::Sender<serde_json::Value>,
+    tx: broadcast::Sender<WireEvent>,
 }
 
 impl RootWireHub {
@@ -36,11 +36,11 @@ impl RootWireHub {
         Self { tx }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<serde_json::Value> {
+    pub fn subscribe(&self) -> broadcast::Receiver<WireEvent> {
         self.tx.subscribe()
     }
 
-    pub fn publish(&self, msg: serde_json::Value) {
+    pub fn publish(&self, msg: WireEvent) {
         let _ = self.tx.send(msg);
     }
 
@@ -59,16 +59,8 @@ impl Default for RootWireHub {
 // Wire send function
 // ============================================================================
 
-pub fn wire_send<T: Serialize>(event: T) {
-    let value = match serde_json::to_value(&event) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("Failed to serialize wire message: {}", e);
-            return;
-        }
-    };
-
+pub fn wire_send(event: WireEvent) {
     if let Some(soul_side) = get_current_wire_soul_side() {
-        soul_side.send(value);
+        soul_side.send(event);
     }
 }

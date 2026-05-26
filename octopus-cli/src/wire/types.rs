@@ -303,3 +303,33 @@ pub struct DisplayBlock {
     pub title: String,
     pub content: String,
 }
+
+// ============================================================================
+// Wire event enum (strongly-typed channel payload)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WireEvent {
+    ContentPart(ContentPart),
+    StatusUpdate(StatusUpdate),
+    McpLoadingBegin(MCPLoadingBegin),
+    McpLoadingEnd(MCPLoadingEnd),
+    TextPart(TextPart),
+    TurnBegin(TurnBegin),
+    TurnEnd(TurnEnd),
+    StepBegin(StepBegin),
+    StepInterrupted(StepInterrupted),
+    StepRetry(StepRetry),
+    SteerInput(SteerInput),
+    CompactionBegin(CompactionBegin),
+    CompactionEnd(CompactionEnd),
+    BtwBegin(BtwBegin),
+    BtwEnd(BtwEnd),
+    Notification(Notification),
+    ApprovalRequest(ApprovalRequestEvent),
+    ApprovalResponse(ApprovalResponseEvent),
+    ToolResult(ToolResult),
+    HookTriggered(HookTriggered),
+    HookResolved(HookResolved),
+}

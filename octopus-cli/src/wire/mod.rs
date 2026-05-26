@@ -10,5 +10,5 @@ pub use types::{
     ContentPart, DisplayBlock, HookResolved, HookTriggered, MCPLoadingBegin, MCPLoadingEnd,
     MCPServerSnapshot, MCPStatusSnapshot, MediaUrl, Message, Notification, StatusUpdate,
     SteerInput, StepBegin, StepInterrupted, StepRetry, TextPart, TokenUsage, ToolCall,
-    ToolCallFunction, ToolOutput, ToolResult, ToolReturnValue, TurnBegin, TurnEnd,
+    ToolCallFunction, ToolOutput, ToolResult, ToolReturnValue, TurnBegin, TurnEnd, WireEvent,
 };

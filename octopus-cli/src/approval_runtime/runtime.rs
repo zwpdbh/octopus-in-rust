@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::wire::{ApprovalRequestEvent, ApprovalResponseEvent, RootWireHub};
+use crate::wire::{ApprovalRequestEvent, ApprovalResponseEvent, RootWireHub, WireEvent};
 
 #[derive(Debug, Clone)]
 pub struct ApprovalSource {
@@ -111,9 +111,7 @@ impl ApprovalRuntime {
                     source_id: req.source.id.clone(),
                     display: req.display.clone(),
                 };
-                if let Ok(value) = serde_json::to_value(event) {
-                    hub.publish(value);
-                }
+                hub.publish(WireEvent::ApprovalRequest(event));
             }
         }
 
@@ -208,9 +206,7 @@ impl ApprovalRuntime {
                 },
                 feedback,
             };
-            if let Ok(value) = serde_json::to_value(event) {
-                hub.publish(value);
-            }
+            hub.publish(WireEvent::ApprovalResponse(event));
         }
 
         true

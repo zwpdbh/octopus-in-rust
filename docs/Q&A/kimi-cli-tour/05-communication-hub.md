@@ -20,18 +20,18 @@ The **wire** is a real-time event stream that connects the Control Room (`KimiSo
 ```rust
 // File: octopus-cli/src/wire/channel.rs
 pub struct Wire {
-    raw: broadcast::Sender<serde_json::Value>,      // All events
-    merged: broadcast::Sender<serde_json::Value>,   // For file recording
+    raw: broadcast::Sender<WireEvent>,      // All events
+    merged: broadcast::Sender<WireEvent>,   // For file recording
     recorder: Option<WireRecorder>,
 }
 
 pub struct WireSoulSide {
-    raw_tx: broadcast::Sender<serde_json::Value>,
-    merged_tx: broadcast::Sender<serde_json::Value>,
+    raw_tx: broadcast::Sender<WireEvent>,
+    merged_tx: broadcast::Sender<WireEvent>,
 }
 
 pub struct WireUISide {
-    raw_rx: broadcast::Receiver<serde_json::Value>,
+    raw_rx: broadcast::Receiver<WireEvent>,
 }
 ```
 
@@ -39,7 +39,7 @@ pub struct WireUISide {
 
 🦀 **Rust's way:** `tokio::sync::broadcast` — a multi-producer, multi-consumer channel. The soul sends once; every subscriber receives a copy.
 
-✨ **Where Rust shines:** **Broadcast is zero-copy for receivers.** When the soul sends a message, Tokio clones the `Arc<serde_json::Value>` (one atomic increment) for each subscriber. In Python, every queue `put()` serializes the message for each consumer.
+✨ **Where Rust shines:** **Broadcast is zero-copy for receivers.** When the soul sends a message, Tokio clones the `Arc<WireEvent>` (one atomic increment) for each subscriber. In Python, every queue `put()` serializes the message for each consumer.
 
 ### The Global Dispatcher
 
@@ -49,7 +49,7 @@ thread_local! {
     static CURRENT_WIRE_SOUL_SIDE: RefCell<Option<WireSoulSide>> = const { RefCell::new(None) };
 }
 
-pub fn wire_send<T: Serialize>(event: T) {
+pub fn wire_send(event: WireEvent) {
     CURRENT_WIRE_SOUL_SIDE.with(|cell| {
         if let Some(ref side) = *cell.borrow() {
             let _ = side.send(event);
@@ -58,7 +58,7 @@ pub fn wire_send<T: Serialize>(event: T) {
 }
 ```
 
-This is the **global wire dispatcher**. Any code — deep inside a tool, inside the LLM provider, anywhere — can call `wire_send(MyEvent)` and it reaches the current wire channel.
+This is the **global wire dispatcher**. Any code — deep inside a tool, inside the LLM provider, anywhere — can call `wire_send(WireEvent::TextPart(...))` and it reaches the current wire channel.
 
 🐍 **Python's way:** Pass the wire object down through every function call. Or use a global variable (which Python makes easy but dangerous).
 
@@ -73,13 +73,13 @@ pub struct WireFile {
 }
 
 impl WireFile {
-    pub async fn append(&mut self, record: &serde_json::Value) -> io::Result<()> {
+    pub async fn append(&mut self, record: &WireEvent) -> io::Result<()> {
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .await?;
-        let line = serde_json::to_string(record)?;
+        let line = serde_json::to_string(record)?;  // serializes to identical JSON
         file.write_all(line.as_bytes()).await?;
         file.write_all(b"\n").await?;
         file.sync_data().await?;
@@ -106,21 +106,49 @@ While the wire connects soul → UI for a single turn, the `RootWireHub` connect
 // File: octopus-cli/src/wire/hub.rs
 #[derive(Clone)]
 pub struct RootWireHub {
-    tx: broadcast::Sender<serde_json::Value>,
+    tx: broadcast::Sender<WireEvent>,
 }
 
 impl RootWireHub {
-    pub fn subscribe(&self) -> broadcast::Receiver<serde_json::Value> {
+    pub fn subscribe(&self) -> broadcast::Receiver<WireEvent> {
         self.tx.subscribe()
     }
 
-    pub fn publish<T: Serialize>(&self, event: T) {
-        let _ = self.tx.send(serde_json::to_value(event).unwrap());
+    pub fn publish(&self, event: WireEvent) {
+        let _ = self.tx.send(event);
     }
 }
 ```
 
 The hub is **session-scoped** — one per `KimiSoul`. Both the soul and the UI hold a clone of the hub. The soul publishes events; the UI subscribes and reacts.
+
+### The `WireEvent` Enum: Strongly-Typed Protocol
+
+All messages that travel through the wire are variants of a single enum:
+
+```rust
+// File: octopus-cli/src/wire/types.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WireEvent {
+    TextPart(TextPart),
+    TurnBegin(TurnBegin),
+    TurnEnd(TurnEnd),
+    StepBegin(StepBegin),
+    StatusUpdate(StatusUpdate),
+    ApprovalRequest(ApprovalRequestEvent),
+    ApprovalResponse(ApprovalResponseEvent),
+    // ... and ~15 more variants
+}
+```
+
+`#[serde(untagged)]` means `WireEvent::TextPart(TextPart { text: "hi" })` serializes to `{"text":"hi"}` — identical JSON to the old direct-struct serialization. So existing `wire.jsonl` log files remain readable.
+
+🐍 **Python's way:** Every event is a dict. Consumers inspect keys to guess the type.
+
+🦀 **Rust's way:** An exhaustive enum. Producers wrap every event in a variant (`WireEvent::TurnBegin(...)`) and consumers `match` on it. Add a new variant, and the compiler shows every `match` that needs updating.
+
+✨ **Where Rust shines:** **The protocol is discoverable.** Open `wire/types.rs`, read the `WireEvent` enum, and you know every message that can flow through the building. In Python, you'd have to grep every `wire_send()` call site to reconstruct the protocol.
 
 ---
 

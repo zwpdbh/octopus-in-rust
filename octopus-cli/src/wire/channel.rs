@@ -1,19 +1,19 @@
-use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::wire::WireEvent;
 use crate::wire::file::WireFile;
 
 /// A spmc channel for communication between the soul and the UI during a soul run.
 pub struct Wire {
-    raw_tx: broadcast::Sender<Value>,
-    merged_tx: broadcast::Sender<Value>,
+    raw_tx: broadcast::Sender<WireEvent>,
+    merged_tx: broadcast::Sender<WireEvent>,
     _recorder_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Wire {
     pub fn new(file_backend: Option<WireFile>) -> Self {
-        let (raw_tx, _) = broadcast::channel(256);
-        let (merged_tx, _merged_rx) = broadcast::channel(256);
+        let (raw_tx, _) = broadcast::channel::<WireEvent>(256);
+        let (merged_tx, _merged_rx) = broadcast::channel::<WireEvent>(256);
 
         let recorder_handle = file_backend.map(|file| {
             let mut rx = merged_tx.subscribe();
@@ -65,13 +65,13 @@ impl Wire {
 /// The soul side of a `Wire`.
 #[derive(Clone)]
 pub struct WireSoulSide {
-    raw_tx: broadcast::Sender<Value>,
-    merged_tx: broadcast::Sender<Value>,
+    raw_tx: broadcast::Sender<WireEvent>,
+    merged_tx: broadcast::Sender<WireEvent>,
 }
 
 impl WireSoulSide {
     /// Send a message to the wire. Non-blocking.
-    pub fn send(&self, msg: Value) {
+    pub fn send(&self, msg: WireEvent) {
         let _ = self.raw_tx.send(msg.clone());
         let _ = self.merged_tx.send(msg);
     }
@@ -79,11 +79,11 @@ impl WireSoulSide {
 
 /// The UI side of a `Wire`.
 pub struct WireUISide {
-    raw_rx: broadcast::Receiver<Value>,
+    raw_rx: broadcast::Receiver<WireEvent>,
 }
 
 impl WireUISide {
-    pub async fn recv(&mut self) -> Result<Value, broadcast::error::RecvError> {
+    pub async fn recv(&mut self) -> Result<WireEvent, broadcast::error::RecvError> {
         self.raw_rx.recv().await
     }
 }
