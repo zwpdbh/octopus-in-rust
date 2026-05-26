@@ -14,6 +14,28 @@ pub struct ApprovalSource {
     pub agent_id: Option<String>,
 }
 
+// ============================================================================
+// Task-local approval source tracking (mirrors Python's ContextVar)
+// ============================================================================
+
+tokio::task_local! {
+    static CURRENT_APPROVAL_SOURCE: ApprovalSource;
+}
+
+/// Get the current approval source for this async task, if one has been set.
+pub fn get_current_approval_source_or_none() -> Option<ApprovalSource> {
+    CURRENT_APPROVAL_SOURCE.try_with(|s| s.clone()).ok()
+}
+
+/// Run a future with the given approval source set as the current source.
+/// The source is automatically cleared when the future completes.
+pub async fn with_approval_source<T>(
+    source: ApprovalSource,
+    f: impl std::future::Future<Output = T>,
+) -> T {
+    CURRENT_APPROVAL_SOURCE.scope(source, f).await
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("Approval request cancelled")]
 pub struct ApprovalCancelledError;

@@ -255,12 +255,132 @@ pub trait DynamicInjectionProvider {
 
 ---
 
+## 🔐 Approval Source Tracking: Context Across Async Tasks
+
+Every tool call that needs user approval is tagged with an **approval source** — metadata that says "this request came from turn X" or "this request came from subagent Y." When the turn or subagent ends, the soul cancels any pending approvals that belong to it, preventing stale prompts from lingering.
+
+### Python's Way: `ContextVar`
+
+Python uses `asyncio.ContextVar` — an async-aware global variable that travels with the task across `await` points:
+
+```python
+# approval_runtime/runtime.py
+_current_approval_source = ContextVar[ApprovalSource | None](
+    "current_approval_source", default=None
+)
+
+def get_current_approval_source_or_none() -> ApprovalSource | None:
+    return _current_approval_source.get()
+
+def set_current_approval_source(source: ApprovalSource) -> Token:
+    return _current_approval_source.set(source)
+
+def reset_current_approval_source(token: Token) -> None:
+    _current_approval_source.reset(token)
+```
+
+Any code — deep inside a tool, a subagent, or a background task — can call `get_current_approval_source_or_none()` and discover what turn or subagent it belongs to.
+
+```python
+# soul/kimisoul.py
+created_approval_source = None
+if get_current_approval_source_or_none() is None:
+    created_approval_source = ApprovalSource(kind="foreground_turn", id=uuid.uuid4().hex)
+    approval_source_token = set_current_approval_source(created_approval_source)
+
+try:
+    # ... run the turn ...
+finally:
+    if approval_source_token is not None:
+        reset_current_approval_source(approval_source_token)
+    if created_approval_source is not None:
+        self._runtime.approval_runtime.cancel_by_source(
+            created_approval_source.kind, created_approval_source.id
+        )
+```
+
+Key behaviors:
+- **Nested turns inherit the parent's source.** A subagent sets its own source; inner turns see it and don't create a new one.
+- **Rejection messages are contextual.** If `source.agent_id` is set, the user gets a subagent-specific "try a different approach" message.
+- **Cleanup is precise.** Only the source that was *created* for this scope is cancelled; inherited sources are left alone.
+
+### Rust's Way: `tokio::task_local!`
+
+Rust uses Tokio's task-local storage, which is the async equivalent of a thread-local:
+
+```rust
+// File: octopus-cli/src/approval_runtime/runtime.rs
+tokio::task_local! {
+    static CURRENT_APPROVAL_SOURCE: ApprovalSource;
+}
+
+pub fn get_current_approval_source_or_none() -> Option<ApprovalSource> {
+    CURRENT_APPROVAL_SOURCE.try_with(|s| s.clone()).ok()
+}
+
+pub async fn with_approval_source<T>(
+    source: ApprovalSource,
+    f: impl std::future::Future<Output = T>,
+) -> T {
+    CURRENT_APPROVAL_SOURCE.scope(source, f).await
+}
+```
+
+The `.scope()` call sets the source for the duration of a future and **automatically restores** the previous value when nested. This replaces Python's manual `set` / `reset` token pattern with RAII.
+
+```rust
+// File: octopus-cli/src/soul/kimisoul.rs
+let (source, inherited) =
+    if let Some(existing) = get_current_approval_source_or_none() {
+        (existing, true)  // subagent or background task already set one
+    } else {
+        (ApprovalSource { kind: "foreground_turn".to_string(), id: uuid::new_v4(), ... }, false)
+    };
+
+let result = if inherited {
+    self.run_turn_body(text).await
+} else {
+    with_approval_source(source.clone(), self.run_turn_body(text)).await
+};
+
+if !inherited {
+    self.approval.runtime().cancel_by_source(&source.kind, &source.id);
+}
+```
+
+And for subagents:
+
+```rust
+// File: octopus-cli/src/tools/agent/mod.rs
+let subagent_source = ApprovalSource {
+    kind: "foreground_turn".to_string(),
+    id: session.id.clone(),
+    agent_id: Some(session.id.clone()),
+};
+let result = with_approval_source(subagent_source.clone(), subagent.run(prompt)).await;
+
+subagent.approval.runtime().cancel_by_source(&subagent_source.kind, &subagent_source.id);
+```
+
+✨ **Where Rust shines:** **No manual token bookkeeping.** Python's `try/finally` with `reset_current_approval_source(token)` is error-prone — forget the finally block and the context leaks. Rust's `.scope()` is compile-time safe: the source is automatically restored when the future completes, even if it panics.
+
+| Aspect | Python (`ContextVar`) | Rust (`tokio::task_local!`) |
+|--------|----------------------|----------------------------|
+| **Get current** | `get_current_approval_source_or_none()` | `get_current_approval_source_or_none()` |
+| **Set / reset** | Manual `set()` + `reset(token)` | `.scope(source, future).await` |
+| **Nested safety** | Correct if tokens are managed | Guaranteed by `.scope()` RAII |
+| **Leak on panic** | Possible if `finally` omitted | Impossible — scope always restores |
+| **Cross-task inheritance** | Must explicitly copy context | Same — spawn doesn't inherit |
+
+---
+
 ## 🎁 Souvenir Shop: What to Remember
 
 1. **The soul is a state machine.** `run()` → `run_turn()` → `step()` → `run_step_once()` is a layered hierarchy. Each layer handles one concern.
 2. **Streaming is first-class.** The soul doesn't just call the LLM; it *dances* with it, processing chunks as they arrive and spawning tools mid-stream.
 3. **The borrow checker is the safety officer.** Concurrent tool execution, shared state (`Arc<KimiToolset>`), and async lifetimes are all verified at compile time.
-4. **~1,290 lines vs. ~1,710 lines.** The Rust soul is 25% smaller than Python's `kimisoul.py` + `__init__.py`, yet includes features (OAuth recovery, notification pump, skill injection) that were scattered across Python's codebase.
+4. **Approval source tracking is contextual.** `tokio::task_local!` gives every async task a scoped approval identity. Subagents inherit the parent's source; cleanup is RAII-safe.
+5. **~1,290 lines vs. ~1,710 lines.** The Rust soul is 25% smaller than Python's `kimisoul.py` + `__init__.py`, yet includes features (OAuth recovery, notification pump, skill injection) that were scattered across Python's codebase.
 
 ---
 

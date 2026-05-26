@@ -245,6 +245,41 @@ impl KimiSoul {
     }
 
     async fn run_turn(&mut self, text: &str) -> Result<String> {
+        // Inherit an existing approval source (e.g., from a subagent or background task),
+        // or create a new foreground-turn source if none exists.
+        let (source, inherited) = if let Some(existing) =
+            crate::approval_runtime::get_current_approval_source_or_none()
+        {
+            (existing, true)
+        } else {
+            (
+                ApprovalSource {
+                    kind: "foreground_turn".to_string(),
+                    id: uuid::Uuid::new_v4().to_string(),
+                    agent_id: None,
+                },
+                false,
+            )
+        };
+
+        let result = if inherited {
+            self.run_turn_body(text).await
+        } else {
+            crate::approval_runtime::with_approval_source(source.clone(), self.run_turn_body(text))
+                .await
+        };
+
+        // Only cancel approvals if WE created the source for this turn.
+        if !inherited {
+            self.approval
+                .runtime()
+                .cancel_by_source(&source.kind, &source.id);
+        }
+
+        result
+    }
+
+    async fn run_turn_body(&mut self, text: &str) -> Result<String> {
         let user_message = Message {
             role: "user".to_string(),
             content: vec![ContentPart::Text {
@@ -265,13 +300,6 @@ impl KimiSoul {
                 return Ok(String::new());
             }
         }
-
-        // Track turn lifecycle for interruption telemetry and approval cleanup.
-        let created_approval_source = Some(ApprovalSource {
-            kind: "foreground_turn".to_string(),
-            id: uuid::Uuid::new_v4().to_string(),
-            agent_id: None,
-        });
 
         // --- UserPromptSubmit hook ---
         if self.hook_engine.has_hooks_for("UserPromptSubmit") {
@@ -323,13 +351,6 @@ impl KimiSoul {
             let _ = self
                 .hook_engine
                 .fire_and_forget_trigger("Stop", "", input_data);
-        }
-
-        // Cancel any pending approval requests tied to this turn's approval source.
-        if let Some(ref source) = created_approval_source {
-            self.approval
-                .runtime()
-                .cancel_by_source(&source.kind, &source.id);
         }
 
         let result = match turn_result {

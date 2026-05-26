@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::approval_runtime::{ApprovalSource, with_approval_source};
 use crate::soul::agent::{Agent, load_agent};
 use crate::soul::approval::ApprovalState;
 use crate::tools::Tool;
@@ -191,7 +192,21 @@ async fn run_subagent_with_market(
                 Some(def.tool_policy.clone()),
             );
 
-            let result = subagent.run(prompt).await;
+            // Set the subagent as the current approval source so nested tool calls
+            // and rejection messages know they're inside a subagent.
+            let subagent_source = ApprovalSource {
+                kind: "foreground_turn".to_string(),
+                id: session.id.clone(),
+                agent_id: Some(session.id.clone()),
+            };
+            let result: Result<String, crate::exception::OctopusError> =
+                with_approval_source(subagent_source.clone(), subagent.run(prompt)).await;
+
+            // Cancel any pending approval requests belonging to this subagent.
+            subagent
+                .approval
+                .runtime()
+                .cancel_by_source(&subagent_source.kind, &subagent_source.id);
 
             // Update SubagentStore
             if let Some(ref store) = subagent_store {

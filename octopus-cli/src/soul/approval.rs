@@ -1,5 +1,6 @@
 use crate::approval_runtime::{
     ApprovalCancelledError, ApprovalResponse, ApprovalRuntime, ApprovalSource,
+    get_current_approval_source_or_none,
 };
 use crate::exception::ToolRejectedError;
 
@@ -58,9 +59,16 @@ impl ApprovalResult {
                 format!("Rejected: {}", self.feedback),
             )
         } else {
-            ToolRejectedError::new(
-                "The tool call is rejected by the user. Try a different approach to complete your task, or explain the limitation in your summary if no alternative is available. Do not retry the same tool call, and do not attempt to bypass this restriction through indirect means.",
-            )
+            let is_subagent = get_current_approval_source_or_none()
+                .map(|s| s.agent_id.is_some())
+                .unwrap_or(false);
+            if is_subagent {
+                ToolRejectedError::new(
+                    "The tool call is rejected by the user. Try a different approach to complete your task, or explain the limitation in your summary if no alternative is available. Do not retry the same tool call, and do not attempt to bypass this restriction through indirect means.",
+                )
+            } else {
+                ToolRejectedError::new("The tool call is rejected by the user.")
+            }
         }
     }
 }
@@ -218,14 +226,14 @@ impl Approval {
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let display_blocks = display.unwrap_or_default();
-        let source = ApprovalSource {
+        let source = get_current_approval_source_or_none().unwrap_or_else(|| ApprovalSource {
             kind: "foreground_turn".to_string(),
             id: tool_call
                 .as_ref()
                 .map(|t| t.id.clone())
                 .unwrap_or_else(|| request_id.clone()),
             agent_id: None,
-        };
+        });
 
         self.runtime.create_request(
             request_id.clone(),
