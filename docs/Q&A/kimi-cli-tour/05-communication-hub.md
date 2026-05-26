@@ -18,6 +18,7 @@ The **wire** is a real-time event stream that connects the Control Room (`KimiSo
 ### The Broadcast Channel
 
 ```rust
+// File: octopus-cli/src/wire/channel.rs
 pub struct Wire {
     raw: broadcast::Sender<serde_json::Value>,      // All events
     merged: broadcast::Sender<serde_json::Value>,   // For file recording
@@ -43,6 +44,7 @@ pub struct WireUISide {
 ### The Global Dispatcher
 
 ```rust
+// File: octopus-cli/src/wire/mod.rs
 thread_local! {
     static CURRENT_WIRE_SOUL_SIDE: RefCell<Option<WireSoulSide>> = const { RefCell::new(None) };
 }
@@ -65,6 +67,7 @@ This is the **global wire dispatcher**. Any code — deep inside a tool, inside 
 ### The Wire File: Persistent Log
 
 ```rust
+// File: octopus-cli/src/wire/file.rs
 pub struct WireFile {
     path: PathBuf,
 }
@@ -100,6 +103,7 @@ While the wire connects soul → UI for a single turn, the `RootWireHub` connect
 - Status updates (MCP loading progress)
 
 ```rust
+// File: octopus-cli/src/wire/hub.rs
 #[derive(Clone)]
 pub struct RootWireHub {
     tx: broadcast::Sender<serde_json::Value>,
@@ -140,6 +144,7 @@ Event published
 ```
 
 ```rust
+// File: octopus-cli/src/notifications/manager.rs
 pub fn claim_for_sink(&self, sink: &str, limit: usize) -> Vec<NotificationView> {
     for view in self.store.list_views().into_iter().rev() {
         let sink_state = view.delivery.sinks.get(sink)?;
@@ -162,6 +167,7 @@ pub fn claim_for_sink(&self, sink: &str, limit: usize) -> Vec<NotificationView> 
 ✨ **Where Rust shines:** **Claim recovery.** If a process crashes while a notification is claimed but not acked, it stays claimed forever... unless we recover! The manager checks `claimed_at` timestamps on startup:
 
 ```rust
+// File: octopus-cli/src/notifications/manager.rs
 if now - claimed_at > stale_after {
     *sink_state = NotificationSinkState::pending();  // Reclaim!
 }
@@ -174,6 +180,7 @@ This **at-least-once delivery** guarantee is robust against crashes — no SQLit
 Notifications are injected into the LLM context as XML:
 
 ```rust
+// File: octopus-cli/src/notifications/llm.rs
 pub fn build_notification_message(view: &NotificationView) -> Message {
     let lines = vec![
         format!(r#"<notification id="{}" category="{}" type="{}" ...>"#, ...),

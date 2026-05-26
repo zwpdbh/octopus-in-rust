@@ -40,6 +40,7 @@ Tool wants to run
 ### The Judge: `ApprovalRuntime`
 
 ```rust
+// File: octopus-cli/src/approval_runtime/runtime.rs
 pub struct ApprovalRuntime {
     inner: Arc<Mutex<ApprovalRuntimeInner>>,
     hub: Option<RootWireHub>,
@@ -66,6 +67,7 @@ The `ApprovalRuntime` is a **state machine** with two hashmaps:
 In the TUI, approval requests appear as a modal overlay:
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 fn render_approval_overlay(&self, frame: &mut Frame, req: &ApprovalRequestEvent) {
     let lines = vec![
         Line::from(""),
@@ -94,6 +96,7 @@ File: `octopus-cli/src/auth/manager.rs` (~251 lines)
 The `OAuthManager` handles token storage, refresh, and API key resolution:
 
 ```rust
+// File: octopus-cli/src/auth/manager.rs
 pub struct OAuthManager {
     access_tokens: HashMap<String, String>,
     refresh_lock: tokio::sync::Mutex<()>,
@@ -104,6 +107,7 @@ pub struct OAuthManager {
 ### Token Storage: Atomic & Permission-Safe
 
 ```rust
+// File: octopus-cli/src/auth/oauth.rs
 pub fn save_tokens(key: &str, token: &OAuthToken) -> Result<()> {
     let path = token_path(key);
     let dir = path.parent().unwrap();
@@ -134,6 +138,7 @@ pub fn save_tokens(key: &str, token: &OAuthToken) -> Result<()> {
 When the LLM API returns 401, the soul triggers token refresh:
 
 ```rust
+// File: octopus-cli/src/auth/manager.rs
 pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<Option<String>> {
     let token = load_tokens("kimi-code");
     let expires_at = token.expires_at;
@@ -193,6 +198,7 @@ The Security Desk has three modes of operation:
 | **AFK** | `/afk` | Auto-approve; user is away |
 
 ```rust
+// File: octopus-cli/src/soul/approval.rs
 pub struct ApprovalState {
     pub yolo: bool,
     pub afk: bool,
@@ -203,6 +209,7 @@ pub struct ApprovalState {
 These states are **persisted to the session** and synced at the end of every turn:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 async fn _sync_approval_state(&self) {
     let state = self.approval.state();
     self.session.state.approval_yolo = state.yolo;

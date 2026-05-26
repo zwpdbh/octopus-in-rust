@@ -15,6 +15,7 @@ File: `octopus-cli/src/soul/kimisoul.rs` (~1,290 lines)
 The `KimiSoul` struct is the control room's main console. Every field is a piece of equipment:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 pub struct KimiSoul {
     pub config: Config,          // Building blueprints
     pub session: Session,        // Current visitor's file
@@ -43,6 +44,7 @@ pub struct KimiSoul {
 ## 🔄 The Main Cycle: `run()`
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 pub async fn run(&mut self, user_input: &str) -> Result<String> {
     // 1. Set up the intercom
     let wire = Wire::new(Some(wire_file));
@@ -77,6 +79,7 @@ The `run()` method is the **control room's daily routine**. It:
 A **turn** is one user message → agent response cycle. Think of it as one round of dialogue.
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 async fn _run_turn(&mut self, text: &str) -> Result<String> {
     // 1. Parse slash commands
     if let Some(call) = parse_slash_command_call(text) {
@@ -135,6 +138,7 @@ Step 3: LLM says "Here's my answer..."
 ### `_step()`: Retry with Grace
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 async fn _step(&mut self) -> Result<Option<StepOutcome>> {
     for attempt in 1..=max_attempts {
         match self._run_step_once().await {
@@ -154,6 +158,7 @@ This is **resilience engineering**. If the LLM API flakes, the soul waits and re
 ### `_run_step_once_inner()`: The LLM Call
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 let tools_slice: Vec<&dyn Tool> = self.toolset.tools();
 let system_prompt = self.agent.as_ref().map(|a| a.system_prompt.as_str());
 
@@ -171,6 +176,7 @@ let completion_result = llm
 Notice `generate_streaming` — this is **streaming LLM output**. The soul doesn't wait for the full response; it processes chunks as they arrive:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 let mut on_message_part = |part: kosong::StreamedMessagePart| {
     match part {
         Part::Content(cp) => {
@@ -195,6 +201,7 @@ let mut on_message_part = |part: kosong::StreamedMessagePart| {
 When the LLM emits a tool call, something clever happens:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 let mut on_tool_call = move |tc: kosong::ToolCall| {
     let toolset = toolset.clone();
     let handle = tokio::spawn(async move {
@@ -219,6 +226,7 @@ Tools are executed **as soon as they're parsed from the stream**, before the LLM
 Before each step, the control room checks for **system reminders**:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 let injections = self._collect_injections().await;
 for inj in injections {
     self.context.append_message(Message {
@@ -239,6 +247,7 @@ These injections come from:
 🦀 **Rust's way:** Same pattern, but the `DynamicInjectionProvider` trait lets anyone add new injection sources without modifying the soul:
 
 ```rust
+// File: octopus-cli/src/soul/dynamic_injection.rs
 pub trait DynamicInjectionProvider {
     fn inject(&self, soul: &KimiSoul) -> Vec<DynamicInjection>;
 }

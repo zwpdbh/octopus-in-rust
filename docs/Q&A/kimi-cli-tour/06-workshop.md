@@ -19,6 +19,7 @@ The `BackgroundTaskManager` is the workshop foreman. It tracks running processes
 ### The Data Structure
 
 ```rust
+// File: octopus-cli/src/background/manager.rs
 #[derive(Clone)]
 pub struct BackgroundTaskManager {
     tasks: Arc<std::sync::Mutex<HashMap<String, TaskHandle>>>,
@@ -54,6 +55,7 @@ Notice the **three layers of Arc/Mutex**:
 ### Spawning a Task
 
 ```rust
+// File: octopus-cli/src/background/manager.rs
 pub async fn spawn(&self, command: String, description: String) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -103,6 +105,7 @@ When a task spawns:
 ### Killing a Task
 
 ```rust
+// File: octopus-cli/src/background/manager.rs
 pub async fn stop(&self, id: &str) -> Result<(), String> {
     let child_arc = {
         let tasks = self.tasks.lock().unwrap();
@@ -160,6 +163,7 @@ flowchart TD
 ### The Type Registry: `LaborMarket`
 
 ```rust
+// File: octopus-cli/src/subagents/mod.rs
 #[derive(Debug, Clone)]
 pub struct LaborMarket {
     types: Arc<Mutex<HashMap<String, AgentTypeDefinition>>>,
@@ -234,6 +238,7 @@ This happens **after** all fallback tools are registered, so core tools like `Sh
 The child's LLM is resolved in priority order:
 
 ```rust
+// File: octopus-cli/src/subagents/mod.rs
 // User override from AgentTool call
 let model_alias = params.model.as_deref()
     // Type default from agent spec
@@ -253,6 +258,7 @@ let subagent_llm = clone_llm_with_model_alias(
 ### Runtime Sharing: Not a Fresh Start
 
 ```rust
+// File: octopus-cli/src/soul/agent.rs
 pub fn copy_for_subagent(
     &self,
     session: Session,
@@ -289,6 +295,7 @@ The child agent **shares** the parent's `LaborMarket` (so it can spawn the same 
 ### Foreground vs. Background
 
 ```rust
+// File: octopus-cli/src/tools/agent/mod.rs
 // Foreground: parent waits
 let result = run_subagent_with_market(parent_runtime, "coder", "Refactor this", None).await?;
 
@@ -304,6 +311,7 @@ if params.run_in_background {
 ### The Ledger: `SubagentStore`
 
 ```rust
+// File: octopus-cli/src/subagents/mod.rs
 #[derive(Debug, Clone)]
 pub struct SubagentStore {
     entries: Arc<Mutex<HashMap<String, SubagentEntry>>>,

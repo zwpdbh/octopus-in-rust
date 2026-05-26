@@ -18,6 +18,7 @@ In the Python original, the entrance was split across `__main__.py`, `cli/__init
 ### The Door Opens
 
 ```rust
+// File: octopus-cli/src/main.rs
 fn main() {
     let cli = <Cli as clap::Parser>::parse();
     // ...
@@ -33,6 +34,7 @@ fn main() {
 ### The Grand Staircase: Runtime Dispatch
 
 ```rust
+// File: octopus-cli/src/main.rs
 let result = match ui_mode {
     UiMode::Print => instance.run_print(...).await,
     UiMode::Acp   => instance.run_acp().await,
@@ -54,6 +56,7 @@ If `main.rs` is the doorman, `app.rs` is the concierge who prepares your room ke
 ### Building the AppRuntime
 
 ```rust
+// File: octopus-cli/src/app.rs
 pub struct OctopusCLI {
     pub soul: Option<KimiSoul>,
     pub runtime: AppRuntime,
@@ -82,6 +85,7 @@ pub struct AppRuntime {
 `OctopusCLI::create()` is the lobby's **initialization pipeline**. It runs in 8 numbered phases, each building on the last:
 
 ```rust
+// File: octopus-cli/src/app.rs
 pub async fn create(...) -> Result<Self> {
     // 1. Load configuration and apply CLI overrides.
     let mut config = match config_source { ... };
@@ -111,6 +115,7 @@ Notice the **config resolution step**: `--config` (inline string) and `--config-
 Phase 2 is where the lobby decides which LLM to talk to. Rather than a chain of `if` blocks that mutate `Option` locals, the code **pre-computes four booleans and matches on the tuple**:
 
 ```rust
+// File: octopus-cli/src/app.rs
 let explicit = model_name.as_ref().and_then(|n| config.models.get(n));
 let default  = config.models.get(&config.default_model);
 
@@ -190,6 +195,7 @@ pub async fn login_kimi_code() -> Result<OAuthToken> {
 ✨ **Where Rust shines:** **Token storage is inherently safe.** The Python version stores tokens in a file too, but Rust's `std::fs::OpenOptions` lets us set permissions atomically at creation time:
 
 ```rust
+// File: octopus-cli/src/auth/oauth.rs
 let file = OpenOptions::new()
     .mode(0o600)  // Only owner can read/write
     .create(true)
@@ -223,6 +229,7 @@ File: `octopus-cli/src/config.rs` (~433 lines)
 Before you can enter, the lobby loads your preferences from `~/.kimi/config.toml`:
 
 ```rust
+// File: octopus-cli/src/config.rs
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub default_model: String,

@@ -18,6 +18,7 @@ File: `octopus-cli/src/ui/shell/mod.rs` (~1,148 lines)
 The `ShellUI` struct is the front desk's control panel:
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 pub struct ShellUI {
     soul: Option<KimiSoul>,              // The brain (moved here when idle)
     soul_arc: Option<Arc<Mutex<Option<KimiSoul>>>>, // The brain (moved here when running)
@@ -35,6 +36,7 @@ pub struct ShellUI {
 ### The Event Loop
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 async fn run_loop(&mut self, terminal: &mut Terminal<...>) -> io::Result<bool> {
     let mut reader = crossterm::event::EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -96,6 +98,7 @@ This is the **classic game loop pattern**, adapted for a TUI:
 ### History Navigation
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 fn history_navigate_up(&mut self) {
     if self.history.is_empty() { return; }
     if self.history_index.is_none() {
@@ -114,6 +117,7 @@ Notice the **draft preservation**. When you press Up, your current unfinished in
 ### External Editor
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 async fn run_external_editor(&mut self, terminal: &mut Terminal<...>) -> io::Result<()> {
     // 1. Leave alternate screen
     crossterm::terminal::disable_raw_mode()?;
@@ -156,6 +160,7 @@ Markdown string
 ### Code Blocks with Syntax Highlighting
 
 ```rust
+// File: octopus-cli/src/ui/shell/render.rs
 fn highlight_code_block(code: &str, lang: Option<&str>) -> Vec<Line<'static>> {
     let ss = syntax_set();  // Syntect syntax definitions
     let ts = theme_set();   // Syntect color themes
@@ -185,6 +190,7 @@ fn highlight_code_block(code: &str, lang: Option<&str>) -> Vec<Line<'static>> {
 ### Diff Blocks
 
 ```rust
+// File: octopus-cli/src/ui/shell/render.rs
 fn render_diff_block(code: &str) -> Vec<Line<'static>> {
     for line in code.lines() {
         let style = if line.starts_with('+') {
@@ -214,6 +220,7 @@ This makes code reviews in the terminal **immediately scannable**.
 ## 🎭 The Stage: Drawing the Frame
 
 ```rust
+// File: octopus-cli/src/ui/shell/mod.rs
 fn draw(&mut self, frame: &mut Frame) {
     // 1. Build chat content
     let mut text_lines = Vec::new();
@@ -269,6 +276,7 @@ File: `octopus-cli/src/utils/clipboard.rs` (~30 lines)
 The front desk has a clipboard for copying assistant responses:
 
 ```rust
+// File: octopus-cli/src/utils/clipboard.rs
 pub fn copy_text(text: &str) -> Result<(), String> {
     with_clipboard(|cb| cb.set_text(text))
 }

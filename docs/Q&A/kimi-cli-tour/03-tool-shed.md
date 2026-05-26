@@ -15,6 +15,7 @@ File: `octopus-cli/src/tools/mod.rs` (~80 lines)
 Every tool in the shed implements a single trait:
 
 ```rust
+// File: octopus-cli/src/tools/mod.rs
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -31,6 +32,7 @@ pub trait Tool: Send + Sync {
 ✨ **Where Rust shines:** **Schema is code.** The `parameters_schema()` method returns a `serde_json::Value` — a JSON Schema object built at runtime. But because it's a method call (not a class attribute), you can **generate schemas dynamically**. For example, `McpTool` fetches its schema from the MCP server at connection time:
 
 ```rust
+// File: octopus-cli/src/mcp/client.rs
 impl Tool for McpTool {
     fn parameters_schema(&self) -> Value {
         self.input_schema.clone()  // From MCP server!
@@ -47,6 +49,7 @@ File: `octopus-cli/src/soul/toolset.rs` (~777 lines)
 The `KimiToolset` is the **shed's inventory system**. It knows every tool and handles execution:
 
 ```rust
+// File: octopus-cli/src/soul/toolset.rs
 pub struct KimiToolset {
     tools: Vec<Box<dyn Tool>>,
     tool_map: HashMap<String, usize>,  // name → index
@@ -88,6 +91,7 @@ for tool_name in spec.tools {
 When the LLM requests a tool, this pipeline runs:
 
 ```rust
+// File: octopus-cli/src/soul/toolset.rs
 pub async fn handle(&self, tool_call: &WireToolCall) -> ToolResult {
     // 1. Find the tool
     let tool = self.tools.get(name)?;
@@ -142,6 +146,7 @@ File: `octopus-cli/src/tools/shell/mod.rs` (~169 lines)
 The `ShellTool` lets the agent run shell commands. It's one of the most powerful — and dangerous — tools.
 
 ```rust
+// File: octopus-cli/src/tools/shell/mod.rs
 pub struct ShellTool {
     bg_manager: BackgroundTaskManager,
 }
@@ -179,6 +184,7 @@ File: `octopus-cli/src/tools/file/mod.rs` (~559 lines)
 The `ReadFileTool` is the agent's eyes. It reads files with optional line offsets:
 
 ```rust
+// File: octopus-cli/src/tools/file/mod.rs
 let path = arguments["path"].as_str().unwrap();
 let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
 let limit = arguments["limit"].as_u64().unwrap_or(0) as usize;
@@ -205,6 +211,7 @@ The `AgentTool` is the **most mind-bending tool** in the shed. It creates a **ne
 ### The Subagent Spawner (Today)
 
 ```rust
+// File: octopus-cli/src/tools/agent/mod.rs
 pub struct AgentTool {
     parent_runtime: AppRuntime,  // Shared runtime with LaborMarket, skills, etc.
 }
@@ -256,6 +263,7 @@ File: `octopus-cli/src/mcp/client.rs` (~330 lines)
 The Tool Shed has a special door for **external tools** — MCP (Model Context Protocol) servers. These are separate processes that expose tools via JSON-RPC over stdio.
 
 ```rust
+// File: octopus-cli/src/mcp/client.rs
 let client = McpClient::connect_stdio("npx", vec!["-y", "@modelcontextprotocol/server-filesystem", "/home"], None).await?;
 let tools = client.list_tools().await?;
 ```
@@ -301,6 +309,7 @@ The manifest uses **deny-by-default** security:
 - `max_memory_pages` → memory ceiling
 
 ```rust
+// File: octopus-cli/src/plugin/discovery.rs
 pub fn build_extism_manifest(manifest: &PluginManifest) -> extism::Manifest {
     let mut m = extism::Manifest::new([wasm_path])
         .with_timeout(Duration::from_millis(timeout));
@@ -338,6 +347,7 @@ Plugins live in `~/.kimi/plugins/` as `.wasm` + `.json` pairs:
 At startup, `discover_plugins()` scans this directory and registers every valid plugin as a `Tool`:
 
 ```rust
+// File: octopus-cli/src/plugin/discovery.rs
 pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn Tool>> {
     let mut tools = Vec::new();
     for entry in fs::read_dir(plugins_dir).unwrap_or_else(|_| return vec![]) {

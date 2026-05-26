@@ -18,6 +18,7 @@ File: `octopus-cli/src/session.rs` (~290 lines)
 A `Session` is a **conversation container** — a directory on disk with metadata:
 
 ```rust
+// File: octopus-cli/src/session.rs
 pub struct Session {
     pub id: String,                    // UUID
     pub work_dir: PathBuf,             // Project root
@@ -31,6 +32,7 @@ pub struct Session {
 ### Creating a Session
 
 ```rust
+// File: octopus-cli/src/session.rs
 pub async fn create(work_dir: &Path, id: Option<String>) -> io::Result<Session> {
     let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let dir = share::get_share_dir()
@@ -71,6 +73,7 @@ File: `octopus-cli/src/soul/context.rs` (~385 lines)
 The `Context` is the LLM's **short-term memory** — a list of messages sent to the API:
 
 ```rust
+// File: octopus-cli/src/soul/context.rs
 pub struct Context {
     messages: Vec<Message>,
     file_path: Option<PathBuf>,
@@ -81,6 +84,7 @@ pub struct Context {
 ### Appending Messages
 
 ```rust
+// File: octopus-cli/src/soul/context.rs
 pub async fn append_message(&mut self, msg: Message) -> io::Result<()> {
     self.messages.push(msg);
     if let Some(ref path) = self.file_path {
@@ -102,6 +106,7 @@ Every message is **immediately persisted** to `context.jsonl`. If the process cr
 ### Checkpoints: Time Travel
 
 ```rust
+// File: octopus-cli/src/soul/context.rs
 pub fn checkpoint(&mut self) -> ContextCheckpoint {
     let checkpoint = ContextCheckpoint {
         message_count: self.messages.len(),
@@ -136,6 +141,7 @@ Session forking is **time travel for conversations**. It copies a session's hist
 ### Fork at Turn N
 
 ```rust
+// File: octopus-cli/src/soul/slash.rs
 async fn fork_session(
     source: &Session,
     work_dir: &Path,
@@ -173,6 +179,7 @@ async fn fork_session(
 ### `/undo`: Fork and Switch
 
 ```rust
+// File: octopus-cli/src/soul/slash.rs
 // /undo <turn_number>
 let turns = enumerate_turns(&soul.session.wire_file_path);
 let turn_idx = if args.trim().is_empty() {
@@ -194,6 +201,7 @@ let new_id = fork_session(&soul.session, &work_dir, Some(turn_idx), "Undo").awai
 When the context approaches the LLM's token limit, the soul **compacts** it:
 
 ```rust
+// File: octopus-cli/src/soul/kimisoul.rs
 pub async fn compact_context(&mut self, custom_instruction: &str) -> Result<()> {
     let llm = self.llm.as_ref().ok_or(LLMNotSet::NotSet)?;
     let history = self.context.history().to_vec();

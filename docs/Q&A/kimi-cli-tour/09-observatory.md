@@ -19,6 +19,7 @@ Telemetry answers the question: **"How is the CLI being used?"** Events include 
 ### The `track!` Macro
 
 ```rust
+// Example: telemetry macro usage
 // Anywhere in the codebase:
 crate::track!(
     "tool_call",
@@ -43,6 +44,7 @@ This macro expands to:
 ### The Transport Layer
 
 ```rust
+// File: octopus-cli/src/telemetry/transport.rs
 pub struct AsyncTransport {
     endpoint: String,
     client: reqwest::Client,
@@ -80,6 +82,7 @@ The transport has **three retry policies**:
 If HTTP fails after all retries, events are **spooled to disk**:
 
 ```rust
+// File: octopus-cli/src/telemetry/transport.rs
 let fallback_path = get_telemetry_dir().join(format!("failed_{}.jsonl", uuid));
 let mut file = std::fs::File::create(&fallback_path)?;
 for event in events {
@@ -91,6 +94,7 @@ for event in events {
 On startup, the telemetry system **scans for failed events** and retries them:
 
 ```rust
+// File: octopus-cli/src/telemetry/sink.rs
 pub fn retry_disk_events(&self) -> Vec<Map<String, Value>> {
     let mut recovered = Vec::new();
     for entry in std::fs::read_dir(get_telemetry_dir()).ok()? {
@@ -138,6 +142,7 @@ This hook runs **before any write operation**, giving the user a chance to block
 ### The Hook Engine
 
 ```rust
+// File: octopus-cli/src/hooks/engine.rs
 pub struct HookEngine {
     hooks: Vec<ConfiguredHook>,
     event_index: HashMap<String, Vec<usize>>,  // event → hook indices
@@ -163,6 +168,7 @@ A hook can return:
 - **`{"action": "block", "reason": "..."}`** — abort the tool call
 
 ```rust
+// File: octopus-cli/src/hooks/runner.rs
 pub enum HookAction {
     Allow,
     Block { reason: String },
