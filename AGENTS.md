@@ -90,6 +90,66 @@ match (agent_conflict, config_conflict) {
 }
 ```
 
+#### Example: Config lookup with fallback priority
+
+**Bad:** imperative mutation with overlapping `if` blocks and variable shadowing.
+
+```rust
+let mut model: Option<LLMModel> = None;
+let mut provider: Option<LLMProvider> = None;
+
+if model_name.is_none() && !config.default_model.is_empty() {
+    if let Some(m) = config.models.get(&config.default_model) {
+        model = Some(m.clone());
+        provider = config.providers.get(&m.provider).cloned();
+    }
+}
+if let Some(ref name) = model_name {
+    if let Some(m) = config.models.get(name) {
+        model = Some(m.clone());
+        provider = config.providers.get(&m.provider).cloned();
+    }
+}
+
+let mut model = model.unwrap_or_else(|| LLMModel { /* fallback */ });
+let mut provider = provider.unwrap_or_else(|| LLMProvider { /* fallback */ });
+```
+
+**Good:** pre-compute existence booleans, then `match` exhaustively on the tuple.
+
+```rust
+let explicit = model_name.as_ref().and_then(|n| config.models.get(n));
+let default = if config.default_model.is_empty() {
+    None
+} else {
+    config.models.get(&config.default_model)
+};
+
+let name_given = model_name.is_some();
+let name_exists = explicit.is_some();
+let default_given = !config.default_model.is_empty();
+let default_exists = default.is_some();
+
+let (mut model, mut provider) = match (name_given, name_exists, default_given, default_exists) {
+    // Explicit model requested and found in config.
+    (true, true, _, _) => {
+        let m = explicit.unwrap().clone();
+        let p = config.providers.get(&m.provider).cloned().unwrap_or_else(|| LLMProvider { /* fallback */ });
+        (m, p)
+    }
+    // No explicit model; default configured and found in config.
+    (false, _, true, true) => {
+        let m = default.unwrap().clone();
+        let p = config.providers.get(&m.provider).cloned().unwrap_or_else(|| LLMProvider { /* fallback */ });
+        (m, p)
+    }
+    // Everything else falls back to hard-coded defaults.
+    _ => (LLMModel { /* fallback */ }, LLMProvider { /* fallback */ }),
+};
+```
+
+This makes the scenario matrix explicit, eliminates shadowing, and guarantees every combination is handled.
+
 Use `matches!` for one-off predicates:
 
 ```rust
@@ -109,6 +169,110 @@ When refactoring existing code:
 #### Exception
 
 Raw primitives are acceptable only at serialization boundaries or external API interop — convert to an enum immediately at the boundary.
+
+---
+
+### Deserialize JSON into Typed Structs, Not `serde_json::Value`
+
+**Rule:** When parsing HTTP responses or JSON files, derive `Deserialize` on a struct and use `response.json::<T>().await` (or `serde_json::from_str`). Do not deserialize into `serde_json::Value` and then manually index fields with hardcoded strings.
+
+Use `#[serde(default)]` and `#[serde(default = "...")]` for optional fields. Post-process after deserialization for computed values (e.g., converting `expires_in` to an absolute `expires_at` timestamp).
+
+Reserve `serde_json::Value` for genuinely dynamic data (error payloads with unknown shape, truly schemaless JSON).
+
+#### Why
+
+- **Type safety:** A typo in a field name becomes a compile error, not a silent `None` at runtime.
+- **Exhaustiveness:** Adding a new required field to the struct forces you to update every construction and deserialization site.
+- **Readability:** `body.user_code` is self-documenting; `body["user_code"].as_str().unwrap_or("")` makes the reader guess the type and nullability of every field.
+- **Refactoring safety:** Rename a field in the struct, and the compiler shows every call site. Rename a string literal, and `grep` is your only safety net.
+
+#### Bad
+
+```rust
+let body: serde_json::Value = response.json().await?;
+
+Ok(DeviceAuthorization {
+    user_code: body["user_code"].as_str().unwrap_or("").to_string(),
+    device_code: body["device_code"].as_str().unwrap_or("").to_string(),
+    verification_uri: body["verification_uri"].as_str().unwrap_or("").to_string(),
+    verification_uri_complete: body["verification_uri_complete"]
+        .as_str()
+        .unwrap_or("")
+        .to_string(),
+    expires_in: body["expires_in"].as_u64(),
+    interval: body["interval"].as_u64().unwrap_or(5),
+})
+```
+
+#### Good
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceAuthorization {
+    pub user_code: String,
+    pub device_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: String,
+    pub expires_in: Option<u64>,
+    #[serde(default = "default_interval")]
+    pub interval: u64,
+}
+
+fn default_interval() -> u64 {
+    5
+}
+
+// One line. The compiler checks field names and types.
+let body: DeviceAuthorization = response.json().await?;
+Ok(body)
+```
+
+#### Computed fields: deserialize first, then transform
+
+When the response contains raw data that must be enriched (e.g., relative `expires_in` → absolute `expires_at`), deserialize into the struct, then compute:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthToken {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_at: f64,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default = "default_bearer")]
+    pub token_type: String,
+    #[serde(default)]
+    pub expires_in: f64,
+}
+
+fn default_bearer() -> String {
+    "Bearer".to_string()
+}
+
+fn parse_token_response(body: &serde_json::Value) -> Result<OAuthToken> {
+    let mut token: OAuthToken = serde_json::from_value(body.clone())
+        .map_err(|e| OctopusError::Other(format!("Invalid token response: {}", e)))?;
+
+    if token.expires_in > 0.0 && token.expires_at == 0.0 {
+        token.expires_at = now_secs() + token.expires_in;
+    }
+
+    Ok(token)
+}
+```
+
+`#[serde(default)]` handles absent fields; the computation step handles derived data. No manual `Value` indexing anywhere.
+
+#### Exception
+
+`serde_json::Value` is acceptable only when:
+1. The schema is truly unknown (e.g., arbitrary user-provided JSON).
+2. You must inspect a small subset of fields before deciding which typed struct to parse into (e.g., reading `body["error"]` to check for an OAuth error before parsing a success response).
+
+Even in case 2, convert to a typed struct as soon as the shape is known.
 
 ---
 

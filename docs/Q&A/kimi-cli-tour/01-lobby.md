@@ -79,40 +79,89 @@ pub struct AppRuntime {
 
 ### The Soul Factory
 
+`OctopusCLI::create()` is the lobby's **initialization pipeline**. It runs in 8 numbered phases, each building on the last:
+
 ```rust
-// Resolve config from mutually exclusive --config / --config-file
-let config = match config_source {
-    Some(ConfigSource::Inline(s)) => load_config_from_string(&s)?,
-    Some(ConfigSource::File(p)) => load_config(Some(&p))?,
-    None => load_config(None)?,
-};
+pub async fn create(...) -> Result<Self> {
+    // 1. Load configuration and apply CLI overrides.
+    let mut config = match config_source { ... };
+    // 1.1 ... 1.2 loop-control overrides ...
 
-let llm = create_llm(&provider, &model)?;
-let approval_state = session.state.approval_state();
+    // 2. Resolve model and provider.
+    // 2.1 Look up explicit model and default model.
+    // 2.2 Pre-compute existence booleans.
+    // 2.3 Match on the tuple to pick model/provider with clear priority.
+    // 2.4 Apply environment variable overrides.
 
-// Build the heavyweight runtime for tool creation
-let app_runtime = AppRuntime::new(config.clone(), session.clone(), llm.clone(), ...);
-
-// Parse MCP configs from CLI args (--mcp-config, --mcp-config-file)
-let mcp_configs = parse_mcp_configs(&cli)?;
-
-// Load agent from YAML spec (tools, system prompt, subagents, WASM plugins, MCP servers)
-let agent = load_agent(agent_file, app_runtime, mcp_configs).await?;
-
-// Inject the fully-loaded agent into the soul
-let soul = KimiSoul::new(config, session, llm, approval_state, agent, None);
+    // 3. Resolve derived settings and instantiate LLM.
+    // 4. Build approval state from session + CLI flags.
+    // 5. Construct agent and soul (KimiSoul::new).
+    // 6. Assemble the lightweight AppRuntime.
+    // 7. Initialize telemetry.
+    // 8. Return the fully initialized CLI handle.
+}
 ```
 
 The `KimiSoul` is the heart of the building — we'll visit it in Tour 2. Here in the lobby, it's constructed with **all dependencies injected upfront**. No global variables, no `threading.local()`, no late initialization.
 
 Notice the **config resolution step**: `--config` (inline string) and `--config-file` (path) are modeled as a single `ConfigSource` enum. This follows the Rust principle of *making invalid states unrepresentable* — the compiler ensures you handle exactly one source, not zero and not two.
 
+#### Model/Provider Resolution: Tuple Matching in Action
+
+Phase 2 is where the lobby decides which LLM to talk to. Rather than a chain of `if` blocks that mutate `Option` locals, the code **pre-computes four booleans and matches on the tuple**:
+
+```rust
+let explicit = model_name.as_ref().and_then(|n| config.models.get(n));
+let default  = config.models.get(&config.default_model);
+
+let name_given    = model_name.is_some();
+let name_exists   = explicit.is_some();
+let default_given = !config.default_model.is_empty();
+let default_exists = default.is_some();
+
+let (mut model, mut provider) = match (name_given, name_exists, default_given, default_exists) {
+    (true, true, _, _) => { /* use explicit model */ }
+    (false, _, true, true) => { /* use default model */ }
+    _ => { /* hard-coded fallback */ }
+};
+```
+
+This is the **"precompute and match on tuples"** pattern from our style guide (`AGENTS.md`). It makes the scenario matrix explicit:
+
+| `model_name` given? | Found in config? | `default_model` given? | Found in config? | Result |
+|---|---|---|---|---|
+| ✅ | ✅ | — | — | Use explicit model |
+| ✅ | ❌ | — | — | Fallback |
+| ❌ | — | ✅ | ✅ | Use default model |
+| ❌ | — | ✅ | ❌ | Fallback |
+| ❌ | — | ❌ | — | Fallback |
+
+🐍 **Python's way:** Two overlapping `if` blocks that mutate local variables, followed by a fallback `if not model:`.
+
+🦀 **Rust's way:** A single `match` on a 4-tuple. Every combination is visible in one place. No variable shadowing, no hidden mutation order.
+
+✨ **Where Rust shines:** **The priority logic is exhaustive.** Add a new boolean dimension, and the compiler forces you to update every arm. In Python, a new condition might silently fall through to the wrong branch.
+
 Notice also the **agent loading step**: the YAML spec drives which tools are registered, what system prompt is used, and which subagents are available. Plus:
 - **WASM plugins** are discovered from `~/.kimi/plugins/`
 - **MCP servers** are connected from CLI `--mcp-config` arguments
 - **Subagent types** are registered in the `LaborMarket`
 
-This mirrors Python's `load_agent(agent_file, runtime)` architecture but extends it with plugin discovery and deferred MCP loading.
+#### Agent Loading: What Changed from Python
+
+This mirrors Python's `load_agent(agent_file, runtime)` architecture — loading an agent spec, building a toolset, registering subagents, and handling MCP servers — but **replaces the implementation mechanics**, not adds new capabilities:
+
+| Mechanism | Python (`tmp/kimi-cli`) | Rust (`octopus-cli`) |
+|---|---|---|
+| **Tool loading** | Dynamic `importlib` import by module path (`kimi_cli.tools.shell:Shell`) with a dependency-injection dict | Static `match` on tool name string; each tool is constructed inline in `build_tool()` |
+| **Plugins** | Directory-based: `~/.kimi/plugins/<name>/plugin.json` → native Python `PluginTool` instances | WASM-based: `~/.kimi/plugins/*.wasm` → Extism `WasmPluginTool` (sandboxed, language-agnostic) |
+| **MCP deferral** | Optional via `start_mcp_loading: bool` flag (caller chooses immediate vs. deferred) | Mandatory (always deferred at load time; `start_deferred_mcp_tool_loading()` triggers it later) |
+
+🐍 **Python's way:** `load_agent` receives a `start_mcp_loading` flag. If `True`, MCP servers spin up immediately in the background. If `False`, they're stashed in `_deferred_mcp_load` and started later. Plugins are discovered by scanning `~/.kimi/plugins/` for directories containing `plugin.json` manifests.
+
+🦀 **Rust's way:** `load_agent` always defers MCP loading — no flag. The caller decides when to call `toolset.start_deferred_mcp_tool_loading()`. Plugins are discovered by scanning `~/.kimi/plugins/` for `.wasm` files (not directories), loaded via the Extism runtime. Tool construction is a hard-coded `match` rather than dynamic import.
+
+✨ **Where Rust shines:** **WASM plugins are sandboxed.** A crashing or malicious plugin cannot corrupt the host process — Extism enforces memory isolation and capability restrictions. Python's native plugins run with full process privileges. The static `match` dispatcher also means tool loading has **zero runtime reflection cost**; the compiler knows every possible tool at build time.
 
 ---
 
@@ -200,6 +249,7 @@ pub struct Config {
 1. **The lobby is thin.** `main.rs` + `app.rs` are ~680 lines combined. Python's equivalent was ~1,200 lines spread across 4 files.
 2. **Ownership is visible.** The `OctopusCLI` struct owns `soul: Option<KimiSoul>`. When the UI runs, the soul is `take()`n. The compiler ensures no double-use.
 3. **No runtime magic.** CLI parsing, config loading, and session setup are all **explicit function calls**. No decorators, no metaclasses, no import-side effects.
+4. **Match on tuples for multi-condition logic.** The model/provider resolution uses a 4-tuple `match` instead of `if-else` chains. This makes the scenario matrix explicit and guarantees every case is handled — a pattern enforced in `AGENTS.md`.
 
 ---
 
