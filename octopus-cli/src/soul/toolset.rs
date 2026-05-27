@@ -3,19 +3,18 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::mcp::{McpConfig, McpServerInfo, McpServerStatus, McpToolInfo};
-use crate::tools::Tool;
-use crate::wire::{ContentPart, ToolCall, ToolOutput, ToolResult, ToolReturnValue};
+use crate::mcp::{McpConfig, McpServerInfo, McpServerStatus};
+use crate::wire::ToolCall as WireToolCall;
 
 thread_local! {
-    static CURRENT_TOOL_CALL: std::cell::RefCell<Option<ToolCall>> = const { std::cell::RefCell::new(None) };
+    static CURRENT_TOOL_CALL: std::cell::RefCell<Option<WireToolCall>> = const { std::cell::RefCell::new(None) };
 }
 
-pub fn set_current_tool_call(tc: Option<ToolCall>) {
+pub fn set_current_tool_call(tc: Option<WireToolCall>) {
     CURRENT_TOOL_CALL.with(|c| *c.borrow_mut() = tc);
 }
 
-pub fn get_current_tool_call() -> Option<ToolCall> {
+pub fn get_current_tool_call() -> Option<WireToolCall> {
     CURRENT_TOOL_CALL.with(|c| c.borrow().clone())
 }
 
@@ -25,24 +24,25 @@ const DEDUP_REMINDER_TEXT: &str = "\n\n<system-reminder>\n\
     try a different method or parameters instead of repeating the same call.\
     \n</system-reminder>";
 
-/// Append dedup reminder text to a [`ToolReturnValue`] output.
-fn append_dedup_reminder(mut rv: ToolReturnValue) -> ToolReturnValue {
+/// Append dedup reminder text to a kosong [`ToolReturnValue`] output.
+fn append_dedup_reminder(
+    mut rv: kosong::tooling::ToolReturnValue,
+) -> kosong::tooling::ToolReturnValue {
     let reminder = DEDUP_REMINDER_TEXT.to_string();
 
     match &mut rv.output {
         None => {
-            rv.output = Some(ToolOutput::Parts(vec![ContentPart::Text {
-                text: reminder,
-            }]));
+            rv.output = Some(Value::String(reminder));
         }
-        Some(ToolOutput::Text(text)) => {
+        Some(Value::String(text)) => {
             text.push_str(&reminder);
         }
-        Some(ToolOutput::Parts(parts)) => {
-            if let Some(ContentPart::Text { text }) = parts.last_mut() {
-                text.push_str(&reminder);
+        Some(_other) => {
+            // For array/object outputs, we can't easily append — just set message
+            if let Some(msg) = &mut rv.message {
+                msg.push_str(&reminder);
             } else {
-                parts.push(ContentPart::Text { text: reminder });
+                rv.message = Some(reminder);
             }
         }
     }
@@ -55,7 +55,7 @@ fn append_dedup_reminder(mut rv: ToolReturnValue) -> ToolReturnValue {
 struct StepState {
     previous_step_calls: Vec<(String, String)>,
     current_step_calls: Vec<(String, String)>,
-    current_step_results: HashMap<(String, String), ToolResult>,
+    current_step_results: HashMap<(String, String), kosong::tooling::ToolResult>,
     dedup_triggered: bool,
     step_no: usize,
     turn_id: String,
@@ -68,7 +68,7 @@ struct McpState {
 }
 
 pub struct KimiToolset {
-    registry: crate::tools::ToolRegistry,
+    tools: HashMap<String, Box<dyn kosong::tooling::CallableTool>>,
     hidden_tools: HashSet<String>,
     hook_engine: Option<crate::hooks::HookEngine>,
     session_id: String,
@@ -90,7 +90,7 @@ pub struct McpLoadContext {
 impl KimiToolset {
     pub fn new() -> Self {
         Self {
-            registry: crate::tools::ToolRegistry::new(),
+            tools: HashMap::new(),
             hidden_tools: HashSet::new(),
             hook_engine: None,
             session_id: String::new(),
@@ -131,17 +131,22 @@ impl KimiToolset {
         self.session_id = id;
     }
 
-    pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.registry.register(tool);
+    pub fn register(&mut self, tool: Box<dyn kosong::tooling::CallableTool>) {
+        self.tools.insert(tool.name().to_string(), tool);
     }
 
-    pub fn find(&self, name: &str) -> Option<&dyn Tool> {
-        self.registry.get(name)
+    /// Convenience: register a [`CallableTool2`] by wrapping it in a [`CallableTool2Adapter`].
+    pub fn register_typed<T: kosong::tooling::CallableTool2 + 'static>(&mut self, tool: T) {
+        self.register(Box::new(kosong::tooling::CallableTool2Adapter::new(tool)));
+    }
+
+    pub fn find(&self, name: &str) -> Option<&dyn kosong::tooling::CallableTool> {
+        self.tools.get(name).map(|t| t.as_ref())
     }
 
     /// Hide a tool from the LLM tool list. Returns `true` if the tool exists.
     pub fn hide(&mut self, tool_name: &str) -> bool {
-        if self.registry.get(tool_name).is_some() {
+        if self.tools.contains_key(tool_name) {
             self.hidden_tools.insert(tool_name.to_string());
             true
         } else {
@@ -152,12 +157,7 @@ impl KimiToolset {
     /// Hide all tools except those in the allowlist.
     pub fn hide_all_except(&mut self, allowed: &[String]) {
         let allowed: std::collections::HashSet<_> = allowed.iter().collect();
-        let all_names: Vec<String> = self
-            .registry
-            .list()
-            .iter()
-            .map(|t| t.name().to_string())
-            .collect();
+        let all_names: Vec<String> = self.tools.keys().cloned().collect();
         for name in all_names {
             if !allowed.contains(&name) {
                 self.hide(&name);
@@ -170,11 +170,12 @@ impl KimiToolset {
         self.hidden_tools.remove(tool_name);
     }
 
-    pub fn tools(&self) -> Vec<&dyn Tool> {
-        self.registry
-            .list()
-            .into_iter()
+    /// Visible tools.
+    pub fn tools(&self) -> Vec<&dyn kosong::tooling::CallableTool> {
+        self.tools
+            .values()
             .filter(|t| !self.hidden_tools.contains(t.name()))
+            .map(|t| t.as_ref())
             .collect()
     }
 
@@ -204,15 +205,10 @@ impl KimiToolset {
         self.step_state.lock().unwrap().dedup_triggered
     }
 
-    pub async fn handle(&self, tool_call: &ToolCall) -> ToolResult {
-        self.handle_inner(tool_call).await
-    }
-
-    async fn handle_inner(&self, tool_call: &ToolCall) -> ToolResult {
-        let call_key = (
-            tool_call.function.name.clone(),
-            tool_call.function.arguments.clone(),
-        );
+    /// Core tool execution — works with kosong types directly.
+    async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::tooling::ToolResult {
+        let args_str = tool_call.function.arguments.clone().unwrap_or_default();
+        let call_key = (tool_call.function.name.clone(), args_str.clone());
 
         // --- Same-step dedup: wait for the original result and copy it ---
         {
@@ -233,10 +229,7 @@ impl KimiToolset {
                     dup_type = "same_step",
                     args_hash = &args_hash[..8.min(args_hash.len())],
                 );
-                return ToolResult {
-                    tool_call_id: tool_call.id.clone(),
-                    return_value: original.return_value.clone(),
-                };
+                return original.clone();
             }
         }
 
@@ -268,16 +261,15 @@ impl KimiToolset {
             );
         }
 
-        let tool = match self.registry.get(&tool_call.function.name) {
-            Some(t) => t,
+        let tool = match self.tools.get(&tool_call.function.name) {
+            Some(t) => t.as_ref(),
             None => {
-                let result = ToolResult {
+                let result = kosong::tooling::ToolResult {
                     tool_call_id: tool_call.id.clone(),
-                    return_value: ToolReturnValue::error(
-                        format!("Tool '{}' not found", tool_call.function.name),
-                        "Tool not found".to_string(),
-                        None,
-                    ),
+                    return_value: kosong::tooling::ToolReturnValue::error(format!(
+                        "Tool '{}' not found",
+                        tool_call.function.name
+                    )),
                 };
                 let mut state = self.step_state.lock().unwrap();
                 state
@@ -288,16 +280,14 @@ impl KimiToolset {
             }
         };
 
-        let arguments: Value = match serde_json::from_str(&tool_call.function.arguments) {
+        let arguments: Value = match serde_json::from_str(&args_str) {
             Ok(v) => v,
             Err(e) => {
-                let result = ToolResult {
+                let result = kosong::tooling::ToolResult {
                     tool_call_id: tool_call.id.clone(),
-                    return_value: ToolReturnValue::error(
-                        format!("JSON parse error: {e}"),
-                        "Invalid arguments".to_string(),
-                        None,
-                    ),
+                    return_value: kosong::tooling::ToolReturnValue::error(format!(
+                        "JSON parse error: {e}"
+                    )),
                 };
                 let mut state = self.step_state.lock().unwrap();
                 state
@@ -327,13 +317,9 @@ impl KimiToolset {
                     .await;
                 for r in &results {
                     if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
-                        let result = ToolResult {
+                        let result = kosong::tooling::ToolResult {
                             tool_call_id: tool_call.id.clone(),
-                            return_value: ToolReturnValue::error(
-                                reason.clone(),
-                                "Hook blocked".to_string(),
-                                None,
-                            ),
+                            return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
                         };
                         let mut state = self.step_state.lock().unwrap();
                         state
@@ -350,20 +336,14 @@ impl KimiToolset {
         let approval_opt = self.approval.lock().unwrap().clone();
         if let Some(ref approval) = approval_opt {
             if Self::requires_approval(&tool_call.function.name) {
-                let description = format!(
-                    "{}({})",
-                    tool_call.function.name, tool_call.function.arguments
-                );
+                let description = format!("{}({})", tool_call.function.name, args_str);
                 let result = approval
                     .request("Octopus", &tool_call.function.name, &description, None)
                     .await;
                 if !result.approved {
-                    let return_value = ToolReturnValue::error(
-                        result.feedback.clone(),
-                        "Tool call rejected".to_string(),
-                        None,
-                    );
-                    let result = ToolResult {
+                    let return_value =
+                        kosong::tooling::ToolReturnValue::error(result.feedback.clone());
+                    let result = kosong::tooling::ToolResult {
                         tool_call_id: tool_call.id.clone(),
                         return_value,
                     };
@@ -380,40 +360,40 @@ impl KimiToolset {
         let tool_call_id = tool_call.id.clone();
         let t0 = std::time::Instant::now();
 
-        set_current_tool_call(Some(tool_call.clone()));
-        let ret = tool.call(arguments).await;
+        let wire_tc = WireToolCall {
+            id: tool_call.id.clone(),
+            call_type: tool_call.call_type.clone(),
+            function: crate::wire::ToolCallFunction {
+                name: tool_call.function.name.clone(),
+                arguments: args_str,
+            },
+        };
+        set_current_tool_call(Some(wire_tc));
+        let return_value = tool.call_raw(arguments).await;
         set_current_tool_call(None);
 
         let elapsed = t0.elapsed();
         let duration_ms = elapsed.as_millis() as u64;
 
-        let return_value = match &ret {
-            Ok(output) => {
-                crate::track!(
-                    "tool_call",
-                    tool_name = tool_call.function.name,
-                    outcome = "success",
-                    duration_ms = duration_ms,
-                );
-                ToolReturnValue::ok(
-                    Some(vec![ContentPart::Text {
-                        text: output.clone(),
-                    }]),
-                    None,
-                )
-            }
-            Err(output) => {
-                crate::track!(
-                    "tool_call",
-                    tool_name = tool_call.function.name,
-                    outcome = "error",
-                    duration_ms = duration_ms,
-                );
-                ToolReturnValue::error(output.clone(), output.clone(), None)
-            }
-        };
+        if return_value.is_error {
+            let msg = return_value.message.clone().unwrap_or_default();
+            crate::track!(
+                "tool_call",
+                tool_name = tool_call.function.name,
+                outcome = "error",
+                duration_ms = duration_ms,
+            );
+            let _ = &msg; // used for hooks below
+        } else {
+            crate::track!(
+                "tool_call",
+                tool_name = tool_call.function.name,
+                outcome = "success",
+                duration_ms = duration_ms,
+            );
+        }
 
-        let mut result = ToolResult {
+        let mut result = kosong::tooling::ToolResult {
             tool_call_id,
             return_value,
         };
@@ -424,40 +404,49 @@ impl KimiToolset {
 
         // --- PostToolUse / PostToolUseFailure hooks (fire-and-forget) ---
         if let Some(ref engine) = self.hook_engine {
-            match ret {
-                Ok(ref output) => {
-                    if engine.has_hooks_for("PostToolUse") {
-                        let input_data = crate::hooks::events::post_tool_use(
-                            &self.session_id,
-                            &self.cwd,
-                            &tool_call.function.name,
-                            &tool_input_map,
-                            &output[..output.len().min(2000)],
-                            &tool_call.id,
-                        );
-                        let _ = engine.fire_and_forget_trigger(
-                            "PostToolUse",
-                            &tool_call.function.name,
-                            input_data,
-                        );
-                    }
+            if result.return_value.is_error {
+                if engine.has_hooks_for("PostToolUseFailure") {
+                    let error_text = result
+                        .return_value
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    let input_data = crate::hooks::events::post_tool_use_failure(
+                        &self.session_id,
+                        &self.cwd,
+                        &tool_call.function.name,
+                        &tool_input_map,
+                        &error_text,
+                        &tool_call.id,
+                    );
+                    let _ = engine.fire_and_forget_trigger(
+                        "PostToolUseFailure",
+                        &tool_call.function.name,
+                        input_data,
+                    );
                 }
-                Err(ref error) => {
-                    if engine.has_hooks_for("PostToolUseFailure") {
-                        let input_data = crate::hooks::events::post_tool_use_failure(
-                            &self.session_id,
-                            &self.cwd,
-                            &tool_call.function.name,
-                            &tool_input_map,
-                            error,
-                            &tool_call.id,
-                        );
-                        let _ = engine.fire_and_forget_trigger(
-                            "PostToolUseFailure",
-                            &tool_call.function.name,
-                            input_data,
-                        );
-                    }
+            } else {
+                if engine.has_hooks_for("PostToolUse") {
+                    let output_text = result
+                        .return_value
+                        .output
+                        .as_ref()
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let input_data = crate::hooks::events::post_tool_use(
+                        &self.session_id,
+                        &self.cwd,
+                        &tool_call.function.name,
+                        &tool_input_map,
+                        &output_text[..output_text.len().min(2000)],
+                        &tool_call.id,
+                    );
+                    let _ = engine.fire_and_forget_trigger(
+                        "PostToolUse",
+                        &tool_call.function.name,
+                        input_data,
+                    );
                 }
             }
         }
@@ -485,7 +474,7 @@ impl KimiToolset {
         description: &str,
         parameters: serde_json::Map<String, serde_json::Value>,
     ) -> (bool, Option<String>) {
-        if self.registry.get(name).is_some() {
+        if self.tools.contains_key(name) {
             return (
                 false,
                 Some("tool name conflicts with existing tool".to_string()),
@@ -496,7 +485,7 @@ impl KimiToolset {
             description: description.to_string(),
             parameters: Value::Object(parameters),
         };
-        self.registry.register(Box::new(tool));
+        self.register(Box::new(tool));
         (true, None)
     }
 
@@ -638,7 +627,7 @@ impl KimiToolset {
                                     schema.clone(),
                                     client.clone(),
                                 );
-                                self.registry.register(Box::new(mcp_tool));
+                                self.register(Box::new(mcp_tool));
 
                                 if let Some(info) = self.mcp_servers.get_mut(&server_name) {
                                     info.tools.push(crate::mcp::McpToolInfo {
@@ -706,76 +695,30 @@ impl Default for KimiToolset {
 }
 
 // ============================================================================
-// kosong::Toolset adapter
+// kosong::Toolset wrapper (orphan-rules-safe)
 // ============================================================================
 
-/// Bridges [`KimiToolset`] to the [`kosong::Toolset`] trait.
-///
-/// The callback is provided at construction time so that it is guaranteed to
-/// exist before any tool is executed, eliminating the race condition where a
-/// tool finishes before a late-registered callback is installed.
-pub struct KosongToolsetAdapter {
-    inner: std::sync::Arc<KimiToolset>,
-    on_tool_result: Option<std::sync::Arc<dyn Fn(&crate::wire::ToolResult) + Send + Sync>>,
-}
+/// Thin wrapper so we can implement [`kosong::Toolset`] without orphan-rule
+/// issues on `Arc<KimiToolset>`.
+pub struct KimiToolsetHandle(pub std::sync::Arc<KimiToolset>);
 
-impl KosongToolsetAdapter {
-    pub fn new(
-        inner: std::sync::Arc<KimiToolset>,
-        on_tool_result: Option<std::sync::Arc<dyn Fn(&crate::wire::ToolResult) + Send + Sync>>,
-    ) -> Self {
-        Self {
-            inner,
-            on_tool_result,
-        }
-    }
-}
-
-impl kosong::Toolset for KosongToolsetAdapter {
+impl kosong::Toolset for KimiToolsetHandle {
     fn tools(&self) -> Vec<kosong::Tool> {
-        self.inner
+        self.0
             .tools()
             .into_iter()
             .map(|t| kosong::Tool {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
-                parameters: t.schema(),
+                parameters: t.parameters(),
             })
             .collect()
     }
 
     fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
-        let inner = self.inner.clone();
-        let wire_tc = crate::wire::ToolCall {
-            id: tool_call.id.clone(),
-            call_type: tool_call.call_type.clone(),
-            function: crate::wire::ToolCallFunction {
-                name: tool_call.function.name.clone(),
-                arguments: tool_call.function.arguments.clone().unwrap_or_default(),
-            },
-        };
-        let cb = self.on_tool_result.clone();
-        let handle = tokio::spawn(async move {
-            let result = inner.handle(&wire_tc).await;
-            if let Some(ref cb) = cb {
-                cb(&result);
-            }
-            kosong::tooling::ToolResult {
-                tool_call_id: result.tool_call_id,
-                return_value: kosong::tooling::ToolReturnValue {
-                    is_error: result.return_value.is_error,
-                    output: result.return_value.output.map(|o| match o {
-                        crate::wire::ToolOutput::Text(t) => serde_json::Value::String(t),
-                        crate::wire::ToolOutput::Parts(parts) => {
-                            serde_json::to_value(parts).unwrap_or(serde_json::Value::Null)
-                        }
-                    }),
-                    message: result.return_value.message,
-                    display: Vec::new(),
-                    extras: None,
-                },
-            }
-        });
+        let inner = std::sync::Arc::clone(&self.0);
+        let tc = tool_call.clone();
+        let handle = tokio::spawn(async move { inner.handle_inner(&tc).await });
         kosong::HandleResult::Pending(handle)
     }
 }
@@ -792,7 +735,7 @@ pub struct WireExternalTool {
 }
 
 #[async_trait::async_trait]
-impl Tool for WireExternalTool {
+impl kosong::tooling::CallableTool for WireExternalTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -801,57 +744,17 @@ impl Tool for WireExternalTool {
         &self.description
     }
 
-    fn schema(&self) -> Value {
+    fn parameters(&self) -> Value {
+        // WireExternalTool stores only the parameters schema.
         self.parameters.clone()
     }
 
-    async fn call(&self, _args: Value) -> Result<String, String> {
+    async fn call_raw(&self, _args: Value) -> kosong::tooling::ToolReturnValue {
         // The actual call is handled by the wire server — this should not be
         // invoked directly. If it is, return an error explaining the issue.
-        Err(format!(
+        kosong::tooling::ToolReturnValue::error(format!(
             "External tool '{}' must be called through the wire protocol, not directly.",
             self.name
-        ))
-    }
-}
-
-// ============================================================================
-// MCPTool (stub)
-// ============================================================================
-
-/// A tool backed by an MCP server. Stub — real implementation needs a Rust MCP client.
-pub struct MCPTool {
-    server_name: String,
-    tool_info: McpToolInfo,
-}
-
-impl MCPTool {
-    pub fn new(server_name: String, tool_info: McpToolInfo) -> Self {
-        Self {
-            server_name,
-            tool_info,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for MCPTool {
-    fn name(&self) -> &str {
-        &self.tool_info.name
-    }
-
-    fn description(&self) -> &str {
-        &self.tool_info.description
-    }
-
-    fn schema(&self) -> Value {
-        self.tool_info.schema.clone()
-    }
-
-    async fn call(&self, _args: Value) -> Result<String, String> {
-        Err(format!(
-            "MCP tool '{}' from server '{}' is not yet callable (MCP client not implemented).",
-            self.tool_info.name, self.server_name
         ))
     }
 }

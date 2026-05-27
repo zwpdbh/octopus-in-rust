@@ -146,7 +146,7 @@ impl LLM {
         &self,
         system_prompt: Option<&str>,
         messages: &[crate::wire::Message],
-        tools: Option<&[&dyn crate::tools::Tool]>,
+        tools: Option<&[&dyn kosong::tooling::CallableTool]>,
     ) -> crate::exception::Result<ChatCompletion> {
         let provider = self.build_kosong_provider()?;
         let kosong_history: Vec<kosong::Message> =
@@ -189,7 +189,7 @@ impl LLM {
         &'a self,
         system_prompt: Option<&'a str>,
         messages: &'a [crate::wire::Message],
-        tools: Option<&'a [&'a dyn crate::tools::Tool]>,
+        tools: Option<&'a [&'a dyn kosong::tooling::CallableTool]>,
         on_message_part: &'a mut MP,
         on_tool_call: &'a mut TC,
     ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a
@@ -233,7 +233,9 @@ impl LLM {
         }
     }
 
-    pub(crate) fn build_kosong_provider(&self) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
+    pub(crate) fn build_kosong_provider(
+        &self,
+    ) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
         let provider_config = self
             .provider_config
             .as_ref()
@@ -343,11 +345,11 @@ pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::To
     }
 }
 
-pub(crate) fn wire_to_kosong_tool(tool: &dyn crate::tools::Tool) -> kosong::Tool {
+pub(crate) fn wire_to_kosong_tool(tool: &dyn kosong::tooling::CallableTool) -> kosong::Tool {
     kosong::Tool {
         name: tool.name().to_string(),
         description: tool.description().to_string(),
-        parameters: tool.schema(),
+        parameters: tool.parameters(),
     }
 }
 
@@ -406,7 +408,9 @@ pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::To
     }
 }
 
-pub(crate) fn kosong_to_wire_tool_result(result: kosong::tooling::ToolResult) -> crate::wire::ToolResult {
+pub(crate) fn kosong_to_wire_tool_result(
+    result: kosong::tooling::ToolResult,
+) -> crate::wire::ToolResult {
     crate::wire::ToolResult {
         tool_call_id: result.tool_call_id,
         return_value: crate::wire::ToolReturnValue {

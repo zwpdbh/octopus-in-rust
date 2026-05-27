@@ -82,29 +82,23 @@ impl KimiSoul {
         let has_agent = toolset.find("Agent").is_some();
         let has_dmail = toolset.find("SendDMail").is_some();
         if !has_shell {
-            toolset.register(Box::new(crate::tools::shell::ShellTool::new(
-                bg_manager.clone(),
-            )));
+            toolset.register_typed(crate::tools::shell::ShellTool::new(bg_manager.clone()));
         }
         if !has_task_output {
-            toolset.register(Box::new(crate::tools::background::TaskOutputTool::new(
+            toolset.register_typed(crate::tools::background::TaskOutputTool::new(
                 bg_manager.clone(),
-            )));
+            ));
         }
         if !has_task_stop {
-            toolset.register(Box::new(crate::tools::background::TaskStopTool::new(
+            toolset.register_typed(crate::tools::background::TaskStopTool::new(
                 bg_manager.clone(),
-            )));
+            ));
         }
         if !has_agent {
-            toolset.register(Box::new(crate::tools::agent::AgentTool::new(
-                agent.runtime.clone(),
-            )));
+            toolset.register_typed(crate::tools::agent::AgentTool::new(agent.runtime.clone()));
         }
         if !has_dmail {
-            toolset.register(Box::new(crate::tools::dmail::SendDMailTool::new(
-                denwa_renji.clone(),
-            )));
+            toolset.register_typed(crate::tools::dmail::SendDMailTool::new(denwa_renji.clone()));
         }
 
         // Enforce tool policy for subagents.
@@ -740,8 +734,10 @@ impl KimiSoul {
 
         // Prepare kosong inputs
         let provider = llm.build_kosong_provider()?;
-        let kosong_history: Vec<kosong::Message> =
-            history.iter().map(crate::llm::wire_to_kosong_message).collect();
+        let kosong_history: Vec<kosong::Message> = history
+            .iter()
+            .map(crate::llm::wire_to_kosong_message)
+            .collect();
 
         let mut on_message_part = |part: kosong::StreamedMessagePart| {
             use kosong::chat_provider::Part;
@@ -761,17 +757,36 @@ impl KimiSoul {
 
         let t0 = std::time::Instant::now();
 
-        let step_result = kosong::step(
+        let step_result = kosong::step_with_callbacks(
             provider.as_ref(),
             &self.agent.system_prompt,
-            &crate::soul::toolset::KosongToolsetAdapter::new(
-                self.toolset.clone(),
-                Some(std::sync::Arc::new(|result: &crate::wire::ToolResult| {
-                    wire_send(crate::wire::WireEvent::ToolResult(result.clone()));
-                })),
-            ),
+            &crate::soul::toolset::KimiToolsetHandle(self.toolset.clone()),
             &kosong_history,
             Some(&mut on_message_part),
+            Some(std::sync::Arc::new(
+                |result: &kosong::tooling::ToolResult| {
+                    let wire_rv = crate::wire::ToolReturnValue {
+                        is_error: result.return_value.is_error,
+                        output: result.return_value.output.as_ref().map(|v| match v {
+                            serde_json::Value::String(s) => {
+                                crate::wire::ToolOutput::Text(s.clone())
+                            }
+                            other => crate::wire::ToolOutput::Parts(vec![
+                                crate::wire::ContentPart::Text {
+                                    text: serde_json::to_string(other).unwrap_or_default(),
+                                },
+                            ]),
+                        }),
+                        message: result.return_value.message.clone(),
+                        brief: None,
+                    };
+                    let wire_result = crate::wire::ToolResult {
+                        tool_call_id: result.tool_call_id.clone(),
+                        return_value: wire_rv,
+                    };
+                    wire_send(crate::wire::WireEvent::ToolResult(wire_result));
+                },
+            )),
         )
         .await;
 
@@ -803,7 +818,10 @@ impl KimiSoul {
         };
 
         let assistant_message = crate::llm::kosong_to_wire_message(step_result.message.clone());
-        let usage = step_result.usage.clone().map(crate::llm::kosong_to_wire_usage);
+        let usage = step_result
+            .usage
+            .clone()
+            .map(crate::llm::kosong_to_wire_usage);
 
         // Update token count
         if let Some(ref u) = usage {

@@ -1,16 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use crate::tools::Tool;
 
 const MAX_LINES: usize = 1000;
 const MAX_LINE_LENGTH: usize = 2000;
 const _MAX_BYTES: usize = 100 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileParams {
     pub path: String,
     #[serde(default = "default_line_offset")]
@@ -27,7 +26,7 @@ fn default_n_lines() -> usize {
     MAX_LINES
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WriteFileParams {
     pub path: String,
     pub content: String,
@@ -39,7 +38,7 @@ fn default_write_mode() -> String {
     "overwrite".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Edit {
     pub old: String,
     pub new: String,
@@ -47,13 +46,13 @@ pub struct Edit {
     pub replace_all: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StrReplaceFileParams {
     pub path: String,
     pub edit: Edit,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GlobParams {
     pub pattern: String,
     #[serde(default)]
@@ -66,7 +65,7 @@ fn default_include_dirs() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GrepParams {
     pub pattern: String,
     #[serde(default = "default_grep_path")]
@@ -203,7 +202,9 @@ fn read_file_lines(path: &Path, line_offset: i32, n_lines: usize) -> Result<Stri
 }
 
 #[async_trait]
-impl Tool for ReadFileTool {
+impl CallableTool2 for ReadFileTool {
+    type Params = ReadFileParams;
+
     fn name(&self) -> &str {
         "ReadFile"
     }
@@ -212,41 +213,27 @@ impl Tool for ReadFileTool {
         "Read a file from the local filesystem."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "ReadFile",
-            "description": "Read a file from the local filesystem. Can read partial content with line_offset and n_lines.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the file" },
-                    "line_offset": { "type": "integer", "default": 1, "description": "Line to start from (1-based, negative for tail)" },
-                    "n_lines": { "type": "integer", "default": 1000, "description": "Max lines to read" }
-                },
-                "required": ["path"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: ReadFileParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: ReadFileParams) -> ToolReturnValue {
         let path = resolve_path(&params.path);
 
         if !path.exists() {
-            return Err(format!("`{}` does not exist.", params.path));
+            return ToolReturnValue::error(format!("`{}` does not exist.", params.path));
         }
         if !path.is_file() {
-            return Err(format!("`{}` is not a file.", params.path));
+            return ToolReturnValue::error(format!("`{}` is not a file.", params.path));
         }
 
-        read_file_lines(&path, params.line_offset, params.n_lines)
+        match read_file_lines(&path, params.line_offset, params.n_lines) {
+            Ok(result) => ToolReturnValue::ok(result),
+            Err(e) => ToolReturnValue::error(e),
+        }
     }
 }
 
 #[async_trait]
-impl Tool for WriteFileTool {
+impl CallableTool2 for WriteFileTool {
+    type Params = WriteFileParams;
+
     fn name(&self) -> &str {
         "WriteFile"
     }
@@ -255,53 +242,40 @@ impl Tool for WriteFileTool {
         "Write content to a file."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "WriteFile",
-            "description": "Write content to a file. Supports overwrite and append modes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the file" },
-                    "content": { "type": "string", "description": "Content to write" },
-                    "mode": { "type": "string", "enum": ["overwrite", "append"], "default": "overwrite" }
-                },
-                "required": ["path", "content"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: WriteFileParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: WriteFileParams) -> ToolReturnValue {
         let path = resolve_path(&params.path);
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return ToolReturnValue::error(format!("Failed to create parent directory: {}", e));
+            }
         }
 
         match params.mode.as_str() {
             "overwrite" => {
-                std::fs::write(&path, &params.content)
-                    .map_err(|e| format!("Failed to write file: {}", e))?;
+                if let Err(e) = std::fs::write(&path, &params.content) {
+                    return ToolReturnValue::error(format!("Failed to write file: {}", e));
+                }
             }
             "append" => {
                 use std::io::Write;
-                let mut file = std::fs::OpenOptions::new()
+                let mut file = match std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(&path)
-                    .map_err(|e| format!("Failed to open file: {}", e))?;
-                file.write_all(params.content.as_bytes())
-                    .map_err(|e| format!("Failed to append to file: {}", e))?;
+                {
+                    Ok(f) => f,
+                    Err(e) => return ToolReturnValue::error(format!("Failed to open file: {}", e)),
+                };
+                if let Err(e) = file.write_all(params.content.as_bytes()) {
+                    return ToolReturnValue::error(format!("Failed to append to file: {}", e));
+                }
             }
-            _ => return Err(format!("Invalid mode: {}", params.mode)),
+            _ => return ToolReturnValue::error(format!("Invalid mode: {}", params.mode)),
         }
 
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        Ok(format!(
+        ToolReturnValue::ok(format!(
             "File successfully written. Current size: {} bytes.",
             size
         ))
@@ -309,7 +283,9 @@ impl Tool for WriteFileTool {
 }
 
 #[async_trait]
-impl Tool for StrReplaceFileTool {
+impl CallableTool2 for StrReplaceFileTool {
+    type Params = StrReplaceFileParams;
+
     fn name(&self) -> &str {
         "StrReplaceFile"
     }
@@ -318,41 +294,17 @@ impl Tool for StrReplaceFileTool {
         "Replace text in a file."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "StrReplaceFile",
-            "description": "Replace text in a file. Use exact string matching.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the file" },
-                    "edit": {
-                        "type": "object",
-                        "properties": {
-                            "old": { "type": "string", "description": "Old string to replace" },
-                            "new": { "type": "string", "description": "New string to replace with" },
-                            "replace_all": { "type": "boolean", "default": false }
-                        },
-                        "required": ["old", "new"]
-                    }
-                },
-                "required": ["path", "edit"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: StrReplaceFileParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: StrReplaceFileParams) -> ToolReturnValue {
         let path = resolve_path(&params.path);
 
         if !path.exists() {
-            return Err(format!("`{}` does not exist.", params.path));
+            return ToolReturnValue::error(format!("`{}` does not exist.", params.path));
         }
 
-        let content =
-            std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => return ToolReturnValue::error(format!("Failed to read file: {}", e)),
+        };
 
         let new_content = if params.edit.replace_all {
             content.replace(&params.edit.old, &params.edit.new)
@@ -361,19 +313,23 @@ impl Tool for StrReplaceFileTool {
         };
 
         if new_content == content {
-            return Err(
-                "No replacements were made. The old string was not found in the file.".to_string(),
+            return ToolReturnValue::error(
+                "No replacements were made. The old string was not found in the file.",
             );
         }
 
-        std::fs::write(&path, &new_content).map_err(|e| format!("Failed to write file: {}", e))?;
+        if let Err(e) = std::fs::write(&path, &new_content) {
+            return ToolReturnValue::error(format!("Failed to write file: {}", e));
+        }
 
-        Ok("File successfully edited.".to_string())
+        ToolReturnValue::ok("File successfully edited.")
     }
 }
 
 #[async_trait]
-impl Tool for GlobTool {
+impl CallableTool2 for GlobTool {
+    type Params = GlobParams;
+
     fn name(&self) -> &str {
         "Glob"
     }
@@ -382,30 +338,10 @@ impl Tool for GlobTool {
         "Find files matching a glob pattern."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "Glob",
-            "description": "Find files matching a glob pattern.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Glob pattern (e.g. src/**/*.rs)" },
-                    "directory": { "type": "string", "description": "Directory to search in" },
-                    "include_dirs": { "type": "boolean", "default": true }
-                },
-                "required": ["pattern"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: GlobParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: GlobParams) -> ToolReturnValue {
         if params.pattern.starts_with("**") {
-            return Err(
-                "Pattern starting with '**' is not allowed. Use a more specific pattern."
-                    .to_string(),
+            return ToolReturnValue::error(
+                "Pattern starting with '**' is not allowed. Use a more specific pattern.",
             );
         }
 
@@ -417,8 +353,10 @@ impl Tool for GlobTool {
         let pattern = dir.join(&params.pattern);
         let pattern_str = pattern.to_string_lossy();
 
-        let entries =
-            glob::glob(&pattern_str).map_err(|e| format!("Invalid glob pattern: {}", e))?;
+        let entries = match glob::glob(&pattern_str) {
+            Ok(e) => e,
+            Err(e) => return ToolReturnValue::error(format!("Invalid glob pattern: {}", e)),
+        };
 
         let mut matches = Vec::new();
         for entry in entries {
@@ -435,12 +373,14 @@ impl Tool for GlobTool {
             matches.truncate(1000);
         }
 
-        Ok(matches.join("\n"))
+        ToolReturnValue::ok(matches.join("\n"))
     }
 }
 
 #[async_trait]
-impl Tool for GrepTool {
+impl CallableTool2 for GrepTool {
+    type Params = GrepParams;
+
     fn name(&self) -> &str {
         "Grep"
     }
@@ -449,37 +389,7 @@ impl Tool for GrepTool {
         "Search file contents using regex."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "Grep",
-            "description": "Search file contents using regex.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Regex pattern" },
-                    "path": { "type": "string", "default": ".", "description": "File or directory to search" },
-                    "glob": { "type": "string", "description": "Glob filter" },
-                    "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count_matches"], "default": "files_with_matches" },
-                    "before_context": { "type": "integer", "description": "Lines before match" },
-                    "after_context": { "type": "integer", "description": "Lines after match" },
-                    "context": { "type": "integer", "description": "Lines before and after" },
-                    "line_number": { "type": "boolean", "default": true },
-                    "ignore_case": { "type": "boolean", "default": false },
-                    "type": { "type": "string", "description": "File type" },
-                    "head_limit": { "type": "integer", "default": 250 },
-                    "offset": { "type": "integer", "default": 0 },
-                    "multiline": { "type": "boolean", "default": false },
-                    "include_ignored": { "type": "boolean", "default": false }
-                },
-                "required": ["pattern"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: GrepParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: GrepParams) -> ToolReturnValue {
         let path = resolve_path(&params.path);
 
         let mut args = vec!["rg".to_string()];
@@ -537,11 +447,14 @@ impl Tool for GrepTool {
         args.push(params.pattern);
         args.push(path.to_string_lossy().to_string());
 
-        let output = tokio::process::Command::new("rg")
+        let output = match tokio::process::Command::new("rg")
             .args(&args[1..])
             .output()
             .await
-            .map_err(|e| format!("Failed to run grep: {}", e))?;
+        {
+            Ok(o) => o,
+            Err(e) => return ToolReturnValue::error(format!("Failed to run grep: {}", e)),
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut lines: Vec<&str> = stdout.lines().collect();
@@ -554,6 +467,6 @@ impl Tool for GrepTool {
             lines.truncate(params.head_limit);
         }
 
-        Ok(lines.join("\n"))
+        ToolReturnValue::ok(lines.join("\n"))
     }
 }

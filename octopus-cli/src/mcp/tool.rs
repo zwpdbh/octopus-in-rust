@@ -35,7 +35,7 @@ impl McpTool {
 }
 
 #[async_trait]
-impl crate::tools::Tool for McpTool {
+impl kosong::tooling::CallableTool for McpTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -44,21 +44,26 @@ impl crate::tools::Tool for McpTool {
         &self.description
     }
 
-    fn schema(&self) -> serde_json::Value {
-        self.schema.clone()
+    fn parameters(&self) -> serde_json::Value {
+        // McpTool stores the full wrapper ({name, description, parameters}).
+        // CallableTool::parameters() must return only the parameters JSON Schema.
+        self.schema
+            .get("parameters")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}))
     }
 
-    async fn call(&self, arguments: serde_json::Value) -> Result<String, String> {
+    async fn call_raw(&self, arguments: serde_json::Value) -> kosong::tooling::ToolReturnValue {
         match self.client.call_tool(&self.name, arguments).await {
             Ok(result) => {
                 let text = result.to_text();
                 if result.is_error.unwrap_or(false) {
-                    Err(text)
+                    kosong::tooling::ToolReturnValue::error(text)
                 } else {
-                    Ok(text)
+                    kosong::tooling::ToolReturnValue::ok(text)
                 }
             }
-            Err(e) => Err(format!("MCP tool error: {}", e)),
+            Err(e) => kosong::tooling::ToolReturnValue::error(format!("MCP tool error: {}", e)),
         }
     }
 }

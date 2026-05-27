@@ -175,12 +175,15 @@ let mut on_message_part = |part: kosong::StreamedMessagePart| {
     }
 };
 
-let step_result = kosong::step(
+let step_result = kosong::step_with_callbacks(
     provider.as_ref(),
     &self.agent.system_prompt,
-    &KosongToolsetAdapter::new(self.toolset.clone(), /* callback */),
+    &KimiToolsetHandle(self.toolset.clone()),
     &kosong_history,
     Some(&mut on_message_part),
+    Some(Arc::new(|result: &kosong::ToolResult| {
+        wire_send(WireEvent::ToolResult(kosong_to_wire_tool_result(result)));
+    })),
 )
 .await;
 ```
@@ -191,13 +194,13 @@ Notice `kosong::step` — this is the **high-level step abstraction** from the `
 
 🦀 **Rust's way:** We now mirror Python exactly: `kimisoul` delegates to `kosong::step`, then calls `step_result.tool_results().await` to gather finished tools. The manual streaming logic that existed in earlier versions of the Rust rewrite has been replaced by the same abstraction.
 
-✨ **Where Rust shines:** **The adapter enforces safety.** `KosongToolsetAdapter` (Tour 3) wraps `KimiToolset` and owns the eager wire callback at construction time. This eliminates a race condition where fast tools could finish before a late-registered callback was installed. If it compiles, the callback is guaranteed to exist before any tool runs.
+✨ **Where Rust shines:** **Construction-invariant safety.** The `on_tool_result` callback is passed to `kosong::step_with_callbacks` at call time, not via a mutable setter. This eliminates a race condition where fast tools could finish before a late-registered callback was installed. If it compiles, the callback is guaranteed to exist before any tool runs.
 
 ---
 
 ## 🛠️ Tool Execution: Concurrent & Early
 
-When the LLM emits a tool call, `kosong::step` dispatches it immediately via the `KosongToolsetAdapter`:
+When the LLM emits a tool call, `kosong::step_with_callbacks` dispatches it immediately via `KimiToolsetHandle`:
 
 ```rust
 // Inside kosong::step (kosong/src/step.rs)
@@ -213,16 +216,13 @@ let mut on_tool_call = |tool_call: ToolCall| {
 };
 ```
 
-And inside `KosongToolsetAdapter::handle`:
+And inside `KimiToolsetHandle::handle`:
 
 ```rust
 let handle = tokio::spawn(async move {
-    let result = inner.handle(&wire_tc).await;
-    // Eager wire callback — guaranteed to exist because it was passed to ::new()
-    if let Some(ref cb) = cb {
-        cb(&result);
-    }
-    // ... convert to kosong::ToolResult ...
+    let result = inner.handle_inner(&tool_call).await;
+    // result is already a kosong::ToolResult — no conversion needed
+    result
 });
 ```
 
@@ -230,9 +230,9 @@ Tools are executed **as soon as they're parsed from the stream**, before the LLM
 
 🐍 **Python's way:** Python `kosong.step` also dispatches tools eagerly via `asyncio.create_task`. Results are gathered later with `await result.tool_results()`.
 
-🦀 **Rust's way:** `kosong::step` spawns each tool via `tokio::spawn` the moment its JSON is complete. The `KosongToolsetAdapter` bridges wire-world to kosong-world and injects the eager wire callback **inside** the spawned task.
+🦀 **Rust's way:** `kosong::step_with_callbacks` spawns each tool via `tokio::spawn` the moment its JSON is complete. The `KimiToolsetHandle` bridges `KimiToolset` to kosong's `Toolset` trait. The wire callback lives in `kimisoul.rs`, outside the toolset entirely.
 
-✨ **Where Rust shines:** **Fearless concurrency + type-safe ordering.** The borrow checker ensures `toolset` (an `Arc<KimiToolset>`) is safely shared across tasks. And because the eager callback lives in `KosongToolsetAdapter::new()` — not a mutable setter — the compiler guarantees it exists before any task is spawned. In Python, a late `set_on_tool_result` call creates a race window that the language cannot detect.
+✨ **Where Rust shines:** **Fearless concurrency + type-safe ordering.** The borrow checker ensures `toolset` (an `Arc<KimiToolset>`) is safely shared across tasks. And because the eager callback is passed directly to `step_with_callbacks` — not stored in a mutable field — the compiler guarantees it exists before any task is spawned. In Python, a late `set_on_tool_result` call creates a race window that the language cannot detect.
 
 ---
 

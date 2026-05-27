@@ -117,6 +117,12 @@ pub struct CallableTool2Adapter<T: CallableTool2> {
     pub inner: T,
 }
 
+impl<T: CallableTool2> CallableTool2Adapter<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
 #[async_trait]
 impl<T: CallableTool2> CallableTool for CallableTool2Adapter<T> {
     fn name(&self) -> &str {

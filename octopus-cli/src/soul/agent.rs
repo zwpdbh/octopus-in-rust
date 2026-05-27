@@ -371,74 +371,83 @@ fn load_system_prompt(
 
 /// Build a tool by its Python-style fully-qualified name.
 /// Returns `None` for tools that do not exist in the Rust rewrite.
-fn build_tool(name: &str, runtime: &AppRuntime) -> Option<Box<dyn crate::tools::Tool>> {
+fn build_tool(name: &str, runtime: &AppRuntime) -> Option<Box<dyn kosong::tooling::CallableTool>> {
+    use kosong::tooling::CallableTool2Adapter;
     match name {
         // Shell & background
-        "kimi_cli.tools.shell:Shell" | "Shell" => Some(Box::new(
+        "kimi_cli.tools.shell:Shell" | "Shell" => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::shell::ShellTool::new(runtime.background_tasks.clone()),
-        )),
-        "kimi_cli.tools.background:TaskOutput" | "TaskOutput" => Some(Box::new(
-            crate::tools::background::TaskOutputTool::new(runtime.background_tasks.clone()),
-        )),
-        "kimi_cli.tools.background:TaskStop" | "TaskStop" => Some(Box::new(
-            crate::tools::background::TaskStopTool::new(runtime.background_tasks.clone()),
-        )),
+        ))),
+        "kimi_cli.tools.background:TaskOutput" | "TaskOutput" => {
+            Some(Box::new(CallableTool2Adapter::new(
+                crate::tools::background::TaskOutputTool::new(runtime.background_tasks.clone()),
+            )))
+        }
+        "kimi_cli.tools.background:TaskStop" | "TaskStop" => {
+            Some(Box::new(CallableTool2Adapter::new(
+                crate::tools::background::TaskStopTool::new(runtime.background_tasks.clone()),
+            )))
+        }
         "kimi_cli.tools.background:TaskList" | "TaskList" => {
             // Not yet ported; skip silently.
             None
         }
 
         // File
-        "kimi_cli.tools.file:ReadFile" | "ReadFile" => {
-            Some(Box::new(crate::tools::file::ReadFileTool::new()))
-        }
+        "kimi_cli.tools.file:ReadFile" | "ReadFile" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::ReadFileTool::new(),
+        ))),
         "kimi_cli.tools.file:ReadMediaFile" | "ReadMediaFile" => {
             // Not yet ported.
             None
         }
-        "kimi_cli.tools.file:WriteFile" | "WriteFile" => {
-            Some(Box::new(crate::tools::file::WriteFileTool::new()))
-        }
-        "kimi_cli.tools.file:StrReplaceFile" | "StrReplaceFile" => {
-            Some(Box::new(crate::tools::file::StrReplaceFileTool::new()))
-        }
-        "kimi_cli.tools.file:Glob" | "Glob" => Some(Box::new(crate::tools::file::GlobTool::new())),
-        "kimi_cli.tools.file:Grep" | "Grep" => Some(Box::new(crate::tools::file::GrepTool::new())),
+        "kimi_cli.tools.file:WriteFile" | "WriteFile" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::WriteFileTool::new(),
+        ))),
+        "kimi_cli.tools.file:StrReplaceFile" | "StrReplaceFile" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::file::StrReplaceFileTool::new()),
+        )),
+        "kimi_cli.tools.file:Glob" | "Glob" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::GlobTool::new(),
+        ))),
+        "kimi_cli.tools.file:Grep" | "Grep" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::GrepTool::new(),
+        ))),
 
         // Web
-        "kimi_cli.tools.web:SearchWeb" | "SearchWeb" => {
-            Some(Box::new(crate::tools::web::SearchWebTool::new()))
-        }
-        "kimi_cli.tools.web:FetchURL" | "FetchURL" => {
-            Some(Box::new(crate::tools::web::FetchURLTool::new()))
-        }
+        "kimi_cli.tools.web:SearchWeb" | "SearchWeb" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::web::SearchWebTool::new(),
+        ))),
+        "kimi_cli.tools.web:FetchURL" | "FetchURL" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::web::FetchURLTool::new(),
+        ))),
 
         // Ask user / todo / think / plan
-        "kimi_cli.tools.ask_user:AskUserQuestion" | "AskUser" => {
-            Some(Box::new(crate::tools::ask_user::AskUserTool::new()))
-        }
-        "kimi_cli.tools.todo:SetTodoList" | "SetTodoList" => {
-            Some(Box::new(crate::tools::todo::SetTodoListTool::new()))
-        }
-        "kimi_cli.tools.think:Think" | "Think" => {
-            Some(Box::new(crate::tools::think::ThinkTool::new()))
-        }
-        "kimi_cli.tools.plan:ExitPlanMode" | "ExitPlanMode" => {
-            Some(Box::new(crate::tools::plan::ExitPlanModeTool::new()))
-        }
-        "kimi_cli.tools.plan.enter:EnterPlanMode" | "EnterPlanMode" => {
-            Some(Box::new(crate::tools::plan::EnterPlanModeTool::new()))
-        }
+        "kimi_cli.tools.ask_user:AskUserQuestion" | "AskUser" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::ask_user::AskUserTool::new()),
+        )),
+        "kimi_cli.tools.todo:SetTodoList" | "SetTodoList" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::todo::SetTodoListTool::new()),
+        )),
+        "kimi_cli.tools.think:Think" | "Think" => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::think::ThinkTool::new(),
+        ))),
+        "kimi_cli.tools.plan:ExitPlanMode" | "ExitPlanMode" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::plan::ExitPlanModeTool::new()),
+        )),
+        "kimi_cli.tools.plan.enter:EnterPlanMode" | "EnterPlanMode" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::plan::EnterPlanModeTool::new()),
+        )),
 
         // Agent / D-Mail
-        "kimi_cli.tools.agent:Agent" | "Agent" => Some(Box::new(
+        "kimi_cli.tools.agent:Agent" | "Agent" => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::agent::AgentTool::new(runtime.clone()),
-        )),
-        "kimi_cli.tools.dmail:SendDMail" | "SendDMail" => {
-            Some(Box::new(crate::tools::dmail::SendDMailTool::new(
+        ))),
+        "kimi_cli.tools.dmail:SendDMail" | "SendDMail" => Some(Box::new(
+            CallableTool2Adapter::new(crate::tools::dmail::SendDMailTool::new(
                 std::sync::Arc::new(std::sync::Mutex::new(runtime.denwa_renji.clone())),
-            )))
-        }
+            )),
+        )),
 
         _ => {
             tracing::warn!("Unknown tool name in agent spec: {}", name);

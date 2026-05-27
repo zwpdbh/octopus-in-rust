@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::approval_runtime::{ApprovalSource, with_approval_source};
 use crate::soul::agent::{Agent, load_agent};
 use crate::soul::approval::ApprovalState;
-use crate::tools::Tool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AgentParams {
     pub description: String,
     #[serde(default)]
@@ -41,7 +41,9 @@ impl AgentTool {
 }
 
 #[async_trait]
-impl Tool for AgentTool {
+impl CallableTool2 for AgentTool {
+    type Params = AgentParams;
+
     fn name(&self) -> &str {
         "Agent"
     }
@@ -50,30 +52,7 @@ impl Tool for AgentTool {
         "Launch a subagent to work on a focused task."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "Agent",
-            "description": "Launch a subagent to work on a focused task in the background.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": { "type": "string", "description": "Short description of the task (3-5 words)" },
-                    "prompt": { "type": "string", "description": "Complete prompt for the subagent" },
-                    "subagent_type": { "type": "string", "default": "coder", "description": "Built-in agent type" },
-                    "model": { "type": "string", "description": "Optional model override" },
-                    "resume": { "type": "string", "description": "Optional agent ID to resume" },
-                    "run_in_background": { "type": "boolean", "default": false, "description": "Run in background" },
-                    "timeout": { "type": "integer", "description": "Timeout in seconds" }
-                },
-                "required": ["description"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: AgentParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: AgentParams) -> ToolReturnValue {
         let parent_runtime = self.parent_runtime.clone();
 
         if params.run_in_background {
@@ -101,23 +80,25 @@ impl Tool for AgentTool {
                 }
             });
 
-            return Ok(format!(
+            return ToolReturnValue::ok(format!(
                 "Subagent '{}' launched in the background.\nautomatic_notification: true\nnext_step: You will be notified when it completes.",
                 params.description
             ));
         }
 
         // Foreground subagent
-        let result = run_subagent_with_market(
+        match run_subagent_with_market(
             parent_runtime,
             &params.subagent_type,
             &params.description,
             &params.prompt,
             params.model.as_deref(),
         )
-        .await?;
-
-        Ok(result)
+        .await
+        {
+            Ok(result) => ToolReturnValue::ok(result),
+            Err(e) => ToolReturnValue::error(e),
+        }
     }
 }
 

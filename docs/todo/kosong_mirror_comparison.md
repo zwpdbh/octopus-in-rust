@@ -339,22 +339,22 @@ octopus-cli/src/soul/mod.rs (KimiSoul)
 └── Tool results collected after generation; `on_tool_result` callback on `KimiToolset` fires per result
 ```
 
-**Important:** `KimiSoul` does **not** call `kosong::step()`. Instead, it calls `LLM::generate_streaming()` (which wraps `kosong::generate()` with streaming callbacks) and handles tools manually via `KimiToolset`. This means:
+**Important:** `KimiSoul` now calls `kosong::step_with_callbacks()` directly. It no longer uses the manual `LLM::generate_streaming()` + early tool dispatch pipeline. This means:
 
 - ✅ `KimiSoul` streams message parts to the user in real-time
-- ✅ `KimiSoul` dispatches tools **during streaming** as they arrive from the stream
-- ✅ `KimiSoul` executes tools concurrently (not sequentially)
+- ✅ `kosong::step_with_callbacks` dispatches tools **during streaming** as they arrive from the stream
+- ✅ `kosong::step_with_callbacks` executes tools concurrently (not sequentially)
 - ✅ `KimiSoul` handles D-Mail, hooks, telemetry, MCP, etc. at a higher layer
-- ✅ `KimiToolset` implements `kosong::Toolset` via `KosongToolsetAdapter` (available for future use)
+- ✅ `KimiToolsetHandle` implements `kosong::Toolset` for `Arc<KimiToolset>`
 
-The kosong crate is complete and functional; `octopus-cli` uses `kosong::generate()` with streaming + early tool dispatch via the `on_tool_call` callback.
+The kosong crate is complete and functional; `octopus-cli` uses `kosong::step_with_callbacks()` with the `on_tool_result` callback for eager wire events.
 
 ---
 
 ## Priority Roadmap
 
 ### P0 — Critical for parity
-1. ~~**Wire `kosong::step()` into `KimiSoul`**~~ ✅ **DONE** — Streaming via `kosong::generate()` + early tool dispatch during streaming + concurrent tool execution via `join_all()` implemented. `KosongToolsetAdapter` implements `kosong::Toolset` for future `kosong::step()` integration.
+1. ~~**Wire `kosong::step()` into `KimiSoul`**~~ ✅ **DONE** — `kimisoul.rs` now calls `kosong::step_with_callbacks()` directly. `KimiToolsetHandle` implements `kosong::Toolset` for `Arc<KimiToolset>`.
 
 ### P1 — Important
 2. ~~**Add `on_tool_result` to Rust `kosong::step()`**~~ ✅ **DONE** — `StepResult::tool_results_with_callback()` and `step_with_tool_result_callback()` implemented. Fires callback synchronously as each `JoinHandle` resolves.

@@ -22,7 +22,7 @@ pub struct WasmPluginTool {
 }
 
 #[async_trait]
-impl crate::tools::Tool for WasmPluginTool {
+impl kosong::tooling::CallableTool for WasmPluginTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -31,21 +31,30 @@ impl crate::tools::Tool for WasmPluginTool {
         &self.description
     }
 
-    fn schema(&self) -> Value {
+    fn parameters(&self) -> Value {
         self.schema.clone()
     }
 
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let input = serde_json::to_string(&arguments)
-            .map_err(|e| format!("Failed to serialize arguments: {}", e))?;
+    async fn call_raw(&self, arguments: Value) -> kosong::tooling::ToolReturnValue {
+        let input = match serde_json::to_string(&arguments) {
+            Ok(s) => s,
+            Err(e) => {
+                return kosong::tooling::ToolReturnValue::error(format!(
+                    "Failed to serialize arguments: {}",
+                    e
+                ));
+            }
+        };
 
         let compiled = self.compiled.clone();
 
         // Run plugin execution in a blocking task since WASM instantiation
         // and execution involves significant synchronous work.
-        let output = tokio::task::spawn_blocking(move || {
-            let mut plugin = Plugin::new_from_compiled(&compiled)
-                .map_err(|e| format!("Failed to instantiate plugin: {}", e))?;
+        let output = match tokio::task::spawn_blocking(move || {
+            let mut plugin = match Plugin::new_from_compiled(&compiled) {
+                Ok(p) => p,
+                Err(e) => return Err(format!("Failed to instantiate plugin: {}", e)),
+            };
 
             plugin
                 .call::<&str, &str>("execute", &input)
@@ -53,9 +62,18 @@ impl crate::tools::Tool for WasmPluginTool {
                 .map(|s| s.to_string())
         })
         .await
-        .map_err(|e| format!("Plugin task panicked: {}", e))??;
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return kosong::tooling::ToolReturnValue::error(e),
+            Err(e) => {
+                return kosong::tooling::ToolReturnValue::error(format!(
+                    "Plugin task panicked: {}",
+                    e
+                ));
+            }
+        };
 
-        Ok(output)
+        kosong::tooling::ToolReturnValue::ok(output)
     }
 }
 
@@ -72,7 +90,7 @@ unsafe impl Sync for WasmPluginTool {}
 /// Scans for `.wasm` files and attempts to load each one as a plugin tool.
 /// Failures are logged as warnings and skipped; they don't fail the entire
 /// discovery process.
-pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn crate::tools::Tool>> {
+pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
     let mut tools = Vec::new();
 
     if !plugins_dir.is_dir() {
@@ -112,7 +130,7 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn crate::tools::Tool>> 
 /// 3. Build an Extism `Manifest` with security restrictions.
 /// 4. Compile the plugin with those restrictions.
 /// 5. If no JSON manifest, fall back to `tool_metadata` export or filename.
-fn load_wasm_plugin(path: &Path) -> Result<Box<dyn crate::tools::Tool>, String> {
+fn load_wasm_plugin(path: &Path) -> Result<Box<dyn kosong::tooling::CallableTool>, String> {
     let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
 
     // Try JSON manifest first
@@ -238,7 +256,7 @@ pub fn default_plugins_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::Tool;
+    use kosong::tooling::CallableTool;
 
     #[test]
     fn test_load_example_http_plugin() {
@@ -257,7 +275,7 @@ mod tests {
         assert_eq!(tool.name(), "HttpRequest");
         assert!(tool.description().contains("HTTP"));
 
-        let schema = tool.schema();
+        let schema = tool.parameters();
         assert!(schema.get("type").is_some());
         assert!(schema.get("properties").is_some());
     }
@@ -311,9 +329,9 @@ mod tests {
             "method": "GET"
         });
 
-        let result = tool.call(args).await;
-        match result {
-            Ok(output) => {
+        let result = tool.call_raw(args).await;
+        match result.output {
+            Some(Value::String(output)) => {
                 let parsed: serde_json::Value =
                     serde_json::from_str(&output).expect("Output should be valid JSON");
                 assert!(
@@ -324,9 +342,9 @@ mod tests {
                 assert!(parsed.get("body").is_some(), "Response should have body");
                 tracing::info!("Plugin HTTP test succeeded: {}", output);
             }
-            Err(e) => {
+            _ => {
                 // Network might be unavailable in test environment; log but don't fail hard
-                tracing::warn!("Plugin HTTP test failed (network issue?): {}", e);
+                tracing::warn!("Plugin HTTP test failed (network issue?)");
             }
         }
     }
@@ -365,9 +383,9 @@ mod tests {
             "method": "GET"
         });
 
-        let result = tool.call(args).await;
-        match result {
-            Ok(output) => {
+        let result = tool.call_raw(args).await;
+        match result.output {
+            Some(Value::String(output)) => {
                 let parsed: serde_json::Value =
                     serde_json::from_str(&output).expect("Output should be valid JSON");
                 // The plugin itself returns error in its JSON response when HTTP fails
@@ -378,9 +396,9 @@ mod tests {
                 );
                 tracing::info!("HTTP correctly blocked without permission: {}", output);
             }
-            Err(e) => {
+            _ => {
                 // Either the plugin returns error JSON or the host traps — both are acceptable
-                tracing::info!("HTTP blocked (expected): {}", e);
+                tracing::info!("HTTP blocked (expected)");
             }
         }
     }
