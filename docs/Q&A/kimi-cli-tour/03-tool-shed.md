@@ -44,7 +44,7 @@ impl Tool for McpTool {
 
 ## 🗃️ The Tool Registry: `KimiToolset`
 
-File: `octopus-cli/src/soul/toolset.rs` (~777 lines)
+File: `octopus-cli/src/soul/toolset.rs` (~857 lines)
 
 The `KimiToolset` is the **shed's inventory system**. It knows every tool and handles execution:
 
@@ -136,6 +136,60 @@ This pipeline has **four guardrails** before the tool actually runs:
 🐍 **Python's way:** Similar pipeline, but hooks and approval are mixed into the tool class hierarchy.
 
 🦀 **Rust's way:** The pipeline is **orthogonal** to tools. Every tool gets the same guards automatically. The `Tool` trait only defines `call()` — everything else is `KimiToolset` middleware.
+
+---
+
+## 🔌 The Kosong Bridge: `KosongToolsetAdapter`
+
+File: `octopus-cli/src/soul/toolset.rs` (near the bottom)
+
+The Tool Shed doesn't just serve the local `KimiSoul`. It also serves the **`kosong` LLM abstraction layer**. But `kosong` speaks its own message types (`kosong::ToolCall`, `kosong::ToolResult`), while `KimiToolset` speaks wire types (`wire::ToolCall`, `wire::ToolResult`).
+
+`KosongToolsetAdapter` is the **translation layer**:
+
+```rust
+pub struct KosongToolsetAdapter {
+    inner: Arc<KimiToolset>,
+    on_tool_result: Option<Arc<dyn Fn(&wire::ToolResult) + Send + Sync>>,
+}
+
+impl kosong::Toolset for KosongToolsetAdapter {
+    fn tools(&self) -> Vec<kosong::Tool> {
+        // Convert wire tools to kosong tools
+    }
+
+    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
+        // 1. Convert kosong::ToolCall → wire::ToolCall
+        // 2. Spawn inner.handle(&wire_tc).await
+        // 3. Fire eager wire callback inside the spawned task
+        // 4. Convert wire::ToolResult → kosong::ToolResult
+    }
+}
+```
+
+### Why the callback lives here
+
+The `on_tool_result` callback sends `WireEvent::ToolResult` to the UI as soon as each tool finishes. By putting it in the adapter's constructor (not a mutable setter on `KimiToolset`), we make it **impossible to spawn tools without a registered callback**:
+
+```rust
+// Control Room (kimisoul.rs)
+let step_result = kosong::step(
+    ...,
+    &KosongToolsetAdapter::new(
+        self.toolset.clone(),
+        Some(Arc::new(|result| {
+            wire_send(WireEvent::ToolResult(result.clone()));
+        })),
+    ),
+    ...,
+).await;
+```
+
+🐍 **Python's way:** Python `kosong.step` accepts an `on_tool_result` callback directly as a parameter. No adapter needed because Python's dynamic typing handles the conversion implicitly.
+
+🦀 **Rust's way:** The adapter is required because of Rust's orphan rules (you can't implement a foreign trait for a foreign type). But the pattern has a bonus: it forces the callback to be decided at construction time, eliminating a race condition.
+
+✨ **Where Rust shines:** **The newtype pattern turns a language limitation into a safety feature.** We needed an adapter anyway (orphan rules). By adding the callback to its constructor, we gained a compile-time guarantee that the eager wire event cannot be lost.
 
 ---
 

@@ -233,7 +233,7 @@ impl LLM {
         }
     }
 
-    fn build_kosong_provider(&self) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
+    pub(crate) fn build_kosong_provider(&self) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
         let provider_config = self
             .provider_config
             .as_ref()
@@ -406,8 +406,29 @@ pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::To
     }
 }
 
+pub(crate) fn kosong_to_wire_tool_result(result: kosong::tooling::ToolResult) -> crate::wire::ToolResult {
+    crate::wire::ToolResult {
+        tool_call_id: result.tool_call_id,
+        return_value: crate::wire::ToolReturnValue {
+            output: result.return_value.output.and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(crate::wire::ToolOutput::Text(s.to_string()))
+                } else {
+                    serde_json::from_value::<Vec<crate::wire::ContentPart>>(v.clone())
+                        .ok()
+                        .map(crate::wire::ToolOutput::Parts)
+                        .or_else(|| Some(crate::wire::ToolOutput::Text(v.to_string())))
+                }
+            }),
+            message: result.return_value.message,
+            brief: None,
+            is_error: result.return_value.is_error,
+        },
+    }
+}
+
 /// Classify a kosong error string into a specific OctopusError variant.
-fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
+pub(crate) fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
     if msg.starts_with("API connection error:") {
         return crate::exception::OctopusError::APIConnection(
             crate::exception::APIConnectionError(msg),

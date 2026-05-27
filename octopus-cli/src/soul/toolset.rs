@@ -50,10 +50,6 @@ fn append_dedup_reminder(mut rv: ToolReturnValue) -> ToolReturnValue {
     rv
 }
 
-/// Callback fired when a single tool result is ready.
-/// Used for streaming tool results to the UI in real-time.
-pub type OnToolResult = Box<dyn Fn(&ToolResult) + Send + Sync>;
-
 /// Mutable state scoped to a single step, protected by a mutex so that
 /// [`KimiToolset::handle`] can take `&self` and be called concurrently.
 struct StepState {
@@ -81,8 +77,6 @@ pub struct KimiToolset {
     // MCP state
     mcp_servers: HashMap<String, McpServerInfo>,
     mcp_state: std::sync::Mutex<McpState>,
-    // Streaming callback
-    on_tool_result: std::sync::Mutex<Option<OnToolResult>>,
     // Approval
     approval: std::sync::Mutex<Option<crate::soul::approval::Approval>>,
 }
@@ -116,7 +110,6 @@ impl KimiToolset {
                 deferred_mcp_load: None,
                 mcp_loading_task: None,
             }),
-            on_tool_result: std::sync::Mutex::new(None),
             approval: std::sync::Mutex::new(None),
         }
     }
@@ -132,10 +125,6 @@ impl KimiToolset {
 
     pub fn set_hook_engine(&mut self, engine: crate::hooks::HookEngine) {
         self.hook_engine = Some(engine);
-    }
-
-    pub fn set_on_tool_result(&self, cb: Option<OnToolResult>) {
-        *self.on_tool_result.lock().unwrap() = cb;
     }
 
     pub fn set_session_id(&mut self, id: String) {
@@ -481,11 +470,6 @@ impl KimiToolset {
             state.current_step_calls.push(call_key);
         }
 
-        // Stream tool result to UI if callback is registered.
-        if let Some(ref cb) = *self.on_tool_result.lock().unwrap() {
-            cb(&result);
-        }
-
         result
     }
 
@@ -725,14 +709,25 @@ impl Default for KimiToolset {
 // kosong::Toolset adapter
 // ============================================================================
 
-/// A newtype wrapper that lets [`KimiToolset`] serve as a [`kosong::Toolset`].
+/// Bridges [`KimiToolset`] to the [`kosong::Toolset`] trait.
+///
+/// The callback is provided at construction time so that it is guaranteed to
+/// exist before any tool is executed, eliminating the race condition where a
+/// tool finishes before a late-registered callback is installed.
 pub struct KosongToolsetAdapter {
     inner: std::sync::Arc<KimiToolset>,
+    on_tool_result: Option<std::sync::Arc<dyn Fn(&crate::wire::ToolResult) + Send + Sync>>,
 }
 
 impl KosongToolsetAdapter {
-    pub fn new(inner: std::sync::Arc<KimiToolset>) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: std::sync::Arc<KimiToolset>,
+        on_tool_result: Option<std::sync::Arc<dyn Fn(&crate::wire::ToolResult) + Send + Sync>>,
+    ) -> Self {
+        Self {
+            inner,
+            on_tool_result,
+        }
     }
 }
 
@@ -759,8 +754,12 @@ impl kosong::Toolset for KosongToolsetAdapter {
                 arguments: tool_call.function.arguments.clone().unwrap_or_default(),
             },
         };
+        let cb = self.on_tool_result.clone();
         let handle = tokio::spawn(async move {
             let result = inner.handle(&wire_tc).await;
+            if let Some(ref cb) = cb {
+                cb(&result);
+            }
             kosong::tooling::ToolResult {
                 tool_call_id: result.tool_call_id,
                 return_value: kosong::tooling::ToolReturnValue {

@@ -685,7 +685,6 @@ impl KimiSoul {
     /// The actual LLM step logic, without any recovery wrapper.
     async fn run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
         // ── Dynamic Injection ───────────────────────────────────────────────
-        // Mirrors Python's `_collect_injections()` in `kimisoul.py`.
         let injections = self.collect_injections().await;
         if !injections.is_empty() {
             let reminder_text = injections
@@ -707,8 +706,6 @@ impl KimiSoul {
         }
 
         // --- Notification delivery (root only) ---
-        // Mirrors Python's notification delivery in `_step()`.
-        // Deliver pending notifications to LLM context before the LLM call.
         if self.notification_manager.has_pending_for_sink("llm") {
             let notifs = self.notification_manager.claim_for_sink("llm", 8);
             for view in notifs {
@@ -739,14 +736,12 @@ impl KimiSoul {
         }
 
         // Build effective history and normalize adjacent user messages.
-        // Mirrors Python's `normalize_history()` in `dynamic_injection.py`.
         let history = normalize_history(self.context.history());
 
-        // Call LLM with streaming + early tool dispatch
-        let tools_slice: Vec<&dyn crate::tools::Tool> = self.toolset.tools();
-        let system_prompt = Some(self.agent.system_prompt.as_str());
-
-        let t0 = std::time::Instant::now();
+        // Prepare kosong inputs
+        let provider = llm.build_kosong_provider()?;
+        let kosong_history: Vec<kosong::Message> =
+            history.iter().map(crate::llm::wire_to_kosong_message).collect();
 
         let mut on_message_part = |part: kosong::StreamedMessagePart| {
             use kosong::chat_provider::Part;
@@ -759,37 +754,36 @@ impl KimiSoul {
             }
         };
 
-        // Spawn tool execution tasks as soon as each tool call is assembled
-        // from the stream, so tools start running before the full message
-        // has been received.
-        let toolset = self.toolset.clone();
-        let tool_handles: std::sync::Arc<
-            std::sync::Mutex<Vec<tokio::task::JoinHandle<crate::wire::ToolResult>>>,
-        > = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let handles = tool_handles.clone();
+        // Setup dedup before the step, matching Python's `begin_step` ordering.
+        let turn_id = self.current_turn_id.clone().unwrap_or_default();
+        self.toolset
+            .begin_step(self.last_tool_calls.clone(), self.current_step_no, turn_id);
 
-        let mut on_tool_call = move |tc: kosong::ToolCall| {
-            let toolset = toolset.clone();
-            let wire_tc = crate::llm::kosong_to_wire_tool_call(tc);
-            let handle = tokio::spawn(async move { toolset.handle(&wire_tc).await });
-            handles.lock().unwrap().push(handle);
-        };
+        let t0 = std::time::Instant::now();
 
-        let completion_result = llm
-            .generate_streaming(
-                system_prompt,
-                &history,
-                Some(&tools_slice),
-                &mut on_message_part,
-                &mut on_tool_call,
-            )
-            .await;
+        let step_result = kosong::step(
+            provider.as_ref(),
+            &self.agent.system_prompt,
+            &crate::soul::toolset::KosongToolsetAdapter::new(
+                self.toolset.clone(),
+                Some(std::sync::Arc::new(|result: &crate::wire::ToolResult| {
+                    wire_send(crate::wire::WireEvent::ToolResult(result.clone()));
+                })),
+            ),
+            &kosong_history,
+            Some(&mut on_message_part),
+        )
+        .await;
+
         let elapsed = t0.elapsed();
 
-        let completion = match completion_result {
-            Ok(c) => c,
+        self.last_tool_calls = self.toolset.end_step();
+
+        let step_result = match step_result {
+            Ok(r) => r,
             Err(e) => {
-                let (error_type, status_code) = Self::classify_api_error(&e);
+                let err = crate::llm::classify_kosong_error(e.message);
+                let (error_type, status_code) = Self::classify_api_error(&err);
                 if let Some(sc) = status_code {
                     crate::track!(
                         "api_error",
@@ -804,12 +798,12 @@ impl KimiSoul {
                         duration_ms = elapsed.as_millis() as u64,
                     );
                 }
-                return Err(e);
+                return Err(err);
             }
         };
 
-        let assistant_message = completion.message;
-        let usage = completion.usage;
+        let assistant_message = crate::llm::kosong_to_wire_message(step_result.message.clone());
+        let usage = step_result.usage.clone().map(crate::llm::kosong_to_wire_usage);
 
         // Update token count
         if let Some(ref u) = usage {
@@ -821,7 +815,7 @@ impl KimiSoul {
 
         let status_update = StatusUpdate {
             token_usage: usage.clone(),
-            message_id: completion.id,
+            message_id: step_result.id.clone(),
             plan_mode: Some(self.plan_mode),
             context_usage: Some(self.context_usage()),
             context_tokens: Some(self.context.token_count()),
@@ -830,43 +824,14 @@ impl KimiSoul {
         };
         wire_send(crate::wire::WireEvent::StatusUpdate(status_update));
 
-        // Execute tool calls
-        if !completion.tool_calls.is_empty() {
-            let turn_id = self.current_turn_id.clone().unwrap_or_default();
-            self.toolset
-                .begin_step(self.last_tool_calls.clone(), self.current_step_no, turn_id);
-
-            // Set up streaming callback so each tool result is sent to wire
-            // as soon as it completes, rather than waiting for all tools.
-            self.toolset.set_on_tool_result(Some(Box::new(|result| {
-                crate::wire::wire_send(crate::wire::WireEvent::ToolResult(result.clone()));
-            })));
-
-            // Await tool handles that were spawned during streaming.
-            let handles = std::sync::Arc::try_unwrap(tool_handles)
-                .unwrap()
-                .into_inner()
-                .unwrap();
-            let tool_results: Vec<crate::wire::ToolResult> = futures::future::join_all(handles)
-                .await
+        // Gather tool results and grow context
+        if !step_result.tool_calls.is_empty() {
+            let kosong_results = step_result.tool_results().await;
+            let tool_results: Vec<crate::wire::ToolResult> = kosong_results
                 .into_iter()
-                .map(|r| match r {
-                    Ok(result) => result,
-                    Err(e) => crate::wire::ToolResult {
-                        tool_call_id: String::new(),
-                        return_value: crate::wire::ToolReturnValue::error(
-                            format!("Tool task panicked: {e}"),
-                            "Tool panic".to_string(),
-                            None,
-                        ),
-                    },
-                })
+                .map(crate::llm::kosong_to_wire_tool_result)
                 .collect();
 
-            self.toolset.set_on_tool_result(None);
-            self.last_tool_calls = self.toolset.end_step();
-
-            // Grow context
             self.grow_context(&assistant_message, &tool_results).await?;
 
             // Check for rejections
@@ -876,7 +841,6 @@ impl KimiSoul {
                 .collect();
 
             if !rejected.is_empty() {
-                // Clear any pending D-Mail on rejection.
                 let _ = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
                 return Ok(Some(StepOutcome {
                     stop_reason: "tool_rejected".to_string(),
@@ -912,10 +876,8 @@ impl KimiSoul {
                 .into());
             }
 
-            // Continue loop
             Ok(None)
         } else {
-            // No tool calls - stop
             Ok(Some(StepOutcome {
                 stop_reason: "no_tool_calls".to_string(),
                 assistant_message,
