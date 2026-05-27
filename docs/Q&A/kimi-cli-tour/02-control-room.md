@@ -1,6 +1,6 @@
 # Tour 2: The Control Room — The Soul of the Machine
 
-> *"This is where the building thinks. Every decision, every word, every tool call originates here."*
+> _"This is where the building thinks. Every decision, every word, every tool call originates here."_
 
 Welcome to the **Control Room** — the second floor, and the beating heart of Octopus-CLI. This is where `KimiSoul` lives. If the lobby is the building's entrance, the Control Room is its **brain**.
 
@@ -51,7 +51,7 @@ pub async fn run(&mut self, user_input: &str) -> Result<String> {
     crate::wire::set_current_wire_soul_side(Some(wire.soul_side()));
 
     // 2. Start the mailroom pump
-    let pump_handle = self._start_notification_pump(...);
+    let pump_handle = self.start_notification_pump(...);
 
     // 3. Run the turn
     let result = self.run_turn(text).await;
@@ -63,6 +63,7 @@ pub async fn run(&mut self, user_input: &str) -> Result<String> {
 ```
 
 The `run()` method is the **control room's daily routine**. It:
+
 1. Opens the intercom (wire channel) so other rooms can listen
 2. Starts the mailroom pump (notification delivery)
 3. Runs one **turn** of conversation
@@ -70,7 +71,7 @@ The `run()` method is the **control room's daily routine**. It:
 
 🐍 **Python's way:** `run_soul()` is a top-level function that wraps the soul in a wire pump context manager.
 
-🦀 **Rust's way:** Everything is a method on `KimiSoul`. The wire is a local variable dropped at the end of the scope (RAII). No context managers needed — Rust's ownership system *is* the context manager.
+🦀 **Rust's way:** Everything is a method on `KimiSoul`. The wire is a local variable dropped at the end of the scope (RAII). No context managers needed — Rust's ownership system _is_ the context manager.
 
 ---
 
@@ -241,7 +242,7 @@ Before each step, the control room checks for **system reminders**:
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
-let injections = self._collect_injections().await;
+let injections = self.collect_injections().await;
 for inj in injections {
     self.context.append_message(Message {
         role: "user".to_string(),
@@ -253,10 +254,11 @@ for inj in injections {
 ```
 
 These injections come from:
+
 - **Plan mode:** "You are in plan mode. Write your plan to the plan file."
 - **AFK mode:** "The user is away. Continue autonomously."
 
-🐍 **Python's way:** `_collect_injections()` returns a list, injected into the system prompt.
+🐍 **Python's way:** `collect_injections()` returns a list, injected into the system prompt.
 
 🦀 **Rust's way:** Same pattern, but the `DynamicInjectionProvider` trait lets anyone add new injection sources without modifying the soul:
 
@@ -314,9 +316,10 @@ finally:
 ```
 
 Key behaviors:
+
 - **Nested turns inherit the parent's source.** A subagent sets its own source; inner turns see it and don't create a new one.
 - **Rejection messages are contextual.** If `source.agent_id` is set, the user gets a subagent-specific "try a different approach" message.
-- **Cleanup is precise.** Only the source that was *created* for this scope is cancelled; inherited sources are left alone.
+- **Cleanup is precise.** Only the source that was _created_ for this scope is cancelled; inherited sources are left alone.
 
 ### Rust's Way: `tokio::task_local!`
 
@@ -378,20 +381,20 @@ subagent.approval.runtime().cancel_by_source(&subagent_source.kind, &subagent_so
 
 ✨ **Where Rust shines:** **No manual token bookkeeping.** Python's `try/finally` with `reset_current_approval_source(token)` is error-prone — forget the finally block and the context leaks. Rust's `.scope()` is compile-time safe: the source is automatically restored when the future completes, even if it panics.
 
-| Aspect | Python (`ContextVar`) | Rust (`tokio::task_local!`) |
-|--------|----------------------|----------------------------|
-| **Get current** | `get_current_approval_source_or_none()` | `get_current_approval_source_or_none()` |
-| **Set / reset** | Manual `set()` + `reset(token)` | `.scope(source, future).await` |
-| **Nested safety** | Correct if tokens are managed | Guaranteed by `.scope()` RAII |
-| **Leak on panic** | Possible if `finally` omitted | Impossible — scope always restores |
-| **Cross-task inheritance** | Must explicitly copy context | Same — spawn doesn't inherit |
+| Aspect                     | Python (`ContextVar`)                   | Rust (`tokio::task_local!`)             |
+| -------------------------- | --------------------------------------- | --------------------------------------- |
+| **Get current**            | `get_current_approval_source_or_none()` | `get_current_approval_source_or_none()` |
+| **Set / reset**            | Manual `set()` + `reset(token)`         | `.scope(source, future).await`          |
+| **Nested safety**          | Correct if tokens are managed           | Guaranteed by `.scope()` RAII           |
+| **Leak on panic**          | Possible if `finally` omitted           | Impossible — scope always restores      |
+| **Cross-task inheritance** | Must explicitly copy context            | Same — spawn doesn't inherit            |
 
 ---
 
 ## 🎁 Souvenir Shop: What to Remember
 
 1. **The soul is a state machine.** `run()` → `run_turn()` → `step()` → `run_step_once()` is a layered hierarchy. Each layer handles one concern.
-2. **Streaming is first-class.** The soul doesn't just call the LLM; it *dances* with it, processing chunks as they arrive and spawning tools mid-stream.
+2. **Streaming is first-class.** The soul doesn't just call the LLM; it _dances_ with it, processing chunks as they arrive and spawning tools mid-stream.
 3. **The borrow checker is the safety officer.** Concurrent tool execution, shared state (`Arc<KimiToolset>`), and async lifetimes are all verified at compile time.
 4. **Approval source tracking is contextual.** `tokio::task_local!` gives every async task a scoped approval identity. Subagents inherit the parent's source; cleanup is RAII-safe.
 5. **~1,290 lines vs. ~1,710 lines.** The Rust soul is 25% smaller than Python's `kimisoul.py` + `__init__.py`, yet includes features (OAuth recovery, notification pump, skill injection) that were scattered across Python's codebase.
@@ -400,6 +403,6 @@ subagent.approval.runtime().cancel_by_source(&subagent_source.kind, &subagent_so
 
 ## 🚶 Next Stop
 
-The Control Room decides *what* to do. But *how* to do it? That's the domain of the **Tool Shed** next door.
+The Control Room decides _what_ to do. But _how_ to do it? That's the domain of the **Tool Shed** next door.
 
 → [Tour 3: The Tool Shed](./03-tool-shed.md)
