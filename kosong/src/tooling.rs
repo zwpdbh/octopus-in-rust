@@ -21,6 +21,25 @@ pub enum DisplayBlock {
 }
 
 /// The return value of a tool execution.
+///
+/// **Why `is_error: bool` instead of `Result<T, E>`?**
+///
+/// 1. **Serialization boundary** — `ToolReturnValue` is serialized to JSON and sent to
+///    LLM providers (OpenAI, Anthropic, etc.). A struct with a boolean flag maps directly
+///    to the provider API shape. `Result` has no natural JSON representation.
+///
+/// 2. **Uniform collection** — `kosong::step()` collects *all* tool results into the
+///    conversation history regardless of success or failure. No caller unwraps or
+///    propagates a `ToolReturnValue`; every result is serialized to a message and
+///    appended. `Result` would force identical `Ok`/`Err` match arms at every site.
+///
+/// 3. **Field duplication** — `display`, `extras`, and `output` are meaningful in both
+///    success and error cases (e.g., a shell command may print useful stdout before
+///    exiting non-zero). An enum would duplicate these fields across variants.
+///
+/// 4. **Semantic clarity** — `is_error` is a *hint to the LLM* about how to interpret
+///    the message, not a Rust error to be handled with `?`. Internal tools may still
+///    use `Result` locally and convert at this boundary via `::ok()` / `::error()`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolReturnValue {
     pub is_error: bool,
