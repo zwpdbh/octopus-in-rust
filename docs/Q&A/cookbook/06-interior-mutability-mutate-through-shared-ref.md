@@ -70,6 +70,8 @@ pub struct KimiToolset {
     step_state: std::sync::Mutex<StepState>,
     approval: std::sync::Mutex<Option<Approval>>,
     mcp_state: std::sync::Mutex<McpState>,
+    // tool names use String keys internally, but the public API
+    // accepts ToolName for source-aware filtering (hide_all_except).
 }
 
 async fn handle_inner(&self, tool_call: &ToolCall) -> ToolResult {

@@ -135,11 +135,13 @@ pub struct AgentTypeDefinition {
     pub tool_policy: ToolPolicy,
 }
 
+use crate::tools::tool_name::ToolName;
+
 /// Determines which tools a subagent of this type may use.
 #[derive(Debug, Clone)]
 pub enum ToolPolicy {
     /// Only these specific tools are allowed.
-    AllowList { tools: Vec<String> },
+    AllowList { tools: Vec<ToolName> },
     /// Inherit the parent's tool policy (all parent tools).
     Inherit,
 }

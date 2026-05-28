@@ -7,4 +7,5 @@ pub mod plan;
 pub mod shell;
 pub mod think;
 pub mod todo;
+pub mod tool_name;
 pub mod web;

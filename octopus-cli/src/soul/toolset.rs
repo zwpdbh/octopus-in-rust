@@ -158,8 +158,9 @@ impl KimiToolset {
     }
 
     /// Hide all tools except those in the allowlist.
-    pub fn hide_all_except(&mut self, allowed: &[String]) {
-        let allowed: std::collections::HashSet<_> = allowed.iter().collect();
+    pub fn hide_all_except(&mut self, allowed: &[crate::tools::tool_name::ToolName]) {
+        let allowed: std::collections::HashSet<String> =
+            allowed.iter().map(|t| t.name().to_string()).collect();
         let all_names: Vec<String> = self.tools.keys().cloned().collect();
         for name in all_names {
             if !allowed.contains(&name) {

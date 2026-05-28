@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::tools::tool_name::BuiltinTool;
+
 const DEFAULT_AGENT_SPEC_VERSION: &str = "1";
 
 /// Subagent specification within an agent file.
@@ -46,9 +48,9 @@ pub struct AgentSpec {
     pub system_prompt_args: HashMap<String, String>,
     pub model: Option<String>,
     pub when_to_use: String,
-    pub tools: Vec<String>,
-    pub allowed_tools: Option<Vec<String>>,
-    pub exclude_tools: Vec<String>,
+    pub tools: Vec<BuiltinTool>,
+    pub allowed_tools: Option<Vec<BuiltinTool>>,
+    pub exclude_tools: Vec<BuiltinTool>,
     pub subagents: HashMap<String, SubagentSpec>,
 }
 
@@ -90,15 +92,19 @@ pub fn load_agent_spec(agent_file: &Path) -> crate::exception::Result<AgentSpec>
         ));
     }
 
+    let tools = parse_builtin_tools(raw.tools.unwrap_or_default());
+    let allowed_tools = raw.allowed_tools.map(parse_builtin_tools);
+    let exclude_tools = parse_builtin_tools(raw.exclude_tools);
+
     Ok(AgentSpec {
         name: raw.name.unwrap(),
         system_prompt_path: raw.system_prompt_path.unwrap(),
         system_prompt_args: raw.system_prompt_args,
         model: raw.model,
         when_to_use: raw.when_to_use.unwrap_or_default(),
-        tools: raw.tools.unwrap_or_default(),
-        allowed_tools: raw.allowed_tools,
-        exclude_tools: raw.exclude_tools,
+        tools,
+        allowed_tools,
+        exclude_tools,
         subagents: raw.subagents,
     })
 }
@@ -200,4 +206,21 @@ fn load_raw_agent_spec(agent_file: &Path) -> crate::exception::Result<RawAgentSp
     }
 
     Ok(spec)
+}
+
+/// Parse raw tool name strings into [`BuiltinTool`] variants.
+///
+/// Unknown or not-yet-ported tools are logged and skipped rather than failing
+/// the entire agent load.
+fn parse_builtin_tools(names: Vec<String>) -> Vec<BuiltinTool> {
+    names
+        .into_iter()
+        .filter_map(|s| match s.parse::<BuiltinTool>() {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!("Skipping unknown tool in agent spec: {}", e);
+                None
+            }
+        })
+        .collect()
 }

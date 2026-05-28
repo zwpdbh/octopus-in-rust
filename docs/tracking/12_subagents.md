@@ -31,7 +31,7 @@
 - [x] Background subagent — `tokio::spawn`, returns immediately, tracked in `SubagentStore`
 - [x] `LaborMarket` — type registry populated from agent YAML specs
 - [x] `AgentTypeDefinition` — name, description, agent_file, default_model, tool_policy
-- [x] `ToolPolicy` — `AllowList { tools }` and `Inherit` variants, enforced via `KimiToolset::hide_all_except()`
+- [x] `ToolPolicy` — `AllowList { tools: Vec<ToolName> }` and `Inherit` variants, enforced via `KimiToolset::hide_all_except(&[ToolName])`
 - [x] Model override resolution — `params.model` → `def.default_model` → parent LLM
 - [x] `AppRuntime::copy_for_subagent()` — shares LaborMarket, skills, notifications, background_tasks, denwa_renji
 - [x] `SubagentStore` — tracks all subagent spawns with `Running | Completed | Failed` status

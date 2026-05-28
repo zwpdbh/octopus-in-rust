@@ -68,6 +68,9 @@ The `KimiToolset` is the **shed's inventory system**. It knows every tool and ha
 // File: octopus-cli/src/soul/toolset.rs
 pub struct KimiToolset {
     tools: HashMap<String, Box<dyn kosong::tooling::CallableTool>>,
+    /// Tool names that are registered but hidden from the LLM tool list.
+    /// Used for subagent `ToolPolicy::AllowList` — register all tools once,
+    /// then hide the ones the agent spec disallows.
     hidden_tools: HashSet<String>,
     hook_engine: Option<HookEngine>,
     session_id: String,
@@ -88,18 +91,18 @@ In Python, tools were hardcoded in `KimiSoul.__init__`. In the Rust rewrite, too
 let spec = load_agent_spec(agent_file)?;
 let mut toolset = KimiToolset::new();
 
-for tool_name in spec.tools {
-    if let Some(tool) = build_tool(&tool_name, &runtime) {
+for tool in spec.tools {
+    if let Some(tool) = build_tool(tool, &runtime) {
         toolset.register(tool);
     }
 }
 ```
 
-`build_tool()` maps Python-style names (`kimi_cli.tools.shell:Shell`) to Rust constructors. The agent spec drives the toolbox — no hardcoded list.
+`load_agent_spec()` parses raw tool name strings into the `BuiltinTool` enum — typos and unknown tools are caught at load time with a warning, not silently passed through. `build_tool()` then uses an exhaustive `match` on the enum to map each variant to its Rust constructor. The agent spec drives the toolbox — no hardcoded list.
 
 🐍 **Python's way:** Tools are registered via `toolset.register_tool(MyTool())` in a list comprehension or loop. Agent spec parsing + dynamic import via `importlib`.
 
-🦀 **Rust's way:** Static name-to-constructor mapping in `build_tool()`. No dynamic imports — the compiler ensures every mapped tool exists. `Box<dyn kosong::CallableTool>` is a **fat pointer** (data + vtable), but lookup is O(1) via `HashMap<String, Box<dyn CallableTool>>`.
+🦀 **Rust's way:** Static name-to-constructor mapping in `build_tool()` via exhaustive `match` on `BuiltinTool`. No dynamic imports — the compiler ensures every mapped tool exists, and adding a new builtin tool becomes a compile error until you update the match. `Box<dyn kosong::CallableTool>` is a **fat pointer** (data + vtable), but lookup is O(1) via `HashMap<String, Box<dyn CallableTool>>`.
 
 ✨ **Where Rust shines:** **Agent-driven toolset.** Change `agents/default/agent.yaml` and the soul boots with a different toolbox — no recompilation needed for config changes, but the compiler still validates every tool constructor at build time.
 

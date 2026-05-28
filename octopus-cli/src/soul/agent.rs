@@ -369,90 +369,85 @@ fn load_system_prompt(
     Ok(rendered.trim().to_string())
 }
 
-/// Build a tool by its Python-style fully-qualified name.
-/// Returns `None` for tools that do not exist in the Rust rewrite.
-fn build_tool(name: &str, runtime: &AppRuntime) -> Option<Box<dyn kosong::tooling::CallableTool>> {
+/// Build a built-in tool implementation.
+/// Returns `None` for tools that are not yet ported.
+fn build_tool(
+    tool: crate::tools::tool_name::BuiltinTool,
+    runtime: &AppRuntime,
+) -> Option<Box<dyn kosong::tooling::CallableTool>> {
+    use crate::tools::tool_name::BuiltinTool;
     use kosong::tooling::CallableTool2Adapter;
-    match name {
+    match tool {
         // Shell & background
-        "kimi_cli.tools.shell:Shell" | "Shell" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::Shell => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::shell::ShellTool::new(runtime.background_tasks.clone()),
         ))),
-        "kimi_cli.tools.background:TaskOutput" | "TaskOutput" => {
-            Some(Box::new(CallableTool2Adapter::new(
-                crate::tools::background::TaskOutputTool::new(runtime.background_tasks.clone()),
-            )))
-        }
-        "kimi_cli.tools.background:TaskStop" | "TaskStop" => {
-            Some(Box::new(CallableTool2Adapter::new(
-                crate::tools::background::TaskStopTool::new(runtime.background_tasks.clone()),
-            )))
-        }
-        "kimi_cli.tools.background:TaskList" | "TaskList" => {
+        BuiltinTool::TaskOutput => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::background::TaskOutputTool::new(runtime.background_tasks.clone()),
+        ))),
+        BuiltinTool::TaskStop => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::background::TaskStopTool::new(runtime.background_tasks.clone()),
+        ))),
+        BuiltinTool::TaskList => {
             // Not yet ported; skip silently.
             None
         }
 
         // File
-        "kimi_cli.tools.file:ReadFile" | "ReadFile" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::ReadFile => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::file::ReadFileTool::new(),
         ))),
-        "kimi_cli.tools.file:ReadMediaFile" | "ReadMediaFile" => {
+        BuiltinTool::ReadMediaFile => {
             // Not yet ported.
             None
         }
-        "kimi_cli.tools.file:WriteFile" | "WriteFile" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::WriteFile => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::file::WriteFileTool::new(),
         ))),
-        "kimi_cli.tools.file:StrReplaceFile" | "StrReplaceFile" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::file::StrReplaceFileTool::new()),
-        )),
-        "kimi_cli.tools.file:Glob" | "Glob" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::StrReplaceFile => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::StrReplaceFileTool::new(),
+        ))),
+        BuiltinTool::Glob => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::file::GlobTool::new(),
         ))),
-        "kimi_cli.tools.file:Grep" | "Grep" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::Grep => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::file::GrepTool::new(),
         ))),
 
         // Web
-        "kimi_cli.tools.web:SearchWeb" | "SearchWeb" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::SearchWeb => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::web::SearchWebTool::new(),
         ))),
-        "kimi_cli.tools.web:FetchURL" | "FetchURL" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::FetchURL => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::web::FetchURLTool::new(),
         ))),
 
         // Ask user / todo / think / plan
-        "kimi_cli.tools.ask_user:AskUserQuestion" | "AskUser" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::ask_user::AskUserTool::new()),
-        )),
-        "kimi_cli.tools.todo:SetTodoList" | "SetTodoList" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::todo::SetTodoListTool::new()),
-        )),
-        "kimi_cli.tools.think:Think" | "Think" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::AskUserQuestion => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::ask_user::AskUserTool::new(),
+        ))),
+        BuiltinTool::SetTodoList => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::todo::SetTodoListTool::new(),
+        ))),
+        BuiltinTool::Think => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::think::ThinkTool::new(),
         ))),
-        "kimi_cli.tools.plan:ExitPlanMode" | "ExitPlanMode" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::plan::ExitPlanModeTool::new()),
-        )),
-        "kimi_cli.tools.plan.enter:EnterPlanMode" | "EnterPlanMode" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::plan::EnterPlanModeTool::new()),
-        )),
+        BuiltinTool::ExitPlanMode => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::plan::ExitPlanModeTool::new(),
+        ))),
+        BuiltinTool::EnterPlanMode => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::plan::EnterPlanModeTool::new(),
+        ))),
 
         // Agent / D-Mail
-        "kimi_cli.tools.agent:Agent" | "Agent" => Some(Box::new(CallableTool2Adapter::new(
+        BuiltinTool::Agent => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::agent::AgentTool::new(runtime.clone()),
         ))),
-        "kimi_cli.tools.dmail:SendDMail" | "SendDMail" => Some(Box::new(
-            CallableTool2Adapter::new(crate::tools::dmail::SendDMailTool::new(
-                std::sync::Arc::new(std::sync::Mutex::new(runtime.denwa_renji.clone())),
-            )),
-        )),
-
-        _ => {
-            tracing::warn!("Unknown tool name in agent spec: {}", name);
-            None
-        }
+        BuiltinTool::SendDMail => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::dmail::SendDMailTool::new(std::sync::Arc::new(std::sync::Mutex::new(
+                runtime.denwa_renji.clone(),
+            ))),
+        ))),
     }
 }
 
@@ -483,13 +478,14 @@ pub async fn load_agent(
 
     // Determine effective tool list.
     let tools = spec.allowed_tools.unwrap_or(spec.tools);
-    let excluded: std::collections::HashSet<String> = spec.exclude_tools.into_iter().collect();
+    let excluded: std::collections::HashSet<crate::tools::tool_name::BuiltinTool> =
+        spec.exclude_tools.into_iter().collect();
 
     for tool_name in tools {
         if excluded.contains(&tool_name) {
             continue;
         }
-        if let Some(tool) = build_tool(&tool_name, &runtime) {
+        if let Some(tool) = build_tool(tool_name, &runtime) {
             toolset.register(tool);
         }
     }
@@ -517,7 +513,7 @@ pub async fn load_agent(
 
         let tool_policy = if let Some(ref allowed) = builtin_spec.allowed_tools {
             crate::subagents::ToolPolicy::AllowList {
-                tools: allowed.clone(),
+                tools: allowed.iter().copied().map(Into::into).collect(),
             }
         } else {
             crate::subagents::ToolPolicy::Inherit

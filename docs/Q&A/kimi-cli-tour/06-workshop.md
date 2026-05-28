@@ -195,7 +195,9 @@ subagents:
 for (subagent_name, subagent_spec) in spec.subagents {
     let builtin_spec = load_agent_spec(&subagent_spec.path)?;
     let tool_policy = if let Some(ref allowed) = builtin_spec.allowed_tools {
-        ToolPolicy::AllowList { tools: allowed.clone() }
+        ToolPolicy::AllowList {
+            tools: allowed.iter().copied().map(Into::into).collect(),
+        }
     } else {
         ToolPolicy::Inherit
     };
@@ -227,9 +229,9 @@ if let Some(policy) = tool_policy {
 ```
 
 - **`Inherit`** — child sees all tools the parent has (default)
-- **`AllowList { tools }`** — child sees only the named tools
+- **`AllowList { tools }`** — child sees only the named tools (`Vec<ToolName>`)
 
-This happens **after** all fallback tools are registered, so core tools like `Shell` and `TaskOutput` are also subject to the policy.
+This happens **after** all fallback tools are registered, so core tools like `Shell` and `TaskOutput` are also subject to the policy. Because `ToolPolicy::AllowList` carries `Vec<ToolName>` rather than bare strings, the policy is source-aware: it can distinguish a builtin `Shell` from an MCP tool of the same name.
 
 ✨ **Where Rust shines:** The `ToolPolicy` enum forces exhaustive handling. If you add a `DenyList` variant tomorrow, the compiler will point to every `match` that needs updating. In Python, a new policy mode might silently default to "allow all."
 

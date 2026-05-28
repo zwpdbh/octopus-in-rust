@@ -158,7 +158,7 @@ This mirrors Python's `load_agent(agent_file, runtime)` architecture — loading
 
 | Mechanism | Python (`tmp/kimi-cli`) | Rust (`octopus-cli`) |
 |---|---|---|
-| **Tool loading** | Dynamic `importlib` import by module path (`kimi_cli.tools.shell:Shell`) with a dependency-injection dict | Static `match` on tool name string; each tool is constructed inline in `build_tool()` |
+| **Tool loading** | Dynamic `importlib` import by module path (`kimi_cli.tools.shell:Shell`) with a dependency-injection dict | Static `match` on `BuiltinTool` enum; each tool is constructed inline in `build_tool()` via exhaustive pattern match |
 | **Plugins** | Directory-based: `~/.kimi/plugins/<name>/plugin.json` → native Python `PluginTool` instances | WASM-based: `~/.kimi/plugins/*.wasm` → Extism `WasmPluginTool` (sandboxed, language-agnostic) |
 | **MCP deferral** | Optional via `start_mcp_loading: bool` flag (caller chooses immediate vs. deferred) | Mandatory (always deferred at load time; `start_deferred_mcp_tool_loading()` triggers it later) |
 

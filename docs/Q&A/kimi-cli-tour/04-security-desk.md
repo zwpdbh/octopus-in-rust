@@ -202,7 +202,7 @@ The Security Desk has three modes of operation:
 pub struct ApprovalState {
     pub yolo: bool,
     pub afk: bool,
-    pub auto_approve: Vec<String>,  // Per-tool auto-approve list
+    pub auto_approve_actions: Vec<String>,  // Per-tool auto-approve list
 }
 ```
 
