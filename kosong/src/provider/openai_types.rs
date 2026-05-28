@@ -49,7 +49,7 @@ pub struct FunctionDefinition {
 pub struct ToolCallObject {
     pub id: String,
     #[serde(rename = "type")]
-    pub call_type: String,
+    pub call_type: crate::message::ToolCallType,
     pub function: FunctionCallObject,
 }
 

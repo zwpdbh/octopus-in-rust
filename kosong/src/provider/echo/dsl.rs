@@ -225,7 +225,7 @@ fn parse_tool_call(
     };
 
     Ok(ToolCall {
-        call_type: "function".to_string(),
+        call_type: crate::ToolCallType::Function,
         id: tool_call_id,
         function: FunctionBody { name, arguments },
         extras,

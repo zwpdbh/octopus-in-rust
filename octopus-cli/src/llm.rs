@@ -335,7 +335,7 @@ pub(crate) fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> ko
 
 pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
     kosong::ToolCall {
-        call_type: tc.call_type.clone(),
+        call_type: tc.call_type,
         id: tc.id.clone(),
         function: kosong::FunctionBody {
             name: tc.function.name.clone(),

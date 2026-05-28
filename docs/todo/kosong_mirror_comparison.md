@@ -90,7 +90,7 @@
 | `TextPart` | `ContentPart::Text` | ✅ | |
 | `ThinkPart` | `ContentPart::Think` | ✅ | Same `think` + `encrypted` fields |
 | `ImageUrl` / `AudioUrl` / `VideoUrl` | Same structs | ✅ | |
-| `ToolCall` Pydantic model | `ToolCall` struct | ✅ | Same: `call_type`, `id`, `function`, `extras` |
+| `ToolCall` Pydantic model | `ToolCall` struct | ✅ | Same fields; `call_type` is `ToolCallType` enum (not `String`) |
 | `ToolCallPart` | `ToolCallPart` struct | ✅ | Same: `arguments_part` |
 | `FunctionBody` | `FunctionBody` struct | ✅ | Same: `name`, `arguments` |
 | `Role` enum | `Role` enum | ✅ | `System`, `User`, `Assistant`, `Tool` |
@@ -188,7 +188,7 @@
 | `ChatCompletionMessage` | `ChatCompletionMessage` | ✅ | Same fields |
 | `ChatCompletionTool` | `ChatCompletionTool` | ✅ | Same fields |
 | `FunctionDefinition` | `FunctionDefinition` | ✅ | Same fields |
-| `ToolCallObject` | `ToolCallObject` | ✅ | Same fields |
+| `ToolCallObject` | `ToolCallObject` | ✅ | Same fields; `call_type` is `ToolCallType` enum |
 | `FunctionCallObject` | `FunctionCallObject` | ✅ | Same fields |
 | `ChatCompletionResponse` | `ChatCompletionResponse` | ✅ | Same fields |
 | `Choice` | `Choice` | ✅ | Same fields |

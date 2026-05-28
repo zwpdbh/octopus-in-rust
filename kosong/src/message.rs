@@ -64,11 +64,23 @@ pub struct VideoUrl {
     pub url: String,
 }
 
+/// The type of a tool call.
+///
+/// OpenAI's chat completions API currently defines only one tool call type:
+/// `"function"`. This enum makes that invariant explicit while leaving room
+/// for future variants if the API expands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ToolCallType {
+    #[default]
+    #[serde(rename = "function")]
+    Function,
+}
+
 /// A tool call issued by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
-    #[serde(rename = "type", default = "default_function")]
-    pub call_type: String,
+    #[serde(rename = "type", default)]
+    pub call_type: ToolCallType,
     pub id: String,
     pub function: FunctionBody,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,9 +101,7 @@ impl ToolCall {
     }
 }
 
-fn default_function() -> String {
-    "function".to_string()
-}
+
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionBody {

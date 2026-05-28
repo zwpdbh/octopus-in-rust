@@ -370,7 +370,11 @@ fn load_system_prompt(
 }
 
 /// Build a built-in tool implementation.
-/// Returns `None` for tools that are not yet ported.
+///
+/// Returns `Option` because `TaskList` and `ReadMediaFile` are referenced in
+/// agent YAML specs but not yet ported to Rust. Once those tools are either
+/// implemented or removed from the YAML specs, this function should return
+/// `Box<dyn CallableTool>` directly and the `Option` wrapper can be removed.
 fn build_tool(
     tool: crate::tools::tool_name::BuiltinTool,
     runtime: &AppRuntime,

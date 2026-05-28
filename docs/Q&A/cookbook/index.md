@@ -10,3 +10,4 @@ Practical Rust patterns used across the Octopus codebase.
 | 04 | Eliminate schema/parser drift with `schemars` + associated types | [04-typed-tool-schemars-associated-type.md](./04-typed-tool-schemars-associated-type.md) |
 | 05 | Carry ambient async context with `tokio::task_local!` | [05-task-local-async-context.md](./05-task-local-async-context.md) |
 | 06 | Mutate state through `&self` with interior mutability | [06-interior-mutability-mutate-through-shared-ref.md](./06-interior-mutability-mutate-through-shared-ref.md) |
+| 07 | Never hold a `std::sync::Mutex` across `.await` | [07-never-hold-std-sync-mutex-across-await.md](./07-never-hold-std-sync-mutex-across-await.md) |

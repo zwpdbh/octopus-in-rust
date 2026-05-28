@@ -366,7 +366,7 @@ impl KimiToolset {
 
         let wire_tc = WireToolCall {
             id: tool_call.id.clone(),
-            call_type: tool_call.call_type.clone(),
+            call_type: tool_call.call_type,
             function: crate::wire::ToolCallFunction {
                 name: tool_call.function.name.clone(),
                 arguments: args_str,
