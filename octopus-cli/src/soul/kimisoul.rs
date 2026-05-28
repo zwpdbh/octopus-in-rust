@@ -219,18 +219,21 @@ impl KimiSoul {
         let wire_file = crate::wire::file::WireFile::new(self.session.wire_file_path.clone());
         let wire = crate::wire::channel::Wire::new(Some(wire_file));
         let soul_side = wire.soul_side();
-        crate::wire::set_current_wire_soul_side(Some(soul_side.clone()));
 
-        // Start notification pump — delivers pending notifications to wire.
-        let pump_handle = self.start_notification_pump(soul_side.clone());
+        let result = crate::wire::with_wire_soul_side(Some(soul_side.clone()), async {
+            // Start notification pump — delivers pending notifications to wire.
+            let pump_handle = self.start_notification_pump(soul_side.clone());
 
-        let result = self.run_turn(text).await;
+            let result = self.run_turn(text).await;
 
-        // Cleanup
-        if let Some(handle) = pump_handle {
-            handle.abort();
-        }
-        crate::wire::set_current_wire_soul_side(None);
+            // Cleanup
+            if let Some(handle) = pump_handle {
+                handle.abort();
+            }
+            result
+        })
+        .await;
+
         // Dropping `wire` drops the broadcast senders, which causes the
         // recorder task to exit cleanly after flushing.
         drop(wire);

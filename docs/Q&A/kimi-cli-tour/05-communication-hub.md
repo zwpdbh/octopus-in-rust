@@ -44,17 +44,15 @@ pub struct WireUISide {
 ### The Global Dispatcher
 
 ```rust
-// File: octopus-cli/src/wire/mod.rs
-thread_local! {
-    static CURRENT_WIRE_SOUL_SIDE: RefCell<Option<WireSoulSide>> = const { RefCell::new(None) };
+// File: octopus-cli/src/wire/hub.rs
+tokio::task_local! {
+    static CURRENT_WIRE_SOUL_SIDE: Option<WireSoulSide>;
 }
 
 pub fn wire_send(event: WireEvent) {
-    CURRENT_WIRE_SOUL_SIDE.with(|cell| {
-        if let Some(ref side) = *cell.borrow() {
-            let _ = side.send(event);
-        }
-    });
+    if let Some(side) = get_current_wire_soul_side() {
+        let _ = side.send(event);
+    }
 }
 ```
 
@@ -62,7 +60,7 @@ This is the **global wire dispatcher**. Any code — deep inside a tool, inside 
 
 🐍 **Python's way:** Pass the wire object down through every function call. Or use a global variable (which Python makes easy but dangerous).
 
-🦀 **Rust's way:** `thread_local!` storage. Each turn sets the current wire soul side at startup. This is **safe** because `thread_local` is per-async-task (Tokio tasks are pinned to threads), and the `RefCell` ensures no concurrent access.
+🦀 **Rust's way:** `tokio::task_local!` storage. Each turn sets the current wire soul side at startup via `.scope()`. This is **safe** because the value is tied to the async task (not just the OS thread), so it survives across `.await` points even if the task migrates threads. The value is automatically cleared when the scope ends.
 
 ### The Wire File: Persistent Log
 

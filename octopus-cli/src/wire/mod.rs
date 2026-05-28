@@ -2,7 +2,7 @@ pub mod channel;
 pub mod file;
 
 mod hub;
-pub use hub::{RootWireHub, get_current_wire_soul_side, set_current_wire_soul_side, wire_send};
+pub use hub::{RootWireHub, get_current_wire_soul_side, wire_send, with_wire_soul_side};
 
 mod types;
 pub use types::{

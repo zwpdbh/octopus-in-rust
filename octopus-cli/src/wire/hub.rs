@@ -7,18 +7,23 @@ use crate::wire::channel::WireSoulSide;
 // Current wire soul side (per-run isolation)
 // ============================================================================
 
-thread_local! {
-    static CURRENT_WIRE_SOUL_SIDE: std::cell::RefCell<Option<WireSoulSide>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Set the current wire soul side for the duration of a soul run.
-pub fn set_current_wire_soul_side(soul_side: Option<WireSoulSide>) {
-    CURRENT_WIRE_SOUL_SIDE.with(|w| *w.borrow_mut() = soul_side);
+tokio::task_local! {
+    static CURRENT_WIRE_SOUL_SIDE: Option<WireSoulSide>;
 }
 
 /// Get the current wire soul side, if any.
 pub fn get_current_wire_soul_side() -> Option<WireSoulSide> {
-    CURRENT_WIRE_SOUL_SIDE.with(|w| w.borrow().clone())
+    CURRENT_WIRE_SOUL_SIDE
+        .try_with(|w| w.clone())
+        .unwrap_or(None)
+}
+
+/// Run a future with the given wire soul side set as the current side.
+pub async fn with_wire_soul_side<F, T>(side: Option<WireSoulSide>, f: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    CURRENT_WIRE_SOUL_SIDE.scope(side, f).await
 }
 
 // ============================================================================

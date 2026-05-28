@@ -48,15 +48,22 @@ pub struct KimiSoul {
 pub async fn run(&mut self, user_input: &str) -> Result<String> {
     // 1. Set up the intercom
     let wire = Wire::new(Some(wire_file));
-    crate::wire::set_current_wire_soul_side(Some(wire.soul_side()));
+    let soul_side = wire.soul_side();
 
-    // 2. Start the mailroom pump
-    let pump_handle = self.start_notification_pump(...);
+    let result = crate::wire::with_wire_soul_side(Some(soul_side.clone()), async {
+        // 2. Start the mailroom pump
+        let pump_handle = self.start_notification_pump(soul_side.clone());
 
-    // 3. Run the turn
-    let result = self.run_turn(text).await;
+        // 3. Run the turn
+        let result = self.run_turn(text).await;
 
-    // 4. Cleanup
+        // 4. Cleanup
+        if let Some(handle) = pump_handle {
+            handle.abort();
+        }
+        result
+    }).await;
+
     wire.shutdown().await;
     Ok(result)
 }

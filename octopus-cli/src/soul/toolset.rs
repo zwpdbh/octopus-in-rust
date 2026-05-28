@@ -6,16 +6,12 @@ use sha2::{Digest, Sha256};
 use crate::mcp::{McpConfig, McpServerInfo, McpServerStatus};
 use crate::wire::ToolCall as WireToolCall;
 
-thread_local! {
-    static CURRENT_TOOL_CALL: std::cell::RefCell<Option<WireToolCall>> = const { std::cell::RefCell::new(None) };
-}
-
-pub fn set_current_tool_call(tc: Option<WireToolCall>) {
-    CURRENT_TOOL_CALL.with(|c| *c.borrow_mut() = tc);
+tokio::task_local! {
+    static CURRENT_TOOL_CALL: Option<WireToolCall>;
 }
 
 pub fn get_current_tool_call() -> Option<WireToolCall> {
-    CURRENT_TOOL_CALL.with(|c| c.borrow().clone())
+    CURRENT_TOOL_CALL.try_with(|tc| tc.clone()).unwrap_or(None)
 }
 
 const DEDUP_REMINDER_TEXT: &str = "\n\n<system-reminder>\n\
@@ -69,6 +65,13 @@ struct McpState {
 
 pub struct KimiToolset {
     tools: HashMap<String, Box<dyn kosong::tooling::CallableTool>>,
+    /// Tool names that are registered but hidden from the LLM tool list.
+    ///
+    /// Hidden tools are still callable (e.g. by name via `find`), but they are
+    /// excluded from `tools()` which returns the visible set sent to the LLM.
+    /// This is used primarily for subagent `ToolPolicy::AllowList` — instead of
+    /// rebuilding the toolset per subagent, we register all tools once and hide
+    /// the ones the agent spec disallows.
     hidden_tools: HashSet<String>,
     hook_engine: Option<crate::hooks::HookEngine>,
     session_id: String,
@@ -368,9 +371,9 @@ impl KimiToolset {
                 arguments: args_str,
             },
         };
-        set_current_tool_call(Some(wire_tc));
-        let return_value = tool.call_raw(arguments).await;
-        set_current_tool_call(None);
+        let return_value = CURRENT_TOOL_CALL
+            .scope(Some(wire_tc), async { tool.call_raw(arguments).await })
+            .await;
 
         let elapsed = t0.elapsed();
         let duration_ms = elapsed.as_millis() as u64;

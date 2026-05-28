@@ -16,7 +16,7 @@
 ### `wire/mod.rs` — Wire types + global dispatcher
 
 - **`wire_send()`** — serializes event to JSON, sends to current `WireSoulSide`
-- **Thread-local isolation** — `CURRENT_WIRE_SOUL_SIDE` per run (replaces old file-only isolation)
+- **Task-local isolation** — `CURRENT_WIRE_SOUL_SIDE` per async task (replaces old file-only isolation)
 - **`RootWireHub`** — session-level broadcast hub for out-of-turn messages (approvals, notifications)
   - `subscribe()` / `publish()` / `shutdown()`
 - **Wire types**: `TurnBegin`/`End`, `StepBegin`/`Interrupted`/`Retry`, `StatusUpdate`, `CompactionBegin`/`End`, `MCPLoadingBegin`/`End`, `BtwBegin`/`End`, `SteerInput`, `TextPart`, `Notification`, `HookTriggered`, `HookResolved`

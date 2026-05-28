@@ -19,7 +19,7 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/wire/mod.rs` | Wire types, `wire_send()` global, thread-local isolation | ~280 | 🔄 Types + file backend + per-run isolation |
+| `octopus-cli/src/wire/mod.rs` | Wire types, `wire_send()` global, task-local isolation | ~280 | 🔄 Types + file backend + per-run isolation |
 | `octopus-cli/src/wire/file.rs` | `WireFile` with `wire.jsonl` append | ~100 | ✅ JSONL streaming with metadata header |
 
 ## What's Done
@@ -29,7 +29,7 @@
 - [x] Tool result / tool call types
 - [x] Message / ContentPart types
 - [x] `WireFile` backend (`wire.jsonl` with metadata header + timestamped records)
-- [x] Per-run wire isolation (thread-local `CURRENT_WIRE_FILE`)
+- [x] Per-run wire isolation (task-local `CURRENT_WIRE_FILE`)
 - [x] `QueueShutDown` exception type
 - [x] `BtwBegin` / `BtwEnd` wire types
 - [x] `MCPLoadingBegin` / `MCPLoadingEnd` wire types
