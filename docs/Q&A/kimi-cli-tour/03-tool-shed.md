@@ -72,7 +72,7 @@ pub struct KimiToolset {
     /// Used for subagent `ToolPolicy::AllowList` — register all tools once,
     /// then hide the ones the agent spec disallows.
     hidden_tools: HashSet<String>,
-    hook_engine: Option<HookEngine>,
+    hook_engine: HookEngine,
     session_id: String,
     cwd: String,
     step_state: Mutex<StepState>,
@@ -177,7 +177,7 @@ File: `octopus-cli/src/soul/toolset.rs` (near the bottom)
 
 The Tool Shed doesn't just serve the local `KimiSoul`. It also serves the **`kosong` LLM abstraction layer**. `kosong::step()` expects a `&dyn kosong::Toolset`, and `KimiToolset` is the natural owner of the tools.
 
-Because Rust's orphan rules prevent implementing `kosong::Toolset` for `Arc<KimiToolset>` directly (both are foreign to each other's crates), we use a thin **newtype wrapper**:
+`kosong::step()` expects `&dyn kosong::Toolset`. `KimiToolset` is the natural owner of the tools, but `Toolset::handle` must spawn async work into a `tokio::task` that outlives the `&self` borrow. To do that, `handle` needs to clone an `Arc<KimiToolset>` — but `&self` on `KimiToolset` itself doesn't provide one. The **newtype wrapper** holds the `Arc`:
 
 ```rust
 pub struct KimiToolsetHandle(pub Arc<KimiToolset>);
@@ -221,9 +221,18 @@ let step_result = kosong::step_with_callbacks(
 
 🐍 **Python's way:** Python `kosong.step` accepts an `on_tool_result` callback directly as a parameter. No adapter needed because Python's dynamic typing handles the conversion implicitly.
 
-🦀 **Rust's way:** The `KimiToolsetHandle` newtype satisfies orphan rules while keeping the bridge minimal. The callback is passed directly to `kosong::step_with_callbacks`, matching Python's API shape. `KimiToolset` implements kosong types natively — no wire/kosong conversion inside the toolset itself.
+🦀 **Rust's way:** The `KimiToolsetHandle` newtype wraps `Arc<KimiToolset>` so that `handle` can clone the Arc and spawn the tool into a task. The callback is passed directly to `kosong::step_with_callbacks`, matching Python's API shape. `KimiToolset` implements kosong types natively — no wire/kosong conversion inside the toolset itself.
 
-✨ **Where Rust shines:** **One trait layer, not two.** Python `kimi-cli` uses `kosong.tooling.CallableTool2` directly with no parallel trait. After this refactor, Rust does the same. The old octopus `Tool` + `TypedTool` + `TypedToolAdapter` + `KosongToolsetAdapter` stack collapsed into a single kosong layer.
+✨ **Where Rust shines:** **Two complementary traits, one adapter, no duplication.** The current stack is cleanly layered and every layer lives in a real file you can trace:
+
+- **`kosong::tooling::CallableTool`** (`kosong/src/tooling.rs`) — the runtime trait: object-safe, erased params (`Value`), used by `KimiToolset`'s HashMap.
+- **`kosong::tooling::CallableTool2`** (`kosong/src/tooling.rs`) — the author trait: typed params via `type Params`, auto-generates JSON Schema via `schemars`.
+- **`kosong::tooling::CallableTool2Adapter`** (`kosong/src/tooling.rs`) — bridges `CallableTool2 → CallableTool` so typed tools slot into the runtime collection.
+- **`kosong::Toolset`** (`kosong/src/tooling.rs`) — the collection trait consumed by `kosong::step_with_callbacks`.
+- **`KimiToolset`** (`octopus-cli/src/soul/toolset.rs`) — the production implementation: dedup, approval, hooks, MCP, telemetry.
+- **`KimiToolsetHandle`** (`octopus-cli/src/soul/toolset.rs`) — the `Arc`-holding bridge that implements `kosong::Toolset` for `KimiToolset`.
+
+There is no dead adapter code or phantom trait. Every struct and trait in the list above has an active implementation in the current codebase.
 
 ---
 

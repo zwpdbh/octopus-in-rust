@@ -73,7 +73,7 @@ pub struct KimiToolset {
     /// rebuilding the toolset per subagent, we register all tools once and hide
     /// the ones the agent spec disallows.
     hidden_tools: HashSet<String>,
-    hook_engine: Option<crate::hooks::HookEngine>,
+    hook_engine: crate::hooks::HookEngine,
     session_id: String,
     cwd: String,
     step_state: std::sync::Mutex<StepState>,
@@ -95,7 +95,7 @@ impl KimiToolset {
         Self {
             tools: HashMap::new(),
             hidden_tools: HashSet::new(),
-            hook_engine: None,
+            hook_engine: crate::hooks::HookEngine::default(),
             session_id: String::new(),
             cwd: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
@@ -127,7 +127,7 @@ impl KimiToolset {
     }
 
     pub fn set_hook_engine(&mut self, engine: crate::hooks::HookEngine) {
-        self.hook_engine = Some(engine);
+        self.hook_engine = engine;
     }
 
     pub fn set_session_id(&mut self, id: String) {
@@ -307,31 +307,31 @@ impl KimiToolset {
             Some(obj) => obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             None => std::collections::HashMap::new(),
         };
-        if let Some(ref engine) = self.hook_engine {
-            if engine.has_hooks_for("PreToolUse") {
-                let input_data = crate::hooks::events::pre_tool_use(
-                    &self.session_id,
-                    &self.cwd,
-                    &tool_call.function.name,
-                    &tool_input_map,
-                    &tool_call.id,
-                );
-                let results = engine
-                    .trigger("PreToolUse", &tool_call.function.name, input_data)
-                    .await;
-                for r in &results {
-                    if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
-                        let result = kosong::tooling::ToolResult {
-                            tool_call_id: tool_call.id.clone(),
-                            return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
-                        };
-                        let mut state = self.step_state.lock().unwrap();
-                        state
-                            .current_step_results
-                            .insert(call_key.clone(), result.clone());
-                        state.current_step_calls.push(call_key);
-                        return result;
-                    }
+
+        if self.hook_engine.has_hooks_for("PreToolUse") {
+            let input_data = crate::hooks::events::pre_tool_use(
+                &self.session_id,
+                &self.cwd,
+                &tool_call.function.name,
+                &tool_input_map,
+                &tool_call.id,
+            );
+            let results = self
+                .hook_engine
+                .trigger("PreToolUse", &tool_call.function.name, input_data)
+                .await;
+            for r in &results {
+                if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
+                    let result = kosong::tooling::ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
+                    };
+                    let mut state = self.step_state.lock().unwrap();
+                    state
+                        .current_step_results
+                        .insert(call_key.clone(), result.clone());
+                    state.current_step_calls.push(call_key);
+                    return result;
                 }
             }
         }
@@ -407,52 +407,48 @@ impl KimiToolset {
         }
 
         // --- PostToolUse / PostToolUseFailure hooks (fire-and-forget) ---
-        if let Some(ref engine) = self.hook_engine {
-            if result.return_value.is_error {
-                if engine.has_hooks_for("PostToolUseFailure") {
-                    let error_text = result
-                        .return_value
-                        .message
-                        .clone()
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    let input_data = crate::hooks::events::post_tool_use_failure(
-                        &self.session_id,
-                        &self.cwd,
-                        &tool_call.function.name,
-                        &tool_input_map,
-                        &error_text,
-                        &tool_call.id,
-                    );
-                    let _ = engine.fire_and_forget_trigger(
-                        "PostToolUseFailure",
-                        &tool_call.function.name,
-                        input_data,
-                    );
-                }
-            } else {
-                if engine.has_hooks_for("PostToolUse") {
-                    let output_text = result
-                        .return_value
-                        .output
-                        .as_ref()
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let input_data = crate::hooks::events::post_tool_use(
-                        &self.session_id,
-                        &self.cwd,
-                        &tool_call.function.name,
-                        &tool_input_map,
-                        &output_text[..output_text.len().min(2000)],
-                        &tool_call.id,
-                    );
-                    let _ = engine.fire_and_forget_trigger(
-                        "PostToolUse",
-                        &tool_call.function.name,
-                        input_data,
-                    );
-                }
+        if result.return_value.is_error {
+            if self.hook_engine.has_hooks_for("PostToolUseFailure") {
+                let error_text = result
+                    .return_value
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                let input_data = crate::hooks::events::post_tool_use_failure(
+                    &self.session_id,
+                    &self.cwd,
+                    &tool_call.function.name,
+                    &tool_input_map,
+                    &error_text,
+                    &tool_call.id,
+                );
+                let _ = self.hook_engine.fire_and_forget_trigger(
+                    "PostToolUseFailure",
+                    &tool_call.function.name,
+                    input_data,
+                );
             }
+        } else if self.hook_engine.has_hooks_for("PostToolUse") {
+            let output_text = result
+                .return_value
+                .output
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let input_data = crate::hooks::events::post_tool_use(
+                &self.session_id,
+                &self.cwd,
+                &tool_call.function.name,
+                &tool_input_map,
+                &output_text[..output_text.len().min(2000)],
+                &tool_call.id,
+            );
+            let _ = self.hook_engine.fire_and_forget_trigger(
+                "PostToolUse",
+                &tool_call.function.name,
+                input_data,
+            );
         }
 
         {
@@ -699,11 +695,15 @@ impl Default for KimiToolset {
 }
 
 // ============================================================================
-// kosong::Toolset wrapper (orphan-rules-safe)
+// kosong::Toolset wrapper
 // ============================================================================
 
-/// Thin wrapper so we can implement [`kosong::Toolset`] without orphan-rule
-/// issues on `Arc<KimiToolset>`.
+/// Thin wrapper around `Arc<KimiToolset>` so that `handle` can clone the Arc
+/// and spawn the tool execution into a `tokio::task`.
+///
+/// `Toolset::handle` takes `&self`, but `handle_inner` is async and must outlive
+/// the borrow. The wrapper holds `Arc<KimiToolset>`, so `handle` can
+/// `Arc::clone(&self.0)` and move the clone into the spawned task.
 pub struct KimiToolsetHandle(pub std::sync::Arc<KimiToolset>);
 
 impl kosong::Toolset for KimiToolsetHandle {

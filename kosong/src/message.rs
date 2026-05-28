@@ -101,8 +101,6 @@ impl ToolCall {
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionBody {
     pub name: String,

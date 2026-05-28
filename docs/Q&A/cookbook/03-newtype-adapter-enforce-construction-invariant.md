@@ -74,7 +74,7 @@ let step_result = kosong::step_with_callbacks(
 self.last_tool_calls = self.toolset.end_step();
 ```
 
-The `KimiToolsetHandle` newtype wrapper exists for a different reason (Rust orphan rules: you cannot implement a foreign trait `kosong::Toolset` for a foreign type `Arc<KimiToolset>`). It is stateless and cheap to construct:
+The `KimiToolsetHandle` newtype wrapper exists so that `Toolset::handle` can clone an `Arc<KimiToolset>` and spawn the tool into a `tokio::task`. `Toolset::handle` takes `&self`, but the async work must outlive the borrow — the wrapper holds the `Arc`, making the clone possible. It is stateless and cheap to construct:
 
 ```rust
 pub struct KimiToolsetHandle(pub Arc<KimiToolset>);
@@ -94,13 +94,13 @@ By moving the callback from a mutable field on `KimiToolset` to a parameter of `
 | `toolset.set_on_tool_result(Some(cb))` after spawning | `on_tool_result: Some(cb)` passed to `step_with_callbacks` |
 | Race window: tasks spawn → callback set | Impossible: `step_with_callbacks` receives the callback before it spawns any tasks |
 
-The `KimiToolsetHandle` newtype is still a useful pattern — it satisfies orphan rules while keeping the bridge minimal. But the critical safety property now comes from the function signature of `step_with_callbacks`, not from the adapter's constructor.
+The `KimiToolsetHandle` newtype is still a useful pattern — it bridges `Arc<KimiToolset>` to `kosong::Toolset` while keeping the adapter minimal. But the critical safety property now comes from the function signature of `step_with_callbacks`, not from the adapter's constructor.
 
 ## When to Use
 
 - You have a **two-phase initialization** where phase 2 must happen before phase 1's side effects become visible.
 - The inner type is shared via `Arc` and called from spawned tasks where you cannot control completion order.
-- You are bridging two domains (e.g., `wire` types ↔ `kosong` types) and need an adapter to satisfy orphan rules.
+- You are bridging two domains (e.g., `wire` types ↔ `kosong` types) and need an adapter to hold an `Arc` for task spawning.
 - You want to **remove mutable interior state** (`Mutex<Option<T>>`) from a type that conceptually should be configuration, not state.
 
 ## When NOT to Use
@@ -118,4 +118,4 @@ The `KimiToolsetHandle` newtype is still a useful pattern — it satisfies orpha
 
 **File:** `octopus-cli/src/soul/kimisoul.rs`
 
-`KimiToolset` no longer has an `on_tool_result` field or `set_on_tool_result` method. The wire-specific eager-callback concern lives entirely in the `step_with_callbacks` call site, which is invoked fresh for each step. The `KimiToolsetHandle` wrapper exists only to bridge `Arc<KimiToolset>` to `kosong::Toolset` without violating orphan rules.
+`KimiToolset` no longer has an `on_tool_result` field or `set_on_tool_result` method. The wire-specific eager-callback concern lives entirely in the `step_with_callbacks` call site, which is invoked fresh for each step. The `KimiToolsetHandle` wrapper bridges `Arc<KimiToolset>` to `kosong::Toolset` so that tool execution can be spawned into tasks.
