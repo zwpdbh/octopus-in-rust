@@ -116,9 +116,7 @@ async fn run_subagent_with_market(
     let subagent_store = parent_runtime.subagent_store.clone();
 
     // Look up the subagent type in the LaborMarket
-    let type_def = parent_runtime
-        .labor_market
-        .get_builtin_type(subagent_type.as_str());
+    let type_def = parent_runtime.labor_market.get_builtin_type(&subagent_type);
 
     match type_def {
         Some(def) => {
@@ -153,7 +151,7 @@ async fn run_subagent_with_market(
                 llm.clone(),
                 approval,
                 builtin_args,
-                Some(SubagentType::from(def.name.clone())),
+                Some(def.name.clone()),
             );
 
             let agent = load_agent(&def.agent_file, subagent_runtime, vec![])

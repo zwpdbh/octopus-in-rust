@@ -526,7 +526,7 @@ pub async fn load_agent(
         runtime
             .labor_market
             .add_builtin_type(crate::subagents::AgentTypeDefinition {
-                name: subagent_name.clone(),
+                name: crate::subagents::SubagentType::from(subagent_name.as_str()),
                 description: Some(subagent_spec.description),
                 agent_file: subagent_spec.path,
                 when_to_use: if builtin_spec.when_to_use.is_empty() {

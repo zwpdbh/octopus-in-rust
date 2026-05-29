@@ -166,12 +166,12 @@ flowchart TD
 // File: octopus-cli/src/subagents/mod.rs
 #[derive(Debug, Clone)]
 pub struct LaborMarket {
-    types: Arc<Mutex<HashMap<String, AgentTypeDefinition>>>,
+    types: Arc<Mutex<HashMap<SubagentType, AgentTypeDefinition>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentTypeDefinition {
-    pub name: String,
+    pub name: SubagentType,
     pub description: Option<String>,
     pub agent_file: PathBuf,        // Path to YAML spec
     pub when_to_use: Option<String>,
@@ -202,7 +202,7 @@ for (subagent_name, subagent_spec) in spec.subagents {
         ToolPolicy::Inherit
     };
     runtime.labor_market.add_builtin_type(AgentTypeDefinition {
-        name: subagent_name,
+        name: SubagentType::from(subagent_name.as_str()),
         description: Some(subagent_spec.description),
         agent_file: subagent_spec.path,
         when_to_use: builtin_spec.when_to_use,

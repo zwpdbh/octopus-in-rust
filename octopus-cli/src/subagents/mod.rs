@@ -13,7 +13,7 @@ use crate::session::Session;
 /// file, default model, tool policy, etc.
 #[derive(Debug, Clone)]
 pub struct LaborMarket {
-    types: Arc<Mutex<HashMap<String, AgentTypeDefinition>>>,
+    types: Arc<Mutex<HashMap<SubagentType, AgentTypeDefinition>>>,
 }
 
 impl LaborMarket {
@@ -31,18 +31,18 @@ impl LaborMarket {
     }
 
     /// Look up a subagent type by name.
-    pub fn get_builtin_type(&self, name: &str) -> Option<AgentTypeDefinition> {
+    pub fn get_builtin_type(&self, name: &SubagentType) -> Option<AgentTypeDefinition> {
         self.types.lock().unwrap().get(name).cloned()
     }
 
     /// Look up a subagent type, returning an error if not found.
-    pub fn require_builtin_type(&self, name: &str) -> Result<AgentTypeDefinition, String> {
+    pub fn require_builtin_type(&self, name: &SubagentType) -> Result<AgentTypeDefinition, String> {
         self.get_builtin_type(name)
             .ok_or_else(|| format!("Builtin subagent type not found: {}", name))
     }
 
     /// List all registered subagent type names.
-    pub fn list_builtin_types(&self) -> Vec<String> {
+    pub fn list_builtin_types(&self) -> Vec<SubagentType> {
         self.types.lock().unwrap().keys().cloned().collect()
     }
 }
@@ -121,7 +121,7 @@ pub struct SubagentEntry {
 }
 
 /// Well-known built-in subagent types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum KnownSubagentType {
     Coder,
@@ -149,7 +149,7 @@ impl std::fmt::Display for KnownSubagentType {
 ///
 /// Supports the well-known built-in variants ([`KnownSubagentType`]) as well as
 /// arbitrary custom types registered in the [`LaborMarket`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SubagentType {
     Known(KnownSubagentType),
@@ -185,13 +185,18 @@ impl From<KnownSubagentType> for SubagentType {
 
 impl From<String> for SubagentType {
     fn from(value: String) -> Self {
-        Self::Other(value)
+        Self::from(value.as_str())
     }
 }
 
 impl From<&str> for SubagentType {
     fn from(value: &str) -> Self {
-        Self::Other(value.to_string())
+        match value {
+            "coder" => Self::Known(KnownSubagentType::Coder),
+            "explore" => Self::Known(KnownSubagentType::Explore),
+            "plan" => Self::Known(KnownSubagentType::Plan),
+            _ => Self::Other(value.to_string()),
+        }
     }
 }
 
@@ -205,7 +210,7 @@ pub enum SubagentStatus {
 /// Definition of a built-in subagent type loaded from an agent spec.
 #[derive(Debug, Clone)]
 pub struct AgentTypeDefinition {
-    pub name: String,
+    pub name: SubagentType,
     pub description: Option<String>,
     pub agent_file: PathBuf,
     pub when_to_use: Option<String>,
