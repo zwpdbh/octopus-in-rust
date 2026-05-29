@@ -229,21 +229,7 @@ pub async fn login_kimi_code() -> Result<OAuthToken> {
     println!("Or enter this code: {}\n", device_auth.user_code);
 
     // Try to open browser automatically
-    #[cfg(not(target_os = "android"))]
-    {
-        if let Ok(mut child) = std::process::Command::new("python3")
-            .args(&[
-                "-c",
-                &format!(
-                    "import webbrowser; webbrowser.open('{}')",
-                    device_auth.verification_uri_complete
-                ),
-            ])
-            .spawn()
-        {
-            let _ = child.wait();
-        }
-    }
+    let _ = webbrowser::open(&device_auth.verification_uri_complete);
 
     let token = poll_device_token(
         &device_auth.device_code,

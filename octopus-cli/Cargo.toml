@@ -64,6 +64,7 @@ futures = "0.3"
 
 # OAuth / auth
 oauth2 = "4"
+webbrowser = "1"
 
 # Config / validation
 config = "0.15"
