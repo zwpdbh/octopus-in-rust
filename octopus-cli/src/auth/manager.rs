@@ -63,17 +63,18 @@ impl OAuthManager {
     /// Ensure OAuth tokens are fresh.
     ///
     /// When `force` is true, always refresh regardless of expiry.
-    /// Returns the new access token if a refresh was performed.
-    pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<Option<String>> {
+    /// Returns `true` if a refresh was performed or the token is valid,
+    /// `false` if no OAuth is configured for this provider.
+    pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<bool> {
         let oauth_ref = match self.kimi_code_ref(llm) {
             Some(r) => r,
-            None => return Ok(None),
+            None => return Ok(false),
         };
 
         // Load persisted token
         let token = match oauth::load_tokens(&oauth_ref.key) {
             Some(t) => t,
-            None => return Ok(None),
+            None => return Ok(false),
         };
 
         // Check if refresh token was recently rejected
@@ -86,7 +87,7 @@ impl OAuthManager {
                         "Refresh token was recently rejected. Please log in again.".to_string(),
                     ));
                 }
-                return Ok(None);
+                return Ok(false);
             }
         } else {
             // Cache the valid access token
@@ -205,10 +206,10 @@ impl OAuthManager {
         ref_ref: &OAuthRef,
         token: oauth::OAuthToken,
         force: bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<bool> {
         let refresh_token_value = token.refresh_token.clone();
         if refresh_token_value.is_empty() {
-            return Ok(None);
+            return Ok(false);
         }
 
         // In-process lock to prevent thundering herd within the same process
@@ -217,14 +218,14 @@ impl OAuthManager {
         // Re-check: another task may have already refreshed
         let current = match oauth::load_tokens(&ref_ref.key) {
             Some(t) => t,
-            None => return Ok(None),
+            None => return Ok(false),
         };
 
         // If the token on disk is different, someone else refreshed it
         if current.refresh_token != refresh_token_value {
             self.clear_rejected_refresh_token(&ref_ref.key);
             self.cache_access_token(&ref_ref.key, &current);
-            return Ok(Some(current.access_token));
+            return Ok(true);
         }
 
         // Check refresh threshold
@@ -233,7 +234,7 @@ impl OAuthManager {
             if current.expires_at > now {
                 let threshold = oauth::refresh_threshold(current.expires_in);
                 if current.expires_at - now >= threshold {
-                    return Ok(None);
+                    return Ok(false);
                 }
             }
         }
@@ -244,7 +245,7 @@ impl OAuthManager {
                 self.clear_rejected_refresh_token(&ref_ref.key);
                 oauth::save_tokens(&ref_ref.key, &refreshed)?;
                 self.cache_access_token(&ref_ref.key, &refreshed);
-                Ok(Some(refreshed.access_token.clone()))
+                Ok(true)
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -255,7 +256,7 @@ impl OAuthManager {
                         return Err(e);
                     }
                 }
-                Ok(None)
+                Ok(false)
             }
         }
     }

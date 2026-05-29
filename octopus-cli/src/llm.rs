@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::auth::OAuthManager;
 use crate::config::{Config, LLMModel, LLMProvider, ModelCapability, ProviderType};
 use crate::exception::OctopusError;
 
@@ -11,6 +12,9 @@ pub struct LLM {
     pub capabilities: HashSet<ModelCapability>,
     pub model_config: Option<LLMModel>,
     pub provider_config: Option<LLMProvider>,
+    /// OAuth manager for resolving live access tokens.
+    /// If present, takes priority over the static `provider_config.api_key`.
+    pub oauth: Option<OAuthManager>,
 }
 
 pub fn model_display_name(model_name: Option<&str>, model: Option<&LLMModel>) -> String {
@@ -112,6 +116,7 @@ pub fn create_llm(provider: &LLMProvider, model: &LLMModel) -> Option<LLM> {
         capabilities,
         model_config: Some(model.clone()),
         provider_config: Some(provider.clone()),
+        oauth: None,
     })
 }
 
@@ -233,6 +238,20 @@ impl LLM {
         }
     }
 
+    /// Resolve the effective API key, preferring OAuth token if available.
+    fn resolve_api_key(&self) -> Option<String> {
+        let provider_config = self.provider_config.as_ref()?;
+        self.oauth
+            .as_ref()
+            .and_then(|o| {
+                o.resolve_api_key(
+                    provider_config.api_key.clone(),
+                    provider_config.oauth.as_ref(),
+                )
+            })
+            .map(|c| c.as_str().to_string())
+    }
+
     pub(crate) fn build_kosong_provider(
         &self,
     ) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
@@ -241,11 +260,13 @@ impl LLM {
             .as_ref()
             .ok_or_else(|| OctopusError::Other("Provider config not set".to_string()))?;
 
+        let api_key = self.resolve_api_key();
+
         match provider_config.provider_type {
             ProviderType::Kimi => {
                 let mut kimi = kosong::provider::kimi::Kimi::new(&self.model_name)
                     .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     kimi = kimi.with_api_key(key);
                 }
                 Ok(Arc::new(kimi))
@@ -254,7 +275,7 @@ impl LLM {
                 let mut openai =
                     kosong::provider::openai_legacy::OpenAILegacy::new(&self.model_name)
                         .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     openai = openai.with_api_key(key);
                 }
                 if let Some(ref key) = provider_config.reasoning_key {
@@ -266,7 +287,7 @@ impl LLM {
                 let mut openai =
                     kosong::provider::openai_responses::OpenAIResponses::new(&self.model_name)
                         .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     openai = openai.with_api_key(key);
                 }
                 Ok(Arc::new(openai))

@@ -167,6 +167,15 @@ impl KimiSoul {
             notification_manager.ack_ids("llm", &ack_ids);
         }
 
+        let oauth = OAuthManager::new();
+
+        // Bind OAuth manager to the LLM so that build_kosong_provider can resolve
+        // live access tokens instead of relying solely on the static api_key.
+        let mut llm = llm;
+        if let Some(ref mut l) = llm {
+            l.oauth = Some(oauth.clone());
+        }
+
         Self {
             config,
             session,
@@ -182,7 +191,7 @@ impl KimiSoul {
             root_wire_hub: Some(root_wire_hub),
             hook_engine,
             notification_manager,
-            oauth: OAuthManager::new(),
+            oauth,
             denwa_renji,
             skills,
             bg_manager,
@@ -636,14 +645,11 @@ impl KimiSoul {
                         .as_ref()
                         .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
                     match self.oauth.ensure_fresh(llm, true).await {
-                        Ok(Some(new_token)) => {
-                            if let Some(ref mut provider) =
-                                self.llm.as_mut().unwrap().provider_config
-                            {
-                                provider.api_key = Some(new_token);
-                            }
+                        Ok(true) => {
+                            // Token cache refreshed; the next build_kosong_provider()
+                            // call will pick up the new token automatically.
                         }
-                        Ok(None) => {}
+                        Ok(false) => {}
                         Err(refresh_err) => {
                             tracing::error!("OAuth refresh failed: {}", refresh_err);
                             return Err(OctopusError::APIStatus(e.clone()));

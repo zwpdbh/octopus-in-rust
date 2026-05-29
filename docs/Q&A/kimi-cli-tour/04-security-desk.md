@@ -108,18 +108,87 @@ The overlay **pauses the entire TUI** until resolved. This is critical — you d
 
 ### The Vault: `OAuthManager`
 
-File: `octopus-cli/src/auth/manager.rs` (~251 lines)
+File: `octopus-cli/src/auth/manager.rs` (~270 lines)
 
-The `OAuthManager` handles token storage, refresh, and API key resolution:
+The `OAuthManager` handles token storage, refresh, and credential resolution:
 
 ```rust
 // File: octopus-cli/src/auth/manager.rs
 pub struct OAuthManager {
-    access_tokens: HashMap<String, String>,
-    refresh_lock: tokio::sync::Mutex<()>,
-    rejected_refresh_tokens: HashMap<String, (String, Instant)>,
+    access_tokens: Arc<Mutex<HashMap<String, String>>>,
+    refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    rejected_refresh_tokens: Arc<Mutex<HashMap<String, (String, Instant)>>>,
 }
 ```
+
+### Layered Credential Model
+
+Rust follows Python's pattern of keeping **config and runtime credentials separate**:
+
+| Layer | Field | Mutable? | Source |
+|-------|-------|----------|--------|
+| **Config** | `provider_config.api_key` | ❌ No | Config file / env vars |
+| **Config** | `provider_config.oauth` | ❌ No | Config file (OAuth reference) |
+| **Runtime** | `OAuthManager` cache | ✅ Yes | Disk → memory cache |
+| **Runtime** | `LLM.oauth` | ✅ Yes | Bound at `KimiSoul` startup |
+
+The `LLM` stores an `OAuthManager` clone so that every `build_kosong_provider()` call can resolve the **live** credential:
+
+```rust
+// File: octopus-cli/src/llm.rs
+pub struct LLM {
+    pub model_name: String,
+    pub provider_config: Option<LLMProvider>,
+    pub oauth: Option<OAuthManager>,  // ← runtime credential resolver
+}
+```
+
+### Credential Resolution
+
+`resolve_api_key` decides which credential to use **at provider-build time**:
+
+```rust
+// File: octopus-cli/src/auth/manager.rs
+pub enum ApiCredential {
+    OAuthToken(String),
+    ApiKey(String),
+}
+
+pub fn resolve_api_key(
+    &self,
+    api_key: Option<String>,
+    oauth_ref: Option<&OAuthRef>,
+) -> Option<ApiCredential> {
+    if let Some(ref_ref) = oauth_ref {
+        let cache = self.access_tokens.lock().unwrap();
+        if let Some(token) = cache.get(&ref_ref.key) {
+            return Some(ApiCredential::OAuthToken(token.clone()));
+        }
+    }
+    api_key.map(ApiCredential::ApiKey)
+}
+```
+
+And `build_kosong_provider` calls it before every LLM request:
+
+```rust
+// File: octopus-cli/src/llm.rs
+fn resolve_api_key(&self) -> Option<String> {
+    let provider_config = self.provider_config.as_ref()?;
+    self.oauth
+        .as_ref()
+        .and_then(|o| o.resolve_api_key(
+            provider_config.api_key.clone(),
+            provider_config.oauth.as_ref(),
+        ))
+        .map(|c| c.as_str().to_string())
+}
+```
+
+This means:
+- **OAuth token takes priority** when available in the cache
+- **Static API key is the fallback** when OAuth is not configured or the cache is empty
+- **Config is never mutated** — `provider_config.api_key` stays as the static fallback forever
 
 ### Token Storage: Atomic & Permission-Safe
 
@@ -156,39 +225,35 @@ When the LLM API returns 401, the soul triggers token refresh:
 
 ```rust
 // File: octopus-cli/src/auth/manager.rs
-pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<Option<String>> {
-    let token = load_tokens("kimi-code");
-    let expires_at = token.expires_at;
+pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<bool> {
+    let oauth_ref = match self.kimi_code_ref(llm) {
+        Some(r) => r,
+        None => return Ok(false),  // No OAuth configured
+    };
 
-    let threshold = max(300.0, 0.5 * token.expires_in);
-    if !force && now < expires_at - threshold {
-        return Ok(None);  // Token is fresh enough
-    }
+    let token = match oauth::load_tokens(&oauth_ref.key) {
+        Some(t) => t,
+        None => return Ok(false),  // No persisted token
+    };
 
     // Check tombstone (rejected refresh token)
-    if let Some((_, cooldown_until)) = self.rejected_refresh_tokens.get(refresh_token) {
-        if now < *cooldown_until {
-            return Ok(None);  // Don't retry a known-bad token
+    if self.should_suppress_persisted_token(&oauth_ref.key, &token) {
+        if !self.can_retry_rejected_refresh_token(&oauth_ref.key, &token.refresh_token) {
+            return Ok(false);  // Don't retry a known-bad token
         }
     }
 
     let _guard = self.refresh_lock.lock().await;  // Only one refresh at a time!
-    match refresh_token(refresh_token).await {
-        Ok(new_token) => {
-            save_tokens("kimi-code", &new_token)?;
-            Ok(Some(new_token.access_token))
-        }
-        Err(e) => {
-            // Tombstone for 5 minutes
-            self.rejected_refresh_tokens.insert(
-                refresh_token.to_string(),
-                (refresh_token.to_string(), now + 300.0),
-            );
-            Err(e)
-        }
-    }
+    self.refresh_tokens(&oauth_ref, token, force).await
 }
 ```
+
+`ensure_fresh` returns `Result<bool>`:
+- `Ok(true)` — token was refreshed or is still valid
+- `Ok(false)` — no OAuth configured, no token on disk, or refresh not needed yet
+- `Err(...)` — refresh failed (e.g., refresh token rejected)
+
+**Crucially, `ensure_fresh` does NOT return the token string.** It only updates the in-memory cache inside `OAuthManager`. The next call to `build_kosong_provider()` will pick up the new token automatically via `resolve_api_key()`.
 
 This is **resilient token management**:
 
@@ -196,12 +261,13 @@ This is **resilient token management**:
 2. **Tombstones** — if a refresh token is rejected, don't retry it for 5 minutes
 3. **Mutex lock** — only one refresh happens at a time, even with concurrent requests
 4. **Threshold heuristic** — `max(300s, 0.5 * expires_in)` balances safety and API load
+5. **Config immutability** — the static `api_key` in config is never overwritten
 
-🐍 **Python's way:** Similar logic, but tombstones and locking are handled by `threading.Lock()` and `time.sleep()`.
+🐍 **Python's way:** `ensure_fresh` mutates the live HTTP client's `api_key` in-place (`runtime.llm.chat_provider.client.api_key = new_token`).
 
-🦀 **Rust's way:** `tokio::sync::Mutex` for async locking. The tombstone `HashMap` is owned by `OAuthManager` and protected by the struct's `&mut self` borrow.
+🦀 **Rust's way:** `ensure_fresh` mutates the `OAuthManager` cache only. The provider is rebuilt on every LLM call, so the fresh token is picked up naturally at `build_kosong_provider()` time. No live client mutation needed.
 
-✨ **Where Rust shines:** **The refresh lock is composable.** Because `tokio::sync::Mutex::lock()` returns a future, you can `.await` it inside any async function. The compiler ensures you can't forget to release the lock (the guard implements `Drop`). In Python, a `with lock:` block is similar, but an unhandled exception could leak the lock state.
+✨ **Where Rust shines:** **No live object mutation.** Because `build_kosong_provider()` creates a new kosong provider each time, credential resolution is a pure function of `LLM` state. In Python, mutating the HTTP client in-place creates a hidden side effect that can surprise callers holding references to the client.
 
 ---
 
