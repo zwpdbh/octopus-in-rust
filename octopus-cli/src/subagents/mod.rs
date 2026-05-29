@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::session::Session;
 
 /// Registry of built-in subagent types that can be spawned by the `Agent` tool.
@@ -63,7 +66,7 @@ impl SubagentStore {
     }
 
     /// Register a new background subagent as running.
-    pub fn register(&self, id: String, description: String, subagent_type: String) {
+    pub fn register(&self, id: String, description: String, subagent_type: SubagentType) {
         let entry = SubagentEntry {
             id: id.clone(),
             description,
@@ -111,10 +114,85 @@ impl SubagentStore {
 pub struct SubagentEntry {
     pub id: String,
     pub description: String,
-    pub subagent_type: String,
+    pub subagent_type: SubagentType,
     pub status: SubagentStatus,
     pub result: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Well-known built-in subagent types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum KnownSubagentType {
+    Coder,
+    Explore,
+    Plan,
+}
+
+impl KnownSubagentType {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Coder => "coder",
+            Self::Explore => "explore",
+            Self::Plan => "plan",
+        }
+    }
+}
+
+impl std::fmt::Display for KnownSubagentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Subagent type used by the [`Agent`](crate::tools::agent::AgentTool) tool.
+///
+/// Supports the well-known built-in variants ([`KnownSubagentType`]) as well as
+/// arbitrary custom types registered in the [`LaborMarket`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SubagentType {
+    Known(KnownSubagentType),
+    Other(String),
+}
+
+impl SubagentType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Known(k) => k.as_str(),
+            Self::Other(s) => s.as_str(),
+        }
+    }
+}
+
+impl Default for SubagentType {
+    fn default() -> Self {
+        Self::Known(KnownSubagentType::Coder)
+    }
+}
+
+impl std::fmt::Display for SubagentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<KnownSubagentType> for SubagentType {
+    fn from(value: KnownSubagentType) -> Self {
+        Self::Known(value)
+    }
+}
+
+impl From<String> for SubagentType {
+    fn from(value: String) -> Self {
+        Self::Other(value)
+    }
+}
+
+impl From<&str> for SubagentType {
+    fn from(value: &str) -> Self {
+        Self::Other(value.to_string())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -438,7 +438,7 @@
 
 | # | Feature | Status | Blocked On | Notes |
 |---|---------|--------|-----------|-------|
-| 4 | **Background Tasks** | ✅ | `background/mod.rs` + `tools/shell/mod.rs` + `tools/background/mod.rs` | `BackgroundTaskManager` spawns real `tokio::process::Child` processes, captures stdout/stderr via reader tasks. `ShellTool` with `run_in_background=true` creates tasks. `TaskOutputTool` and `TaskStopTool` query and kill tasks. |
+| 4 | **Background Tasks** | ✅ | `background/mod.rs` + `tools/shell/mod.rs` + `tools/background/mod.rs` | `BackgroundTaskManager` spawns real `tokio::process::Child` processes, captures stdout/stderr via reader tasks. `ShellTool` with `execution_mode="background"` creates tasks. `TaskOutputTool` and `TaskStopTool` query and kill tasks. |
 | 5 | **Subagents** | ✅ | `tools/agent/mod.rs` + `subagents/mod.rs` + `soul/agent.rs` | Full pipeline: `LaborMarket` registers types from YAML specs → `AgentTool` looks up type → loads spec via `load_agent()` → resolves model override → applies `ToolPolicy` via `hide_all_except()` → shares parent runtime via `copy_for_subagent()` → tracks in `SubagentStore`. |
 | 6 | **Skills discovery** | ✅ | `skills/mod.rs` | `SkillRegistry::discover()` scans `~/.kimi/skills/` and `<work_dir>/.kimi/skills/` for `SKILL.md` (subdirectory) and `*.md` (flat) layouts. Parses simple YAML frontmatter for `name` and `description`. Flowcharts (Mermaid/D2) are future work. |
 | 7 | **Side Questions (`/btw`)** | ✅ | — | One-off `llm.complete()` call with `BtwBegin`/`BtwEnd` wire events. Answer rendered with `btw` role (💡 magenta). |

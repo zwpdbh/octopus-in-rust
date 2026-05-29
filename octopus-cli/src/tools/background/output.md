@@ -1,6 +1,6 @@
 Retrieve output from a running or completed background task.
 
-Use this after `Shell(run_in_background=true)` when you need to inspect progress or explicitly wait for completion.
+Use this after `Shell(execution_mode="background")` when you need to inspect progress or explicitly wait for completion.
 
 Guidelines:
 - Prefer relying on automatic completion notifications. Use this tool only when you need task output before the automatic notification arrives.

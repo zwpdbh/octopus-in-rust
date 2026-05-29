@@ -267,7 +267,7 @@ pub fn copy_for_subagent(
     llm: Option<LLM>,
     approval: Approval,
     builtin_args: BuiltinSystemPromptArgs,
-    subagent_type: Option<String>,
+    subagent_type: Option<SubagentType>,
 ) -> Self {
     Self {
         config: self.config.clone(),
@@ -299,14 +299,27 @@ The child agent **shares** the parent's `LaborMarket` (so it can spawn the same 
 ```rust
 // File: octopus-cli/src/tools/agent/mod.rs
 // Foreground: parent waits
-let result = run_subagent_with_market(parent_runtime, "coder", "Refactor this", None).await?;
+let result = run_subagent_with_market(
+    parent_runtime,
+    SubagentType::Known(KnownSubagentType::Coder),
+    "Refactor this",
+    None,
+).await?;
 
 // Background: parent continues, child is tracked
-if params.run_in_background {
-    tokio::spawn(async move {
-        let result = run_subagent_with_market(parent_runtime, "coder", "Refactor this", None).await;
-        // SubagentStore is updated automatically
-    });
+match params.execution_mode {
+    ExecutionMode::Background => {
+        tokio::spawn(async move {
+            let result = run_subagent_with_market(
+                parent_runtime,
+                SubagentType::Known(KnownSubagentType::Coder),
+                "Refactor this",
+                None,
+            ).await;
+            // SubagentStore is updated automatically
+        });
+    }
+    ExecutionMode::Foreground => { /* ... await result ... */ }
 }
 ```
 
@@ -322,7 +335,7 @@ pub struct SubagentStore {
 pub struct SubagentEntry {
     pub id: String,           // Session ID
     pub description: String,
-    pub subagent_type: String,
+    pub subagent_type: SubagentType,
     pub status: SubagentStatus,  // Running | Completed | Failed
     pub result: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -339,7 +352,7 @@ Background tasks and subagents are triggered by tools:
 
 ```rust
 // ShellTool spawns background tasks
-ShellTool::call({ "command": "cargo build", "run_in_background": true })
+ShellTool::call({ "command": "cargo build", "execution_mode": "background" })
     → BackgroundTaskManager::spawn()
 
 // AgentTool spawns subagents

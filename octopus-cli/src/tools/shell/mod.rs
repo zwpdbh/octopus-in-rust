@@ -8,6 +8,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
+use crate::tools::ExecutionMode;
+
 const MAX_FOREGROUND_TIMEOUT: u64 = 5 * 60;
 const _MAX_BACKGROUND_TIMEOUT: u64 = 24 * 60 * 60;
 
@@ -17,7 +19,7 @@ pub struct ShellParams {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
     #[serde(default)]
-    pub run_in_background: bool,
+    pub execution_mode: ExecutionMode,
     #[serde(default)]
     pub description: String,
 }
@@ -53,24 +55,27 @@ impl CallableTool2 for ShellTool {
             return ToolReturnValue::error("Command cannot be empty.");
         }
 
-        if params.run_in_background {
-            let task_id = match self
-                .bg_manager
-                .spawn(params.command.clone(), params.description.clone())
-                .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    return ToolReturnValue::error(format!(
-                        "Failed to spawn background task: {}",
-                        e
-                    ));
-                }
-            };
-            return ToolReturnValue::ok(format!(
-                "Background task started: `{}`\ntask_id: {}\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
-                params.command, task_id
-            ));
+        match params.execution_mode {
+            ExecutionMode::Background => {
+                let task_id = match self
+                    .bg_manager
+                    .spawn(params.command.clone(), params.description.clone())
+                    .await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return ToolReturnValue::error(format!(
+                            "Failed to spawn background task: {}",
+                            e
+                        ));
+                    }
+                };
+                return ToolReturnValue::ok(format!(
+                    "Background task started: `{}`\ntask_id: {}\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
+                    params.command, task_id
+                ));
+            }
+            ExecutionMode::Foreground => {}
         }
 
         let timeout_secs = params.timeout.min(MAX_FOREGROUND_TIMEOUT);

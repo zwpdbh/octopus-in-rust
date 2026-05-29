@@ -8,26 +8,24 @@ use serde::{Deserialize, Serialize};
 use crate::approval_runtime::{ApprovalSource, with_approval_source};
 use crate::soul::agent::{Agent, load_agent};
 use crate::soul::approval::ApprovalState;
+use crate::subagents::SubagentType;
+use crate::tools::ExecutionMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AgentParams {
     pub description: String,
     #[serde(default)]
     pub prompt: String,
-    #[serde(default = "default_subagent_type")]
-    pub subagent_type: String,
+    #[serde(default)]
+    pub subagent_type: SubagentType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
     #[serde(default)]
-    pub run_in_background: bool,
+    pub execution_mode: ExecutionMode,
     #[serde(default)]
     pub timeout: Option<u64>,
-}
-
-fn default_subagent_type() -> String {
-    "coder".to_string()
 }
 
 pub struct AgentTool {
@@ -55,56 +53,58 @@ impl CallableTool2 for AgentTool {
     async fn call_typed(&self, params: AgentParams) -> ToolReturnValue {
         let parent_runtime = self.parent_runtime.clone();
 
-        if params.run_in_background {
-            let description = params.description.clone();
-            let prompt = params.prompt.clone();
-            let subagent_type = params.subagent_type.clone();
-            let model_override = params.model.clone();
-            tokio::spawn(async move {
-                let result = run_subagent_with_market(
+        match params.execution_mode {
+            ExecutionMode::Background => {
+                let description = params.description.clone();
+                let prompt = params.prompt.clone();
+                let subagent_type = params.subagent_type.clone();
+                let model_override = params.model.clone();
+                tokio::spawn(async move {
+                    let result = run_subagent_with_market(
+                        parent_runtime,
+                        subagent_type,
+                        &description,
+                        &prompt,
+                        model_override.as_deref(),
+                    )
+                    .await;
+                    match result {
+                        Ok(response) => {
+                            tracing::info!("Background subagent '{}' completed", description);
+                            tracing::info!("Subagent result: {}", response);
+                        }
+                        Err(e) => {
+                            tracing::error!("Background subagent '{}' failed: {}", description, e);
+                        }
+                    }
+                });
+
+                ToolReturnValue::ok(format!(
+                    "Subagent '{}' launched in the background.\nautomatic_notification: true\nnext_step: You will be notified when it completes.",
+                    params.description
+                ))
+            }
+            ExecutionMode::Foreground => {
+                match run_subagent_with_market(
                     parent_runtime,
-                    &subagent_type,
-                    &description,
-                    &prompt,
-                    model_override.as_deref(),
+                    params.subagent_type,
+                    &params.description,
+                    &params.prompt,
+                    params.model.as_deref(),
                 )
-                .await;
-                match result {
-                    Ok(response) => {
-                        tracing::info!("Background subagent '{}' completed", description);
-                        tracing::info!("Subagent result: {}", response);
-                    }
-                    Err(e) => {
-                        tracing::error!("Background subagent '{}' failed: {}", description, e);
-                    }
+                .await
+                {
+                    Ok(result) => ToolReturnValue::ok(result),
+                    Err(e) => ToolReturnValue::error(e),
                 }
-            });
-
-            return ToolReturnValue::ok(format!(
-                "Subagent '{}' launched in the background.\nautomatic_notification: true\nnext_step: You will be notified when it completes.",
-                params.description
-            ));
-        }
-
-        // Foreground subagent
-        match run_subagent_with_market(
-            parent_runtime,
-            &params.subagent_type,
-            &params.description,
-            &params.prompt,
-            params.model.as_deref(),
-        )
-        .await
-        {
-            Ok(result) => ToolReturnValue::ok(result),
-            Err(e) => ToolReturnValue::error(e),
+            }
         }
     }
 }
 
 async fn run_subagent_with_market(
     parent_runtime: crate::soul::agent::AppRuntime,
-    subagent_type: &str,
+    subagent_type: SubagentType,
     description: &str,
     prompt: &str,
     model_override: Option<&str>,
@@ -116,7 +116,9 @@ async fn run_subagent_with_market(
     let subagent_store = parent_runtime.subagent_store.clone();
 
     // Look up the subagent type in the LaborMarket
-    let type_def = parent_runtime.labor_market.get_builtin_type(subagent_type);
+    let type_def = parent_runtime
+        .labor_market
+        .get_builtin_type(subagent_type.as_str());
 
     match type_def {
         Some(def) => {
@@ -130,7 +132,7 @@ async fn run_subagent_with_market(
                 store.register(
                     session.id.clone(),
                     description.to_string(),
-                    subagent_type.to_string(),
+                    subagent_type.clone(),
                 );
             }
 
@@ -151,7 +153,7 @@ async fn run_subagent_with_market(
                 llm.clone(),
                 approval,
                 builtin_args,
-                Some(def.name.clone()),
+                Some(SubagentType::from(def.name.clone())),
             );
 
             let agent = load_agent(&def.agent_file, subagent_runtime, vec![])
@@ -206,7 +208,7 @@ async fn run_subagent_with_market(
             // Fallback: unregistered type, create a basic subagent
             tracing::warn!(
                 "Subagent type '{}' not found in LaborMarket, using basic fallback",
-                subagent_type
+                subagent_type.as_str()
             );
             run_subagent_basic(
                 config,
@@ -239,7 +241,7 @@ async fn run_subagent_basic(
         store.register(
             session.id.clone(),
             description.to_string(),
-            "basic".to_string(),
+            SubagentType::from("basic"),
         );
     }
 

@@ -252,7 +252,7 @@ pub struct ShellTool {
 pub struct ShellParams {
     pub command: String,
     #[serde(default)]
-    pub run_in_background: bool,
+    pub execution_mode: ExecutionMode,
     #[serde(default)]
     pub timeout: u64,
 }
@@ -262,18 +262,21 @@ impl CallableTool2 for ShellTool {
     type Params = ShellParams;
 
     async fn call_typed(&self, params: ShellParams) -> ToolReturnValue {
-        if params.run_in_background {
-            let id = self.bg_manager.spawn(params.command, ...).await;
-            ToolReturnValue::ok(format!("Task started: {}", id))
-        } else {
-            let output = run_command(&params.command).await;
-            ToolReturnValue::ok(output)
+        match params.execution_mode {
+            ExecutionMode::Background => {
+                let id = self.bg_manager.spawn(params.command, ...).await;
+                ToolReturnValue::ok(format!("Task started: {}", id))
+            }
+            ExecutionMode::Foreground => {
+                let output = run_command(&params.command).await;
+                ToolReturnValue::ok(output)
+            }
         }
     }
 }
 ```
 
-Notice the **`run_in_background` flag**. This one parameter branches into two entirely different execution paths:
+Notice the **`execution_mode` enum**. This parameter branches into two entirely different execution paths:
 - **Foreground:** Run now, block until done, return output
 - **Background:** Spawn a `tokio::process::Child`, return immediately with a task ID
 
@@ -331,16 +334,18 @@ impl CallableTool2 for AgentTool {
     async fn call_typed(&self, params: AgentParams) -> ToolReturnValue {
         let parent_runtime = self.parent_runtime.clone();
 
-        // Background or foreground?
-        if params.run_in_background {
-            tokio::spawn(async move {
-                run_subagent_with_market(parent_runtime, &params).await
-            });
-            ToolReturnValue::ok("Launched in background".to_string())
-        } else {
-            match run_subagent_with_market(parent_runtime, &params).await {
-                Ok(output) => ToolReturnValue::ok(output),
-                Err(e) => ToolReturnValue::error(e),
+        match params.execution_mode {
+            ExecutionMode::Background => {
+                tokio::spawn(async move {
+                    run_subagent_with_market(parent_runtime, &params).await
+                });
+                ToolReturnValue::ok("Launched in background".to_string())
+            }
+            ExecutionMode::Foreground => {
+                match run_subagent_with_market(parent_runtime, &params).await {
+                    Ok(output) => ToolReturnValue::ok(output),
+                    Err(e) => ToolReturnValue::error(e),
+                }
             }
         }
     }

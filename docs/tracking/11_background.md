@@ -21,7 +21,7 @@
 |------|-------------|-----|--------|
 | `octopus-cli/src/background/mod.rs` | BackgroundTaskManager with real process spawning | ~205 | ✅ |
 | `octopus-cli/src/tools/background/mod.rs` | TaskOutput / TaskStop tools | ~160 | ✅ |
-| `octopus-cli/src/tools/shell/mod.rs` | ShellTool with run_in_background support | ~169 | ✅ |
+| `octopus-cli/src/tools/shell/mod.rs` | ShellTool with `execution_mode` support | ~169 | ✅ |
 
 ## What's Done
 
@@ -30,7 +30,7 @@
 - [x] Task lifecycle: `spawn()`, `get_output()`, `stop()`, `list_tasks()`
 - [x] `TaskOutputTool` — read task output with `block=true` support
 - [x] `TaskStopTool` — kill running background tasks
-- [x] `ShellTool` — `run_in_background=true` creates background tasks
+- [x] `ShellTool` — `execution_mode="background"` creates background tasks
 - [x] Shutdown cleanup — `KimiSoul::shutdown()` kills all child processes
 
 ## What's Missing

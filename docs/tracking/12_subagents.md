@@ -35,7 +35,7 @@
 - [x] Model override resolution — `params.model` → `def.default_model` → parent LLM
 - [x] `AppRuntime::copy_for_subagent()` — shares LaborMarket, skills, notifications, background_tasks, denwa_renji
 - [x] `SubagentStore` — tracks all subagent spawns with `Running | Completed | Failed` status
-- [x] `AgentParams` for tool-call-based subagent invocation (with `model`, `run_in_background`, `resume` fields)
+- [x] `AgentParams` for tool-call-based subagent invocation (with `model`, `execution_mode`, `resume` fields)
 - [x] Subagent spec parsing from YAML (via `agents/mod.rs` `load_agent_spec()`)
 - [x] Subagent type registration in `LaborMarket` during `load_agent()`
 

@@ -12,7 +12,7 @@ use crate::session::Session;
 use crate::skills::Skill;
 use crate::soul::approval::{Approval, ApprovalState};
 use crate::soul::toolset::KimiToolset;
-use crate::subagents::{LaborMarket, SubagentStore};
+use crate::subagents::{LaborMarket, SubagentStore, SubagentType};
 use crate::wire::RootWireHub;
 
 #[derive(Debug, Clone)]
@@ -125,7 +125,7 @@ pub struct AppRuntime {
     pub approval_runtime: Option<ApprovalRuntime>,
     pub root_wire_hub: Option<RootWireHub>,
     pub subagent_id: Option<String>,
-    pub subagent_type: Option<String>,
+    pub subagent_type: Option<SubagentType>,
     pub role: String,
     pub ui_mode: UiMode,
     pub resumed: bool,
@@ -179,7 +179,7 @@ impl AppRuntime {
         llm: Option<LLM>,
         approval: Approval,
         builtin_args: BuiltinSystemPromptArgs,
-        subagent_type: Option<String>,
+        subagent_type: Option<SubagentType>,
     ) -> Self {
         let session_id = session.id.clone();
         Self {
