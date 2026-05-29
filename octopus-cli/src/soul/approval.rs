@@ -68,14 +68,6 @@ impl ApprovalState {
     pub fn is_auto_approve(&self) -> bool {
         self.mode.is_auto_approve()
     }
-
-    pub fn is_afk(&self) -> bool {
-        self.mode.is_afk()
-    }
-
-    pub fn is_afk_flag(&self) -> bool {
-        self.mode.is_afk()
-    }
 }
 
 impl Default for ApprovalState {
@@ -156,12 +148,7 @@ impl std::fmt::Debug for Approval {
 }
 
 impl Approval {
-    pub fn new(yolo: bool) -> Self {
-        let mode = if yolo {
-            ApprovalMode::Yolo
-        } else {
-            ApprovalMode::Ask
-        };
+    pub fn new(mode: ApprovalMode) -> Self {
         let state = ApprovalState {
             mode,
             ..Default::default()
@@ -234,30 +221,14 @@ impl Approval {
         self.state.read().unwrap().mode.is_yolo()
     }
 
-    pub fn is_yolo_flag(&self) -> bool {
-        self.is_yolo()
-    }
-
     pub fn is_afk(&self) -> bool {
         let state = self.state.read().unwrap();
         let rt_afk = self.runtime_afk.read().unwrap();
         state.mode.is_afk() || *rt_afk
     }
 
-    pub fn is_afk_flag(&self) -> bool {
-        self.state.read().unwrap().mode.is_afk()
-    }
-
     pub fn is_runtime_afk(&self) -> bool {
         *self.runtime_afk.read().unwrap()
-    }
-
-    pub fn yolo(&self) -> bool {
-        self.state.read().unwrap().mode.is_yolo()
-    }
-
-    pub fn afk(&self) -> bool {
-        self.state.read().unwrap().mode.is_afk()
     }
 
     pub fn auto_approve_actions(&self) -> Vec<String> {
@@ -317,14 +288,15 @@ impl Approval {
 
         match self.runtime.wait_for_response(&request_id, None).await {
             Ok(response) => match response {
-                ApprovalResponse::Approve => ApprovalResult::Approved,
-                ApprovalResponse::ApproveForSession => {
-                    let mut state = self.state.write().unwrap();
-                    if !state.auto_approve_actions.contains(&action.to_string()) {
-                        state.auto_approve_actions.push(action.to_string());
+                ApprovalResponse::Allow { scope } => {
+                    if matches!(scope, crate::approval_runtime::ApprovalScope::Session) {
+                        let mut state = self.state.write().unwrap();
+                        if !state.auto_approve_actions.contains(&action.to_string()) {
+                            state.auto_approve_actions.push(action.to_string());
+                        }
+                        drop(state);
+                        self.notify_change();
                     }
-                    drop(state);
-                    self.notify_change();
                     ApprovalResult::Approved
                 }
                 ApprovalResponse::Reject { feedback } => ApprovalResult::Rejected { feedback },

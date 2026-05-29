@@ -272,7 +272,9 @@ impl ShellUI {
                     if let Some(ref rt) = self.approval_runtime {
                         rt.resolve(
                             &pending.id,
-                            crate::approval_runtime::ApprovalResponse::Approve,
+                            crate::approval_runtime::ApprovalResponse::Allow {
+                                scope: crate::approval_runtime::ApprovalScope::Once,
+                            },
                         );
                     }
                     self.pending_approval = None;
@@ -294,7 +296,9 @@ impl ShellUI {
                     if let Some(ref rt) = self.approval_runtime {
                         rt.resolve(
                             &pending.id,
-                            crate::approval_runtime::ApprovalResponse::ApproveForSession,
+                            crate::approval_runtime::ApprovalResponse::Allow {
+                                scope: crate::approval_runtime::ApprovalScope::Session,
+                            },
                         );
                     }
                     self.pending_approval = None;

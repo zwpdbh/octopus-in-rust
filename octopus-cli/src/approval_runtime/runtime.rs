@@ -40,11 +40,17 @@ pub async fn with_approval_source<T>(
 #[error("Approval request cancelled")]
 pub struct ApprovalCancelledError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalScope {
+    Once,
+    Session,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "data")]
+#[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ApprovalResponse {
-    Approve,
-    ApproveForSession,
+    Allow { scope: ApprovalScope },
     Reject { feedback: String },
 }
 
@@ -222,8 +228,10 @@ impl ApprovalRuntime {
             let event = ApprovalResponseEvent {
                 request_id: request_id_owned,
                 response: match response {
-                    ApprovalResponse::Approve => "approve".to_string(),
-                    ApprovalResponse::ApproveForSession => "approve_for_session".to_string(),
+                    ApprovalResponse::Allow { scope } => match scope {
+                        ApprovalScope::Once => "approve".to_string(),
+                        ApprovalScope::Session => "approve_for_session".to_string(),
+                    },
                     ApprovalResponse::Reject { .. } => "reject".to_string(),
                 },
                 feedback,

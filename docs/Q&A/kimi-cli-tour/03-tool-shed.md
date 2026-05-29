@@ -134,8 +134,8 @@ async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::ToolResult
     // 4. Request approval (if not yolo/afk)
     if let Some(approval) = &self.approval {
         match approval.request(...).await {
-            ApprovalResponse::Approve => {}
-            ApprovalResponse::Reject { feedback } => {
+            ApprovalResult::Approved => {}
+            ApprovalResult::Rejected { feedback } => {
                 return kosong::ToolResult {
                     tool_call_id: tool_call.id.clone(),
                     return_value: kosong::ToolReturnValue::error(format!("User rejected: {}", feedback)),

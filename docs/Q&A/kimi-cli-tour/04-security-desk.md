@@ -34,6 +34,9 @@ Tool wants to run
                 → ShellUI receives event, renders overlay
                     → User presses Y/N/A
                         → ApprovalRuntime resolves via oneshot channel
+                            → Y: `Allow { scope: Once }`
+                            → A: `Allow { scope: Session }`
+                            → N: `Reject { feedback }`
                             → Tool runs (or is rejected)
 ```
 
@@ -43,12 +46,21 @@ Tool wants to run
 // File: octopus-cli/src/approval_runtime/runtime.rs
 pub struct ApprovalRuntime {
     inner: Arc<Mutex<ApprovalRuntimeInner>>,
-    hub: Option<RootWireHub>,
 }
 
 struct ApprovalRuntimeInner {
-    requests: HashMap<String, ApprovalRequestRecord>,
+    requests: HashMap<String, ApprovalRequest>,
     waiters: HashMap<String, tokio::sync::oneshot::Sender<ApprovalResponse>>,
+}
+
+pub enum ApprovalScope {
+    Once,    // Approve this action only
+    Session, // Approve and remember for this session
+}
+
+pub enum ApprovalResponse {
+    Allow { scope: ApprovalScope },
+    Reject { feedback: String },
 }
 ```
 

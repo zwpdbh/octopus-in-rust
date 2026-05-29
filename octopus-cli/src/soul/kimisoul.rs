@@ -1150,7 +1150,7 @@ impl KimiSoul {
         let ctx = InjectionContext {
             plan_mode: self.plan_mode,
             effective_afk: self.approval.is_afk(),
-            persisted_afk: self.approval.is_afk_flag(),
+            persisted_afk: self.approval.state().mode.is_afk(),
             plan_file_path: plan_file_path.as_deref(),
             pending_plan_activation: self.consume_pending_plan_activation_injection(),
         };
@@ -1243,8 +1243,8 @@ impl KimiSoul {
             } else {
                 0.0
             },
-            yolo_enabled: self.approval.yolo(),
-            afk_enabled: self.approval.afk(),
+            yolo_enabled: self.approval.is_yolo(),
+            afk_enabled: self.approval.state().mode.is_afk(),
             plan_mode: self.plan_mode,
             context_tokens: token_count,
             max_context_tokens: max_size,

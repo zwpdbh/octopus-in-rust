@@ -159,9 +159,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "yolo".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.yolo() {
+                if soul.approval.is_yolo() {
                     soul.approval.toggle_yolo();
-                    if soul.approval.afk() {
+                    if soul.approval.state().mode.is_afk() {
                         crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "Yolo disabled, but afk is still on — tool calls remain auto-approved. Use /afk to turn off afk.".to_string(),
                         }));
@@ -192,10 +192,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "afk".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.afk() {
+                if soul.approval.state().mode.is_afk() {
                     soul.approval.toggle_afk();
                     soul.notify_afk_changed(false).await;
-                    let msg = if soul.approval.yolo() {
+                    let msg = if soul.approval.is_yolo() {
                         "afk mode disabled. You are back at the terminal. Yolo is still on."
                     } else {
                         "afk mode disabled. You are back at the terminal."
@@ -412,8 +412,8 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             .unwrap_or_else(|| "none".to_string())
                     ),
                     format!("  Plan mode:      {}", soul.plan_mode),
-                    format!("  YOLO:           {}", soul.approval.yolo()),
-                    format!("  AFK:            {}", soul.approval.afk()),
+                    format!("  YOLO:           {}", soul.approval.is_yolo()),
+                    format!("  AFK:            {}", soul.approval.state().mode.is_afk()),
                     format!(
                         "  Context tokens: {} / {} ({:.1}%)",
                         snap.context_tokens,
