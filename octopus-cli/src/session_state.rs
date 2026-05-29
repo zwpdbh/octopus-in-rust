@@ -2,13 +2,15 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::soul::approval::ApprovalMode;
+
 const STATE_FILE_NAME: &str = "state.json";
 const LEGACY_METADATA_FILENAME: &str = "metadata.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApprovalStateData {
-    pub yolo: bool,
-    pub afk: bool,
+    #[serde(default)]
+    pub mode: ApprovalMode,
     #[serde(default)]
     pub auto_approve_actions: Vec<String>,
 }

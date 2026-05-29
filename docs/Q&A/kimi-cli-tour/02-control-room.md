@@ -115,7 +115,7 @@ registry.register(SlashCommand {
     name: "yolo".to_string(),
     func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
         Box::pin(async move {
-            soul.approval.state_mut().yolo = true;
+            soul.approval.toggle_yolo();
             // ...
         })
     }),
@@ -271,8 +271,16 @@ These injections come from:
 
 ```rust
 // File: octopus-cli/src/soul/dynamic_injection.rs
-pub trait DynamicInjectionProvider {
-    fn inject(&self, soul: &KimiSoul) -> Vec<DynamicInjection>;
+#[async_trait::async_trait]
+pub trait DynamicInjectionProvider: Send + Sync {
+    async fn get_injections(
+        &mut self,
+        history: &[Message],
+        ctx: &InjectionContext<'_>,
+    ) -> Vec<DynamicInjection>;
+
+    async fn on_context_compacted(&mut self) {}
+    async fn on_afk_changed(&mut self, _enabled: bool) {}
 }
 ```
 

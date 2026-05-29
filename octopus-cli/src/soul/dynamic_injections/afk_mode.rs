@@ -43,10 +43,10 @@ impl DynamicInjectionProvider for AfkModeInjectionProvider {
         _history: &[Message],
         ctx: &InjectionContext<'_>,
     ) -> Vec<DynamicInjection> {
-        if !ctx.is_afk {
+        if !ctx.effective_afk {
             return Vec::new();
         }
-        if !ctx.is_afk_flag {
+        if !ctx.persisted_afk {
             return Vec::new();
         }
 

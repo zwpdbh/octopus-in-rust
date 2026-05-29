@@ -1023,8 +1023,7 @@ impl KimiSoul {
 
     /// Sync the in-memory approval state to the session and persist it.
     pub(super) fn sync_approval_state(&mut self) {
-        self.session.state.approval.yolo = self.approval.yolo();
-        self.session.state.approval.afk = self.approval.afk();
+        self.session.state.approval.mode = self.approval.state().mode;
         self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions();
         let _ = self.session.save_state();
     }
@@ -1150,8 +1149,8 @@ impl KimiSoul {
         let plan_file_path = self.get_plan_file_path();
         let ctx = InjectionContext {
             plan_mode: self.plan_mode,
-            is_afk: self.approval.is_afk(),
-            is_afk_flag: self.approval.is_afk_flag(),
+            effective_afk: self.approval.is_afk(),
+            persisted_afk: self.approval.is_afk_flag(),
             plan_file_path: plan_file_path.as_deref(),
             pending_plan_activation: self.consume_pending_plan_activation_injection(),
         };

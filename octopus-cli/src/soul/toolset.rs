@@ -344,9 +344,8 @@ impl KimiToolset {
                 let result = approval
                     .request("Octopus", &tool_call.function.name, &description, None)
                     .await;
-                if !result.approved {
-                    let return_value =
-                        kosong::tooling::ToolReturnValue::error(result.feedback.clone());
+                if let crate::soul::approval::ApprovalResult::Rejected { feedback } = result {
+                    let return_value = kosong::tooling::ToolReturnValue::error(feedback.clone());
                     let result = kosong::tooling::ToolResult {
                         tool_call_id: tool_call.id.clone(),
                         return_value,

@@ -160,7 +160,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 if soul.approval.yolo() {
-                    soul.approval.set_yolo(false);
+                    soul.approval.toggle_yolo();
                     if soul.approval.afk() {
                         crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "Yolo disabled, but afk is still on — tool calls remain auto-approved. Use /afk to turn off afk.".to_string(),
@@ -171,7 +171,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         }));
                     }
                 } else {
-                    soul.approval.set_yolo(true);
+                    soul.approval.toggle_yolo();
                     crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "You only live once! All actions will be auto-approved.".to_string(),
                     }));
@@ -193,7 +193,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 if soul.approval.afk() {
-                    soul.approval.set_afk(false);
+                    soul.approval.toggle_afk();
                     soul.notify_afk_changed(false).await;
                     let msg = if soul.approval.yolo() {
                         "afk mode disabled. You are back at the terminal. Yolo is still on."
@@ -202,7 +202,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     };
                     crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart { text: msg.to_string() }));
                 } else {
-                    soul.approval.set_afk(true);
+                    soul.approval.toggle_afk();
                     soul.notify_afk_changed(true).await;
                     crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "afk mode enabled. AskUserQuestion will be auto-dismissed and tool calls auto-approved.".to_string(),

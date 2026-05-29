@@ -30,7 +30,7 @@
 | `octopus-cli/src/soul/mod.rs` | `KimiSoul`, agent loop, status | ~486 | 🔄 Core loop done; missing notifications, hooks, steers |
 | `octopus-cli/src/soul/slash.rs` | Soul-level slash commands | ~1,118 | ✅ All major commands ported with mirror comments |
 | `octopus-cli/src/soul/agent.rs` | Agent struct, system prompt | ~162 | 🔄 Basic agent exists |
-| `octopus-cli/src/soul/approval.rs` | Approval state | ~234 | ✅ `ApprovalState` with yolo/afk |
+| `octopus-cli/src/soul/approval.rs` | Approval state | ~234 | ✅ `ApprovalState` with `ApprovalMode` enum |
 | `octopus-cli/src/soul/compaction.rs` | Context compaction | ~151 | 🔄 Simple compaction only |
 | `octopus-cli/src/soul/context.rs` | Context file backend | ~385 | 🔄 File-based context with checkpoints |
 | `octopus-cli/src/soul/message.rs` | Message helpers | ~98 | 🔄 Basic message formatting |

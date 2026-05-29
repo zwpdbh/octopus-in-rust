@@ -381,12 +381,19 @@ async fn async_main(cli: Cli) {
             SessionSource::Resume(_) | SessionSource::Continue
         );
 
+        let approval_mode = if cli.yolo {
+            octopus_cli::soul::approval::ApprovalMode::Yolo
+        } else if cli.afk {
+            octopus_cli::soul::approval::ApprovalMode::Afk
+        } else {
+            octopus_cli::soul::approval::ApprovalMode::Ask
+        };
+
         let mut instance = match OctopusCLI::create(
             session,
             config_source.clone(),
             cli.model.clone(),
-            cli.yolo,
-            cli.afk,
+            approval_mode,
             resumed,
             ui_mode,
             cli.max_steps_per_turn,

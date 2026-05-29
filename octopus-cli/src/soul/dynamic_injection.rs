@@ -15,8 +15,12 @@ pub struct DynamicInjection {
 /// without creating a circular reference on `KimiSoul`.
 pub struct InjectionContext<'a> {
     pub plan_mode: bool,
-    pub is_afk: bool,
-    pub is_afk_flag: bool,
+    /// Effective AFK state — true when the user is away (includes both
+    /// persisted session AFK and runtime invocation AFK like `--afk`).
+    pub effective_afk: bool,
+    /// Persisted session AFK flag — true only when the session itself
+    /// is in AFK mode (not counting runtime-only overlays).
+    pub persisted_afk: bool,
     pub plan_file_path: Option<&'a Path>,
     pub pending_plan_activation: bool,
 }

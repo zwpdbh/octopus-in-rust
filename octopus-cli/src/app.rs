@@ -44,17 +44,16 @@ pub struct AppRuntime {
 
 #[derive(Debug, Clone)]
 pub struct ApprovalRuntime {
-    yolo: bool,
-    afk: bool,
+    mode: crate::soul::approval::ApprovalMode,
 }
 
 impl ApprovalRuntime {
     pub fn is_yolo(&self) -> bool {
-        self.yolo
+        self.mode.is_yolo()
     }
 
     pub fn is_afk(&self) -> bool {
-        self.afk
+        self.mode.is_afk()
     }
 }
 
@@ -63,8 +62,7 @@ impl OctopusCLI {
         session: Session,
         config_source: Option<ConfigSource>,
         model_name: Option<String>,
-        yolo: bool,
-        afk: bool,
+        approval_mode: crate::soul::approval::ApprovalMode,
         resumed: bool,
         ui_mode: UiMode,
         max_steps_per_turn: Option<usize>,
@@ -175,9 +173,6 @@ impl OctopusCLI {
         let env_overrides = augment_provider_with_env_vars(&mut provider, &mut model);
 
         // 3. Resolve derived settings.
-        // 3.1 Merge CLI flags with config defaults.
-        let yolo = yolo || config.default_yolo;
-
         // 3.2 Instantiate the LLM client only when provider and model are configured.
         let llm = if !provider.base_url.is_empty() && !model.model.is_empty() {
             create_llm(&provider, &model)
@@ -186,9 +181,16 @@ impl OctopusCLI {
         };
 
         // 4. Build approval state from session state merged with CLI flags.
+        // CLI > config default > persisted session state.
+        let mode = if approval_mode != crate::soul::approval::ApprovalMode::Ask {
+            approval_mode
+        } else if config.default_yolo {
+            crate::soul::approval::ApprovalMode::Yolo
+        } else {
+            session.state.approval.mode
+        };
         let approval_state = ApprovalState {
-            yolo: session.state.approval.yolo || yolo,
-            afk: session.state.approval.afk || afk,
+            mode,
             auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
@@ -259,7 +261,7 @@ impl OctopusCLI {
 
         // 6. Assemble the lightweight runtime exposed to the UI layer.
         // 6.1 Approval runtime (yolo/afk flags).
-        let approval_runtime = ApprovalRuntime { yolo, afk };
+        let approval_runtime = ApprovalRuntime { mode };
 
         // 6.2 Full AppRuntime with all resolved components.
         let runtime = AppRuntime {

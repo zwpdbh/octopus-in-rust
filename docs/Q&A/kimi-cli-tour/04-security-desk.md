@@ -200,9 +200,16 @@ The Security Desk has three modes of operation:
 ```rust
 // File: octopus-cli/src/soul/approval.rs
 pub struct ApprovalState {
-    pub yolo: bool,
-    pub afk: bool,
+    pub mode: ApprovalMode,
     pub auto_approve_actions: Vec<String>,  // Per-tool auto-approve list
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApprovalMode {
+    Ask,        // Normal interactive mode
+    Yolo,       // Auto-approve everything
+    Afk,        // Auto-approve; user is away
+    YoloAndAfk, // Both flags active simultaneously
 }
 ```
 
@@ -210,11 +217,10 @@ These states are **persisted to the session** and synced at the end of every tur
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
-async fn _sync_approval_state(&self) {
-    let state = self.approval.state();
-    self.session.state.approval_yolo = state.yolo;
-    self.session.state.approval_afk = state.afk;
-    let _ = self.session.save_state().await;
+fn sync_approval_state(&mut self) {
+    self.session.state.approval.mode = self.approval.state().mode;
+    self.session.state.approval.auto_approve_actions = self.approval.auto_approve_actions();
+    let _ = self.session.save_state();
 }
 ```
 

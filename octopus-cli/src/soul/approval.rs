@@ -3,71 +3,135 @@ use crate::approval_runtime::{
     get_current_approval_source_or_none,
 };
 use crate::exception::ToolRejectedError;
+use serde::{Deserialize, Serialize};
+
+/// Combined approval mode for the session.
+///
+/// Yolo and Afk are independent toggles in the underlying UI (a user can have
+/// both on at the same time). The enum exhaustively models the four
+/// combinations so that `match` sites are forced to handle every case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    /// Normal interactive mode — ask the user for every tool call.
+    #[default]
+    Ask,
+    /// Explicit yolo mode — auto-approve everything.
+    Yolo,
+    /// AFK mode — no user present, auto-approve everything.
+    Afk,
+    /// Both yolo and AFK are active simultaneously.
+    YoloAndAfk,
+}
+
+impl ApprovalMode {
+    pub fn is_yolo(&self) -> bool {
+        matches!(self, Self::Yolo | Self::YoloAndAfk)
+    }
+
+    pub fn is_afk(&self) -> bool {
+        matches!(self, Self::Afk | Self::YoloAndAfk)
+    }
+
+    pub fn is_auto_approve(&self) -> bool {
+        !matches!(self, Self::Ask)
+    }
+
+    /// Toggle the yolo component on or off, preserving the afk component.
+    pub fn toggle_yolo(&mut self) {
+        *self = match *self {
+            Self::Ask => Self::Yolo,
+            Self::Afk => Self::YoloAndAfk,
+            Self::Yolo => Self::Ask,
+            Self::YoloAndAfk => Self::Afk,
+        };
+    }
+
+    /// Toggle the afk component on or off, preserving the yolo component.
+    pub fn toggle_afk(&mut self) {
+        *self = match *self {
+            Self::Ask => Self::Afk,
+            Self::Yolo => Self::YoloAndAfk,
+            Self::Afk => Self::Ask,
+            Self::YoloAndAfk => Self::Yolo,
+        };
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ApprovalState {
-    pub yolo: bool,
-    pub afk: bool,
+    pub mode: ApprovalMode,
     pub auto_approve_actions: Vec<String>,
 }
 
 impl ApprovalState {
     pub fn is_auto_approve(&self) -> bool {
-        self.yolo || self.afk
+        self.mode.is_auto_approve()
     }
 
     pub fn is_afk(&self) -> bool {
-        self.afk
+        self.mode.is_afk()
     }
 
     pub fn is_afk_flag(&self) -> bool {
-        self.afk
+        self.mode.is_afk()
     }
 }
 
 impl Default for ApprovalState {
     fn default() -> Self {
         Self {
-            yolo: false,
-            afk: false,
+            mode: ApprovalMode::default(),
             auto_approve_actions: Vec::new(),
         }
     }
 }
 
+/// Result of an approval request.
 #[derive(Debug, Clone)]
-pub struct ApprovalResult {
-    pub approved: bool,
-    pub feedback: String,
+pub enum ApprovalResult {
+    Approved,
+    Rejected { feedback: String },
 }
 
 impl ApprovalResult {
-    pub fn new(approved: bool, feedback: impl Into<String>) -> Self {
-        Self {
-            approved,
-            feedback: feedback.into(),
+    pub fn approved(&self) -> bool {
+        matches!(self, Self::Approved)
+    }
+
+    pub fn feedback(&self) -> Option<&str> {
+        match self {
+            Self::Approved => None,
+            Self::Rejected { feedback } => Some(feedback.as_str()),
         }
     }
 
     pub fn rejection_error(&self) -> ToolRejectedError {
-        if !self.feedback.is_empty() {
-            ToolRejectedError::with_feedback(
-                format!(
-                    "The tool call is rejected by the user. User feedback: {}",
-                    self.feedback
-                ),
-                format!("Rejected: {}", self.feedback),
-            )
-        } else {
-            let is_subagent = get_current_approval_source_or_none()
-                .map(|s| s.agent_id.is_some())
-                .unwrap_or(false);
-            if is_subagent {
-                ToolRejectedError::new(
-                    "The tool call is rejected by the user. Try a different approach to complete your task, or explain the limitation in your summary if no alternative is available. Do not retry the same tool call, and do not attempt to bypass this restriction through indirect means.",
-                )
-            } else {
-                ToolRejectedError::new("The tool call is rejected by the user.")
+        match self {
+            Self::Approved => {
+                panic!("rejection_error called on an Approved result")
+            }
+            Self::Rejected { feedback } => {
+                if !feedback.is_empty() {
+                    ToolRejectedError::with_feedback(
+                        format!(
+                            "The tool call is rejected by the user. User feedback: {}",
+                            feedback
+                        ),
+                        format!("Rejected: {}", feedback),
+                    )
+                } else {
+                    let is_subagent = get_current_approval_source_or_none()
+                        .map(|s| s.agent_id.is_some())
+                        .unwrap_or(false);
+                    if is_subagent {
+                        ToolRejectedError::new(
+                            "The tool call is rejected by the user. Try a different approach to complete your task, or explain the limitation in your summary if no alternative is available. Do not retry the same tool call, and do not attempt to bypass this restriction through indirect means.",
+                        )
+                    } else {
+                        ToolRejectedError::new("The tool call is rejected by the user.")
+                    }
+                }
             }
         }
     }
@@ -93,8 +157,13 @@ impl std::fmt::Debug for Approval {
 
 impl Approval {
     pub fn new(yolo: bool) -> Self {
+        let mode = if yolo {
+            ApprovalMode::Yolo
+        } else {
+            ApprovalMode::Ask
+        };
         let state = ApprovalState {
-            yolo,
+            mode,
             ..Default::default()
         };
         Self {
@@ -131,17 +200,18 @@ impl Approval {
         &self.runtime
     }
 
-    pub fn set_yolo(&self, yolo: bool) {
+    pub fn toggle_yolo(&self) {
         let mut state = self.state.write().unwrap();
-        state.yolo = yolo;
+        state.mode.toggle_yolo();
         drop(state);
         self.notify_change();
     }
 
-    pub fn set_afk(&self, afk: bool) {
+    pub fn toggle_afk(&self) {
         let mut state = self.state.write().unwrap();
-        state.afk = afk;
-        if !afk {
+        let was_afk = state.mode.is_afk();
+        state.mode.toggle_afk();
+        if was_afk {
             let mut rt_afk = self.runtime_afk.write().unwrap();
             *rt_afk = false;
         }
@@ -157,11 +227,11 @@ impl Approval {
     pub fn is_auto_approve(&self) -> bool {
         let state = self.state.read().unwrap();
         let rt_afk = self.runtime_afk.read().unwrap();
-        state.yolo || state.afk || *rt_afk
+        state.mode.is_auto_approve() || *rt_afk
     }
 
     pub fn is_yolo(&self) -> bool {
-        self.state.read().unwrap().yolo
+        self.state.read().unwrap().mode.is_yolo()
     }
 
     pub fn is_yolo_flag(&self) -> bool {
@@ -171,11 +241,11 @@ impl Approval {
     pub fn is_afk(&self) -> bool {
         let state = self.state.read().unwrap();
         let rt_afk = self.runtime_afk.read().unwrap();
-        state.afk || *rt_afk
+        state.mode.is_afk() || *rt_afk
     }
 
     pub fn is_afk_flag(&self) -> bool {
-        self.state.read().unwrap().afk
+        self.state.read().unwrap().mode.is_afk()
     }
 
     pub fn is_runtime_afk(&self) -> bool {
@@ -183,11 +253,11 @@ impl Approval {
     }
 
     pub fn yolo(&self) -> bool {
-        self.state.read().unwrap().yolo
+        self.state.read().unwrap().mode.is_yolo()
     }
 
     pub fn afk(&self) -> bool {
-        self.state.read().unwrap().afk
+        self.state.read().unwrap().mode.is_afk()
     }
 
     pub fn auto_approve_actions(&self) -> Vec<String> {
@@ -214,13 +284,13 @@ impl Approval {
         let tool_call = crate::soul::toolset::get_current_tool_call();
 
         if self.is_auto_approve() {
-            return ApprovalResult::new(true, "");
+            return ApprovalResult::Approved;
         }
 
         {
             let state = self.state.read().unwrap();
             if state.auto_approve_actions.contains(&action.to_string()) {
-                return ApprovalResult::new(true, "");
+                return ApprovalResult::Approved;
             }
         }
 
@@ -247,7 +317,7 @@ impl Approval {
 
         match self.runtime.wait_for_response(&request_id, None).await {
             Ok(response) => match response {
-                ApprovalResponse::Approve => ApprovalResult::new(true, ""),
+                ApprovalResponse::Approve => ApprovalResult::Approved,
                 ApprovalResponse::ApproveForSession => {
                     let mut state = self.state.write().unwrap();
                     if !state.auto_approve_actions.contains(&action.to_string()) {
@@ -255,13 +325,15 @@ impl Approval {
                     }
                     drop(state);
                     self.notify_change();
-                    ApprovalResult::new(true, "")
+                    ApprovalResult::Approved
                 }
-                ApprovalResponse::Reject { feedback } => ApprovalResult::new(false, feedback),
+                ApprovalResponse::Reject { feedback } => ApprovalResult::Rejected { feedback },
             },
             Err(ApprovalCancelledError) => {
                 let record = self.runtime.get_request(&request_id);
-                ApprovalResult::new(false, record.map(|r| r.feedback).unwrap_or_default())
+                ApprovalResult::Rejected {
+                    feedback: record.map(|r| r.feedback).unwrap_or_default(),
+                }
             }
         }
     }
