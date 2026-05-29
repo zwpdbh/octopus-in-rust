@@ -268,7 +268,7 @@ impl Approval {
         let request_id = uuid::Uuid::new_v4().to_string();
         let display_blocks = display.unwrap_or_default();
         let source = get_current_approval_source_or_none().unwrap_or_else(|| ApprovalSource {
-            kind: "foreground_turn".to_string(),
+            kind: crate::approval_runtime::ApprovalSourceKind::ForegroundTurn,
             id: tool_call
                 .as_ref()
                 .map(|t| t.id.clone())

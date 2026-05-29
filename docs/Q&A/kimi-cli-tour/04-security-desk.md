@@ -1,8 +1,9 @@
 # Tour 4: The Security Desk — Approval & OAuth
 
-> *"Every powerful building needs security. This desk decides who gets in, what tools can be used, and when to ask for permission."*
+> _"Every powerful building needs security. This desk decides who gets in, what tools can be used, and when to ask for permission."_
 
 Welcome to the **Security Desk** — the first floor, where two systems guard the building:
+
 1. **Approval Flow** — "Should the agent run this tool?"
 2. **OAuth** — "Who is this user, and are they authenticated?"
 
@@ -16,11 +17,11 @@ These systems are conceptually separate but practically intertwined: the approva
 
 Three entities participate in every approval decision:
 
-| Actor | File | Role |
-|-------|------|------|
-| `ApprovalRuntime` | `approval_runtime/runtime.rs` | The **judge** — stores requests, waits for resolution |
-| `Approval` (wrapper) | `soul/approval.rs` | The **clerk** — checks yolo/afk state, routes to runtime |
-| `ShellUI` | `ui/shell/mod.rs` | The **jury** — renders the prompt, collects user input |
+| Actor                | File                          | Role                                                     |
+| -------------------- | ----------------------------- | -------------------------------------------------------- |
+| `ApprovalRuntime`    | `approval_runtime/runtime.rs` | The **judge** — stores requests, waits for resolution    |
+| `Approval` (wrapper) | `soul/approval.rs`            | The **clerk** — checks yolo/afk state, routes to runtime |
+| `ShellUI`            | `ui/shell/mod.rs`             | The **jury** — renders the prompt, collects user input   |
 
 ### The Flow
 
@@ -48,9 +49,11 @@ pub struct ApprovalRuntime {
     inner: Arc<Mutex<ApprovalRuntimeInner>>,
 }
 
+#[derive(Debug, Default)]
 struct ApprovalRuntimeInner {
     requests: HashMap<String, ApprovalRequest>,
-    waiters: HashMap<String, tokio::sync::oneshot::Sender<ApprovalResponse>>,
+    waiters: HashMap<String, oneshot::Sender<ApprovalResponse>>,
+    hub: Option<RootWireHub>,
 }
 
 pub enum ApprovalScope {
@@ -64,9 +67,11 @@ pub enum ApprovalResponse {
 }
 ```
 
-The `ApprovalRuntime` is a **state machine** with two hashmaps:
+The `ApprovalRuntimeInner` is a **state machine** with three fields:
+
 - `requests`: pending approval requests
 - `waiters`: oneshot channels for async waiters
+- `hub`: optional `RootWireHub` for broadcasting approval events to the UI
 
 🐍 **Python's way:** `asyncio.Event` and `asyncio.Queue` for synchronization. The runtime lives in the main event loop.
 
@@ -186,6 +191,7 @@ pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<Option<String
 ```
 
 This is **resilient token management**:
+
 1. **Proactive refresh** — refresh before expiry, not after
 2. **Tombstones** — if a refresh token is rejected, don't retry it for 5 minutes
 3. **Mutex lock** — only one refresh happens at a time, even with concurrent requests
@@ -203,11 +209,11 @@ This is **resilient token management**:
 
 The Security Desk has three modes of operation:
 
-| Mode | Trigger | Behavior |
-|------|---------|----------|
-| **Normal** | Default | Every tool asks for approval |
-| **YOLO** | `/yolo` | Auto-approve everything this session |
-| **AFK** | `/afk` | Auto-approve; user is away |
+| Mode       | Trigger | Behavior                             |
+| ---------- | ------- | ------------------------------------ |
+| **Normal** | Default | Every tool asks for approval         |
+| **YOLO**   | `/yolo` | Auto-approve everything this session |
+| **AFK**    | `/afk`  | Auto-approve; user is away           |
 
 ```rust
 // File: octopus-cli/src/soul/approval.rs

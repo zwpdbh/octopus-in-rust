@@ -16,6 +16,23 @@ pub struct OAuthManager {
     rejected_refresh_tokens: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
 }
 
+/// A resolved credential for LLM authentication.
+#[derive(Debug, Clone)]
+pub enum ApiCredential {
+    /// A short-lived OAuth access token.
+    OAuthToken(String),
+    /// A static API key.
+    ApiKey(String),
+}
+
+impl ApiCredential {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::OAuthToken(s) | Self::ApiKey(s) => s.as_str(),
+        }
+    }
+}
+
 impl OAuthManager {
     pub fn new() -> Self {
         Self {
@@ -25,7 +42,7 @@ impl OAuthManager {
         }
     }
 
-    /// Resolve the effective API key.
+    /// Resolve the effective API credential.
     ///
     /// If an OAuth reference is provided and a cached access token exists,
     /// returns the access token. Otherwise falls back to the static API key.
@@ -33,14 +50,14 @@ impl OAuthManager {
         &self,
         api_key: Option<String>,
         oauth_ref: Option<&OAuthRef>,
-    ) -> Option<String> {
+    ) -> Option<ApiCredential> {
         if let Some(ref_ref) = oauth_ref {
             let cache = self.access_tokens.lock().unwrap();
             if let Some(token) = cache.get(&ref_ref.key) {
-                return Some(token.clone());
+                return Some(ApiCredential::OAuthToken(token.clone()));
             }
         }
-        api_key
+        api_key.map(ApiCredential::ApiKey)
     }
 
     /// Ensure OAuth tokens are fresh.

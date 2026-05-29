@@ -366,7 +366,7 @@ let (source, inherited) =
     if let Some(existing) = get_current_approval_source_or_none() {
         (existing, true)  // subagent or background task already set one
     } else {
-        (ApprovalSource { kind: "foreground_turn".to_string(), id: uuid::new_v4(), ... }, false)
+        (ApprovalSource { kind: ApprovalSourceKind::ForegroundTurn, id: uuid::new_v4(), ... }, false)
     };
 
 let result = if inherited {
@@ -385,13 +385,13 @@ And for subagents:
 ```rust
 // File: octopus-cli/src/tools/agent/mod.rs
 let subagent_source = ApprovalSource {
-    kind: "foreground_turn".to_string(),
+    kind: ApprovalSourceKind::ForegroundTurn,
     id: session.id.clone(),
     agent_id: Some(session.id.clone()),
 };
 let result = with_approval_source(subagent_source.clone(), subagent.run(prompt)).await;
 
-subagent.approval.runtime().cancel_by_source(&subagent_source.kind, &subagent_source.id);
+subagent.approval.runtime().cancel_by_source(subagent_source.kind, &subagent_source.id);
 ```
 
 ✨ **Where Rust shines:** **No manual token bookkeeping.** Python's `try/finally` with `reset_current_approval_source(token)` is error-prone — forget the finally block and the context leaks. Rust's `.scope()` is compile-time safe: the source is automatically restored when the future completes, even if it panics.

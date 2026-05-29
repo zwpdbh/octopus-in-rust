@@ -158,6 +158,20 @@ pub async fn with_approval_source<T>(
 ) -> T {
     CURRENT_APPROVAL_SOURCE.scope(source, f).await
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSourceKind {
+    ForegroundTurn,
+    BackgroundAgent,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApprovalSource {
+    pub kind: ApprovalSourceKind,
+    pub id: String,
+    pub agent_id: Option<String>,
+}
 ```
 
 ## When to Use

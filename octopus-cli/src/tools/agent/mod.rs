@@ -176,7 +176,7 @@ async fn run_subagent_with_market(
             // Set the subagent as the current approval source so nested tool calls
             // and rejection messages know they're inside a subagent.
             let subagent_source = ApprovalSource {
-                kind: "foreground_turn".to_string(),
+                kind: crate::approval_runtime::ApprovalSourceKind::ForegroundTurn,
                 id: session.id.clone(),
                 agent_id: Some(session.id.clone()),
             };
@@ -187,7 +187,7 @@ async fn run_subagent_with_market(
             subagent
                 .approval
                 .runtime()
-                .cancel_by_source(&subagent_source.kind, &subagent_source.id);
+                .cancel_by_source(subagent_source.kind, &subagent_source.id);
 
             // Update SubagentStore
             if let Some(ref store) = subagent_store {

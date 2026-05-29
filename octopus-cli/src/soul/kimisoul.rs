@@ -251,7 +251,7 @@ impl KimiSoul {
         } else {
             (
                 ApprovalSource {
-                    kind: "foreground_turn".to_string(),
+                    kind: crate::approval_runtime::ApprovalSourceKind::ForegroundTurn,
                     id: uuid::Uuid::new_v4().to_string(),
                     agent_id: None,
                 },
@@ -270,7 +270,7 @@ impl KimiSoul {
         if !inherited {
             self.approval
                 .runtime()
-                .cancel_by_source(&source.kind, &source.id);
+                .cancel_by_source(source.kind, &source.id);
         }
 
         result

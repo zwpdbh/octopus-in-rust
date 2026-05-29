@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::approval_runtime::ApprovalSourceKind;
+
 // ============================================================================
 // Core message types (shared between wire protocol and soul)
 // ============================================================================
@@ -284,7 +286,7 @@ pub struct ApprovalRequestEvent {
     pub sender: String,
     pub action: String,
     pub description: String,
-    pub source_kind: String,
+    pub source_kind: ApprovalSourceKind,
     pub source_id: String,
     #[serde(default)]
     pub display: Vec<DisplayBlock>,

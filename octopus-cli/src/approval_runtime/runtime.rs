@@ -7,9 +7,16 @@ use tokio::sync::oneshot;
 
 use crate::wire::{ApprovalRequestEvent, ApprovalResponseEvent, RootWireHub, WireEvent};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSourceKind {
+    ForegroundTurn,
+    BackgroundAgent,
+}
+
 #[derive(Debug, Clone)]
 pub struct ApprovalSource {
-    pub kind: String,
+    pub kind: ApprovalSourceKind,
     pub id: String,
     pub agent_id: Option<String>,
 }
@@ -155,15 +162,18 @@ impl ApprovalRuntime {
         let rx = {
             let mut inner = self.inner.lock().unwrap();
 
-            // Check if already resolved
+            // Check if already resolved or cancelled
             if let Some(req) = inner.requests.get(request_id) {
-                if req.status == ApprovalStatus::Resolved {
-                    return Ok(req.response.clone().unwrap_or(ApprovalResponse::Reject {
-                        feedback: req.feedback.clone(),
-                    }));
-                }
-                if req.status == ApprovalStatus::Cancelled {
-                    return Err(ApprovalCancelledError);
+                match req.status {
+                    ApprovalStatus::Resolved => {
+                        return Ok(req.response.clone().unwrap_or(ApprovalResponse::Reject {
+                            feedback: req.feedback.clone(),
+                        }));
+                    }
+                    ApprovalStatus::Cancelled => {
+                        return Err(ApprovalCancelledError);
+                    }
+                    ApprovalStatus::Pending => {}
                 }
             }
 
@@ -242,7 +252,7 @@ impl ApprovalRuntime {
         true
     }
 
-    pub fn cancel_by_source(&self, kind: &str, id: &str) {
+    pub fn cancel_by_source(&self, kind: ApprovalSourceKind, id: &str) {
         let request_ids: Vec<String> = {
             let inner = self.inner.lock().unwrap();
             inner
