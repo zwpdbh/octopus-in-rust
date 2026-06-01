@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-fn base(event: &str, session_id: &str, cwd: &str) -> HashMap<String, Value> {
+use crate::hooks::types::HookEvent;
+
+fn base(event: HookEvent, session_id: &str, cwd: &str) -> HashMap<String, Value> {
     let mut m = HashMap::new();
     m.insert(
         "hook_event_name".to_string(),
@@ -23,7 +25,7 @@ pub fn pre_tool_use(
     tool_input: &HashMap<String, Value>,
     tool_call_id: &str,
 ) -> HashMap<String, Value> {
-    let mut m = base("PreToolUse", session_id, cwd);
+    let mut m = base(HookEvent::PreToolUse, session_id, cwd);
     m.insert(
         "tool_name".to_string(),
         Value::String(tool_name.to_string()),
@@ -47,7 +49,7 @@ pub fn post_tool_use(
     tool_output: &str,
     tool_call_id: &str,
 ) -> HashMap<String, Value> {
-    let mut m = base("PostToolUse", session_id, cwd);
+    let mut m = base(HookEvent::PostToolUse, session_id, cwd);
     m.insert(
         "tool_name".to_string(),
         Value::String(tool_name.to_string()),
@@ -75,7 +77,7 @@ pub fn post_tool_use_failure(
     error: &str,
     tool_call_id: &str,
 ) -> HashMap<String, Value> {
-    let mut m = base("PostToolUseFailure", session_id, cwd);
+    let mut m = base(HookEvent::PostToolUseFailure, session_id, cwd);
     m.insert(
         "tool_name".to_string(),
         Value::String(tool_name.to_string()),
@@ -93,13 +95,13 @@ pub fn post_tool_use_failure(
 }
 
 pub fn user_prompt_submit(session_id: &str, cwd: &str, prompt: &str) -> HashMap<String, Value> {
-    let mut m = base("UserPromptSubmit", session_id, cwd);
+    let mut m = base(HookEvent::UserPromptSubmit, session_id, cwd);
     m.insert("prompt".to_string(), Value::String(prompt.to_string()));
     m
 }
 
 pub fn stop(session_id: &str, cwd: &str, stop_hook_active: bool) -> HashMap<String, Value> {
-    let mut m = base("Stop", session_id, cwd);
+    let mut m = base(HookEvent::Stop, session_id, cwd);
     m.insert(
         "stop_hook_active".to_string(),
         Value::Bool(stop_hook_active),
@@ -113,7 +115,7 @@ pub fn stop_failure(
     error_type: &str,
     error_message: &str,
 ) -> HashMap<String, Value> {
-    let mut m = base("StopFailure", session_id, cwd);
+    let mut m = base(HookEvent::StopFailure, session_id, cwd);
     m.insert(
         "error_type".to_string(),
         Value::String(error_type.to_string()),
@@ -126,13 +128,13 @@ pub fn stop_failure(
 }
 
 pub fn session_start(session_id: &str, cwd: &str, source: &str) -> HashMap<String, Value> {
-    let mut m = base("SessionStart", session_id, cwd);
+    let mut m = base(HookEvent::SessionStart, session_id, cwd);
     m.insert("source".to_string(), Value::String(source.to_string()));
     m
 }
 
 pub fn session_end(session_id: &str, cwd: &str, reason: &str) -> HashMap<String, Value> {
-    let mut m = base("SessionEnd", session_id, cwd);
+    let mut m = base(HookEvent::SessionEnd, session_id, cwd);
     m.insert("reason".to_string(), Value::String(reason.to_string()));
     m
 }
@@ -143,7 +145,7 @@ pub fn pre_compact(
     trigger: &str,
     token_count: usize,
 ) -> HashMap<String, Value> {
-    let mut m = base("PreCompact", session_id, cwd);
+    let mut m = base(HookEvent::PreCompact, session_id, cwd);
     m.insert("trigger".to_string(), Value::String(trigger.to_string()));
     m.insert("token_count".to_string(), Value::Number(token_count.into()));
     m
@@ -155,7 +157,7 @@ pub fn post_compact(
     trigger: &str,
     estimated_token_count: usize,
 ) -> HashMap<String, Value> {
-    let mut m = base("PostCompact", session_id, cwd);
+    let mut m = base(HookEvent::PostCompact, session_id, cwd);
     m.insert("trigger".to_string(), Value::String(trigger.to_string()));
     m.insert(
         "estimated_token_count".to_string(),
@@ -173,7 +175,7 @@ pub fn notification(
     body: &str,
     severity: &str,
 ) -> HashMap<String, Value> {
-    let mut m = base("Notification", session_id, cwd);
+    let mut m = base(HookEvent::Notification, session_id, cwd);
     m.insert("sink".to_string(), Value::String(sink.to_string()));
     m.insert(
         "notification_type".to_string(),

@@ -6,19 +6,20 @@ use serde_json::Value;
 
 use crate::config::HookDef;
 use crate::hooks::runner::{HookAction, HookResult, run_hook};
+use crate::hooks::types::HookEvent;
 
 /// A client-side hook subscription registered via wire initialize.
 #[derive(Debug, Clone)]
 pub struct WireHookSubscription {
     pub id: String,
-    pub event: String,
+    pub event: HookEvent,
     pub matcher: String,
     pub timeout: u64,
 }
 
 /// Callback signatures for wire integration.
-pub type OnTriggered = Box<dyn Fn(&str, &str, usize) + Send + Sync>;
-pub type OnResolved = Box<dyn Fn(&str, &str, HookAction, u64) + Send + Sync>;
+pub type OnTriggered = Box<dyn Fn(HookEvent, &str, usize) + Send + Sync>;
+pub type OnResolved = Box<dyn Fn(HookEvent, &str, HookAction, u64) + Send + Sync>;
 
 /// Loads hook definitions and executes matching hooks in parallel.
 ///
@@ -31,8 +32,8 @@ pub struct HookEngine {
     cwd: Option<PathBuf>,
     on_triggered: Option<OnTriggered>,
     on_resolved: Option<OnResolved>,
-    by_event: HashMap<String, Vec<HookDef>>,
-    wire_by_event: HashMap<String, Vec<WireHookSubscription>>,
+    by_event: HashMap<HookEvent, Vec<HookDef>>,
+    wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
 }
 
 impl HookEngine {
@@ -78,17 +79,17 @@ impl HookEngine {
         !self.hooks.is_empty() || !self.wire_subs.is_empty()
     }
 
-    pub fn has_hooks_for(&self, event: &str) -> bool {
-        self.by_event.contains_key(event) || self.wire_by_event.contains_key(event)
+    pub fn has_hooks_for(&self, event: HookEvent) -> bool {
+        self.by_event.contains_key(&event) || self.wire_by_event.contains_key(&event)
     }
 
     pub fn summary(&self) -> HashMap<String, usize> {
         let mut counts: HashMap<String, usize> = HashMap::new();
         for (event, hooks) in &self.by_event {
-            *counts.entry(event.clone()).or_insert(0) += hooks.len();
+            *counts.entry(event.to_string()).or_insert(0) += hooks.len();
         }
         for (event, subs) in &self.wire_by_event {
-            *counts.entry(event.clone()).or_insert(0) += subs.len();
+            *counts.entry(event.to_string()).or_insert(0) += subs.len();
         }
         counts
     }
@@ -96,7 +97,7 @@ impl HookEngine {
     pub fn details(&self) -> HashMap<String, Vec<HashMap<String, String>>> {
         let mut result: HashMap<String, Vec<HashMap<String, String>>> = HashMap::new();
         for (event, hooks) in &self.by_event {
-            let entries = result.entry(event.clone()).or_default();
+            let entries = result.entry(event.to_string()).or_default();
             for h in hooks {
                 let mut entry = HashMap::new();
                 entry.insert("matcher".to_string(), h.matcher.clone().unwrap_or_default());
@@ -106,7 +107,7 @@ impl HookEngine {
             }
         }
         for (event, subs) in &self.wire_by_event {
-            let entries = result.entry(event.clone()).or_default();
+            let entries = result.entry(event.to_string()).or_default();
             for s in subs {
                 let mut entry = HashMap::new();
                 entry.insert("matcher".to_string(), s.matcher.clone());
@@ -121,15 +122,12 @@ impl HookEngine {
     fn rebuild_index(&mut self) {
         self.by_event.clear();
         for h in &self.hooks {
-            self.by_event
-                .entry(h.event.clone())
-                .or_default()
-                .push(h.clone());
+            self.by_event.entry(h.event).or_default().push(h.clone());
         }
         self.wire_by_event.clear();
         for s in &self.wire_subs {
             self.wire_by_event
-                .entry(s.event.clone())
+                .entry(s.event)
                 .or_default()
                 .push(s.clone());
         }
@@ -151,14 +149,14 @@ impl HookEngine {
     /// Run all matching hooks (server + wire) in parallel.
     pub async fn trigger(
         &self,
-        event: &str,
+        event: HookEvent,
         matcher_value: &str,
         input_data: HashMap<String, Value>,
     ) -> Vec<HookResult> {
         // Match server-side hooks
         let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut server_matched: Vec<&HookDef> = Vec::new();
-        for h in self.by_event.get(event).into_iter().flatten() {
+        for h in self.by_event.get(&event).into_iter().flatten() {
             if !self.match_regex(h.matcher.as_deref().unwrap_or(""), matcher_value) {
                 continue;
             }
@@ -172,7 +170,7 @@ impl HookEngine {
         // Match wire subscriptions
         let wire_matched: Vec<&WireHookSubscription> = self
             .wire_by_event
-            .get(event)
+            .get(&event)
             .into_iter()
             .flatten()
             .filter(|s| self.match_regex(&s.matcher, matcher_value))
@@ -250,14 +248,13 @@ impl HookEngine {
     /// may be cancelled when the caller drops the handle.
     pub fn fire_and_forget_trigger(
         &self,
-        event: &str,
+        event: HookEvent,
         matcher_value: &str,
         input_data: HashMap<String, Value>,
     ) -> tokio::task::JoinHandle<Vec<HookResult>> {
-        let event = event.to_string();
         let matcher_value = matcher_value.to_string();
         let engine = self.clone();
-        tokio::spawn(async move { engine.trigger(&event, &matcher_value, input_data).await })
+        tokio::spawn(async move { engine.trigger(event, &matcher_value, input_data).await })
     }
 }
 

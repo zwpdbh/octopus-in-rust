@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::hooks::HookEvent;
 use crate::mcp::{McpConfig, McpServerInfo, McpServerStatus};
 use crate::wire::ToolCall as WireToolCall;
 
@@ -308,7 +309,7 @@ impl KimiToolset {
             None => std::collections::HashMap::new(),
         };
 
-        if self.hook_engine.has_hooks_for("PreToolUse") {
+        if self.hook_engine.has_hooks_for(HookEvent::PreToolUse) {
             let input_data = crate::hooks::events::pre_tool_use(
                 &self.session_id,
                 &self.cwd,
@@ -318,7 +319,7 @@ impl KimiToolset {
             );
             let results = self
                 .hook_engine
-                .trigger("PreToolUse", &tool_call.function.name, input_data)
+                .trigger(HookEvent::PreToolUse, &tool_call.function.name, input_data)
                 .await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
@@ -407,7 +408,10 @@ impl KimiToolset {
 
         // --- PostToolUse / PostToolUseFailure hooks (fire-and-forget) ---
         if result.return_value.is_error {
-            if self.hook_engine.has_hooks_for("PostToolUseFailure") {
+            if self
+                .hook_engine
+                .has_hooks_for(HookEvent::PostToolUseFailure)
+            {
                 let error_text = result
                     .return_value
                     .message
@@ -422,12 +426,12 @@ impl KimiToolset {
                     &tool_call.id,
                 );
                 let _ = self.hook_engine.fire_and_forget_trigger(
-                    "PostToolUseFailure",
+                    HookEvent::PostToolUseFailure,
                     &tool_call.function.name,
                     input_data,
                 );
             }
-        } else if self.hook_engine.has_hooks_for("PostToolUse") {
+        } else if self.hook_engine.has_hooks_for(HookEvent::PostToolUse) {
             let output_text = result
                 .return_value
                 .output
@@ -444,7 +448,7 @@ impl KimiToolset {
                 &tool_call.id,
             );
             let _ = self.hook_engine.fire_and_forget_trigger(
-                "PostToolUse",
+                HookEvent::PostToolUse,
                 &tool_call.function.name,
                 input_data,
             );

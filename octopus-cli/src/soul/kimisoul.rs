@@ -4,7 +4,7 @@ use crate::approval_runtime::{ApprovalRuntime, ApprovalSource};
 use crate::auth::OAuthManager;
 use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
-use crate::hooks::HookEngine;
+use crate::hooks::{HookEngine, HookEvent};
 use crate::llm::LLM;
 use crate::notifications::llm::{build_notification_message, extract_notification_ids};
 use crate::notifications::manager::NotificationManager;
@@ -308,7 +308,7 @@ impl KimiSoul {
         }
 
         // --- UserPromptSubmit hook ---
-        if self.hook_engine.has_hooks_for("UserPromptSubmit") {
+        if self.hook_engine.has_hooks_for(HookEvent::UserPromptSubmit) {
             let input_data = crate::hooks::events::user_prompt_submit(
                 &self.session.id,
                 &std::env::current_dir()
@@ -318,7 +318,7 @@ impl KimiSoul {
             );
             let results = self
                 .hook_engine
-                .trigger("UserPromptSubmit", text, input_data)
+                .trigger(HookEvent::UserPromptSubmit, text, input_data)
                 .await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
@@ -356,7 +356,7 @@ impl KimiSoul {
             );
             let _ = self
                 .hook_engine
-                .fire_and_forget_trigger("Stop", "", input_data);
+                .fire_and_forget_trigger(HookEvent::Stop, "", input_data);
         }
 
         let result = match turn_result {
@@ -555,7 +555,7 @@ impl KimiSoul {
                         &format!("{}", e),
                     );
                     let _ = self.hook_engine.fire_and_forget_trigger(
-                        "StopFailure",
+                        HookEvent::StopFailure,
                         std::any::type_name_of_val(&e),
                         input_data,
                     );
@@ -717,7 +717,7 @@ impl KimiSoul {
                     tracing::warn!("Failed to append notification to context: {}", e);
                 }
                 // Fire Notification hook (fire-and-forget)
-                if self.hook_engine.has_hooks_for("Notification") {
+                if self.hook_engine.has_hooks_for(HookEvent::Notification) {
                     let input_data = crate::hooks::events::notification(
                         &self.session.id,
                         &std::env::current_dir()
@@ -730,7 +730,7 @@ impl KimiSoul {
                         &view.event.severity,
                     );
                     let _ = self.hook_engine.fire_and_forget_trigger(
-                        "Notification",
+                        HookEvent::Notification,
                         &view.event.event_type,
                         input_data,
                     );
@@ -1043,7 +1043,7 @@ impl KimiSoul {
             .unwrap_or_else(|_| ".".to_string());
 
         // --- PreCompact hook ---
-        if self.hook_engine.has_hooks_for("PreCompact") {
+        if self.hook_engine.has_hooks_for(HookEvent::PreCompact) {
             let input_data = crate::hooks::events::pre_compact(
                 &self.session.id,
                 &cwd,
@@ -1052,7 +1052,7 @@ impl KimiSoul {
             );
             let results = self
                 .hook_engine
-                .trigger("PreCompact", custom_instruction, input_data)
+                .trigger(HookEvent::PreCompact, custom_instruction, input_data)
                 .await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
@@ -1132,7 +1132,7 @@ impl KimiSoul {
                 estimated,
             );
             let _ = self.hook_engine.fire_and_forget_trigger(
-                "PostCompact",
+                HookEvent::PostCompact,
                 custom_instruction,
                 input_data,
             );
