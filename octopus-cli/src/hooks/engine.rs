@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use regex::Regex;
-use serde_json::Value;
 
 use crate::config::HookDef;
 use crate::hooks::runner::{HookAction, HookResult, run_hook};
@@ -18,8 +17,8 @@ pub struct WireHookSubscription {
 }
 
 /// Callback signatures for wire integration.
-pub type OnTriggered = Box<dyn Fn(HookEvent, &str, usize) + Send + Sync>;
-pub type OnResolved = Box<dyn Fn(HookEvent, &str, HookAction, u64) + Send + Sync>;
+pub type OnTriggered = Box<dyn Fn(&HookEvent, &str, usize) + Send + Sync>;
+pub type OnResolved = Box<dyn Fn(&HookEvent, &str, HookAction, u64) + Send + Sync>;
 
 /// Loads hook definitions and executes matching hooks in parallel.
 ///
@@ -79,8 +78,8 @@ impl HookEngine {
         !self.hooks.is_empty() || !self.wire_subs.is_empty()
     }
 
-    pub fn has_hooks_for(&self, event: HookEvent) -> bool {
-        self.by_event.contains_key(&event) || self.wire_by_event.contains_key(&event)
+    pub fn has_hooks_for(&self, event: &HookEvent) -> bool {
+        self.by_event.contains_key(event) || self.wire_by_event.contains_key(event)
     }
 
     pub fn summary(&self) -> HashMap<String, usize> {
@@ -122,12 +121,12 @@ impl HookEngine {
     fn rebuild_index(&mut self) {
         self.by_event.clear();
         for h in &self.hooks {
-            self.by_event.entry(h.event).or_default().push(h.clone());
+            self.by_event.entry(h.event.clone()).or_default().push(h.clone());
         }
         self.wire_by_event.clear();
         for s in &self.wire_subs {
             self.wire_by_event
-                .entry(s.event)
+                .entry(s.event.clone())
                 .or_default()
                 .push(s.clone());
         }
@@ -147,12 +146,7 @@ impl HookEngine {
     }
 
     /// Run all matching hooks (server + wire) in parallel.
-    pub async fn trigger(
-        &self,
-        event: HookEvent,
-        matcher_value: &str,
-        input_data: HashMap<String, Value>,
-    ) -> Vec<HookResult> {
+    pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
         // Match server-side hooks
         let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut server_matched: Vec<&HookDef> = Vec::new();
@@ -183,7 +177,7 @@ impl HookEngine {
 
         // Emit triggered callback
         if let Some(ref cb) = self.on_triggered {
-            cb(event, matcher_value, total);
+            cb(&event, matcher_value, total);
         }
 
         let t0 = std::time::Instant::now();
@@ -192,11 +186,11 @@ impl HookEngine {
         // Server-side: run shell commands
         for h in server_matched {
             let command = h.command.clone();
-            let input = input_data.clone();
+            let event = event.clone();
             let timeout = h.timeout;
             let cwd = self.cwd.clone();
             tasks.push(tokio::spawn(async move {
-                run_hook(&command, &input, timeout, cwd.as_deref()).await
+                run_hook(&command, &event, timeout, cwd.as_deref()).await
             }));
         }
 
@@ -236,7 +230,7 @@ impl HookEngine {
 
         // Emit resolved callback
         if let Some(ref cb) = self.on_resolved {
-            cb(event, matcher_value, action, duration_ms);
+            cb(&event, matcher_value, action, duration_ms);
         }
 
         results
@@ -250,11 +244,10 @@ impl HookEngine {
         &self,
         event: HookEvent,
         matcher_value: &str,
-        input_data: HashMap<String, Value>,
     ) -> tokio::task::JoinHandle<Vec<HookResult>> {
         let matcher_value = matcher_value.to_string();
         let engine = self.clone();
-        tokio::spawn(async move { engine.trigger(event, &matcher_value, input_data).await })
+        tokio::spawn(async move { engine.trigger(event, &matcher_value).await })
     }
 }
 

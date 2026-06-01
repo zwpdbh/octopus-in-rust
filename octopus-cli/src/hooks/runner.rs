@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+use crate::hooks::types::HookEvent;
 
 /// Semantic decision produced by a hook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,14 +45,14 @@ impl HookResult {
 /// Execute a single hook command. Fail-open: errors/timeouts -> allow.
 pub async fn run_hook(
     command: &str,
-    input_data: &HashMap<String, Value>,
+    event: &HookEvent,
     timeout_secs: u64,
     cwd: Option<&std::path::Path>,
 ) -> HookResult {
-    let json_input = match serde_json::to_vec(input_data) {
+    let json_input = match serde_json::to_vec(event) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Hook failed to serialize input data: {}", e);
+            tracing::warn!("Hook failed to serialize event: {}", e);
             return HookResult::allow();
         }
     };
@@ -134,7 +133,7 @@ pub async fn run_hook(
 
     // Exit 0 + JSON stdout = structured decision
     if exit_code == 0 && !stdout.trim().is_empty() {
-        if let Ok(raw) = serde_json::from_str::<Value>(&stdout) {
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&stdout) {
             if let Some(hook_output) = raw.get("hookSpecificOutput").and_then(|v| v.as_object()) {
                 if hook_output
                     .get("permissionDecision")

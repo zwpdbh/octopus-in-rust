@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::exception::{ConfigError, Result};
-use crate::hooks::HookEvent;
 use crate::share::get_share_dir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,7 +201,8 @@ impl Default for MCPConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDef {
-    pub event: HookEvent,
+    #[serde(with = "crate::hooks::types::discriminant_serde")]
+    pub event: crate::hooks::HookEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
     pub command: String,

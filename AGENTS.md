@@ -156,6 +156,108 @@ Use `matches!` for one-off predicates:
 if matches!(ui_mode, UiMode::Acp | UiMode::Wire) { /* ... */ }
 ```
 
+#### Example: Replace `HashMap<String, Value>` payload builders with a sum type
+
+**Bad:** Functions that construct dynamic maps for external consumers. The compiler cannot verify field names, types, or which fields belong to which event.
+
+```rust
+pub fn pre_tool_use(
+    session_id: &str,
+    cwd: &str,
+    tool_name: &str,
+    tool_input: &HashMap<String, Value>,
+    tool_call_id: &str,
+) -> HashMap<String, Value> {
+    let mut m = HashMap::new();
+    m.insert("hook_event_name".to_string(), Value::String("PreToolUse".to_string()));
+    m.insert("session_id".to_string(), Value::String(session_id.to_string()));
+    m.insert("cwd".to_string(), Value::String(cwd.to_string()));
+    m.insert("tool_name".to_string(), Value::String(tool_name.to_string()));
+    m.insert("tool_input".to_string(), Value::Object(tool_input.clone().into_iter().collect()));
+    m.insert("tool_call_id".to_string(), Value::String(tool_call_id.to_string()));
+    m
+}
+
+pub fn post_tool_use_failure(
+    session_id: &str,
+    cwd: &str,
+    tool_name: &str,
+    tool_input: &HashMap<String, Value>,
+    error: &str,
+    tool_call_id: &str,
+) -> HashMap<String, Value> {
+    let mut m = HashMap::new();
+    m.insert("hook_event_name".to_string(), Value::String("PostToolUseFailure".to_string()));
+    // ... repeated boilerplate for every event type
+    m
+}
+```
+
+Problems:
+- Typos in field names are runtime errors.
+- Nothing prevents passing a `PostToolUseFailure` payload to a `PreToolUse` trigger.
+- Adding a new required field does not force updates at call sites.
+- The compiler cannot tell you which fields are valid for which event.
+
+**Good:** A single enum where each variant carries exactly the data it needs.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "hook_event_name", rename_all = "PascalCase")]
+pub enum HookEvent {
+    PreToolUse {
+        session_id: String,
+        cwd: String,
+        tool_name: String,
+        tool_input: HashMap<String, Value>,
+        tool_call_id: String,
+    },
+    PostToolUseFailure {
+        session_id: String,
+        cwd: String,
+        tool_name: String,
+        tool_input: HashMap<String, Value>,
+        error: String,
+        tool_call_id: String,
+    },
+    // ... every other event type
+}
+```
+
+Construction is explicit and type-checked:
+
+```rust
+let event = HookEvent::PreToolUse {
+    session_id: session_id.into(),
+    cwd: cwd.into(),
+    tool_name: tool_name.into(),
+    tool_input: inputs.clone(),
+    tool_call_id: call_id.into(),
+};
+```
+
+- Adding a new field to `PreToolUse` is a compile error at every construction site until it is provided.
+- A `PostToolUseFailure` payload cannot be accidentally passed where a `PreToolUse` is expected.
+- `serde` generates the exact same JSON the old `HashMap` builders produced.
+
+When the enum must also serve as a `HashMap` key (e.g., indexing registered hooks by event type), implement `Hash` and `Eq` on the discriminant only so the same type acts as both payload and dictionary key, eliminating the need for a parallel "kind" enum:
+
+```rust
+impl PartialEq for HookEvent {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+
+impl Eq for HookEvent {}
+
+impl std::hash::Hash for HookEvent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+    }
+}
+```
+
 #### Migration Strategy
 
 When refactoring existing code:

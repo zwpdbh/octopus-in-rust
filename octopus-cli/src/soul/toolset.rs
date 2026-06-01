@@ -309,17 +309,17 @@ impl KimiToolset {
             None => std::collections::HashMap::new(),
         };
 
-        if self.hook_engine.has_hooks_for(HookEvent::PreToolUse) {
-            let input_data = crate::hooks::events::pre_tool_use(
-                &self.session_id,
-                &self.cwd,
-                &tool_call.function.name,
-                &tool_input_map,
-                &tool_call.id,
-            );
+        let event = HookEvent::pre_tool_use(
+            &self.session_id,
+            &self.cwd,
+            &tool_call.function.name,
+            &tool_input_map,
+            &tool_call.id,
+        );
+        if self.hook_engine.has_hooks_for(&event) {
             let results = self
                 .hook_engine
-                .trigger(HookEvent::PreToolUse, &tool_call.function.name, input_data)
+                .trigger(event, &tool_call.function.name)
                 .await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
@@ -408,30 +408,25 @@ impl KimiToolset {
 
         // --- PostToolUse / PostToolUseFailure hooks (fire-and-forget) ---
         if result.return_value.is_error {
-            if self
-                .hook_engine
-                .has_hooks_for(HookEvent::PostToolUseFailure)
-            {
-                let error_text = result
-                    .return_value
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                let input_data = crate::hooks::events::post_tool_use_failure(
-                    &self.session_id,
-                    &self.cwd,
-                    &tool_call.function.name,
-                    &tool_input_map,
-                    &error_text,
-                    &tool_call.id,
-                );
-                let _ = self.hook_engine.fire_and_forget_trigger(
-                    HookEvent::PostToolUseFailure,
-                    &tool_call.function.name,
-                    input_data,
-                );
+            let error_text = result
+                .return_value
+                .message
+                .clone()
+                .unwrap_or_else(|| "Unknown error".to_string());
+            let event = HookEvent::post_tool_use_failure(
+                &self.session_id,
+                &self.cwd,
+                &tool_call.function.name,
+                &tool_input_map,
+                &error_text,
+                &tool_call.id,
+            );
+            if self.hook_engine.has_hooks_for(&event) {
+                let _ = self
+                    .hook_engine
+                    .fire_and_forget_trigger(event, &tool_call.function.name);
             }
-        } else if self.hook_engine.has_hooks_for(HookEvent::PostToolUse) {
+        } else {
             let output_text = result
                 .return_value
                 .output
@@ -439,7 +434,7 @@ impl KimiToolset {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let input_data = crate::hooks::events::post_tool_use(
+            let event = HookEvent::post_tool_use(
                 &self.session_id,
                 &self.cwd,
                 &tool_call.function.name,
@@ -447,11 +442,11 @@ impl KimiToolset {
                 &output_text[..output_text.len().min(2000)],
                 &tool_call.id,
             );
-            let _ = self.hook_engine.fire_and_forget_trigger(
-                HookEvent::PostToolUse,
-                &tool_call.function.name,
-                input_data,
-            );
+            if self.hook_engine.has_hooks_for(&event) {
+                let _ = self
+                    .hook_engine
+                    .fire_and_forget_trigger(event, &tool_call.function.name);
+            }
         }
 
         {

@@ -308,18 +308,15 @@ impl KimiSoul {
         }
 
         // --- UserPromptSubmit hook ---
-        if self.hook_engine.has_hooks_for(HookEvent::UserPromptSubmit) {
-            let input_data = crate::hooks::events::user_prompt_submit(
-                &self.session.id,
-                &std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string()),
-                text,
-            );
-            let results = self
-                .hook_engine
-                .trigger(HookEvent::UserPromptSubmit, text, input_data)
-                .await;
+        let event = HookEvent::user_prompt_submit(
+            &self.session.id,
+            &std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            text,
+        );
+        if self.hook_engine.has_hooks_for(&event) {
+            let results = self.hook_engine.trigger(event, text).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
                     wire_send(crate::wire::WireEvent::TextPart(crate::wire::TextPart {
@@ -347,16 +344,14 @@ impl KimiSoul {
             );
         } else {
             // --- Stop hook (normal turn completion) ---
-            let input_data = crate::hooks::events::stop(
+            let event = HookEvent::stop(
                 &self.session.id,
                 &std::env::current_dir()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| ".".to_string()),
                 false,
             );
-            let _ = self
-                .hook_engine
-                .fire_and_forget_trigger(HookEvent::Stop, "", input_data);
+            let _ = self.hook_engine.fire_and_forget_trigger(event, "");
         }
 
         let result = match turn_result {
@@ -546,7 +541,7 @@ impl KimiSoul {
                     wire_send(crate::wire::WireEvent::StepInterrupted(StepInterrupted {}));
                     // --- StopFailure hook ---
                     // Fire-and-forget: hook execution must not block error propagation.
-                    let input_data = crate::hooks::events::stop_failure(
+                    let event = HookEvent::stop_failure(
                         &self.session.id,
                         &std::env::current_dir()
                             .map(|p| p.to_string_lossy().to_string())
@@ -554,11 +549,9 @@ impl KimiSoul {
                         std::any::type_name_of_val(&e),
                         &format!("{}", e),
                     );
-                    let _ = self.hook_engine.fire_and_forget_trigger(
-                        HookEvent::StopFailure,
-                        std::any::type_name_of_val(&e),
-                        input_data,
-                    );
+                    let _ = self
+                        .hook_engine
+                        .fire_and_forget_trigger(event, std::any::type_name_of_val(&e));
                     return Err(e);
                 }
             };
@@ -717,23 +710,21 @@ impl KimiSoul {
                     tracing::warn!("Failed to append notification to context: {}", e);
                 }
                 // Fire Notification hook (fire-and-forget)
-                if self.hook_engine.has_hooks_for(HookEvent::Notification) {
-                    let input_data = crate::hooks::events::notification(
-                        &self.session.id,
-                        &std::env::current_dir()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|_| ".".to_string()),
-                        "llm",
-                        &view.event.event_type,
-                        &view.event.title,
-                        &view.event.body,
-                        &view.event.severity,
-                    );
-                    let _ = self.hook_engine.fire_and_forget_trigger(
-                        HookEvent::Notification,
-                        &view.event.event_type,
-                        input_data,
-                    );
+                let event = HookEvent::notification(
+                    &self.session.id,
+                    &std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| ".".to_string()),
+                    "llm",
+                    &view.event.event_type,
+                    &view.event.title,
+                    &view.event.body,
+                    &view.event.severity,
+                );
+                if self.hook_engine.has_hooks_for(&event) {
+                    let _ = self
+                        .hook_engine
+                        .fire_and_forget_trigger(event, &view.event.event_type);
                 }
             }
         }
@@ -1043,17 +1034,10 @@ impl KimiSoul {
             .unwrap_or_else(|_| ".".to_string());
 
         // --- PreCompact hook ---
-        if self.hook_engine.has_hooks_for(HookEvent::PreCompact) {
-            let input_data = crate::hooks::events::pre_compact(
-                &self.session.id,
-                &cwd,
-                custom_instruction,
-                token_count,
-            );
-            let results = self
-                .hook_engine
-                .trigger(HookEvent::PreCompact, custom_instruction, input_data)
-                .await;
+        let event =
+            HookEvent::pre_compact(&self.session.id, &cwd, custom_instruction, token_count);
+        if self.hook_engine.has_hooks_for(&event) {
+            let results = self.hook_engine.trigger(event, custom_instruction).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
                     tracing::warn!("PreCompact hook blocked compaction: {}", reason);
@@ -1125,17 +1109,11 @@ impl KimiSoul {
 
         // --- PostCompact hook ---
         {
-            let input_data = crate::hooks::events::post_compact(
-                &self.session.id,
-                &cwd,
-                custom_instruction,
-                estimated,
-            );
-            let _ = self.hook_engine.fire_and_forget_trigger(
-                HookEvent::PostCompact,
-                custom_instruction,
-                input_data,
-            );
+            let event =
+                HookEvent::post_compact(&self.session.id, &cwd, custom_instruction, estimated);
+            let _ = self
+                .hook_engine
+                .fire_and_forget_trigger(event, custom_instruction);
         }
 
         // Notify injection providers that history has been rebuilt so they can
