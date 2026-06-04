@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::hooks::types::HookEvent;
+use crate::hooks::event::HookEvent;
 
 /// Semantic decision produced by a hook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

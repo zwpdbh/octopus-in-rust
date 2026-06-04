@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use regex::Regex;
 
 use crate::config::HookDef;
+use crate::hooks::event::HookEvent;
 use crate::hooks::runner::{HookAction, HookResult, run_hook};
-use crate::hooks::types::HookEvent;
 
 /// A client-side hook subscription registered via wire initialize.
 #[derive(Debug, Clone)]
@@ -121,7 +121,10 @@ impl HookEngine {
     fn rebuild_index(&mut self) {
         self.by_event.clear();
         for h in &self.hooks {
-            self.by_event.entry(h.event.clone()).or_default().push(h.clone());
+            self.by_event
+                .entry(h.event.clone())
+                .or_default()
+                .push(h.clone());
         }
         self.wire_by_event.clear();
         for s in &self.wire_subs {
