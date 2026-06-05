@@ -227,11 +227,83 @@ impl KimiSoul {
         // Set up wire channel for this run.
         let wire_file = crate::wire::file::WireFile::new(self.session.wire_file_path.clone());
         let wire = crate::wire::channel::Wire::new(Some(wire_file));
+        let result = self.run_with_wire(text, &wire, None).await;
+
+        // Dropping `wire` drops the broadcast senders, which causes the
+        // recorder task to exit cleanly after flushing.
+        drop(wire);
+
+        result
+    }
+
+    /// Run a single turn using the provided wire channel.
+    ///
+    /// The caller retains ownership of the `Wire` and is responsible for
+    /// reading from `wire.ui_side()` to consume events sent via `wire_send()`.
+    pub async fn run_with_wire(
+        &mut self,
+        user_input: &str,
+        wire: &crate::wire::channel::Wire,
+        on_wire_hook: Option<crate::hooks::OnWireHook>,
+    ) -> Result<String> {
+        let text = user_input.trim();
+        if text.is_empty() {
+            return Ok(String::new());
+        }
+
         let soul_side = wire.soul_side();
 
-        let result = crate::wire::with_wire_soul_side(Some(soul_side.clone()), async {
+        crate::wire::with_wire_soul_side(Some(soul_side.clone()), async {
             // Start notification pump — delivers pending notifications to wire.
             let pump_handle = self.start_notification_pump(soul_side.clone());
+
+            // Wire hook callbacks: emit HookTriggered / HookResolved events.
+            // Wire hook dispatch is stubbed (no request/response protocol yet)
+            // so client-side hooks always fail open.
+            self.hook_engine.set_callbacks(
+                Some(Box::new(
+                    |event: &crate::hooks::HookEvent, target: &str, count: usize| {
+                        crate::wire::wire_send(crate::wire::WireEvent::HookTriggered(
+                            crate::wire::HookTriggered {
+                                event: event.to_string(),
+                                target: target.to_string(),
+                                hook_count: count,
+                            },
+                        ));
+                    },
+                )),
+                Some(Box::new(
+                    |event: &crate::hooks::HookEvent,
+                     target: &str,
+                     action: crate::hooks::runner::HookAction,
+                     duration_ms: u64| {
+                        let (action_str, reason) = match action {
+                            crate::hooks::runner::HookAction::Allow => {
+                                ("allow".to_string(), String::new())
+                            }
+                            crate::hooks::runner::HookAction::Block(ref r) => {
+                                ("block".to_string(), r.clone())
+                            }
+                        };
+                        crate::wire::wire_send(crate::wire::WireEvent::HookResolved(
+                            crate::wire::HookResolved {
+                                event: event.to_string(),
+                                target: target.to_string(),
+                                action: action_str,
+                                reason,
+                                duration_ms,
+                            },
+                        ));
+                    },
+                )),
+                on_wire_hook.or_else(|| {
+                    Some(Box::new(|handle: crate::hooks::WireHookHandle| {
+                        // No wire request/response protocol yet — fail open.
+                        handle.resolve(crate::hooks::runner::HookAction::Allow);
+                        Box::pin(async {})
+                    }))
+                }),
+            );
 
             let result = self.run_turn(text).await;
 
@@ -241,13 +313,7 @@ impl KimiSoul {
             }
             result
         })
-        .await;
-
-        // Dropping `wire` drops the broadcast senders, which causes the
-        // recorder task to exit cleanly after flushing.
-        drop(wire);
-
-        result
+        .await
     }
 
     async fn run_turn(&mut self, text: &str) -> Result<String> {

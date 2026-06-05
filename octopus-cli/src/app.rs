@@ -359,8 +359,13 @@ impl OctopusCLI {
 
     pub async fn run_wire_stdio(&mut self) -> Result<()> {
         tracing::info!("Running Wire server over stdio");
-        println!("Wire server not yet implemented");
-        Ok(())
+
+        let soul = self.soul.take().ok_or_else(|| {
+            crate::exception::OctopusError::Other("Soul already consumed".to_string())
+        })?;
+
+        let server = crate::wire_server::WireServer::new(soul);
+        server.serve().await
     }
 
     pub async fn shutdown_background_tasks(&mut self) {

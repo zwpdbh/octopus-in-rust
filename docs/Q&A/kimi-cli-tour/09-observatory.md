@@ -121,11 +121,16 @@ pub fn retry_disk_events(&self) -> Vec<Map<String, Value>> {
 
 ## 🪝 Part 2: Hooks
 
-Files: `octopus-cli/src/hooks/` — `mod.rs`, `runner.rs`, `events.rs`
+Files: `octopus-cli/src/hooks/` — `mod.rs`, `runner.rs`, `event.rs`, `engine.rs`
 
-Hooks let users **intercept and customize** the agent's behavior. They're shell scripts (or any executable) that run at specific events.
+Hooks let users **intercept and customize** the agent's behavior. They're shell scripts (or any executable) that run at specific events. The hook system supports **two sources**:
 
-### Configuring Hooks
+| Source | Registration | Execution |
+|--------|-------------|-----------|
+| **Server-side** | `~/.kimi/config.toml` | Local shell command |
+| **Wire (client-side)** | `initialize` JSON-RPC | Remote IDE/editor |
+
+### Quick Example
 
 In `~/.kimi/config.toml`:
 
@@ -139,28 +144,6 @@ timeout_ms = 5000
 
 This hook runs **before any write operation**, giving the user a chance to block it.
 
-### The Hook Engine
-
-```rust
-// File: octopus-cli/src/hooks/engine.rs
-pub struct HookEngine {
-    hooks: Vec<ConfiguredHook>,
-    event_index: HashMap<String, Vec<usize>>,  // event → hook indices
-}
-
-impl HookEngine {
-    pub async fn evaluate(&self, event: &str, payload: &str) -> Vec<HookResult> {
-        let indices = self.event_index.get(event).unwrap_or(&vec![]);
-        let futures: Vec<_> = indices.iter()
-            .map(|&idx| self.run_hook(&self.hooks[idx], payload))
-            .collect();
-        futures::future::join_all(futures).await
-    }
-}
-```
-
-Hooks matching the same event run **in parallel** via `join_all`. Each hook gets the event payload as JSON on stdin and returns a result on stdout.
-
 ### Hook Actions
 
 A hook can return:
@@ -168,18 +151,13 @@ A hook can return:
 - **`{"action": "block", "reason": "..."}`** — abort the tool call
 
 ```rust
-// File: octopus-cli/src/hooks/runner.rs
 pub enum HookAction {
     Allow,
-    Block { reason: String },
+    Block(String),
 }
 ```
 
-🐍 **Python's way:** `HookEngine` in `hooks/engine.py` with regex matching and `asyncio.gather()`.
-
-🦀 **Rust's way:** Same architecture, but the regex engine and subprocess runner are native Rust. No Python interpreter overhead per hook invocation.
-
-✨ **Where Rust shines:** **Hook subprocesses are pure OS processes.** They don't need a Python runtime. You can write hooks in Bash, Go, Rust, or anything that reads stdin and writes stdout. In Python's kimi-cli, hooks also run as subprocesses, but the parent process is heavier.
+Hooks are **gates, not transformers** — they can allow or block, but never modify arguments or outputs.
 
 ### Event Types
 
@@ -194,6 +172,8 @@ pub enum HookAction {
 | `PreCompact` | Before context compaction |
 | `PostCompact` | After context compaction |
 | `Notification` | When a notification is delivered |
+
+> 🔍 **For a deep dive into the hook engine, discriminant equality, wire hook request/response lifecycle, and the gate pattern, see [Tour 10: The Hook System](./10-hook-system.md).**
 
 ---
 
@@ -219,7 +199,7 @@ Hooks are **synchronous gates** (they can block actions). Telemetry is **asynchr
 ## 🎁 Souvenir Shop: What to Remember
 
 1. **Telemetry is opt-out by design.** Events are anonymous (no user IDs, no conversation content). The `track!` macro is a no-op until a sink is attached.
-2. **Hooks are user-defined middleware.** They turn the agent from a black box into a customizable pipeline.
+2. **Hooks are user-defined middleware.** They turn the agent from a black box into a customizable pipeline. See [Tour 10](./10-hook-system.md) for the full architecture.
 3. **Disk fallback makes telemetry resilient.** Even without network, events are preserved and retried later.
 4. **Hook evaluation is parallel.** Multiple hooks on the same event run concurrently, not sequentially.
 
@@ -239,7 +219,8 @@ Congratulations! You've visited every floor of Octopus-CLI:
 | 🔩 [Workshop](./06-workshop.md) | Background tasks, subagent recursion |
 | 🖥️ [Front Desk](./07-front-desk.md) | TUI shell, markdown rendering, clipboard |
 | 📁 [Archives](./08-archives.md) | Sessions, context, forking, compaction |
-| 🔭 **Observatory** | Telemetry, hooks, event tracking |
+| 🔭 [Observatory](./09-observatory.md) | Telemetry, hooks, event tracking |
+| 🪝 [Hook System](./10-hook-system.md) | Security Annex — deep dive into server-side and wire hooks |
 
 ### The Building in Numbers
 

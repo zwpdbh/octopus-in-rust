@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use regex::Regex;
 
@@ -19,6 +20,32 @@ pub struct WireHookSubscription {
 /// Callback signatures for wire integration.
 pub type OnTriggered = Box<dyn Fn(&HookEvent, &str, usize) + Send + Sync>;
 pub type OnResolved = Box<dyn Fn(&HookEvent, &str, HookAction, u64) + Send + Sync>;
+pub type OnWireHook = Box<
+    dyn Fn(WireHookHandle) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+
+/// A pending wire hook request waiting for client response.
+#[derive(Debug)]
+pub struct WireHookHandle {
+    pub id: String,
+    pub subscription_id: String,
+    pub event_name: String,
+    pub target: String,
+    pub input_data: serde_json::Value,
+    tx: Option<tokio::sync::oneshot::Sender<HookResult>>,
+}
+
+impl WireHookHandle {
+    pub fn resolve(self, action: HookAction) {
+        if let Some(tx) = self.tx {
+            let result = match action {
+                HookAction::Allow => HookResult::allow(),
+                HookAction::Block(reason) => HookResult::block(reason),
+            };
+            let _ = tx.send(result);
+        }
+    }
+}
 
 /// Loads hook definitions and executes matching hooks in parallel.
 ///
@@ -31,6 +58,7 @@ pub struct HookEngine {
     cwd: Option<PathBuf>,
     on_triggered: Option<OnTriggered>,
     on_resolved: Option<OnResolved>,
+    on_wire_hook: Option<OnWireHook>,
     by_event: HashMap<HookEvent, Vec<HookDef>>,
     wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
 }
@@ -43,6 +71,7 @@ impl HookEngine {
             cwd: None,
             on_triggered: None,
             on_resolved: None,
+            on_wire_hook: None,
             by_event: HashMap::new(),
             wire_by_event: HashMap::new(),
         };
@@ -59,9 +88,11 @@ impl HookEngine {
         &mut self,
         on_triggered: Option<OnTriggered>,
         on_resolved: Option<OnResolved>,
+        on_wire_hook: Option<OnWireHook>,
     ) {
         self.on_triggered = on_triggered;
         self.on_resolved = on_resolved;
+        self.on_wire_hook = on_wire_hook;
     }
 
     pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
@@ -197,13 +228,48 @@ impl HookEngine {
             }));
         }
 
-        // Wire-side: stubbed for now (no real wire client)
-        for _s in wire_matched {
-            tasks.push(tokio::spawn(async move {
-                // Wire hooks are not yet supported without a real wire client.
-                // Fail open.
-                HookResult::allow()
-            }));
+        // Wire-side: dispatch to client via callback
+        for s in wire_matched {
+            if let Some(ref cb) = self.on_wire_hook {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let handle = WireHookHandle {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    subscription_id: s.id.clone(),
+                    event_name: event.to_string(),
+                    target: matcher_value.to_string(),
+                    input_data: serde_json::to_value(&event).unwrap_or_default(),
+                    tx: Some(tx),
+                };
+                let timeout_secs = s.timeout;
+                let target = matcher_value.to_string();
+                let cb_future = cb(handle);
+                tasks.push(tokio::spawn(async move {
+                    // First let the callback send the request to the client.
+                    cb_future.await;
+                    // Then wait for the client response with a timeout.
+                    match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), rx)
+                        .await
+                    {
+                        Ok(Ok(result)) => result,
+                        Ok(Err(_)) => {
+                            tracing::warn!("Wire hook resolver dropped without resolving");
+                            HookResult::allow()
+                        }
+                        Err(_) => {
+                            tracing::warn!("Wire hook timed out: {}", target);
+                            HookResult {
+                                action: HookAction::Allow,
+                                stdout: String::new(),
+                                stderr: String::new(),
+                                exit_code: 0,
+                                timed_out: true,
+                            }
+                        }
+                    }
+                }));
+            } else {
+                tasks.push(tokio::spawn(async move { HookResult::allow() }));
+            }
         }
 
         let results: Vec<HookResult> = match futures::future::try_join_all(tasks).await {
@@ -262,6 +328,7 @@ impl Clone for HookEngine {
             cwd: self.cwd.clone(),
             on_triggered: None,
             on_resolved: None,
+            on_wire_hook: None,
             by_event: HashMap::new(),
             wire_by_event: HashMap::new(),
         };

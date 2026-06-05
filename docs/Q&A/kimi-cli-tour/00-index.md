@@ -21,6 +21,7 @@ This tour series will walk you through the building floor by floor, room by room
 | [Tour 7: The Front Desk](./07-front-desk.md) | Ground East | TUI shell, markdown rendering, and user interaction |
 | [Tour 8: The Archives](./08-archives.md) | Sub-basement | Session persistence, context management, forking |
 | [Tour 9: The Observatory](./09-observatory.md) | Rooftop | Telemetry, hooks, and the event tracking system |
+| [Tour 10: The Hook System](./10-hook-system.md) | Security Annex | Deep dive into server-side and wire hooks |
 
 ---
 

@@ -271,6 +271,18 @@ pub struct HookResolved {
     pub duration_ms: u64,
 }
 
+/// A request sent to the wire client asking it to resolve a client-side hook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookRequest {
+    pub id: String,
+    pub subscription_id: String,
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub input_data: serde_json::Value,
+}
+
 fn default_allow() -> String {
     "allow".to_string()
 }
