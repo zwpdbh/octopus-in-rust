@@ -377,3 +377,177 @@ pub mod discriminant_serde {
         }
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_discriminant_equality_ignores_payload() {
+        let a = HookEvent::PreToolUse {
+            session_id: "sess-a".into(),
+            cwd: "/a".into(),
+            tool_name: "tool-a".into(),
+            tool_input: {
+                let mut m = HashMap::new();
+                m.insert("key".into(), Value::String("val".into()));
+                m
+            },
+            tool_call_id: "call-a".into(),
+        };
+        let b = HookEvent::PreToolUse {
+            session_id: "sess-b".into(),
+            cwd: "/b".into(),
+            tool_name: "tool-b".into(),
+            tool_input: HashMap::new(),
+            tool_call_id: "call-b".into(),
+        };
+        assert_eq!(
+            a, b,
+            "same discriminant should be equal regardless of payload"
+        );
+    }
+
+    #[test]
+    fn test_discriminant_inequality() {
+        let pre = HookEvent::pre_tool_use("s", "/", "t", &HashMap::new(), "c");
+        let post = HookEvent::post_tool_use("s", "/", "t", &HashMap::new(), "out", "c");
+        assert_ne!(pre, post, "different discriminants should not be equal");
+    }
+
+    #[test]
+    fn test_discriminant_hash_as_map_key() {
+        let mut map: HashMap<HookEvent, usize> = HashMap::new();
+        let a = HookEvent::pre_tool_use("s", "/", "t", &HashMap::new(), "c");
+        let b = HookEvent::PreToolUse {
+            session_id: "other".into(),
+            cwd: "/other".into(),
+            tool_name: "other".into(),
+            tool_input: HashMap::new(),
+            tool_call_id: "other".into(),
+        };
+        map.insert(a, 42);
+        assert_eq!(
+            map.get(&b),
+            Some(&42),
+            "same discriminant should hash to same bucket"
+        );
+    }
+
+    #[test]
+    fn test_display_outputs_variant_name() {
+        let e = HookEvent::post_tool_use_failure("s", "/", "t", &HashMap::new(), "err", "c");
+        assert_eq!(e.to_string(), "PostToolUseFailure");
+    }
+
+    #[test]
+    fn test_discriminant_serde_roundtrip() {
+        let original = HookEvent::pre_tool_use(
+            "real-session",
+            "/real",
+            "real-tool",
+            &HashMap::new(),
+            "real-call",
+        );
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(
+            json.contains("real-session"),
+            "default serde should serialize full payload: {}",
+            json
+        );
+
+        // discriminant_serde::serialize should emit just the string name
+        let mut buf = Vec::new();
+        let mut ser = serde_json::Serializer::new(&mut buf);
+        discriminant_serde::serialize(&original, &mut ser).unwrap();
+        let discriminant_json = String::from_utf8(buf).unwrap();
+        assert_eq!(discriminant_json, "\"PreToolUse\"");
+
+        // discriminant_serde::deserialize should reconstruct the variant with empty defaults
+        let mut de = serde_json::Deserializer::from_str(&discriminant_json);
+        let decoded = discriminant_serde::deserialize(&mut de).unwrap();
+        assert_eq!(
+            decoded, original,
+            "deserialized discriminant should match original variant"
+        );
+        // but payload is empty because config only stores the event name
+        match decoded {
+            HookEvent::PreToolUse {
+                session_id,
+                cwd,
+                tool_name,
+                tool_input,
+                tool_call_id,
+            } => {
+                assert_eq!(session_id, "");
+                assert_eq!(cwd, "");
+                assert_eq!(tool_name, "");
+                assert!(tool_input.is_empty());
+                assert_eq!(tool_call_id, "");
+            }
+            other => panic!("expected PreToolUse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_full_payload_serde_serialize() {
+        let mut input = HashMap::new();
+        input.insert("path".into(), Value::String("/tmp".into()));
+        input.insert("content".into(), Value::String("hello".into()));
+
+        let original = HookEvent::PreToolUse {
+            session_id: "sess-1".into(),
+            cwd: "/home/user".into(),
+            tool_name: "WriteFile".into(),
+            tool_input: input.clone(),
+            tool_call_id: "call-123".into(),
+        };
+
+        let json = serde_json::to_string_pretty(&original).unwrap();
+        assert!(json.contains("\"hook_event_name\""));
+        assert!(json.contains("PreToolUse"));
+        assert!(json.contains("sess-1"));
+        assert!(json.contains("call-123"));
+        assert!(json.contains("WriteFile"));
+    }
+
+    #[test]
+    fn test_all_event_variants_deserialize_from_discriminant() {
+        let variants = vec![
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "UserPromptSubmit",
+            "Stop",
+            "StopFailure",
+            "SessionStart",
+            "SessionEnd",
+            "PreCompact",
+            "PostCompact",
+            "Notification",
+        ];
+        for name in variants {
+            let json = format!("\"{}\"", name);
+            let mut de = serde_json::Deserializer::from_str(&json);
+            let event = discriminant_serde::deserialize(&mut de)
+                .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", name, e));
+            assert_eq!(
+                event.to_string(),
+                name,
+                "roundtripped variant name should match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_discriminant_errors() {
+        let mut de = serde_json::Deserializer::from_str("\"UnknownEvent\"");
+        let result: Result<HookEvent, _> = discriminant_serde::deserialize(&mut de);
+        assert!(result.is_err(), "unknown event should fail to deserialize");
+    }
+}

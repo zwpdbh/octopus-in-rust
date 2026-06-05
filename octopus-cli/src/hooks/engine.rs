@@ -275,3 +275,124 @@ impl Default for HookEngine {
         Self::new(Vec::new())
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Build a HookDef the same way config deserialization does: event has
+    /// empty payload fields because the config file only stores the variant
+    /// name (e.g. `event = "PreToolUse"`).
+    fn config_hook_def(event: HookEvent, command: &str, matcher: Option<&str>) -> HookDef {
+        HookDef {
+            event,
+            matcher: matcher.map(|s| s.to_string()),
+            command: command.to_string(),
+            timeout: 30,
+        }
+    }
+
+    #[test]
+    fn test_config_event_matches_runtime_event() {
+        // This is what the engine sees after loading from config.toml:
+        // event = "PreToolUse"  ->  HookEvent::PreToolUse with all empty strings
+        let config_event = HookEvent::PreToolUse {
+            session_id: String::new(),
+            cwd: String::new(),
+            tool_name: String::new(),
+            tool_input: HashMap::new(),
+            tool_call_id: String::new(),
+        };
+        let def = config_hook_def(config_event, "echo ok", None);
+        let engine = HookEngine::new(vec![def]);
+
+        // This is the real runtime event fired when a tool is about to run:
+        let runtime_event = HookEvent::pre_tool_use(
+            "real-sess",
+            "/real/cwd",
+            "WriteFile",
+            &HashMap::new(),
+            "call-42",
+        );
+
+        assert!(
+            engine.has_hooks_for(&runtime_event),
+            "config hook with empty payload should match runtime event with real payload"
+        );
+    }
+
+    #[test]
+    fn test_different_events_do_not_match() {
+        let config_event = HookEvent::PreToolUse {
+            session_id: String::new(),
+            cwd: String::new(),
+            tool_name: String::new(),
+            tool_input: HashMap::new(),
+            tool_call_id: String::new(),
+        };
+        let engine = HookEngine::new(vec![config_hook_def(config_event, "echo ok", None)]);
+
+        let runtime_event = HookEvent::post_tool_use(
+            "real-sess",
+            "/real/cwd",
+            "WriteFile",
+            &HashMap::new(),
+            "done",
+            "call-42",
+        );
+
+        assert!(
+            !engine.has_hooks_for(&runtime_event),
+            "PreToolUse config hook should not match PostToolUse runtime event"
+        );
+    }
+
+    #[test]
+    fn test_summary_counts_by_discriminant() {
+        let hooks = vec![
+            config_hook_def(
+                HookEvent::PreToolUse {
+                    session_id: String::new(),
+                    cwd: String::new(),
+                    tool_name: String::new(),
+                    tool_input: HashMap::new(),
+                    tool_call_id: String::new(),
+                },
+                "echo 1",
+                None,
+            ),
+            config_hook_def(
+                HookEvent::PreToolUse {
+                    session_id: "other".into(),
+                    cwd: "/other".into(),
+                    tool_name: "other".into(),
+                    tool_input: HashMap::new(),
+                    tool_call_id: "other".into(),
+                },
+                "echo 2",
+                None,
+            ),
+            config_hook_def(
+                HookEvent::PostToolUse {
+                    session_id: String::new(),
+                    cwd: String::new(),
+                    tool_name: String::new(),
+                    tool_input: HashMap::new(),
+                    tool_output: String::new(),
+                    tool_call_id: String::new(),
+                },
+                "echo 3",
+                None,
+            ),
+        ];
+        let engine = HookEngine::new(hooks);
+        let summary = engine.summary();
+        assert_eq!(summary.get("PreToolUse"), Some(&2));
+        assert_eq!(summary.get("PostToolUse"), Some(&1));
+    }
+}

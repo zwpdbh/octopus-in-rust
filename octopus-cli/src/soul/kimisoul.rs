@@ -1034,8 +1034,7 @@ impl KimiSoul {
             .unwrap_or_else(|_| ".".to_string());
 
         // --- PreCompact hook ---
-        let event =
-            HookEvent::pre_compact(&self.session.id, &cwd, custom_instruction, token_count);
+        let event = HookEvent::pre_compact(&self.session.id, &cwd, custom_instruction, token_count);
         if self.hook_engine.has_hooks_for(&event) {
             let results = self.hook_engine.trigger(event, custom_instruction).await;
             for r in &results {

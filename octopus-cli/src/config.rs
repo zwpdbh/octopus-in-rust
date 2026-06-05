@@ -432,3 +432,89 @@ pub fn save_config(config: &Config, config_file: Option<&Path>) -> Result<()> {
     std::fs::write(config_file, text)?;
     Ok(())
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hook_def_deserializes_from_toml_with_event_string_only() {
+        let toml_str = r#"
+event = "PreToolUse"
+matcher = "Shell"
+command = "echo hello"
+timeout = 10
+"#;
+        let def: HookDef = toml::from_str(toml_str).expect("should parse HookDef from TOML");
+        assert_eq!(def.event.to_string(), "PreToolUse");
+        assert_eq!(def.matcher, Some("Shell".to_string()));
+        assert_eq!(def.command, "echo hello");
+        assert_eq!(def.timeout, 10);
+    }
+
+    #[test]
+    fn test_config_with_hooks_deserializes_from_toml() {
+        let toml_str = r#"
+default_model = ""
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Shell"
+command = "echo ok"
+timeout = 10
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "WriteFile"
+command = "prettier --write"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("should parse Config from TOML");
+        assert_eq!(config.hooks.len(), 2);
+
+        let first = &config.hooks[0];
+        assert_eq!(first.event.to_string(), "PreToolUse");
+        assert_eq!(first.matcher, Some("Shell".to_string()));
+        assert_eq!(first.command, "echo ok");
+        assert_eq!(first.timeout, 10);
+
+        let second = &config.hooks[1];
+        assert_eq!(second.event.to_string(), "PostToolUse");
+        assert_eq!(second.matcher, Some("WriteFile".to_string()));
+        assert_eq!(second.command, "prettier --write");
+        assert_eq!(second.timeout, 30); // default
+    }
+
+    #[test]
+    fn test_hook_def_default_timeout() {
+        let toml_str = r#"
+event = "Stop"
+command = "echo done"
+"#;
+        let def: HookDef = toml::from_str(toml_str).unwrap();
+        assert_eq!(def.timeout, 30);
+        assert_eq!(def.matcher, None);
+    }
+
+    #[test]
+    fn test_config_without_hooks_is_empty_vec() {
+        let toml_str = r#"
+default_model = ""
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn test_hook_def_invalid_event_fails() {
+        let toml_str = r#"
+event = "UnknownEvent"
+command = "echo bad"
+"#;
+        let result: std::result::Result<HookDef, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "unknown event should fail to parse");
+    }
+}
