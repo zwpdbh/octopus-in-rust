@@ -14,52 +14,63 @@ Wire-side hooks let these clients participate in the hook system as first-class 
 
 ## 7.2 Types
 
-**File:** `src/kimi_cli/wire/types.py`
+**File:** `src/wire/types.rs`
 
-### WireHookSubscription
+### HookTriggered / HookResolved
 
-```python
-@dataclass
-class WireHookSubscription:
-    id: str           # Unique subscription ID from client
-    event: str        # "PreToolUse", "Stop", etc.
-    matcher: str = "" # Regex filter
-    timeout: int = 30 # How long the server waits
+These are fire-and-forget wire events that let a UI observe hook execution:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookTriggered {
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub hook_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResolved {
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default = "default_allow")]
+    pub action: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+}
 ```
-
-Sent by the client during wire initialization.
 
 ### HookRequest
 
-```python
-class HookRequest(BaseModel):
-    id: str
-    subscription_id: str = ""
-    event: str
-    target: str = ""          # matcher_value (e.g., tool name)
-    input_data: dict[str, Any] = Field(default_factory=dict)
-
-    _resolved: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
-    _action: str = PrivateAttr(default="allow")
-    _reason: str = PrivateAttr(default="")
-
-    async def wait(self) -> tuple[Literal["allow", "block"], str]:
-        await self._resolved.wait()
-        return self._action, self._reason
-
-    def resolve(self, action: str, reason: str = "") -> None:
-        self._action = action
-        self._reason = reason
-        self._resolved.set()
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookRequest {
+    pub id: String,
+    pub subscription_id: String,
+    pub event: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub input_data: serde_json::Value,
+}
 ```
 
 ### HookResponse
 
-```python
-class HookResponse(BaseModel):
-    request_id: str
-    action: Literal["allow", "block"] = "allow"
-    reason: str = ""
+**File:** `src/wire/jsonrpc.rs`
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResponse {
+    pub request_id: String,
+    pub action: String,
+    #[serde(default)]
+    pub reason: String,
+}
 ```
 
 ## 7.3 Registration Flow
@@ -81,48 +92,85 @@ Client                              WireServer                         HookEngin
   │   result: {capabilities: {...}}    │                                  │
 ```
 
+**File:** `src/wire_server/mod.rs`
+
+```rust
+if let Some(hooks) = msg.params.hooks {
+    let mut subs: Vec<crate::hooks::WireHookSubscription> = Vec::new();
+    for h in hooks {
+        match parse_hook_event(&h.event) {
+            Some(event) => subs.push(crate::hooks::WireHookSubscription {
+                id: h.id,
+                event,
+                matcher: h.matcher,
+                compiled_matcher: None,
+                timeout: h.timeout,
+            }),
+            None => {
+                tracing::warn!("Ignoring unknown hook event from client: {}", h.event);
+            }
+        }
+    }
+    if !subs.is_empty() {
+        let mut soul = self.soul.lock().await;
+        soul.hook_engine.add_wire_subscriptions(subs);
+    }
+}
+```
+
 ## 7.4 Trigger Flow
 
-When `HookEngine.trigger()` matches a wire subscription:
+When `HookEngine::trigger()` matches a wire subscription, it creates a `WireHookHandle` and calls the `on_wire_hook` callback:
 
-```python
-handle = WireHookHandle(
-    id=str(uuid.uuid4()),
-    subscription_id=sub.id,
-    event=event,
-    target=matcher_value,
-    input_data=input_data,
-    _future=asyncio.get_event_loop().create_future(),
-)
-self._pending_wire_hooks[handle.id] = handle
-asyncio.create_task(self._on_wire_hook(handle))
+```rust
+let (tx, rx) = tokio::sync::oneshot::channel();
+let handle = WireHookHandle {
+    id: uuid::Uuid::new_v4().to_string(),
+    subscription_id: s.id.clone(),
+    event_name: event.to_string(),
+    target: matcher_value.to_string(),
+    input_data: input_data.clone(),
+    tx: Some(tx),
+};
+let handle_id = handle.id.clone();
+let cb_future = cb(handle);
+let on_done = on_done.clone();
+tasks.push(tokio::spawn(async move {
+    cb_future.await;
+    let result = match tokio::time::timeout(..., rx).await { ... };
+    if let Some(ref cb) = on_done {
+        cb(&handle_id);
+    }
+    result
+}));
 ```
 
 ### WireServer Dispatch
 
-**File:** `src/kimi_cli/wire/server.py` (lines 481–499)
+**File:** `src/wire_server/mod.rs`
 
-```python
-async def _on_wire_hook(self, handle: WireHookHandle) -> None:
-    request = HookRequest(
-        id=handle.id,
-        subscription_id=handle.subscription_id,
-        event=handle.event,
-        target=handle.target,
-        input_data=handle.input_data,
-    )
-    self._pending_requests[handle.id] = request
-
-    # Send to client
-    await self._send_msg(JSONRPCRequestMessage(
-        id=handle.id,
-        method="HookRequest",
-        params=request.model_dump(),
-    ))
-
-    # Wait for client response
-    action, reason = await request.wait()
-    handle.resolve(action, reason)
+```rust
+let on_wire_hook: OnWireHook = Box::new(move |handle: WireHookHandle| {
+    let pending = pending.clone();
+    let write_tx = write_tx.clone();
+    Box::pin(async move {
+        let request = HookRequest {
+            id: handle.id.clone(),
+            subscription_id: handle.subscription_id.clone(),
+            event: handle.event_name.clone(),
+            target: handle.target.clone(),
+            input_data: handle.input_data.clone(),
+        };
+        let request_id = request.id.clone();
+        pending.lock().await.insert(request_id.clone(), PendingRequest::Hook(handle));
+        if let Some(ref tx) = write_tx {
+            let envelope = JSONRPCRequestMessage::new(request_id, request);
+            if let Ok(v) = serde_json::to_value(&envelope) {
+                let _ = tx.send(v);
+            }
+        }
+    })
+});
 ```
 
 ## 7.5 Client-Side Handling
@@ -168,49 +216,53 @@ The client should:
 }
 ```
 
-Or, to allow:
+## 7.6 Server-Side Response Handling
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "uuid-handle",
-  "result": {
-    "request_id": "uuid-handle",
-    "action": "allow",
-    "reason": ""
-  }
+**File:** `src/wire_server/mod.rs`
+
+```rust
+async fn handle_response(&self, resp: JSONRPCClientResponse) {
+    let (id, result, error) = match resp {
+        JSONRPCClientResponse::Success(s) => (s.id, Some(s.result), None),
+        JSONRPCClientResponse::Error(e) => (e.id, None, Some(e.error)),
+    };
+
+    let pending = self.pending_requests.lock().await.remove(&id);
+
+    match pending {
+        Some(PendingRequest::Hook(handle)) => {
+            if error.is_some() {
+                handle.resolve(HookAction::Allow);
+                return;
+            }
+            if let Some(result) = result {
+                if let Ok(body) = serde_json::from_value::<HookResponse>(result) {
+                    let action = if body.action == "block" {
+                        HookAction::Block(body.reason)
+                    } else {
+                        HookAction::Allow
+                    };
+                    handle.resolve(action);
+                } else {
+                    handle.resolve(HookAction::Allow);
+                }
+            } else {
+                handle.resolve(HookAction::Allow);
+            }
+        }
+        // ... Approval handling omitted
+    }
 }
 ```
 
-## 7.6 Server-Side Response Handling
-
-**File:** `src/kimi_cli/wire/server.py` (lines 995–1017)
-
-```python
-case HookRequest():
-    if isinstance(msg, JSONRPCErrorResponse):
-        # Client sent an error → fail-open
-        request.resolve("allow")
-        return
-
-    try:
-        result = HookResponse.model_validate(msg.result)
-    except pydantic.ValidationError:
-        # Malformed response → fail-open
-        request.resolve("allow")
-        return
-
-    request.resolve(result.action, result.reason)
-```
-
 Key points:
-- **JSON-RPC error response** → `allow`.
-- **Validation error** → `allow`.
-- **Missing fields** → Pydantic defaults action to `allow`.
+- **JSON-RPC error response** → `allow` (fail-open).
+- **Validation error** → `allow` (fail-open).
+- **Missing fields** → serde defaults `action` to `allow`.
 
 ## 7.7 Timeout Handling
 
-Wire-side hooks share the same `timeout` semantics as server-side hooks. The `HookEngine.trigger()` uses `asyncio.gather()` with the same timeout boundary.
+Wire-side hooks share the same `timeout` semantics as server-side hooks. The `HookEngine::trigger()` uses `tokio::time::timeout` with the same boundary.
 
 However, the wire protocol itself adds latency:
 - Serialization / deserialization.
@@ -219,28 +271,49 @@ However, the wire protocol itself adds latency:
 
 For `PreToolUse`, this means a GUI client might show a modal dialog, and the user has **up to `timeout` seconds** to respond. If they don't, the hook is treated as `allow` (fail-open) and the tool proceeds.
 
+**Python comparison:** The Python version had the same timeout behavior, but the stale `PendingRequest` was never cleaned up from the server's dict. The Rust version adds the `on_wire_hook_done` callback to remove it explicitly.
+
 ## 7.8 Wire Events for Observability
 
 The wire protocol also emits events so clients can observe hook execution:
 
-```python
-# When a hook is triggered
+```rust
+// When a hook is triggered
 WireEvent::HookTriggered(HookTriggered {
-    request_id: handle.id,
-    subscription_id: sub.id,
-    event: event,
-    target: matcher_value,
+    event: event.to_string(),
+    target: matcher_value.to_string(),
+    hook_count: total,
 })
 
-# When a hook is resolved
+// When a hook is resolved
 WireEvent::HookResolved(HookResolved {
-    request_id: handle.id,
-    action: action,
-    reason: reason,
+    event: event.to_string(),
+    target: matcher_value.to_string(),
+    action: action_str,
+    reason,
+    duration_ms,
 })
 ```
 
 These are fire-and-forget notifications that let a UI show "Waiting for approval..." and then "Approved" or "Blocked".
+
+**Python comparison:** Python emitted the same events but sent them as raw Pydantic models serialized to dicts. Rust uses the `WireEvent` enum:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WireEvent {
+    TextPart(TextPart),
+    TurnBegin(TurnBegin),
+    HookRequest(HookRequest),
+    HookResponse(HookResponse),
+    HookTriggered(HookTriggered),
+    HookResolved(HookResolved),
+    // ...
+}
+```
+
+This is a **strong enum** (per `AGENTS.md`): the consumer uses an exhaustive `match` instead of trial-and-error deserialization.
 
 ## 7.9 Comparison: Server-Side vs. Wire-Side
 
@@ -253,3 +326,4 @@ These are fire-and-forget notifications that let a UI show "Waiting for approval
 | **Fail-open** | Timeout kills proc → allow | Timeout drops future → allow |
 | **Deduplication** | By command string | No deduplication |
 | **Security** | Runs as CLI user | Runs in client process |
+| **Cleanup** | Process exit cleans up | `on_wire_hook_done` removes pending request |

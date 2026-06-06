@@ -35,7 +35,7 @@ Every hook system has four parts:
 |------|-------------|------------------------|
 | **Event** | A named moment in the lifecycle. | Before a tool executes. |
 | **Payload** | Structured data about the current state. | `{tool_name: "shell", tool_input: {command: "rm -rf /"}, cwd: "/home/user", ...}` |
-| **Handler** | External code that receives the payload. | A shell script, a Python function, or a remote client over JSON-RPC. |
+| **Handler** | External code that receives the payload. | A shell script, a Rust function, or a remote client over JSON-RPC. |
 | **Decision** | What the core does with the handler's response. | If any handler says `block`, abort the tool call and return an error. |
 
 ## 2.3 Hook Patterns
@@ -60,18 +60,12 @@ Hook: (logs the failure to a file)
 Core: Continues normally.
 ```
 
-`PostToolUse`, `PostToolUseFailure`, `SessionEnd` are **observer hooks**.
+`PostToolUse`, `PostToolUseFailure` are **observer hooks**.
 
 ### Transform Hook
 The handler modifies the payload before the core proceeds. Used for **input sanitization**, **enrichment**.
 
-```
-Core: "I'm about to save this file."
-Hook: "Change the path from `/tmp/x` to `/tmp/x.bak`."
-Core: Proceeds with modified path.
-```
-
-The current kimi-cli hook system does **not** use transform hooks; it only supports `allow` / `block` decisions.
+The current octopus-cli hook system does **not** use transform hooks; it only supports `allow` / `block` decisions.
 
 ## 2.4 Where Hooks Live in the Architecture
 
@@ -90,7 +84,7 @@ The current kimi-cli hook system does **not** use transform hooks; it only suppo
 │       │            │            │           │
 │       ▼            ▼            ▼           │
 │  ┌─────────────────────────────────────┐    │
-│  │         Hook Engine                 │    │
+│  │         HookEngine                  │    │
 │  │  ┌─────────┐      ┌─────────────┐  │    │
 │  │  │ Server  │      │   Wire      │  │    │
 │  │  │ Hooks   │      │ Subscriptions│  │    │
@@ -104,13 +98,26 @@ The current kimi-cli hook system does **not** use transform hooks; it only suppo
 └─────────────────────────────────────────────┘
 ```
 
-The **Hook Engine** sits between the core business logic and external handlers. It is:
+The **HookEngine** sits between the core business logic and external handlers. It is:
 - **Synchronous** for blocking hooks (the core waits for a decision).
 - **Asynchronous / fire-and-forget** for observer hooks (the core does not wait).
 
-## 2.5 Key Design Decisions in kimi-cli
+## 2.5 Key Design Decisions in octopus-cli
 
 1. **Fail-open**: If a hook crashes, times out, or returns invalid data, the default is `allow`. Safety hooks should be tested carefully.
-2. **Parallel execution**: All matched hooks run concurrently; the result is aggregated (block wins).
-3. **Regex matching**: Each hook can declare a `matcher` regex to filter which events it cares about (e.g., only block `shell` tools).
-4. **Two backends**: Server-side (local subprocess) and wire-side (remote client over JSON-RPC).
+2. **Parallel execution**: All matched hooks run concurrently; the result is aggregated (`block` wins).
+3. **Compiled regex matching**: Each hook declares a `matcher` regex. We compile it **once** at load time using `regex::Regex` (not on every trigger like the Python original did).
+4. **Two backends**: Server-side (local `tokio::process::Command`) and wire-side (remote client over JSON-RPC).
+5. **Strong typing**: `HookEvent` is an enum with associated data, not a string literal. Payloads are typed variants, not `dict[str, Any]` or `serde_json::Value`.
+
+## 2.6 Python vs. Rust at a Glance
+
+| Aspect | Python (kimi-cli) | Rust (octopus-cli) |
+|--------|-------------------|-------------------|
+| **Event type** | `Literal["PreToolUse", ...]` | `enum HookEvent` with discriminant-only `Eq`/`Hash` |
+| **Payload** | `dict[str, Any]` built by helpers | `enum HookPayload` (variant associated data) |
+| **Subprocess** | `asyncio.create_subprocess_shell` | `tokio::process::Command` |
+| **Regex** | `re.search(pattern, value)` on every trigger | `Regex::new` once at load; `re.is_match` at trigger |
+| **Wire carrier** | Pydantic models sent as plain dicts | `enum WireEvent` with `#[serde(untagged)]` |
+| **Clone cost** | Dicts passed by reference (but task spawn copies) | `Arc<HookEvent>` shared across tasks; JSON serialized once |
+| **Stdout parsing** | Manual `dict.get("hookSpecificOutput")` | Typed `HookStdout` struct with `Deserialize` |

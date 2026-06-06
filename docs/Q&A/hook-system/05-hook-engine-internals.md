@@ -1,160 +1,98 @@
 # 5. Hook Engine Internals
 
-The `HookEngine` is the brain of the hook system. It decides *which* hooks run, *when* they run, and *how* their results are combined. This section dissects the implementation in `src/kimi_cli/hooks/engine.py`.
+The `HookEngine` is the brain of the hook system. It decides *which* hooks run, *when* they run, and *how* their results are combined. This section dissects the Rust implementation in `src/hooks/engine.rs`, with Python references where the designs diverge.
 
 ## 5.1 Data Structures
 
-```python
-@dataclass
-class HookResult:
-    action: Literal["allow", "block"] = "allow"
-    reason: str = ""
-
-class HookEngine:
-    def __init__(
-        self,
-        hooks: list[HookDef] | None = None,
-        cwd: str | None = None,
-        on_wire_hook: Callable[[WireHookHandle], Awaitable[None]] | None = None,
-    ):
-        self._hooks: list[HookDef] = list(hooks) if hooks else []
-        self._wire_subs: list[WireHookSubscription] = []
-        self._cwd = cwd
-        self._on_wire_hook = on_wire_hook
-
-        # Indexes for O(1) lookup by event name
-        self._by_event: dict[str, list[HookDef]] = {}
-        self._wire_by_event: dict[str, list[WireHookSubscription]] = {}
-        self._pending_wire_hooks: dict[str, WireHookHandle] = {}
-
-        self._rebuild_indexes()
+```rust
+pub struct HookEngine {
+    hooks: Vec<HookDef>,
+    wire_subs: Vec<WireHookSubscription>,
+    cwd: Option<PathBuf>,
+    on_triggered: Option<OnTriggered>,
+    on_resolved: Option<OnResolved>,
+    on_wire_hook: Option<OnWireHook>,
+    on_wire_hook_done: Option<OnWireHookDone>,
+    by_event: HashMap<HookEvent, Vec<HookDef>>,
+    wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
+}
 ```
 
 The engine maintains **two indexes**:
-- `_by_event`: maps `"PreToolUse"` → list of local `HookDef` objects.
-- `_wire_by_event`: maps `"PreToolUse"` → list of remote `WireHookSubscription` objects.
+- `by_event`: maps `HookEvent::PreToolUse` → list of local `HookDef` objects.
+- `wire_by_event`: maps `HookEvent::PreToolUse` → list of remote `WireHookSubscription` objects.
 
-These are rebuilt whenever hooks or subscriptions are added.
+**Python comparison:** The Python engine used `dict[str, list[HookDef]]` — string keys instead of enum keys. The lookup was `self._by_event.get("PreToolUse")`.
 
 ## 5.2 Index Rebuilding
 
-```python
-def _rebuild_indexes(self) -> None:
-    self._by_event.clear()
-    for h in self._hooks:
-        self._by_event.setdefault(h.event, []).append(h)
-
-    self._wire_by_event.clear()
-    for sub in self._wire_subs:
-        self._wire_by_event.setdefault(sub.event, []).append(sub)
+```rust
+fn rebuild_index(&mut self) {
+    self.by_event.clear();
+    for h in &self.hooks {
+        self.by_event
+            .entry(h.event.clone())
+            .or_default()
+            .push(h.clone());
+    }
+    self.wire_by_event.clear();
+    for s in &self.wire_subs {
+        self.wire_by_event
+            .entry(s.event.clone())
+            .or_default()
+            .push(s.clone());
+    }
+}
 ```
 
 This is simple but effective: it trades a small amount of startup time for O(1) event lookup at trigger time.
+
+Because `HookEvent` equality is **discriminant-only**, `h.event.clone()` is cheap — it only clones the enum discriminant and a few empty strings (for config-loaded hooks) or the actual payload (for runtime events). In practice, the `Arc<HookEvent>` optimization in `trigger()` makes this cost negligible.
 
 ## 5.3 Registration API
 
 ### Adding Server-Side Hooks
 
-```python
-def add_hooks(self, hooks: list[HookDef]) -> None:
-    self._hooks.extend(hooks)
-    self._rebuild_indexes()
+```rust
+pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
+    self.hooks.extend(hooks);
+    self.rebuild_index();
+}
 ```
 
-Called during startup after parsing `config.toml`.
+Called during startup after parsing `config.toml`. The hooks are already compiled by `HookDef::compile_matcher()` during config loading.
 
 ### Adding Wire Subscriptions
 
-```python
-def add_wire_subscriptions(self, subs: list[WireHookSubscription]) -> None:
-    self._wire_subs.extend(subs)
-    self._rebuild_indexes()
+```rust
+pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
+    for s in &mut subs {
+        s.compiled_matcher = Regex::new(&s.matcher).ok();
+    }
+    self.wire_subs.extend(subs);
+    self.rebuild_index();
+}
 ```
 
 Called when a wire client sends its subscription list during initialization.
 
-## 5.4 The Trigger Method (Full Implementation)
+**Python comparison:** Python's `add_wire_subscriptions` stored the raw string matcher and compiled it on every trigger.
 
-```python
-async def trigger(
-    self,
-    event: HookEventType,
-    *,
-    matcher_value: str = "",
-    input_data: dict[str, Any],
-) -> list[HookResult]:
-    """
-    Trigger all hooks matching the given event and matcher_value.
-    Returns a list of HookResult, one per executed hook.
-    """
-    tasks: list[asyncio.Task[HookResult]] = []
+## 5.4 Matching with Compiled Regexes
 
-    # --- Server-side hooks ---
-    matched_hooks = self._match_hooks(event, matcher_value)
-    for hook in matched_hooks:
-        tasks.append(
-            asyncio.create_task(
-                run_hook(hook.command, input_data, timeout=hook.timeout, cwd=self._cwd),
-                name=f"hook:{hook.command}",
-            )
-        )
-
-    # --- Wire-side hooks ---
-    matched_wire = self._match_wire(event, matcher_value)
-    for sub in matched_wire:
-        handle = WireHookHandle(
-            id=str(uuid.uuid4()),
-            subscription_id=sub.id,
-            event=event,
-            target=matcher_value,
-            input_data=input_data,
-            _future=asyncio.get_event_loop().create_future(),
-        )
-        self._pending_wire_hooks[handle.id] = handle
-        if self._on_wire_hook:
-            asyncio.create_task(self._on_wire_hook(handle))
-        tasks.append(asyncio.create_task(handle.wait(), name=f"wire:{sub.id}"))
-
-    # --- Run everything in parallel ---
-    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # --- Parse with fail-open ---
-    results: list[HookResult] = []
-    for r in raw_results:
-        if isinstance(r, Exception):
-            results.append(HookResult(action="allow", reason=f"Hook failed: {r}"))
-        else:
-            results.append(r)
-
-    # --- Cleanup wire handles ---
-    for sub in matched_wire:
-        # Handles are removed from _pending_wire_hooks when resolved
-        pass
-
-    # --- Telemetry (fire-and-forget) ---
-    self._emit_telemetry(event, matcher_value, len(tasks), results)
-
-    return results
-```
-
-## 5.5 Matching Logic
-
-```python
-def _match_hooks(self, event: str, matcher_value: str) -> list[HookDef]:
-    candidates = self._by_event.get(event, [])
-    matched = []
-    for h in candidates:
-        if not h.matcher or re.search(h.matcher, matcher_value):
-            matched.append(h)
-    return matched
-
-def _match_wire(self, event: str, matcher_value: str) -> list[WireHookSubscription]:
-    candidates = self._wire_by_event.get(event, [])
-    matched = []
-    for sub in candidates:
-        if not sub.matcher or re.search(sub.matcher, matcher_value):
-            matched.append(sub)
-    return matched
+```rust
+fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+    match compiled {
+        Some(re) => re.is_match(value),
+        None => {
+            // Invalid regex was already logged when compiled; treat as no-match.
+            false
+        }
+    }
+}
 ```
 
 ### Regex Behavior
@@ -162,26 +100,74 @@ def _match_wire(self, event: str, matcher_value: str) -> list[WireHookSubscripti
 - `matcher = ""` → matches everything (default).
 - `matcher = "shell"` → matches exactly the string `shell` anywhere in `matcher_value`.
 - `matcher = "shell|bash"` → matches either `shell` or `bash`.
-- Invalid regex is handled gracefully (falls back to no-match).
+- Invalid regex → logged once at compilation time; treated as no-match.
 
-## 5.6 Deduplication
+**Python comparison:** Python's `match_regex` called `re.search(pattern, value)` on every trigger, compiling the regex fresh each time:
+
+```python
+match Regex::new(pattern):  # Rust compiles once
+    Ok(re) => re.is_match(value)
+```
+
+```python
+re.search(pattern, value)   # Python compiles every call
+```
+
+## 5.5 Deduplication
 
 Server-side hooks are deduplicated by **command string**:
 
-```python
-def _deduplicate_hooks(self, hooks: list[HookDef]) -> list[HookDef]:
-    seen: set[str] = set()
-    deduped: list[HookDef] = []
-    for h in hooks:
-        if h.command not in seen:
-            seen.add(h.command)
-            deduped.append(h)
-    return deduped
+```rust
+let mut seen_commands = HashSet::new();
+for h in matched {
+    if seen_commands.insert(h.command.clone()) {
+        server_matched.push(h);
+    }
+}
 ```
 
 Why? A user might accidentally register the same script twice in `config.toml`. Deduplication prevents double-execution.
 
 Wire subscriptions are **not** deduplicated because each subscription comes from a different client and may return a different decision.
+
+## 5.6 The Trigger Method (Detailed)
+
+```rust
+pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+    let event = Arc::new(event);
+    let input_data = serde_json::to_value(&*event).unwrap_or_default();
+    // ... match, dedup, spawn tasks, gather, aggregate, callbacks
+}
+```
+
+### Arc Optimization
+
+Before the fix, the code did:
+
+```rust
+let event = event.clone();  // cloned once per hook!
+```
+
+Now it does:
+
+```rust
+let event = Arc::new(event);
+// ...
+let event = Arc::clone(&event);  // cheap refcount bump
+run_hook(&command, &*event, ...)
+```
+
+**Python comparison:** Python passed dictionaries by reference, but each `asyncio.create_task` closure captured variables from the enclosing scope. Because Python closures capture by reference, the dict was shared — but if the dict was mutated later, all tasks would see the mutation. Rust's `Arc` makes the sharing explicit and safe.
+
+### Pre-serialization Optimization
+
+Before the fix, wire hooks did:
+
+```rust
+input_data: serde_json::to_value(&event).unwrap_or_default(),  // once per wire hook
+```
+
+Now the event is serialized **once** before the loop, and the `Value` is cloned for each wire hook.
 
 ## 5.7 Fail-Open Guarantee
 
@@ -199,21 +185,51 @@ This is critical for **availability**: a broken hook should not brick the entire
 
 ## 5.8 Aggregation Semantics
 
-```python
-def _aggregate(self, results: list[HookResult]) -> HookResult:
-    for r in results:
-        if r.action == "block":
-            return r  # First block wins; reason is preserved
-    return HookResult(action="allow")
+```rust
+let mut action = HookAction::Allow;
+for r in &results {
+    if let HookAction::Block(ref reason) = r.action {
+        action = HookAction::Block(reason.clone());
+        break;
+    }
+}
 ```
 
-In practice, the caller (`toolset.py`) does its own loop, but the semantic is the same: **any block blocks**.
+**Block wins over allow**: Even if 9 hooks say `allow` and 1 says `block`, the tool is blocked.
 
-## 5.9 Thread Safety
+## 5.9 Wire Hook Cleanup
+
+The `on_wire_hook_done` callback solves a leak that existed in the Python version:
+
+```rust
+let on_done = self.on_wire_hook_done.clone();
+// ...
+tasks.push(tokio::spawn(async move {
+    let result = match tokio::time::timeout(..., rx).await { ... };
+    if let Some(ref cb) = on_done {
+        cb(&handle_id);  // ← cleanup even on timeout!
+    }
+    result
+}));
+```
+
+In the wire server, this callback removes the entry from `pending_requests`:
+
+```rust
+let on_done = Arc::new(move |id: &str| {
+    let pending = pending_cleanup.clone();
+    let id = id.to_string();
+    tokio::spawn(async move {
+        pending.lock().await.remove(&id);
+    });
+});
+```
+
+**Python comparison:** The Python version had no equivalent cleanup. If a client never responded, the `PendingRequest` stayed in the server's `_pending_requests` dict forever. Python's garbage collector would eventually collect it, but there was no explicit cleanup.
+
+## 5.10 Thread Safety
 
 The `HookEngine` is **not thread-safe** for mutation but is safe for concurrent triggers because:
 - `add_hooks()` and `add_wire_subscriptions()` are only called during setup.
-- `_pending_wire_hooks` is accessed only from the same event loop.
-- `asyncio.gather` runs all hooks concurrently within the same loop.
-
-If you need dynamic hook registration at runtime, you would need a lock around index rebuilding.
+- `trigger()` only reads shared state (`by_event`, `wire_by_event`) and spawns independent tasks.
+- The `on_wire_hook` callback uses `Arc<Mutex<...>>` for shared mutable state in the wire server.

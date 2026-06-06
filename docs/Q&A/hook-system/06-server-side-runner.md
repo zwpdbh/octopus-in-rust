@@ -1,62 +1,55 @@
 # 6. Server-Side Runner
 
-The `run_hook()` function in `src/kimi_cli/hooks/runner.py` is the bridge between the Python `HookEngine` and arbitrary external programs. It turns a hook configuration into a subprocess, feeds it JSON, and interprets the result.
+The `run_hook()` function in `src/hooks/runner.rs` is the bridge between the Rust `HookEngine` and arbitrary external programs. It turns a hook configuration into a subprocess, feeds it JSON, and interprets the result using typed structs.
 
 ## 6.1 Signature
 
-```python
-async def run_hook(
-    command: str,
-    input_data: dict[str, Any],
-    *,
-    timeout: int = 30,
-    cwd: str | None = None,
-) -> HookResult:
+```rust
+pub async fn run_hook(
+    command: &str,
+    event: &HookEvent,
+    timeout_secs: u64,
+    cwd: Option<&std::path::Path>,
+) -> HookResult
 ```
 
 | Parameter | Description |
 |-----------|-------------|
 | `command` | The shell command string from `HookDef.command`. |
-| `input_data` | The JSON payload (e.g., `events.pre_tool_use(...)`). |
-| `timeout` | Maximum seconds to wait for the subprocess. |
-| `cwd` | Working directory for the subprocess (defaults to engine's cwd). |
+| `event` | The typed `HookEvent` payload (serialized to JSON on stdin). |
+| `timeout_secs` | Maximum seconds to wait for the subprocess. |
+| `cwd` | Working directory for the subprocess. |
 
 ## 6.2 Subprocess Creation
 
-```python
-proc = await asyncio.create_subprocess_shell(
-    command,
-    stdin=asyncio.subprocess.PIPE,
-    stdout=asyncio.subprocess.PIPE,
-    stderr=asyncio.subprocess.PIPE,
-    cwd=cwd,
-)
+```rust
+let mut child = tokio::process::Command::new("sh")
+    .arg("-c")
+    .arg(command)
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn();
 ```
 
-**Important:** `create_subprocess_shell` means the `command` string is passed to `/bin/sh -c`. This allows:
-- Shell pipes: `"cat | jq .tool_name"`
-- Environment variables: `"MY_VAR=1 python script.py"`
-- Relative paths: `"python ./hooks/my_hook.py"`
+**Important:** `Command::new("sh").arg("-c").arg(command)` passes the command string to `/bin/sh -c`. This allows shell pipes, environment variables, and relative paths — but it also means shell metacharacters in `command` are interpreted. The `command` comes verbatim from `config.toml`; no tool data is interpolated.
 
-But it also means:
-- **Quote carefully**: if `command` contains user input, it must be shell-escaped.
-- **Security**: a malicious `config.toml` could inject shell commands.
+**Python comparison:** Python used `asyncio.create_subprocess_shell(command, ...)` — functionally identical. Both run the command through a shell.
 
 ## 6.3 Communication Protocol
 
 The runner writes JSON to stdin and reads stdout/stderr:
 
-```python
-stdin_data = json.dumps(input_data).encode()
-stdout, stderr = await asyncio.wait_for(
-    proc.communicate(input=stdin_data),
-    timeout=timeout,
-)
+```rust
+let json_input = serde_json::to_vec(event)?;
+// ...
+tokio::io::AsyncWriteExt::write_all(&mut stdin, &json_input).await?;
+drop(stdin); // Close stdin so the child sees EOF
 ```
 
 ### stdin
 
-A single JSON object, minified, followed by EOF.
+A single JSON object, produced by serializing the `HookEvent` enum:
 
 ```json
 {"hook_event_name":"PreToolUse","session_id":"sess_abc","cwd":"/home/user","tool_name":"shell","tool_input":{"command":"ls"},"tool_call_id":"call_xyz"}
@@ -64,15 +57,36 @@ A single JSON object, minified, followed by EOF.
 
 ### stdout
 
-Expected to be valid JSON when exit code is 0. Optional format:
+Expected to be valid JSON when exit code is 0. The Rust runner deserializes it into a typed struct:
 
-```json
-{
-  "hookSpecificOutput": {
-    "permissionDecision": "allow"
-  }
+```rust
+#[derive(Debug, Deserialize)]
+struct HookStdout {
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: Option<HookSpecificOutput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HookSpecificOutput {
+    #[serde(rename = "permissionDecision")]
+    permission_decision: Option<String>,
+    #[serde(rename = "permissionDecisionReason")]
+    permission_decision_reason: Option<String>,
 }
 ```
+
+**Python comparison:** The Python runner manually indexed a `dict`:
+
+```python
+parsed = json.loads(stdout)
+if parsed.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+    ...
+```
+
+The Rust approach is strictly better:
+- A typo in `#[serde(rename = ...)]` is a compile error.
+- Adding a new required field forces updates at every construction site.
+- The IDE can autocomplete field names.
 
 ### stderr
 
@@ -80,27 +94,30 @@ Used as the `reason` string when `exit_code == 2`.
 
 ## 6.4 Decision Logic
 
-```python
-# Exit code 2 → explicit block
-if proc.returncode == 2:
-    return HookResult(
-        action="block",
-        reason=stderr.decode().strip() or "Blocked"
-    )
+```rust
+let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+let exit_code = output.status.code().unwrap_or(0);
 
-# Exit code 0 → check stdout JSON
-if proc.returncode == 0:
-    try:
-        parsed = json.loads(stdout.decode())
-        decision = parsed.get("hookSpecificOutput", {}).get("permissionDecision")
-        if decision == "deny":
-            return HookResult(action="block", reason="Denied by hook output")
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return HookResult(action="allow")
+// Exit code 2 → explicit block
+if exit_code == 2 {
+    return HookResult::block(stderr.trim());
+}
 
-# Any other exit code → allow (fail-open)
-return HookResult(action="allow")
+// Exit code 0 + JSON stdout with deny → block
+if exit_code == 0 && !stdout.trim().is_empty() {
+    if let Ok(parsed) = serde_json::from_str::<HookStdout>(&stdout) {
+        if let Some(ref output) = parsed.hook_specific_output {
+            if output.permission_decision.as_deref() == Some("deny") {
+                let reason = output.permission_decision_reason.clone().unwrap_or_default();
+                return HookResult::block(reason);
+            }
+        }
+    }
+}
+
+// Everything else → allow (fail-open)
+HookResult::allow()
 ```
 
 ### Exit Code Semantics
@@ -113,23 +130,32 @@ return HookResult(action="allow")
 
 ## 6.5 Timeout Behavior
 
-```python
-try:
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(input=...),
-        timeout=timeout,
-    )
-except asyncio.TimeoutError:
-    proc.kill()
-    return HookResult(action="allow", reason="Hook timed out")
+```rust
+match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), async {
+    // ... write stdin, wait for output
+}).await {
+    Ok(output) => output,
+    Err(_) => {
+        tracing::warn!("Hook timed out after {}s: {}", timeout_secs, command);
+        return HookResult {
+            action: HookAction::Allow,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            timed_out: true,
+        };
+    }
+}
 ```
 
 If a hook exceeds its timeout:
-1. The subprocess is **killed** (`SIGKILL`).
+1. The subprocess is **killed** implicitly when the timeout future drops.
 2. The result is **`allow`**.
-3. The reason string notes the timeout.
+3. The `timed_out` flag is set for telemetry.
 
 This prevents a hung hook from freezing the entire CLI.
+
+**Python comparison:** Python used `asyncio.wait_for(proc.communicate(...), timeout=timeout)` and then `proc.kill()` on timeout. Same semantics.
 
 ## 6.6 Complete Example: A Shell Hook
 
@@ -194,13 +220,15 @@ $ echo $?
 2
 ```
 
+This script works identically in both the Python and Rust versions because the JSON protocol and exit-code semantics are preserved across the rewrite.
+
 ## 6.7 Performance Considerations
 
 | Concern | Reality |
 |---------|---------|
 | Subprocess overhead | Spawning a shell + Python interpreter takes ~50–100ms. |
 | Parallelism | Multiple hooks run concurrently, so overhead is the max, not the sum. |
-| JSON serialization | Negligible for typical payloads (< 10 KB). |
+| JSON serialization | Negligible for typical payloads (< 10 KB). In Rust, the event is serialized once per trigger (or once per wire batch), not once per hook. |
 | File descriptors | Each subprocess gets its own stdin/stdout/stderr pipes. |
 
 For high-frequency hooks (e.g., `PostToolUse` on every token), prefer **wire-side** hooks or long-running daemons that the shell command talks to via a socket.
