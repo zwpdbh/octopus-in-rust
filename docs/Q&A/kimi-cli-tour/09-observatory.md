@@ -173,7 +173,7 @@ Hooks are **gates, not transformers** — they can allow or block, but never mod
 | `PostCompact` | After context compaction |
 | `Notification` | When a notification is delivered |
 
-> 🔍 **For a deep dive into the hook engine, discriminant equality, wire hook request/response lifecycle, and the gate pattern, see [Tour 10: The Hook System](./10-hook-system.md).**
+> 🔍 **For a deep dive into the hook engine, discriminant equality, wire hook request/response lifecycle, and the gate pattern, see the [Hook System tutorial](../hook-system/).**
 
 ---
 
@@ -199,7 +199,7 @@ Hooks are **synchronous gates** (they can block actions). Telemetry is **asynchr
 ## 🎁 Souvenir Shop: What to Remember
 
 1. **Telemetry is opt-out by design.** Events are anonymous (no user IDs, no conversation content). The `track!` macro is a no-op until a sink is attached.
-2. **Hooks are user-defined middleware.** They turn the agent from a black box into a customizable pipeline. See [Tour 10](./10-hook-system.md) for the full architecture.
+2. **Hooks are user-defined middleware.** They turn the agent from a black box into a customizable pipeline. See the [Hook System tutorial](../hook-system/) for the full architecture.
 3. **Disk fallback makes telemetry resilient.** Even without network, events are preserved and retried later.
 4. **Hook evaluation is parallel.** Multiple hooks on the same event run concurrently, not sequentially.
 
@@ -220,7 +220,7 @@ Congratulations! You've visited every floor of Octopus-CLI:
 | 🖥️ [Front Desk](./07-front-desk.md) | TUI shell, markdown rendering, clipboard |
 | 📁 [Archives](./08-archives.md) | Sessions, context, forking, compaction |
 | 🔭 [Observatory](./09-observatory.md) | Telemetry, hooks, event tracking |
-| 🪝 [Hook System](./10-hook-system.md) | Security Annex — deep dive into server-side and wire hooks |
+| 🪝 [Hook System](../hook-system/) | Security Annex — deep dive into server-side and wire hooks |
 
 ### The Building in Numbers
 
