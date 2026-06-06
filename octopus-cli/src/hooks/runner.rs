@@ -2,6 +2,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::hooks::event::HookEvent;
 
+/// Structured JSON a hook may write to stdout when it exits 0.
+#[derive(Debug, Deserialize)]
+struct HookStdout {
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: Option<HookSpecificOutput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HookSpecificOutput {
+    #[serde(rename = "permissionDecision")]
+    permission_decision: Option<String>,
+    #[serde(rename = "permissionDecisionReason")]
+    permission_decision_reason: Option<String>,
+}
+
 /// Semantic decision produced by a hook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "action", content = "reason")]
@@ -133,18 +148,13 @@ pub async fn run_hook(
 
     // Exit 0 + JSON stdout = structured decision
     if exit_code == 0 && !stdout.trim().is_empty() {
-        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(hook_output) = raw.get("hookSpecificOutput").and_then(|v| v.as_object()) {
-                if hook_output
-                    .get("permissionDecision")
-                    .and_then(|v| v.as_str())
-                    == Some("deny")
-                {
-                    let reason = hook_output
-                        .get("permissionDecisionReason")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
+        if let Ok(parsed) = serde_json::from_str::<HookStdout>(&stdout) {
+            if let Some(ref output) = parsed.hook_specific_output {
+                if output.permission_decision.as_deref() == Some("deny") {
+                    let reason = output
+                        .permission_decision_reason
+                        .clone()
+                        .unwrap_or_default();
                     return HookResult {
                         action: HookAction::Block(reason),
                         stdout,

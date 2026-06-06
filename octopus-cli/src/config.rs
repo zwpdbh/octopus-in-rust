@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::exception::{ConfigError, Result};
@@ -205,9 +206,27 @@ pub struct HookDef {
     pub event: crate::hooks::HookEvent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
+    /// Compiled regex from `matcher`. Filled at load time; `#[serde(skip)]`
+    /// because it is derived from `matcher` and not persisted.
+    #[serde(skip)]
+    pub compiled_matcher: Option<Regex>,
     pub command: String,
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
+}
+
+impl HookDef {
+    /// Compile `self.matcher` into `self.compiled_matcher`.
+    /// Warnings are emitted for invalid regex patterns.
+    pub fn compile_matcher(&mut self) {
+        self.compiled_matcher = self.matcher.as_ref().and_then(|p| match Regex::new(p) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                tracing::warn!("Invalid regex in hook matcher '{}': {}", p, e);
+                None
+            }
+        });
+    }
 }
 
 fn default_hook_timeout() -> u64 {
@@ -395,6 +414,9 @@ pub fn load_config(config_file: Option<&Path>) -> Result<Config> {
 
     config.is_from_default_location = is_default_config_file;
     config.source_file = Some(config_file);
+    for hook in &mut config.hooks {
+        hook.compile_matcher();
+    }
     config.validate()?;
     Ok(config)
 }
@@ -405,11 +427,15 @@ pub fn load_config_from_string(config_string: &str) -> Result<Config> {
         return Err(ConfigError::EmptyConfig.into());
     }
 
-    let config: Config = match serde_json::from_str(config_string) {
+    let mut config: Config = match serde_json::from_str(config_string) {
         Ok(c) => c,
         Err(json_err) => toml::from_str(config_string)
             .map_err(|toml_err| ConfigError::InvalidText(format!("{}; {}", json_err, toml_err)))?,
     };
+
+    for hook in &mut config.hooks {
+        hook.compile_matcher();
+    }
 
     config.validate()?;
     Ok(config)

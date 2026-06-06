@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use regex::Regex;
 
@@ -14,6 +15,8 @@ pub struct WireHookSubscription {
     pub id: String,
     pub event: HookEvent,
     pub matcher: String,
+    /// Compiled regex from `matcher`, computed when the subscription is added.
+    pub compiled_matcher: Option<Regex>,
     pub timeout: u64,
 }
 
@@ -23,6 +26,7 @@ pub type OnResolved = Box<dyn Fn(&HookEvent, &str, HookAction, u64) + Send + Syn
 pub type OnWireHook = Box<
     dyn Fn(WireHookHandle) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
 >;
+pub type OnWireHookDone = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A pending wire hook request waiting for client response.
 #[derive(Debug)]
@@ -59,6 +63,7 @@ pub struct HookEngine {
     on_triggered: Option<OnTriggered>,
     on_resolved: Option<OnResolved>,
     on_wire_hook: Option<OnWireHook>,
+    on_wire_hook_done: Option<OnWireHookDone>,
     by_event: HashMap<HookEvent, Vec<HookDef>>,
     wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
 }
@@ -72,6 +77,7 @@ impl HookEngine {
             on_triggered: None,
             on_resolved: None,
             on_wire_hook: None,
+            on_wire_hook_done: None,
             by_event: HashMap::new(),
             wire_by_event: HashMap::new(),
         };
@@ -95,12 +101,19 @@ impl HookEngine {
         self.on_wire_hook = on_wire_hook;
     }
 
+    pub fn set_on_wire_hook_done(&mut self, cb: Option<OnWireHookDone>) {
+        self.on_wire_hook_done = cb;
+    }
+
     pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
         self.hooks.extend(hooks);
         self.rebuild_index();
     }
 
-    pub fn add_wire_subscriptions(&mut self, subs: Vec<WireHookSubscription>) {
+    pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
+        for s in &mut subs {
+            s.compiled_matcher = Regex::new(&s.matcher).ok();
+        }
         self.wire_subs.extend(subs);
         self.rebuild_index();
     }
@@ -166,14 +179,14 @@ impl HookEngine {
         }
     }
 
-    fn match_regex(&self, pattern: &str, value: &str) -> bool {
+    fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
         if pattern.is_empty() {
             return true;
         }
-        match Regex::new(pattern) {
-            Ok(re) => re.is_match(value),
-            Err(e) => {
-                tracing::warn!("Invalid regex in hook matcher '{}': {}", pattern, e);
+        match compiled {
+            Some(re) => re.is_match(value),
+            None => {
+                // Invalid regex was already logged when compiled; treat as no-match.
                 false
             }
         }
@@ -181,11 +194,18 @@ impl HookEngine {
 
     /// Run all matching hooks (server + wire) in parallel.
     pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+        let event = Arc::new(event);
+        let input_data = serde_json::to_value(&*event).unwrap_or_default();
+
         // Match server-side hooks
         let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut server_matched: Vec<&HookDef> = Vec::new();
-        for h in self.by_event.get(&event).into_iter().flatten() {
-            if !self.match_regex(h.matcher.as_deref().unwrap_or(""), matcher_value) {
+        for h in self.by_event.get(&*event).into_iter().flatten() {
+            if !Self::match_regex(
+                h.compiled_matcher.as_ref(),
+                h.matcher.as_deref().unwrap_or(""),
+                matcher_value,
+            ) {
                 continue;
             }
             if seen_commands.contains(&h.command) {
@@ -198,10 +218,10 @@ impl HookEngine {
         // Match wire subscriptions
         let wire_matched: Vec<&WireHookSubscription> = self
             .wire_by_event
-            .get(&event)
+            .get(&*event)
             .into_iter()
             .flatten()
-            .filter(|s| self.match_regex(&s.matcher, matcher_value))
+            .filter(|s| Self::match_regex(s.compiled_matcher.as_ref(), &s.matcher, matcher_value))
             .collect();
 
         let total = server_matched.len() + wire_matched.len();
@@ -211,7 +231,7 @@ impl HookEngine {
 
         // Emit triggered callback
         if let Some(ref cb) = self.on_triggered {
-            cb(&event, matcher_value, total);
+            cb(&*event, matcher_value, total);
         }
 
         let t0 = std::time::Instant::now();
@@ -220,15 +240,16 @@ impl HookEngine {
         // Server-side: run shell commands
         for h in server_matched {
             let command = h.command.clone();
-            let event = event.clone();
+            let event = Arc::clone(&event);
             let timeout = h.timeout;
             let cwd = self.cwd.clone();
             tasks.push(tokio::spawn(async move {
-                run_hook(&command, &event, timeout, cwd.as_deref()).await
+                run_hook(&command, &*event, timeout, cwd.as_deref()).await
             }));
         }
 
         // Wire-side: dispatch to client via callback
+        let on_done = self.on_wire_hook_done.clone();
         for s in wire_matched {
             if let Some(ref cb) = self.on_wire_hook {
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -237,18 +258,23 @@ impl HookEngine {
                     subscription_id: s.id.clone(),
                     event_name: event.to_string(),
                     target: matcher_value.to_string(),
-                    input_data: serde_json::to_value(&event).unwrap_or_default(),
+                    input_data: input_data.clone(),
                     tx: Some(tx),
                 };
+                let handle_id = handle.id.clone();
                 let timeout_secs = s.timeout;
                 let target = matcher_value.to_string();
                 let cb_future = cb(handle);
+                let on_done = on_done.clone();
                 tasks.push(tokio::spawn(async move {
                     // First let the callback send the request to the client.
                     cb_future.await;
                     // Then wait for the client response with a timeout.
-                    match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), rx)
-                        .await
+                    let result = match tokio::time::timeout(
+                        tokio::time::Duration::from_secs(timeout_secs),
+                        rx,
+                    )
+                    .await
                     {
                         Ok(Ok(result)) => result,
                         Ok(Err(_)) => {
@@ -265,7 +291,11 @@ impl HookEngine {
                                 timed_out: true,
                             }
                         }
+                    };
+                    if let Some(ref cb) = on_done {
+                        cb(&handle_id);
                     }
+                    result
                 }));
             } else {
                 tasks.push(tokio::spawn(async move { HookResult::allow() }));
@@ -329,6 +359,7 @@ impl Clone for HookEngine {
             on_triggered: None,
             on_resolved: None,
             on_wire_hook: None,
+            on_wire_hook_done: None,
             by_event: HashMap::new(),
             wire_by_event: HashMap::new(),
         };
@@ -356,12 +387,15 @@ mod tests {
     /// empty payload fields because the config file only stores the variant
     /// name (e.g. `event = "PreToolUse"`).
     fn config_hook_def(event: HookEvent, command: &str, matcher: Option<&str>) -> HookDef {
-        HookDef {
+        let mut def = HookDef {
             event,
             matcher: matcher.map(|s| s.to_string()),
+            compiled_matcher: None,
             command: command.to_string(),
             timeout: 30,
-        }
+        };
+        def.compile_matcher();
+        def
     }
 
     #[test]

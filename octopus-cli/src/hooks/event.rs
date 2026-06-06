@@ -50,16 +50,6 @@ pub enum HookEvent {
         error_type: String,
         error_message: String,
     },
-    SessionStart {
-        session_id: String,
-        cwd: String,
-        source: String,
-    },
-    SessionEnd {
-        session_id: String,
-        cwd: String,
-        reason: String,
-    },
     PreCompact {
         session_id: String,
         cwd: String,
@@ -107,8 +97,6 @@ impl std::fmt::Display for HookEvent {
             HookEvent::UserPromptSubmit { .. } => "UserPromptSubmit",
             HookEvent::Stop { .. } => "Stop",
             HookEvent::StopFailure { .. } => "StopFailure",
-            HookEvent::SessionStart { .. } => "SessionStart",
-            HookEvent::SessionEnd { .. } => "SessionEnd",
             HookEvent::PreCompact { .. } => "PreCompact",
             HookEvent::PostCompact { .. } => "PostCompact",
             HookEvent::Notification { .. } => "Notification",
@@ -205,30 +193,6 @@ impl HookEvent {
             cwd: cwd.into(),
             error_type: error_type.into(),
             error_message: error_message.into(),
-        }
-    }
-
-    pub fn session_start(
-        session_id: impl Into<String>,
-        cwd: impl Into<String>,
-        source: impl Into<String>,
-    ) -> Self {
-        HookEvent::SessionStart {
-            session_id: session_id.into(),
-            cwd: cwd.into(),
-            source: source.into(),
-        }
-    }
-
-    pub fn session_end(
-        session_id: impl Into<String>,
-        cwd: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
-        HookEvent::SessionEnd {
-            session_id: session_id.into(),
-            cwd: cwd.into(),
-            reason: reason.into(),
         }
     }
 
@@ -341,16 +305,6 @@ pub mod discriminant_serde {
                 cwd: String::new(),
                 error_type: String::new(),
                 error_message: String::new(),
-            }),
-            "SessionStart" => Ok(HookEvent::SessionStart {
-                session_id: String::new(),
-                cwd: String::new(),
-                source: String::new(),
-            }),
-            "SessionEnd" => Ok(HookEvent::SessionEnd {
-                session_id: String::new(),
-                cwd: String::new(),
-                reason: String::new(),
             }),
             "PreCompact" => Ok(HookEvent::PreCompact {
                 session_id: String::new(),
@@ -525,8 +479,6 @@ mod tests {
             "UserPromptSubmit",
             "Stop",
             "StopFailure",
-            "SessionStart",
-            "SessionEnd",
             "PreCompact",
             "PostCompact",
             "Notification",

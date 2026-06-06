@@ -345,6 +345,7 @@ impl WireServer {
                         id: h.id,
                         event,
                         matcher: h.matcher,
+                        compiled_matcher: None,
                         timeout: h.timeout,
                     }),
                     None => {
@@ -464,8 +465,17 @@ impl WireServer {
 
         // Run the soul turn in its own task so it can be aborted on cancel.
         let soul = self.soul.clone();
+        let pending_cleanup = self.pending_requests.clone();
         let soul_handle = tokio::spawn(async move {
             let mut soul = soul.lock().await;
+            let on_done = Arc::new(move |id: &str| {
+                let pending = pending_cleanup.clone();
+                let id = id.to_string();
+                tokio::spawn(async move {
+                    pending.lock().await.remove(&id);
+                });
+            });
+            soul.hook_engine.set_on_wire_hook_done(Some(on_done));
             soul.run_with_wire(&text, &wire, Some(on_wire_hook)).await
         });
 

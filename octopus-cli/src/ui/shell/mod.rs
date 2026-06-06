@@ -205,8 +205,21 @@ impl ShellUI {
                         std::future::pending().await
                     }
                 } => {
-                    if let crate::wire::WireEvent::ApprovalRequest(req) = event {
-                        self.pending_approval = Some(req);
+                    match event {
+                        crate::wire::WireEvent::ApprovalRequest(req) => {
+                            self.pending_approval = Some(req);
+                        }
+                        crate::wire::WireEvent::HookResolved(resolved) if resolved.action == "block" => {
+                            if !resolved.reason.is_empty() {
+                                self.messages.push((
+                                    "system".to_string(),
+                                    format!("Hook blocked {}: {}", resolved.event, resolved.reason),
+                                ));
+                            }
+                        }
+                        // HookTriggered is a progress indicator for GUI clients;
+                        // shell mode has no transient status area so we ignore it.
+                        _ => {}
                     }
                 }
             }
