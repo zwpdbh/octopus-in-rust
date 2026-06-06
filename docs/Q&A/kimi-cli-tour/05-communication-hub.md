@@ -92,7 +92,7 @@ Every wire event is **appended to `wire.jsonl`** in the session directory. This 
 
 ## 📢 The Broadcast Station: `RootWireHub`
 
-File: `octopus-cli/src/wire/hub.rs` + `wire/types.rs`
+File: `octopus-cli/src/wire/hub.rs` + `wire/event.rs`
 
 While the wire connects soul → UI for a single turn, the `RootWireHub` connects **out-of-turn events**:
 
@@ -125,7 +125,7 @@ The hub is **session-scoped** — one per `KimiSoul`. Both the soul and the UI h
 All messages that travel through the wire are variants of a single enum:
 
 ```rust
-// File: octopus-cli/src/wire/types.rs
+// File: octopus-cli/src/wire/event.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WireEvent {
@@ -146,7 +146,7 @@ pub enum WireEvent {
 
 🦀 **Rust's way:** An exhaustive enum. Producers wrap every event in a variant (`WireEvent::TurnBegin(...)`) and consumers `match` on it. Add a new variant, and the compiler shows every `match` that needs updating.
 
-✨ **Where Rust shines:** **The protocol is discoverable.** Open `wire/types.rs`, read the `WireEvent` enum, and you know every message that can flow through the building. In Python, you'd have to grep every `wire_send()` call site to reconstruct the protocol.
+✨ **Where Rust shines:** **The protocol is discoverable.** Open `wire/event.rs`, read the `WireEvent` enum, and you know every message that can flow through the building. In Python, you'd have to grep every `wire_send()` call site to reconstruct the protocol.
 
 ---
 

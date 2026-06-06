@@ -13,7 +13,7 @@ octopus-cli/src/
 │   └── runner.rs       # run_hook() — subprocess execution + typed stdout parsing
 ├── config.rs           # HookDef struct for config deserialization
 ├── wire/
-│   └── types.rs        # Wire events: HookTriggered, HookResolved, HookRequest
+│   └── event.rs        # Wire events: HookTriggered, HookResolved, HookRequest
 ├── wire/
 │   └── jsonrpc.rs      # HookResponse (client → server)
 └── wire_server/

@@ -5,8 +5,8 @@ pub mod jsonrpc;
 mod hub;
 pub use hub::{RootWireHub, get_current_wire_soul_side, wire_send, with_wire_soul_side};
 
-mod types;
-pub use types::{
+mod event;
+pub use event::{
     ApprovalRequestEvent, ApprovalResponseEvent, BtwBegin, BtwEnd, CompactionBegin, CompactionEnd,
     ContentPart, DisplayBlock, HookRequest, HookResolved, HookTriggered, MCPLoadingBegin,
     MCPLoadingEnd, MCPServerSnapshot, MCPStatusSnapshot, MediaUrl, Message, Notification,

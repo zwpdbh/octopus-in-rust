@@ -14,7 +14,7 @@ Wire-side hooks let these clients participate in the hook system as first-class 
 
 ## 7.2 Types
 
-**File:** `src/wire/types.rs`
+**File:** `src/wire/event.rs`
 
 ### HookTriggered / HookResolved
 
