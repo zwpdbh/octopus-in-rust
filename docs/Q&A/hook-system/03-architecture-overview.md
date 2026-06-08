@@ -48,6 +48,7 @@ pub enum HookEvent {
 **Key design:** equality and hashing are **discriminant-only**:
 
 ```rust
+// octopus-cli/src/hooks/event.rs ~line 77 — discriminant-only PartialEq
 impl PartialEq for HookEvent {
     fn eq(&self, other: &Self) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(other)
@@ -64,10 +65,12 @@ This means `HookEvent::PreToolUse { tool_name: "A", ... }` == `HookEvent::PreToo
 **File:** `src/config.rs`
 
 ```rust
+// octopus-cli/src/config.rs ~line 1 — HookDef
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDef {
     #[serde(with = "crate::hooks::event::discriminant_serde")]
     pub event: crate::hooks::HookEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
     #[serde(skip)]
     pub compiled_matcher: Option<Regex>,
@@ -95,6 +98,7 @@ The `discriminant_serde` helper deserializes `"PreToolUse"` into `HookEvent::Pre
 **File:** `src/hooks/runner.rs`
 
 ```rust
+// octopus-cli/src/hooks/runner.rs ~line 21 — HookAction + HookResult
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "action", content = "reason")]
 pub enum HookAction {
@@ -102,6 +106,7 @@ pub enum HookAction {
     Block(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct HookResult {
     pub action: HookAction,
     pub stdout: String,
@@ -116,11 +121,13 @@ pub struct HookResult {
 **File:** `src/hooks/engine.rs`
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 13 — WireHookSubscription
 #[derive(Debug, Clone)]
 pub struct WireHookSubscription {
     pub id: String,
     pub event: HookEvent,
     pub matcher: String,
+    /// Compiled regex from `matcher`, computed when the subscription is added.
     pub compiled_matcher: Option<Regex>,
     pub timeout: u64,
 }
@@ -135,18 +142,20 @@ When a client connects via the wire protocol, it can subscribe to hooks remotely
 The `HookEngine` is the central dispatcher. It maintains two indexes:
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 59 — HookEngine (abbreviated)
 pub struct HookEngine {
     hooks: Vec<HookDef>,
     wire_subs: Vec<WireHookSubscription>,
     by_event: HashMap<HookEvent, Vec<HookDef>>,
     wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
-    // callbacks omitted
+    // callbacks omitted for brevity
 }
 ```
 
 ### Registration
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 108 — Registration API
 engine.add_hooks(vec![hook_def]);        // server-side from config
 engine.add_wire_subscriptions(vec![sub]); // remote subscriptions
 ```
@@ -177,6 +186,7 @@ Core calls engine.trigger(HookEvent::PreToolUse { ... }, "shell")
 In Rust, payloads are constructed by calling typed constructors on `HookEvent`:
 
 ```rust
+// octopus-cli/src/hooks/event.rs ~line 109 — Payload construction
 let event = HookEvent::pre_tool_use(
     session_id,
     cwd,
@@ -206,20 +216,39 @@ The Rust approach eliminates typos in field names and guarantees every construct
 **File:** `src/hooks/runner.rs`
 
 ```rust
+// octopus-cli/src/hooks/runner.rs ~line 61 — run_hook
 pub async fn run_hook(
     command: &str,
     event: &HookEvent,
     timeout_secs: u64,
     cwd: Option<&std::path::Path>,
 ) -> HookResult {
-    let json_input = serde_json::to_vec(event)?;
-    let mut child = tokio::process::Command::new("sh")
-        .arg("-c")
+    let json_input = match serde_json::to_vec(event) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Hook failed to serialize event: {}", e);
+            return HookResult::allow();
+        }
+    };
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
         .arg(command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Hook failed to spawn: {}: {}", command, e);
+            return HookResult::allow();
+        }
+    };
     // ... write JSON to stdin, read stdout/stderr, interpret result
 }
 ```

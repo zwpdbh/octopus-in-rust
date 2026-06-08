@@ -73,7 +73,7 @@ When the UI receives `ApprovalRequest`, it stores it in `self.pending_approval`.
 
 ```rust
 // octopus-cli/src/ui/shell/mod.rs ~line 1056 — ShellUI::draw_approval_overlay
-fn draw_approval_overlay(&self, frame: &mut Frame, pending: &ApprovalRequestEvent) {
+fn draw_approval_overlay(&self, frame: &mut Frame, pending: &crate::wire::ApprovalRequestEvent) {
     // Renders: Action, Tool, Description, [Y] / [N] / [A]
 }
 ```

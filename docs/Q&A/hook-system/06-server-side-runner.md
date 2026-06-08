@@ -23,13 +23,25 @@ pub async fn run_hook(
 ## 6.2 Subprocess Creation
 
 ```rust
-let mut child = tokio::process::Command::new("sh")
-    .arg("-c")
+// octopus-cli/src/hooks/runner.rs ~line 75 — Subprocess creation
+let mut cmd = tokio::process::Command::new("sh");
+cmd.arg("-c")
     .arg(command)
     .stdin(std::process::Stdio::piped())
     .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .spawn();
+    .stderr(std::process::Stdio::piped());
+
+if let Some(cwd) = cwd {
+    cmd.current_dir(cwd);
+}
+
+let mut child = match cmd.spawn() {
+    Ok(c) => c,
+    Err(e) => {
+        tracing::warn!("Hook failed to spawn: {}: {}", command, e);
+        return HookResult::allow();
+    }
+};
 ```
 
 **Important:** `Command::new("sh").arg("-c").arg(command)` passes the command string to `/bin/sh -c`. This allows shell pipes, environment variables, and relative paths — but it also means shell metacharacters in `command` are interpreted. The `command` comes verbatim from `config.toml`; no tool data is interpolated.
@@ -41,9 +53,28 @@ let mut child = tokio::process::Command::new("sh")
 The runner writes JSON to stdin and reads stdout/stderr:
 
 ```rust
-let json_input = serde_json::to_vec(event)?;
+// octopus-cli/src/hooks/runner.rs ~line 67 — Communication protocol
+let json_input = match serde_json::to_vec(event) {
+    Ok(v) => v,
+    Err(e) => {
+        tracing::warn!("Hook failed to serialize event: {}", e);
+        return HookResult::allow();
+    }
+};
 // ...
-tokio::io::AsyncWriteExt::write_all(&mut stdin, &json_input).await?;
+let mut stdin = match child.stdin.take() {
+    Some(s) => s,
+    None => {
+        tracing::warn!("Hook failed to open stdin");
+        let _ = child.start_kill();
+        return HookResult::allow();
+    }
+};
+
+if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut stdin, &json_input).await {
+    tracing::warn!("Hook failed to write stdin: {}", e);
+    return HookResult::allow();
+}
 drop(stdin); // Close stdin so the child sees EOF
 ```
 
@@ -60,6 +91,7 @@ A single JSON object, produced by serializing the `HookEvent` enum:
 Expected to be valid JSON when exit code is 0. The Rust runner deserializes it into a typed struct:
 
 ```rust
+// octopus-cli/src/hooks/runner.rs ~line 6 — Typed stdout structs
 #[derive(Debug, Deserialize)]
 struct HookStdout {
     #[serde(rename = "hookSpecificOutput")]
@@ -95,29 +127,51 @@ Used as the `reason` string when `exit_code == 2`.
 ## 6.4 Decision Logic
 
 ```rust
+// octopus-cli/src/hooks/runner.rs ~line 134 — Decision logic
 let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 let exit_code = output.status.code().unwrap_or(0);
 
-// Exit code 2 → explicit block
+// Exit 2 = block (reason from stderr)
 if exit_code == 2 {
-    return HookResult::block(stderr.trim());
+    return HookResult {
+        action: HookAction::Block(stderr.trim().to_string()),
+        stdout,
+        stderr,
+        exit_code: 2,
+        timed_out: false,
+    };
 }
 
-// Exit code 0 + JSON stdout with deny → block
+// Exit 0 + JSON stdout = structured decision
 if exit_code == 0 && !stdout.trim().is_empty() {
     if let Ok(parsed) = serde_json::from_str::<HookStdout>(&stdout) {
         if let Some(ref output) = parsed.hook_specific_output {
             if output.permission_decision.as_deref() == Some("deny") {
-                let reason = output.permission_decision_reason.clone().unwrap_or_default();
-                return HookResult::block(reason);
+                let reason = output
+                    .permission_decision_reason
+                    .clone()
+                    .unwrap_or_default();
+                return HookResult {
+                    action: HookAction::Block(reason),
+                    stdout,
+                    stderr,
+                    exit_code: 0,
+                    timed_out: false,
+                };
             }
         }
     }
 }
 
-// Everything else → allow (fail-open)
-HookResult::allow()
+// Everything else = allow (fail-open)
+HookResult {
+    action: HookAction::Allow,
+    stdout,
+    stderr,
+    exit_code,
+    timed_out: false,
+}
 ```
 
 ### Exit Code Semantics
@@ -131,10 +185,18 @@ HookResult::allow()
 ## 6.5 Timeout Behavior
 
 ```rust
-match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), async {
+// octopus-cli/src/hooks/runner.rs ~line 94 — Timeout behavior
+let result = tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), async {
     // ... write stdin, wait for output
-}).await {
-    Ok(output) => output,
+    match child.wait_with_output().await {
+        Ok(o) => Some(o),
+        Err(_) => None,
+    }
+}).await;
+
+match result {
+    Ok(Some(o)) => o,
+    Ok(None) => return HookResult::allow(),
     Err(_) => {
         tracing::warn!("Hook timed out after {}s: {}", timeout_secs, command);
         return HookResult {

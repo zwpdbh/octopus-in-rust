@@ -21,6 +21,7 @@ Wire-side hooks let these clients participate in the hook system as first-class 
 These are fire-and-forget wire events that let a UI observe hook execution:
 
 ```rust
+// octopus-cli/src/wire/event.rs ~line 252 — HookTriggered / HookResolved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookTriggered {
     pub event: String,
@@ -47,6 +48,7 @@ pub struct HookResolved {
 ### HookRequest
 
 ```rust
+// octopus-cli/src/wire/event.rs ~line 275 — HookRequest
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookRequest {
     pub id: String,
@@ -64,9 +66,11 @@ pub struct HookRequest {
 **File:** `src/wire/jsonrpc.rs`
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// octopus-cli/src/wire/jsonrpc.rs ~line 311 — HookResponse (Deserialize only)
+#[derive(Debug, Clone, Deserialize)]
 pub struct HookResponse {
     pub request_id: String,
+    #[serde(default = "default_allow_action")]
     pub action: String,
     #[serde(default)]
     pub reason: String,
@@ -95,6 +99,7 @@ Client                              WireServer                         HookEngin
 **File:** `src/wire_server/mod.rs`
 
 ```rust
+// octopus-cli/src/wire_server/mod.rs ~line 340 — Wire hook registration
 if let Some(hooks) = msg.params.hooks {
     let mut subs: Vec<crate::hooks::WireHookSubscription> = Vec::new();
     for h in hooks {
@@ -123,6 +128,7 @@ if let Some(hooks) = msg.params.hooks {
 When `HookEngine::trigger()` matches a wire subscription, it creates a `WireHookHandle` and calls the `on_wire_hook` callback:
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 251 — Wire hook trigger flow
 let (tx, rx) = tokio::sync::oneshot::channel();
 let handle = WireHookHandle {
     id: uuid::Uuid::new_v4().to_string(),
@@ -133,11 +139,32 @@ let handle = WireHookHandle {
     tx: Some(tx),
 };
 let handle_id = handle.id.clone();
+let timeout_secs = s.timeout;
+let target = matcher_value.to_string();
 let cb_future = cb(handle);
 let on_done = on_done.clone();
 tasks.push(tokio::spawn(async move {
     cb_future.await;
-    let result = match tokio::time::timeout(..., rx).await { ... };
+    let result = match tokio::time::timeout(
+        tokio::time::Duration::from_secs(timeout_secs),
+        rx,
+    ).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => {
+            tracing::warn!("Wire hook resolver dropped without resolving");
+            HookResult::allow()
+        }
+        Err(_) => {
+            tracing::warn!("Wire hook timed out: {}", target);
+            HookResult {
+                action: HookAction::Allow,
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+                timed_out: true,
+            }
+        }
+    };
     if let Some(ref cb) = on_done {
         cb(&handle_id);
     }
@@ -150,6 +177,7 @@ tasks.push(tokio::spawn(async move {
 **File:** `src/wire_server/mod.rs`
 
 ```rust
+// octopus-cli/src/wire_server/mod.rs ~line 441 — WireServer hook dispatch
 let on_wire_hook: OnWireHook = Box::new(move |handle: WireHookHandle| {
     let pending = pending.clone();
     let write_tx = write_tx.clone();
@@ -221,6 +249,7 @@ The client should:
 **File:** `src/wire_server/mod.rs`
 
 ```rust
+// octopus-cli/src/wire_server/mod.rs ~line 586 — WireServer::handle_response
 async fn handle_response(&self, resp: JSONRPCClientResponse) {
     let (id, result, error) = match resp {
         JSONRPCClientResponse::Success(s) => (s.id, Some(s.result), None),
@@ -244,6 +273,7 @@ async fn handle_response(&self, resp: JSONRPCClientResponse) {
                     };
                     handle.resolve(action);
                 } else {
+                    tracing::warn!("Invalid hook response for id={}", id);
                     handle.resolve(HookAction::Allow);
                 }
             } else {
@@ -278,17 +308,18 @@ For `PreToolUse`, this means a GUI client might show a modal dialog, and the use
 The wire protocol also emits events so clients can observe hook execution:
 
 ```rust
+// octopus-cli/src/soul/kimisoul.rs ~line 260 — Wire events for observability
 // When a hook is triggered
 WireEvent::HookTriggered(HookTriggered {
     event: event.to_string(),
-    target: matcher_value.to_string(),
-    hook_count: total,
+    target: target.to_string(),
+    hook_count: count,
 })
 
 // When a hook is resolved
 WireEvent::HookResolved(HookResolved {
     event: event.to_string(),
-    target: matcher_value.to_string(),
+    target: target.to_string(),
     action: action_str,
     reason,
     duration_ms,
@@ -300,6 +331,7 @@ These are fire-and-forget notifications that let a UI show "Waiting for approval
 **Python comparison:** Python emitted the same events but sent them as raw Pydantic models serialized to dicts. Rust uses the `WireEvent` enum:
 
 ```rust
+// octopus-cli/src/wire/event.rs ~line 325 — WireEvent enum (abbreviated)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WireEvent {
@@ -309,7 +341,7 @@ pub enum WireEvent {
     HookResponse(HookResponse),
     HookTriggered(HookTriggered),
     HookResolved(HookResolved),
-    // ...
+    // ... 13+ other variants omitted
 }
 ```
 

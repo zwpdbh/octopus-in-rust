@@ -5,6 +5,7 @@ The `HookEngine` is the brain of the hook system. It decides *which* hooks run, 
 ## 5.1 Data Structures
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 59 — HookEngine
 pub struct HookEngine {
     hooks: Vec<HookDef>,
     wire_subs: Vec<WireHookSubscription>,
@@ -27,6 +28,7 @@ The engine maintains **two indexes**:
 ## 5.2 Index Rebuilding
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 165 — rebuild_index
 fn rebuild_index(&mut self) {
     self.by_event.clear();
     for h in &self.hooks {
@@ -54,6 +56,7 @@ Because `HookEvent` equality is **discriminant-only**, `h.event.clone()` is chea
 ### Adding Server-Side Hooks
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 108 — add_hooks
 pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
     self.hooks.extend(hooks);
     self.rebuild_index();
@@ -65,6 +68,7 @@ Called during startup after parsing `config.toml`. The hooks are already compile
 ### Adding Wire Subscriptions
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 113 — add_wire_subscriptions
 pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
     for s in &mut subs {
         s.compiled_matcher = Regex::new(&s.matcher).ok();
@@ -81,6 +85,7 @@ Called when a wire client sends its subscription list during initialization.
 ## 5.4 Matching with Compiled Regexes
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 182 — match_regex
 fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
     if pattern.is_empty() {
         return true;
@@ -118,11 +123,16 @@ re.search(pattern, value)   # Python compiles every call
 Server-side hooks are deduplicated by **command string**:
 
 ```rust
-let mut seen_commands = HashSet::new();
-for h in matched {
-    if seen_commands.insert(h.command.clone()) {
-        server_matched.push(h);
+// octopus-cli/src/hooks/engine.rs ~line 200 — Deduplication
+let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
+let mut server_matched: Vec<&HookDef> = Vec::new();
+for h in self.by_event.get(&*event).into_iter().flatten() {
+    // ... regex check ...
+    if seen_commands.contains(&h.command) {
+        continue;
     }
+    seen_commands.insert(h.command.clone());
+    server_matched.push(h);
 }
 ```
 
@@ -133,6 +143,7 @@ Wire subscriptions are **not** deduplicated because each subscription comes from
 ## 5.6 The Trigger Method (Detailed)
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 196 — trigger
 pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
     let event = Arc::new(event);
     let input_data = serde_json::to_value(&*event).unwrap_or_default();
@@ -145,16 +156,18 @@ pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookRe
 Before the fix, the code did:
 
 ```rust
+// Conceptual pseudo-code: cloning once per hook
 let event = event.clone();  // cloned once per hook!
 ```
 
 Now it does:
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 196 — Arc optimization
 let event = Arc::new(event);
 // ...
 let event = Arc::clone(&event);  // cheap refcount bump
-run_hook(&command, &*event, ...)
+run_hook(&command, &*event, timeout, cwd.as_deref()).await
 ```
 
 **Python comparison:** Python passed dictionaries by reference, but each `asyncio.create_task` closure captured variables from the enclosing scope. Because Python closures capture by reference, the dict was shared — but if the dict was mutated later, all tasks would see the mutation. Rust's `Arc` makes the sharing explicit and safe.
@@ -164,6 +177,7 @@ run_hook(&command, &*event, ...)
 Before the fix, wire hooks did:
 
 ```rust
+// Conceptual pseudo-code: serializing once per wire hook
 input_data: serde_json::to_value(&event).unwrap_or_default(),  // once per wire hook
 ```
 
@@ -186,10 +200,12 @@ This is critical for **availability**: a broken hook should not brick the entire
 ## 5.8 Aggregation Semantics
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 315 — Aggregation
 let mut action = HookAction::Allow;
 for r in &results {
     if let HookAction::Block(ref reason) = r.action {
         action = HookAction::Block(reason.clone());
+        tracing::warn!("Hook blocked {} (matcher={}): {}", event, matcher_value, reason);
         break;
     }
 }
@@ -202,6 +218,7 @@ for r in &results {
 The `on_wire_hook_done` callback solves a leak that existed in the Python version:
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 251 — Wire hook cleanup
 let on_done = self.on_wire_hook_done.clone();
 // ...
 tasks.push(tokio::spawn(async move {
@@ -216,6 +233,7 @@ tasks.push(tokio::spawn(async move {
 In the wire server, this callback removes the entry from `pending_requests`:
 
 ```rust
+// octopus-cli/src/wire_server/mod.rs ~line 471 — Wire server cleanup callback
 let on_done = Arc::new(move |id: &str| {
     let pending = pending_cleanup.clone();
     let id = id.to_string();

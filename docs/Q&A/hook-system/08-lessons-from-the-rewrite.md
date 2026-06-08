@@ -34,6 +34,7 @@ def trigger(self, event: HookEventType, ...):
 ### Rust (after)
 
 ```rust
+// octopus-cli/src/hooks/event.rs ~line 13 — HookEvent enum + discriminant-only PartialEq
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "hook_event_name", rename_all = "PascalCase")]
 pub enum HookEvent {
@@ -73,6 +74,7 @@ def pre_tool_use(session_id: str, cwd: str, tool_name: str, ...) -> dict[str, An
 ### Rust (after)
 
 ```rust
+// octopus-cli/src/hooks/event.rs ~line 13 — Typed payload
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "hook_event_name", rename_all = "PascalCase")]
 pub enum HookEvent {
@@ -90,6 +92,7 @@ pub enum HookEvent {
 Construction is explicit and type-checked:
 
 ```rust
+// octopus-cli/src/hooks/event.rs ~line 109 — Explicit construction
 let event = HookEvent::PreToolUse {
     session_id: session_id.into(),
     cwd: cwd.into(),
@@ -119,6 +122,7 @@ elif let Ok(text) = serde_json::from_value::<TextPart>(value):
 ### Rust (after)
 
 ```rust
+// octopus-cli/src/wire/event.rs ~line 325 — Strong enum for wire protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WireEvent {
@@ -135,6 +139,7 @@ pub enum WireEvent {
 Consumption is exhaustive:
 
 ```rust
+// octopus-cli/src/ui/shell/mod.rs ~line 201 — Exhaustive match (illustrative)
 match event {
     WireEvent::HookRequest(req) => self.handle_hook_request(req).await,
     WireEvent::HookResponse(resp) => self.resolve_hook_response(resp).await,
@@ -161,7 +166,7 @@ match_regex(pattern, value):
 ### Rust (after)
 
 ```rust
-// config.rs — called once at load time
+// octopus-cli/src/config.rs ~line 1 — compile_matcher (called once at load time)
 pub fn compile_matcher(&mut self) {
     self.compiled_matcher = self.matcher.as_ref().and_then(|p| {
         match Regex::new(p) {
@@ -174,7 +179,7 @@ pub fn compile_matcher(&mut self) {
     });
 }
 
-// engine.rs — called at trigger time
+// octopus-cli/src/hooks/engine.rs ~line 182 — match_regex (called at trigger time)
 fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
     if pattern.is_empty() { return true; }
     match compiled {
@@ -193,7 +198,7 @@ fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
 ### Before (both Python and early Rust)
 
 ```rust
-// Cloned once per matched hook
+// Conceptual pseudo-code: cloning once per matched hook
 let event = event.clone();
 tasks.push(tokio::spawn(async move {
     run_hook(&command, &event, ...).await
@@ -203,11 +208,12 @@ tasks.push(tokio::spawn(async move {
 ### After (Rust)
 
 ```rust
+// octopus-cli/src/hooks/engine.rs ~line 196 — Arc optimization
 let event = Arc::new(event);
 // ...
 let event = Arc::clone(&event);  // cheap refcount bump
 tasks.push(tokio::spawn(async move {
-    run_hook(&command, &*event, ...).await
+    run_hook(&command, &*event, timeout, cwd.as_deref()).await
 }));
 ```
 
@@ -232,7 +238,7 @@ pending.pop(id, None)
 ### Rust (after)
 
 ```rust
-// Engine calls on_done even on timeout/drop
+// octopus-cli/src/hooks/engine.rs ~line 251 — Engine calls on_done even on timeout/drop
 let on_done = self.on_wire_hook_done.clone();
 tasks.push(tokio::spawn(async move {
     let result = match tokio::time::timeout(..., rx).await { ... };
@@ -242,7 +248,7 @@ tasks.push(tokio::spawn(async move {
     result
 }));
 
-// Wire server provides the cleanup callback
+// octopus-cli/src/wire_server/mod.rs ~line 471 — Wire server provides the cleanup callback
 let on_done = Arc::new(move |id: &str| {
     let pending = pending_cleanup.clone();
     let id = id.to_string();
@@ -269,6 +275,7 @@ if parsed.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
 ### Rust (after)
 
 ```rust
+// octopus-cli/src/hooks/runner.rs ~line 6 — Typed deserialization
 #[derive(Debug, Deserialize)]
 struct HookStdout {
     #[serde(rename = "hookSpecificOutput")]
@@ -283,11 +290,21 @@ struct HookSpecificOutput {
     permission_decision_reason: Option<String>,
 }
 
+// octopus-cli/src/hooks/runner.rs ~line 150 — Decision logic
 if let Ok(parsed) = serde_json::from_str::<HookStdout>(&stdout) {
     if let Some(ref output) = parsed.hook_specific_output {
         if output.permission_decision.as_deref() == Some("deny") {
-            let reason = output.permission_decision_reason.clone().unwrap_or_default();
-            return HookResult::block(reason);
+            let reason = output
+                .permission_decision_reason
+                .clone()
+                .unwrap_or_default();
+            return HookResult {
+                action: HookAction::Block(reason),
+                stdout,
+                stderr,
+                exit_code: 0,
+                timed_out: false,
+            };
         }
     }
 }

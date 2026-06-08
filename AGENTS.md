@@ -489,3 +489,91 @@ pub use kimisoul::KimiSoul;
 3. Let the compiler guide visibility fixes — promote private items to `pub(crate)` if other modules need them.
 
 Callers stay unchanged because `mod.rs` re-exports.
+
+
+---
+
+## Documentation Code Snippets
+
+### Always Annotate Code Snippets with Source Location
+
+**Rule:** Every code snippet in documentation (markdown files, READMEs, inline comments) that shows project source code must begin with an explicit source-location comment.
+
+The comment must include:
+1. **File path** — relative to project root (e.g., `octopus-cli/src/hooks/engine.rs`)
+2. **Approximate line number** — prefixed with `~line` (e.g., `~line 196`)
+3. **Function or item name** — what the snippet is showing (e.g., `HookEngine::trigger`)
+
+```rust
+// octopus-cli/src/hooks/engine.rs ~line 196 — HookEngine::trigger
+pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+    // ...
+}
+```
+
+#### Why
+
+- **Traceability:** A reader can grep the codebase and jump to the exact definition.
+- **Drift detection:** When source changes, the line number becomes visibly outdated, signaling the doc needs updating.
+- **Reviewability:** PR reviewers can verify doc snippets against source without hunting.
+
+#### Bad
+
+```rust
+pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+```
+
+```rust
+// In HookEngine
+trigger(&self, event, matcher_value)
+```
+
+```rust
+// engine.rs
+trigger(...)
+```
+
+#### Good
+
+```rust
+// octopus-cli/src/hooks/engine.rs ~line 196 — HookEngine::trigger
+pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+```
+
+```rust
+// octopus-cli/src/hooks/runner.rs ~line 61 — run_hook
+pub async fn run_hook(command: &str, event: &HookEvent, timeout_secs: u64, cwd: Option<&Path>) -> HookResult {
+```
+
+```rust
+// octopus-cli/src/soul/toolset.rs ~line 126 — KimiToolset::requires_approval (private associated fn)
+fn requires_approval(name: &str) -> bool {
+    matches!(name, "Shell" | "WriteFile" | "StrReplaceFile" | "Agent")
+}
+```
+
+#### Abbreviated Snippets
+
+If a snippet is intentionally truncated (omitting fields, match arms, or helper logic), add `(abbreviated)` to the comment:
+
+```rust
+// octopus-cli/src/hooks/engine.rs ~line 59 — HookEngine (abbreviated)
+pub struct HookEngine {
+    hooks: Vec<HookDef>,
+    // ... callbacks omitted
+}
+```
+
+#### Pseudo-Code Snippets
+
+If a snippet is conceptual / pseudo-code (not actual source), mark it explicitly:
+
+```rust
+// Conceptual pseudo-code: cloning once per matched hook
+let event = event.clone();
+```
+
+#### Exception
+
+- External examples (e.g., a Python hook script in `config.toml` documentation) do not need source-location comments because they are user-written, not project source.
+- Shell commands and JSON examples do not need source-location comments unless they are machine-generated from the codebase.
