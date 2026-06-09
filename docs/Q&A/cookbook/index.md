@@ -12,3 +12,4 @@ Practical Rust patterns used across the Octopus codebase.
 | 06 | Mutate state through `&self` with interior mutability | [06-interior-mutability-mutate-through-shared-ref.md](./06-interior-mutability-mutate-through-shared-ref.md) |
 | 07 | Never hold a `std::sync::Mutex` across `.await` | [07-never-hold-std-sync-mutex-across-await.md](./07-never-hold-std-sync-mutex-across-await.md) |
 | 08 | Contribute to open source via fork + PR | [08-open-source-contribution-workflow.md](./08-open-source-contribution-workflow.md) |
+| 09 | Run a forked Python CLI alongside the official install | [09-run-forked-python-cli-alongside-official.md](./09-run-forked-python-cli-alongside-official.md) |
