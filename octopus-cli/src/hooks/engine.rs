@@ -106,16 +106,26 @@ impl HookEngine {
     }
 
     pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
+        for h in &hooks {
+            self.by_event
+                .entry(h.event.clone())
+                .or_default()
+                .push(h.clone());
+        }
         self.hooks.extend(hooks);
-        self.rebuild_index();
     }
 
     pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
         for s in &mut subs {
             s.compiled_matcher = Regex::new(&s.matcher).ok();
         }
+        for s in &subs {
+            self.wire_by_event
+                .entry(s.event.clone())
+                .or_default()
+                .push(s.clone());
+        }
         self.wire_subs.extend(subs);
-        self.rebuild_index();
     }
 
     pub fn has_hooks(&self) -> bool {
