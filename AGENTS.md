@@ -573,6 +573,25 @@ If a snippet is conceptual / pseudo-code (not actual source), mark it explicitly
 let event = event.clone();
 ```
 
+#### Demo / Example Markers
+
+If a snippet is a pure teaching example with no corresponding source file (illustrative code invented for documentation purposes), mark it with `docref: demo` or `docref: example` as the first line of the code block. This tells `docref` not to attempt matching it against the codebase during migration or drift checks.
+
+```rust
+// docref: demo
+fn how_to_clone<T: Clone>(item: T) -> (T, T) {
+    (item.clone(), item.clone())
+}
+```
+
+```python
+# docref: example
+def hello(name: str) -> str:
+    return f"Hello, {name}!"
+```
+
+Use any of the supported comment styles (`//`, `#`, `<!--`, `--`, `;`, `(*`, etc.) for the language in question. The marker keywords `demo` or `example` are interchangeable.
+
 #### Exception
 
 - External examples (e.g., a Python hook script in `config.toml` documentation) do not need source-location comments because they are user-written, not project source.
