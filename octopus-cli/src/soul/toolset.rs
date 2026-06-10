@@ -406,8 +406,9 @@ impl KimiToolset {
             result.return_value = append_dedup_reminder(result.return_value.clone());
         }
 
-        // --- PostToolUse / PostToolUseFailure hooks (fire-and-forget) ---
+        // --- PostToolUse / PostToolUseFailure hooks ---
         if result.return_value.is_error {
+            // PostToolUseFailure remains fire-and-forget
             let error_text = result
                 .return_value
                 .message
@@ -427,6 +428,7 @@ impl KimiToolset {
                     .fire_and_forget_trigger(event, &tool_call.function.name);
             }
         } else {
+            // PostToolUse is awaited so hook stderr can be surfaced to the LLM
             let output_text = result
                 .return_value
                 .output
@@ -443,9 +445,33 @@ impl KimiToolset {
                 &tool_call.id,
             );
             if self.hook_engine.has_hooks_for(&event) {
-                let _ = self
+                let hook_results = self
                     .hook_engine
-                    .fire_and_forget_trigger(event, &tool_call.function.name);
+                    .trigger(event, &tool_call.function.name)
+                    .await;
+
+                // Collect non-empty stderr from hooks for LLM visibility
+                let mut hook_stderr_lines: Vec<String> = Vec::new();
+                for hr in &hook_results {
+                    let trimmed = hr.stderr.trim();
+                    if !trimmed.is_empty() {
+                        hook_stderr_lines.push(trimmed.to_string());
+                    }
+                }
+
+                if !hook_stderr_lines.is_empty() {
+                    let hook_output = hook_stderr_lines.join("\n");
+                    match &mut result.return_value.message {
+                        Some(msg) if !msg.is_empty() => {
+                            msg.push_str("\n\n[post-tool-use-hooks]\n");
+                            msg.push_str(&hook_output);
+                        }
+                        _ => {
+                            result.return_value.message =
+                                Some(format!("[post-tool-use-hooks]\n{hook_output}"));
+                        }
+                    }
+                }
             }
         }
 

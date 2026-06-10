@@ -28,7 +28,7 @@ The engine maintains **two indexes**:
 ## 5.2 Index Rebuilding
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 165 — rebuild_index
+// octopus-cli/src/hooks/engine.rs ~line 175 — rebuild_index
 fn rebuild_index(&mut self) {
     self.by_event.clear();
     for h in &self.hooks {
@@ -58,8 +58,13 @@ Because `HookEvent` equality is **discriminant-only**, `h.event.clone()` is chea
 ```rust
 // octopus-cli/src/hooks/engine.rs ~line 108 — add_hooks
 pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
+    for h in &hooks {
+        self.by_event
+            .entry(h.event.clone())
+            .or_default()
+            .push(h.clone());
+    }
     self.hooks.extend(hooks);
-    self.rebuild_index();
 }
 ```
 
@@ -68,13 +73,18 @@ Called during startup after parsing `config.toml`. The hooks are already compile
 ### Adding Wire Subscriptions
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 113 — add_wire_subscriptions
+// octopus-cli/src/hooks/engine.rs ~line 118 — add_wire_subscriptions
 pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
     for s in &mut subs {
         s.compiled_matcher = Regex::new(&s.matcher).ok();
     }
+    for s in &subs {
+        self.wire_by_event
+            .entry(s.event.clone())
+            .or_default()
+            .push(s.clone());
+    }
     self.wire_subs.extend(subs);
-    self.rebuild_index();
 }
 ```
 
@@ -85,7 +95,7 @@ Called when a wire client sends its subscription list during initialization.
 ## 5.4 Matching with Compiled Regexes
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 182 — match_regex
+// octopus-cli/src/hooks/engine.rs ~line 192 — match_regex
 fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
     if pattern.is_empty() {
         return true;
@@ -143,7 +153,7 @@ Wire subscriptions are **not** deduplicated because each subscription comes from
 ## 5.6 The Trigger Method (Detailed)
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 196 — trigger
+// octopus-cli/src/hooks/engine.rs ~line 206 — trigger
 pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
     let event = Arc::new(event);
     let input_data = serde_json::to_value(&*event).unwrap_or_default();

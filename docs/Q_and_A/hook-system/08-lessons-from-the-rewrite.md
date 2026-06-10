@@ -179,7 +179,7 @@ pub fn compile_matcher(&mut self) {
     });
 }
 
-// octopus-cli/src/hooks/engine.rs ~line 182 — match_regex (called at trigger time)
+// octopus-cli/src/hooks/engine.rs ~line 192 — match_regex (called at trigger time)
 fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
     if pattern.is_empty() { return true; }
     match compiled {
@@ -208,7 +208,7 @@ tasks.push(tokio::spawn(async move {
 ### After (Rust)
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 196 — Arc optimization
+// octopus-cli/src/hooks/engine.rs ~line 206 — Arc optimization
 let event = Arc::new(event);
 // ...
 let event = Arc::clone(&event);  // cheap refcount bump

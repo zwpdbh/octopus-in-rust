@@ -505,7 +505,7 @@ The comment must include:
 3. **Function or item name** — what the snippet is showing (e.g., `HookEngine::trigger`)
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 196 — HookEngine::trigger
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger
 pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
     // ...
 }
@@ -536,7 +536,7 @@ trigger(...)
 #### Good
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 196 — HookEngine::trigger
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger
 pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
 ```
 

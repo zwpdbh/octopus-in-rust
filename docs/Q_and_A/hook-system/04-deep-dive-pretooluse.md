@@ -311,7 +311,7 @@ When `trigger()` is called, the engine does six things:
 ### Step 1: Match server-side hooks
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 200 — HookEngine::trigger (Step 1: match server-side hooks)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 1: match server-side hooks)
 let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
 let mut server_matched: Vec<&HookDef> = Vec::new();
 for h in self.by_event.get(&*event).into_iter().flatten() {
@@ -333,7 +333,7 @@ for h in self.by_event.get(&*event).into_iter().flatten() {
 ### Step 2: Match wire subscriptions
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 218 — HookEngine::trigger (Step 2: match wire subscriptions)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 2: match wire subscriptions)
 let wire_matched: Vec<&WireHookSubscription> = self
     .wire_by_event
     .get(&*event)
@@ -346,7 +346,7 @@ let wire_matched: Vec<&WireHookSubscription> = self
 ### Step 3: Emit triggered callback
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 232 — HookEngine::trigger (Step 3: emit triggered callback)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 3: emit triggered callback)
 if let Some(ref cb) = self.on_triggered {
     cb(&*event, matcher_value, total);
 }
@@ -357,7 +357,7 @@ This broadcasts `WireEvent::HookTriggered` so GUI clients can show "Running hook
 ### Step 4: Run everything in parallel
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 237 — HookEngine::trigger (Step 4: run everything in parallel)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 4: run everything in parallel)
 let t0 = std::time::Instant::now();
 let mut tasks: Vec<tokio::task::JoinHandle<HookResult>> = Vec::new();
 
@@ -381,7 +381,7 @@ for s in wire_matched {
 ### Step 5: Aggregate results
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 305 — HookEngine::trigger (Step 5: aggregate results)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 5: aggregate results)
 let results: Vec<HookResult> = match futures::future::try_join_all(tasks).await {
     Ok(r) => r,
     Err(e) => {
@@ -396,7 +396,7 @@ If any task panics or fails to join, the engine logs a warning and returns empty
 ### Step 6: Block wins
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 315 — HookEngine::trigger (Step 6: block wins, emit resolved)
+// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 6: block wins, emit resolved)
 let mut action = HookAction::Allow;
 for r in &results {
     if let HookAction::Block(ref reason) = r.action {
