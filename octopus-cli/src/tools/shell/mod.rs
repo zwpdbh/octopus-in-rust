@@ -1,24 +1,25 @@
 use std::process::Stdio;
 
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-use crate::tools::Tool;
+use crate::tools::ExecutionMode;
 
 const MAX_FOREGROUND_TIMEOUT: u64 = 5 * 60;
 const _MAX_BACKGROUND_TIMEOUT: u64 = 24 * 60 * 60;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ShellParams {
     pub command: String,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
     #[serde(default)]
-    pub run_in_background: bool,
+    pub execution_mode: ExecutionMode,
     #[serde(default)]
     pub description: String,
 }
@@ -38,7 +39,9 @@ impl ShellTool {
 }
 
 #[async_trait]
-impl Tool for ShellTool {
+impl CallableTool2 for ShellTool {
+    type Params = ShellParams;
+
     fn name(&self) -> &str {
         "Shell"
     }
@@ -47,55 +50,32 @@ impl Tool for ShellTool {
         "Execute a shell command."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "Shell",
-            "description": "Execute a shell command. Use bash syntax. Commands run in the working directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The bash command to execute."
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Timeout in seconds",
-                        "default": 60
-                    },
-                    "run_in_background": {
-                        "type": "boolean",
-                        "description": "Run as a background task",
-                        "default": false
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Description for background task (required if run_in_background=true)",
-                        "default": ""
-                    }
-                },
-                "required": ["command"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: ShellParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
+    async fn call_typed(&self, params: ShellParams) -> ToolReturnValue {
         if params.command.is_empty() {
-            return Err("Command cannot be empty.".to_string());
+            return ToolReturnValue::error("Command cannot be empty.");
         }
 
-        if params.run_in_background {
-            let task_id = self
-                .bg_manager
-                .spawn(params.command.clone(), params.description.clone())
-                .await?;
-            return Ok(format!(
-                "Background task started: `{}`\ntask_id: {}\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
-                params.command, task_id
-            ));
+        match params.execution_mode {
+            ExecutionMode::Background => {
+                let task_id = match self
+                    .bg_manager
+                    .spawn(params.command.clone(), params.description.clone())
+                    .await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return ToolReturnValue::error(format!(
+                            "Failed to spawn background task: {}",
+                            e
+                        ));
+                    }
+                };
+                return ToolReturnValue::ok(format!(
+                    "Background task started: `{}`\ntask_id: {}\nautomatic_notification: true\nnext_step: You will be automatically notified when it completes.",
+                    params.command, task_id
+                ));
+            }
+            ExecutionMode::Foreground => {}
         }
 
         let timeout_secs = params.timeout.min(MAX_FOREGROUND_TIMEOUT);
@@ -107,9 +87,10 @@ impl Tool for ShellTool {
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn command: {}", e))?;
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return ToolReturnValue::error(format!("Failed to spawn command: {}", e)),
+        };
 
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -150,23 +131,26 @@ impl Tool for ShellTool {
 
         match result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
+            Ok(Err(e)) => return ToolReturnValue::error(e),
             Err(_) => {
                 let _ = child.kill().await;
-                return Err(format!("Command killed by timeout ({}s)", timeout_secs));
+                return ToolReturnValue::error(format!(
+                    "Command killed by timeout ({}s)",
+                    timeout_secs
+                ));
             }
         }
 
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| format!("Failed to wait for command: {}", e))?;
+        let status = match child.wait().await {
+            Ok(s) => s,
+            Err(e) => return ToolReturnValue::error(format!("Failed to wait for command: {}", e)),
+        };
 
         if status.success() {
-            Ok(output)
+            ToolReturnValue::ok(output)
         } else {
             let code = status.code().unwrap_or(-1);
-            Err(format!(
+            ToolReturnValue::error(format!(
                 "Command failed with exit code {}.\nOutput:\n{}",
                 code, output
             ))

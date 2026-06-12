@@ -12,7 +12,7 @@ use crate::session::Session;
 use crate::skills::Skill;
 use crate::soul::approval::{Approval, ApprovalState};
 use crate::soul::toolset::KimiToolset;
-use crate::subagents::{LaborMarket, SubagentStore};
+use crate::subagents::{LaborMarket, SubagentStore, SubagentType};
 use crate::wire::RootWireHub;
 
 #[derive(Debug, Clone)]
@@ -105,6 +105,7 @@ fn detect_shell() -> (String, String) {
     (shell_name, shell_path)
 }
 
+#[derive(Debug, Clone)]
 pub struct AppRuntime {
     pub config: Config,
     pub oauth: OAuthManager,
@@ -124,7 +125,7 @@ pub struct AppRuntime {
     pub approval_runtime: Option<ApprovalRuntime>,
     pub root_wire_hub: Option<RootWireHub>,
     pub subagent_id: Option<String>,
-    pub subagent_type: Option<String>,
+    pub subagent_type: Option<SubagentType>,
     pub role: String,
     pub ui_mode: UiMode,
     pub resumed: bool,
@@ -169,6 +170,43 @@ impl AppRuntime {
             resumed: false,
         }
     }
+
+    /// Create a child runtime for a subagent, sharing the parent's
+    /// LaborMarket, skills, notifications, background tasks, and denwa renji.
+    pub fn copy_for_subagent(
+        &self,
+        session: Session,
+        llm: Option<LLM>,
+        approval: Approval,
+        builtin_args: BuiltinSystemPromptArgs,
+        subagent_type: Option<SubagentType>,
+    ) -> Self {
+        let session_id = session.id.clone();
+        Self {
+            config: self.config.clone(),
+            oauth: OAuthManager::new(),
+            llm,
+            session,
+            builtin_args,
+            denwa_renji: self.denwa_renji.clone(),
+            approval,
+            labor_market: self.labor_market.clone(),
+            environment: self.environment.clone(),
+            notifications: self.notifications.clone(),
+            background_tasks: self.background_tasks.clone(),
+            skills: self.skills.clone(),
+            additional_dirs: self.additional_dirs.clone(),
+            skills_dirs: self.skills_dirs.clone(),
+            subagent_store: self.subagent_store.clone(),
+            approval_runtime: self.approval_runtime.clone(),
+            root_wire_hub: Some(RootWireHub::new()),
+            subagent_id: Some(session_id),
+            subagent_type,
+            role: "subagent".to_string(),
+            ui_mode: self.ui_mode,
+            resumed: false,
+        }
+    }
 }
 
 impl Environment {
@@ -197,6 +235,7 @@ impl Agent {
         session: Session,
         llm: Option<LLM>,
         approval: ApprovalState,
+        mcp_configs: Vec<crate::mcp::McpConfig>,
     ) -> Self {
         let builtin_args = BuiltinSystemPromptArgs {
             kimi_now: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -215,10 +254,37 @@ impl Agent {
             Approval::with_state(approval),
             builtin_args,
         );
+        let mut toolset = KimiToolset::new();
+
+        // Load WASM plugin tools even for basic agents (no agent file specified).
+        if let Some(ref plugins_dir) = crate::plugin::default_plugins_dir() {
+            if plugins_dir.is_dir() {
+                for plugin_tool in crate::plugin::discover_plugins(plugins_dir) {
+                    let plugin_name = plugin_tool.name().to_string();
+                    if toolset.find(&plugin_name).is_some() {
+                        tracing::warn!(
+                            "Plugin tool '{}' conflicts with an existing tool, skipping",
+                            plugin_name
+                        );
+                        continue;
+                    }
+                    toolset.register(plugin_tool);
+                }
+            }
+        }
+
+        // Defer MCP tool loading for basic agents too.
+        if !mcp_configs.is_empty() {
+            let mcp_context = crate::soul::toolset::McpLoadContext {
+                tool_call_timeout_ms: 60_000,
+            };
+            toolset.defer_mcp_tool_loading(mcp_configs, mcp_context);
+        }
+
         Self {
             name,
             system_prompt,
-            toolset: KimiToolset::new(),
+            toolset,
             runtime,
         }
     }
@@ -303,86 +369,89 @@ fn load_system_prompt(
     Ok(rendered.trim().to_string())
 }
 
-/// Build a tool by its Python-style fully-qualified name.
-/// Returns `None` for tools that do not exist in the Rust rewrite.
-fn build_tool(name: &str, runtime: &AppRuntime) -> Option<Box<dyn crate::tools::Tool>> {
-    match name {
+/// Build a built-in tool implementation.
+///
+/// Returns `Option` because `TaskList` and `ReadMediaFile` are referenced in
+/// agent YAML specs but not yet ported to Rust. Once those tools are either
+/// implemented or removed from the YAML specs, this function should return
+/// `Box<dyn CallableTool>` directly and the `Option` wrapper can be removed.
+fn build_tool(
+    tool: crate::tools::tool_name::BuiltinTool,
+    runtime: &AppRuntime,
+) -> Option<Box<dyn kosong::tooling::CallableTool>> {
+    use crate::tools::tool_name::BuiltinTool;
+    use kosong::tooling::CallableTool2Adapter;
+    match tool {
         // Shell & background
-        "kimi_cli.tools.shell:Shell" | "Shell" => Some(Box::new(
+        BuiltinTool::Shell => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::shell::ShellTool::new(runtime.background_tasks.clone()),
-        )),
-        "kimi_cli.tools.background:TaskOutput" | "TaskOutput" => Some(Box::new(
+        ))),
+        BuiltinTool::TaskOutput => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::background::TaskOutputTool::new(runtime.background_tasks.clone()),
-        )),
-        "kimi_cli.tools.background:TaskStop" | "TaskStop" => Some(Box::new(
+        ))),
+        BuiltinTool::TaskStop => Some(Box::new(CallableTool2Adapter::new(
             crate::tools::background::TaskStopTool::new(runtime.background_tasks.clone()),
-        )),
-        "kimi_cli.tools.background:TaskList" | "TaskList" => {
+        ))),
+        BuiltinTool::TaskList => {
             // Not yet ported; skip silently.
             None
         }
 
         // File
-        "kimi_cli.tools.file:ReadFile" | "ReadFile" => {
-            Some(Box::new(crate::tools::file::ReadFileTool::new()))
-        }
-        "kimi_cli.tools.file:ReadMediaFile" | "ReadMediaFile" => {
+        BuiltinTool::ReadFile => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::ReadFileTool::new(),
+        ))),
+        BuiltinTool::ReadMediaFile => {
             // Not yet ported.
             None
         }
-        "kimi_cli.tools.file:WriteFile" | "WriteFile" => {
-            Some(Box::new(crate::tools::file::WriteFileTool::new()))
-        }
-        "kimi_cli.tools.file:StrReplaceFile" | "StrReplaceFile" => {
-            Some(Box::new(crate::tools::file::StrReplaceFileTool::new()))
-        }
-        "kimi_cli.tools.file:Glob" | "Glob" => Some(Box::new(crate::tools::file::GlobTool::new())),
-        "kimi_cli.tools.file:Grep" | "Grep" => Some(Box::new(crate::tools::file::GrepTool::new())),
+        BuiltinTool::WriteFile => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::WriteFileTool::new(),
+        ))),
+        BuiltinTool::StrReplaceFile => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::StrReplaceFileTool::new(),
+        ))),
+        BuiltinTool::Glob => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::GlobTool::new(),
+        ))),
+        BuiltinTool::Grep => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::file::GrepTool::new(),
+        ))),
 
         // Web
-        "kimi_cli.tools.web:SearchWeb" | "SearchWeb" => {
-            Some(Box::new(crate::tools::web::SearchWebTool::new()))
-        }
-        "kimi_cli.tools.web:FetchURL" | "FetchURL" => {
-            Some(Box::new(crate::tools::web::FetchURLTool::new()))
-        }
+        BuiltinTool::SearchWeb => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::web::SearchWebTool::new(),
+        ))),
+        BuiltinTool::FetchURL => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::web::FetchURLTool::new(),
+        ))),
 
         // Ask user / todo / think / plan
-        "kimi_cli.tools.ask_user:AskUserQuestion" | "AskUser" => {
-            Some(Box::new(crate::tools::ask_user::AskUserTool::new()))
-        }
-        "kimi_cli.tools.todo:SetTodoList" | "SetTodoList" => {
-            Some(Box::new(crate::tools::todo::SetTodoListTool::new()))
-        }
-        "kimi_cli.tools.think:Think" | "Think" => {
-            Some(Box::new(crate::tools::think::ThinkTool::new()))
-        }
-        "kimi_cli.tools.plan:ExitPlanMode" | "ExitPlanMode" => {
-            Some(Box::new(crate::tools::plan::ExitPlanModeTool::new()))
-        }
-        "kimi_cli.tools.plan.enter:EnterPlanMode" | "EnterPlanMode" => {
-            Some(Box::new(crate::tools::plan::EnterPlanModeTool::new()))
-        }
+        BuiltinTool::AskUserQuestion => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::ask_user::AskUserTool::new(),
+        ))),
+        BuiltinTool::SetTodoList => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::todo::SetTodoListTool::new(),
+        ))),
+        BuiltinTool::Think => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::think::ThinkTool::new(),
+        ))),
+        BuiltinTool::ExitPlanMode => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::plan::ExitPlanModeTool::new(),
+        ))),
+        BuiltinTool::EnterPlanMode => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::plan::EnterPlanModeTool::new(),
+        ))),
 
         // Agent / D-Mail
-        "kimi_cli.tools.agent:Agent" | "Agent" => {
-            Some(Box::new(crate::tools::agent::AgentTool::new(
-                runtime.config.clone(),
-                runtime.llm.clone(),
-                runtime.approval.state(),
-                runtime.session.work_dir.clone(),
-            )))
-        }
-        "kimi_cli.tools.dmail:SendDMail" | "SendDMail" => {
-            Some(Box::new(crate::tools::dmail::SendDMailTool::new(
-                std::sync::Arc::new(std::sync::Mutex::new(runtime.denwa_renji.clone())),
-            )))
-        }
-
-        _ => {
-            tracing::warn!("Unknown tool name in agent spec: {}", name);
-            None
-        }
+        BuiltinTool::Agent => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::agent::AgentTool::new(runtime.clone()),
+        ))),
+        BuiltinTool::SendDMail => Some(Box::new(CallableTool2Adapter::new(
+            crate::tools::dmail::SendDMailTool::new(std::sync::Arc::new(std::sync::Mutex::new(
+                runtime.denwa_renji.clone(),
+            ))),
+        ))),
     }
 }
 
@@ -392,8 +461,15 @@ fn build_tool(name: &str, runtime: &AppRuntime) -> Option<Box<dyn crate::tools::
 /// 1. Parse the YAML agent spec (with inheritance).
 /// 2. Render the system prompt through Jinja2 (`${...}` delimiters).
 /// 3. Build the toolset from the spec's tool list.
-/// 4. Return a fully populated `Agent`.
-pub async fn load_agent(agent_file: &Path, runtime: AppRuntime) -> crate::exception::Result<Agent> {
+/// 4. Register subagent types in the LaborMarket.
+/// 5. Load plugin tools.
+/// 6. Defer MCP tool loading if configs are provided.
+/// 7. Return a fully populated `Agent`.
+pub async fn load_agent(
+    agent_file: &Path,
+    runtime: AppRuntime,
+    mcp_configs: Vec<crate::mcp::McpConfig>,
+) -> crate::exception::Result<Agent> {
     let spec = crate::agents::load_agent_spec(agent_file)?;
 
     let system_prompt = load_system_prompt(
@@ -406,29 +482,87 @@ pub async fn load_agent(agent_file: &Path, runtime: AppRuntime) -> crate::except
 
     // Determine effective tool list.
     let tools = spec.allowed_tools.unwrap_or(spec.tools);
-    let excluded: std::collections::HashSet<String> = spec.exclude_tools.into_iter().collect();
+    let excluded: std::collections::HashSet<crate::tools::tool_name::BuiltinTool> =
+        spec.exclude_tools.into_iter().collect();
 
     for tool_name in tools {
         if excluded.contains(&tool_name) {
             continue;
         }
-        if let Some(tool) = build_tool(&tool_name, &runtime) {
+        if let Some(tool) = build_tool(tool_name, &runtime) {
             toolset.register(tool);
         }
     }
 
-    // Subagent registration (subagents are loaded but not fully wired yet).
+    // Register subagent types in the LaborMarket so the Agent tool can look them up.
     for (subagent_name, subagent_spec) in spec.subagents {
         tracing::info!(
             "Registering subagent type: {} -> {}",
             subagent_name,
             subagent_spec.path.display()
         );
-        // TODO: register in labor_market when AgentTypeDefinition is implemented
-        let _ = subagent_spec;
+
+        let subagent_file = &subagent_spec.path;
+        let builtin_spec = match crate::agents::load_agent_spec(subagent_file) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load subagent spec for '{}': {}, skipping",
+                    subagent_name,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let tool_policy = if let Some(ref allowed) = builtin_spec.allowed_tools {
+            crate::subagents::ToolPolicy::AllowList {
+                tools: allowed.iter().copied().map(Into::into).collect(),
+            }
+        } else {
+            crate::subagents::ToolPolicy::Inherit
+        };
+
+        runtime
+            .labor_market
+            .add_builtin_type(crate::subagents::AgentTypeDefinition {
+                name: crate::subagents::SubagentType::from(subagent_name.as_str()),
+                description: Some(subagent_spec.description),
+                agent_file: subagent_spec.path,
+                when_to_use: if builtin_spec.when_to_use.is_empty() {
+                    None
+                } else {
+                    Some(builtin_spec.when_to_use)
+                },
+                default_model: builtin_spec.model,
+                tool_policy,
+            });
     }
 
-    // TODO: plugin tools, MCP tools
+    // Load WASM plugin tools from ~/.kimi/plugins/
+    if let Some(ref plugins_dir) = crate::plugin::default_plugins_dir() {
+        if plugins_dir.is_dir() {
+            for plugin_tool in crate::plugin::discover_plugins(plugins_dir) {
+                let plugin_name = plugin_tool.name().to_string();
+                if toolset.find(&plugin_name).is_some() {
+                    tracing::warn!(
+                        "Plugin tool '{}' conflicts with an existing tool, skipping",
+                        plugin_name
+                    );
+                    continue;
+                }
+                toolset.register(plugin_tool);
+            }
+        }
+    }
+
+    // Defer MCP tool loading.
+    if !mcp_configs.is_empty() {
+        let mcp_context = crate::soul::toolset::McpLoadContext {
+            tool_call_timeout_ms: 60_000,
+        };
+        toolset.defer_mcp_tool_loading(mcp_configs, mcp_context);
+    }
 
     Ok(Agent {
         name: spec.name,

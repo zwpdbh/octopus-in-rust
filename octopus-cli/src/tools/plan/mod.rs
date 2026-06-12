@@ -1,10 +1,9 @@
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::tools::Tool;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EnterPlanModeParams {
     #[serde(default)]
     pub reason: String,
@@ -26,7 +25,9 @@ impl ExitPlanModeTool {
 }
 
 #[async_trait]
-impl Tool for EnterPlanModeTool {
+impl CallableTool2 for EnterPlanModeTool {
+    type Params = EnterPlanModeParams;
+
     fn name(&self) -> &str {
         "EnterPlanMode"
     }
@@ -35,26 +36,15 @@ impl Tool for EnterPlanModeTool {
         "Enter plan mode to create a read-only plan before making changes."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "EnterPlanMode",
-            "description": "Enter plan mode to create a read-only plan before making changes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": { "type": "string", "description": "Reason for entering plan mode" }
-                }
-            }
-        })
-    }
-
-    async fn call(&self, _arguments: Value) -> Result<String, String> {
-        Ok("Plan mode activated. All file changes must go through the plan file.".to_string())
+    async fn call_typed(&self, _args: EnterPlanModeParams) -> ToolReturnValue {
+        ToolReturnValue::ok("Plan mode activated. All file changes must go through the plan file.")
     }
 }
 
 #[async_trait]
-impl Tool for ExitPlanModeTool {
+impl CallableTool2 for ExitPlanModeTool {
+    type Params = ();
+
     fn name(&self) -> &str {
         "ExitPlanMode"
     }
@@ -63,18 +53,7 @@ impl Tool for ExitPlanModeTool {
         "Exit plan mode and begin executing the plan."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "ExitPlanMode",
-            "description": "Exit plan mode and begin executing the plan.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        })
-    }
-
-    async fn call(&self, _arguments: Value) -> Result<String, String> {
-        Ok("Plan mode deactivated. You can now make direct changes.".to_string())
+    async fn call_typed(&self, _args: ()) -> ToolReturnValue {
+        ToolReturnValue::ok("Plan mode deactivated. You can now make direct changes.")
     }
 }

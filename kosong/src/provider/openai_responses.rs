@@ -351,7 +351,7 @@ impl ChatProvider for OpenAIResponses {
                         ..
                     } => {
                         parts.push(Part::ToolCall(ToolCall {
-                            call_type: "function".to_string(),
+                            call_type: crate::ToolCallType::Function,
                             id: call_id.clone(),
                             function: FunctionBody {
                                 name: name.clone(),
@@ -533,7 +533,7 @@ fn event_to_parts(event: ResponsesStreamEvent) -> Vec<Part> {
                             .unwrap_or("")
                             .to_string();
                         parts.push(Part::ToolCall(ToolCall {
-                            call_type: "function".to_string(),
+                            call_type: crate::ToolCallType::Function,
                             id: call_id,
                             function: FunctionBody {
                                 name,

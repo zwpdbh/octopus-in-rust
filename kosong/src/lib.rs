@@ -15,7 +15,7 @@ pub use chat_provider::{
 pub use generate::{GenerateResult, generate};
 pub use message::{
     AudioUrl, ContentPart, FunctionBody, ImageUrl, Message, Role, TokenUsage, ToolCall,
-    ToolCallPart, VideoUrl,
+    ToolCallPart, ToolCallType, VideoUrl,
 };
 pub use simple_toolset::SimpleToolset;
 pub use step::{StepResult, step, step_with_callbacks};

@@ -7,7 +7,7 @@ use crate::notifications::{
     NotificationView,
 };
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NotificationManager {
     _config: NotificationConfig,
     store: NotificationStore,

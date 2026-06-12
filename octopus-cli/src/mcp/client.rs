@@ -227,7 +227,7 @@ impl McpClient {
             }
         });
 
-        let _result = self.send_request("initialize", Some(params)).await?;
+        let _ = self.send_request("initialize", Some(params)).await?;
 
         self.send_notification("notifications/initialized", None)
             .await?;

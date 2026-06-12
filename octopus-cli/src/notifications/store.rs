@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::notifications::{NotificationDelivery, NotificationEvent, NotificationView};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NotificationStore {
     root: PathBuf,
 }

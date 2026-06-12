@@ -25,6 +25,7 @@ pub mod utils;
 pub mod vis;
 pub mod web;
 pub mod wire;
+pub mod wire_server;
 
 pub mod acp;
 pub mod agents;

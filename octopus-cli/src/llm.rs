@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::auth::OAuthManager;
 use crate::config::{Config, LLMModel, LLMProvider, ModelCapability, ProviderType};
 use crate::exception::OctopusError;
 
@@ -11,6 +12,9 @@ pub struct LLM {
     pub capabilities: HashSet<ModelCapability>,
     pub model_config: Option<LLMModel>,
     pub provider_config: Option<LLMProvider>,
+    /// OAuth manager for resolving live access tokens.
+    /// If present, takes priority over the static `provider_config.api_key`.
+    pub oauth: Option<OAuthManager>,
 }
 
 pub fn model_display_name(model_name: Option<&str>, model: Option<&LLMModel>) -> String {
@@ -104,12 +108,7 @@ pub fn derive_model_capabilities(model: &LLMModel) -> HashSet<ModelCapability> {
     capabilities
 }
 
-pub fn create_llm(
-    provider: &LLMProvider,
-    model: &LLMModel,
-    _thinking: Option<bool>,
-    _session_id: Option<&str>,
-) -> Option<LLM> {
+pub fn create_llm(provider: &LLMProvider, model: &LLMModel) -> Option<LLM> {
     let capabilities = derive_model_capabilities(model);
     Some(LLM {
         model_name: model.model.clone(),
@@ -117,6 +116,7 @@ pub fn create_llm(
         capabilities,
         model_config: Some(model.clone()),
         provider_config: Some(provider.clone()),
+        oauth: None,
     })
 }
 
@@ -135,7 +135,7 @@ pub fn clone_llm_with_model_alias(
     let provider = config.providers.get(&model.provider).ok_or_else(|| {
         crate::exception::OctopusError::Other(format!("Provider not found: {}", model.provider))
     })?;
-    Ok(create_llm(provider, model, None, None))
+    Ok(create_llm(provider, model))
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +151,7 @@ impl LLM {
         &self,
         system_prompt: Option<&str>,
         messages: &[crate::wire::Message],
-        tools: Option<&[&dyn crate::tools::Tool]>,
+        tools: Option<&[&dyn kosong::tooling::CallableTool]>,
     ) -> crate::exception::Result<ChatCompletion> {
         let provider = self.build_kosong_provider()?;
         let kosong_history: Vec<kosong::Message> =
@@ -194,7 +194,7 @@ impl LLM {
         &'a self,
         system_prompt: Option<&'a str>,
         messages: &'a [crate::wire::Message],
-        tools: Option<&'a [&'a dyn crate::tools::Tool]>,
+        tools: Option<&'a [&'a dyn kosong::tooling::CallableTool]>,
         on_message_part: &'a mut MP,
         on_tool_call: &'a mut TC,
     ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a
@@ -238,17 +238,35 @@ impl LLM {
         }
     }
 
-    fn build_kosong_provider(&self) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
+    /// Resolve the effective API key, preferring OAuth token if available.
+    fn resolve_api_key(&self) -> Option<String> {
+        let provider_config = self.provider_config.as_ref()?;
+        self.oauth
+            .as_ref()
+            .and_then(|o| {
+                o.resolve_api_key(
+                    provider_config.api_key.clone(),
+                    provider_config.oauth.as_ref(),
+                )
+            })
+            .map(|c| c.as_str().to_string())
+    }
+
+    pub(crate) fn build_kosong_provider(
+        &self,
+    ) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
         let provider_config = self
             .provider_config
             .as_ref()
             .ok_or_else(|| OctopusError::Other("Provider config not set".to_string()))?;
 
+        let api_key = self.resolve_api_key();
+
         match provider_config.provider_type {
             ProviderType::Kimi => {
                 let mut kimi = kosong::provider::kimi::Kimi::new(&self.model_name)
                     .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     kimi = kimi.with_api_key(key);
                 }
                 Ok(Arc::new(kimi))
@@ -257,7 +275,7 @@ impl LLM {
                 let mut openai =
                     kosong::provider::openai_legacy::OpenAILegacy::new(&self.model_name)
                         .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     openai = openai.with_api_key(key);
                 }
                 if let Some(ref key) = provider_config.reasoning_key {
@@ -269,7 +287,7 @@ impl LLM {
                 let mut openai =
                     kosong::provider::openai_responses::OpenAIResponses::new(&self.model_name)
                         .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = provider_config.api_key {
+                if let Some(ref key) = api_key {
                     openai = openai.with_api_key(key);
                 }
                 Ok(Arc::new(openai))
@@ -338,7 +356,7 @@ pub(crate) fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> ko
 
 pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
     kosong::ToolCall {
-        call_type: tc.call_type.clone(),
+        call_type: tc.call_type,
         id: tc.id.clone(),
         function: kosong::FunctionBody {
             name: tc.function.name.clone(),
@@ -348,11 +366,11 @@ pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::To
     }
 }
 
-pub(crate) fn wire_to_kosong_tool(tool: &dyn crate::tools::Tool) -> kosong::Tool {
+pub(crate) fn wire_to_kosong_tool(tool: &dyn kosong::tooling::CallableTool) -> kosong::Tool {
     kosong::Tool {
         name: tool.name().to_string(),
         description: tool.description().to_string(),
-        parameters: tool.schema(),
+        parameters: tool.parameters(),
     }
 }
 
@@ -411,8 +429,31 @@ pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::To
     }
 }
 
+pub(crate) fn kosong_to_wire_tool_result(
+    result: kosong::tooling::ToolResult,
+) -> crate::wire::ToolResult {
+    crate::wire::ToolResult {
+        tool_call_id: result.tool_call_id,
+        return_value: crate::wire::ToolReturnValue {
+            output: result.return_value.output.and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(crate::wire::ToolOutput::Text(s.to_string()))
+                } else {
+                    serde_json::from_value::<Vec<crate::wire::ContentPart>>(v.clone())
+                        .ok()
+                        .map(crate::wire::ToolOutput::Parts)
+                        .or_else(|| Some(crate::wire::ToolOutput::Text(v.to_string())))
+                }
+            }),
+            message: result.return_value.message,
+            brief: None,
+            is_error: result.return_value.is_error,
+        },
+    }
+}
+
 /// Classify a kosong error string into a specific OctopusError variant.
-fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
+pub(crate) fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
     if msg.starts_with("API connection error:") {
         return crate::exception::OctopusError::APIConnection(
             crate::exception::APIConnectionError(msg),

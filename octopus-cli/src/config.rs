@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::exception::{ConfigError, Result};
@@ -201,12 +202,30 @@ impl Default for MCPConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDef {
-    pub event: String,
+    pub event: crate::hooks::HookEventKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
+    /// Compiled regex from `matcher`. Filled at load time; `#[serde(skip)]`
+    /// because it is derived from `matcher` and not persisted.
+    #[serde(skip)]
+    pub compiled_matcher: Option<Regex>,
     pub command: String,
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
+}
+
+impl HookDef {
+    /// Compile `self.matcher` into `self.compiled_matcher`.
+    /// Warnings are emitted for invalid regex patterns.
+    pub fn compile_matcher(&mut self) {
+        self.compiled_matcher = self.matcher.as_ref().and_then(|p| match Regex::new(p) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                tracing::warn!("Invalid regex in hook matcher '{}': {}", p, e);
+                None
+            }
+        });
+    }
 }
 
 fn default_hook_timeout() -> u64 {
@@ -336,7 +355,7 @@ pub fn get_default_config() -> Config {
     Config::default()
 }
 
-fn _migrate_json_config_to_toml() {
+fn migrate_json_config_to_toml() {
     let old = get_share_dir().join("config.json");
     let new = get_share_dir().join("config.toml");
     if !old.exists() || new.exists() {
@@ -363,7 +382,7 @@ pub fn load_config(config_file: Option<&Path>) -> Result<Config> {
     let is_default_config_file = config_file == default_config_file;
 
     if is_default_config_file && !config_file.exists() {
-        _migrate_json_config_to_toml();
+        migrate_json_config_to_toml();
     }
 
     if !config_file.exists() {
@@ -394,6 +413,9 @@ pub fn load_config(config_file: Option<&Path>) -> Result<Config> {
 
     config.is_from_default_location = is_default_config_file;
     config.source_file = Some(config_file);
+    for hook in &mut config.hooks {
+        hook.compile_matcher();
+    }
     config.validate()?;
     Ok(config)
 }
@@ -404,11 +426,15 @@ pub fn load_config_from_string(config_string: &str) -> Result<Config> {
         return Err(ConfigError::EmptyConfig.into());
     }
 
-    let config: Config = match serde_json::from_str(config_string) {
+    let mut config: Config = match serde_json::from_str(config_string) {
         Ok(c) => c,
         Err(json_err) => toml::from_str(config_string)
             .map_err(|toml_err| ConfigError::InvalidText(format!("{}; {}", json_err, toml_err)))?,
     };
+
+    for hook in &mut config.hooks {
+        hook.compile_matcher();
+    }
 
     config.validate()?;
     Ok(config)
@@ -430,4 +456,90 @@ pub fn save_config(config: &Config, config_file: Option<&Path>) -> Result<()> {
     };
     std::fs::write(config_file, text)?;
     Ok(())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hook_def_deserializes_from_toml_with_event_string_only() {
+        let toml_str = r#"
+event = "PreToolUse"
+matcher = "Shell"
+command = "echo hello"
+timeout = 10
+"#;
+        let def: HookDef = toml::from_str(toml_str).expect("should parse HookDef from TOML");
+        assert_eq!(def.event.to_string(), "PreToolUse");
+        assert_eq!(def.matcher, Some("Shell".to_string()));
+        assert_eq!(def.command, "echo hello");
+        assert_eq!(def.timeout, 10);
+    }
+
+    #[test]
+    fn test_config_with_hooks_deserializes_from_toml() {
+        let toml_str = r#"
+default_model = ""
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Shell"
+command = "echo ok"
+timeout = 10
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "WriteFile"
+command = "prettier --write"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("should parse Config from TOML");
+        assert_eq!(config.hooks.len(), 2);
+
+        let first = &config.hooks[0];
+        assert_eq!(first.event.to_string(), "PreToolUse");
+        assert_eq!(first.matcher, Some("Shell".to_string()));
+        assert_eq!(first.command, "echo ok");
+        assert_eq!(first.timeout, 10);
+
+        let second = &config.hooks[1];
+        assert_eq!(second.event.to_string(), "PostToolUse");
+        assert_eq!(second.matcher, Some("WriteFile".to_string()));
+        assert_eq!(second.command, "prettier --write");
+        assert_eq!(second.timeout, 30); // default
+    }
+
+    #[test]
+    fn test_hook_def_default_timeout() {
+        let toml_str = r#"
+event = "Stop"
+command = "echo done"
+"#;
+        let def: HookDef = toml::from_str(toml_str).unwrap();
+        assert_eq!(def.timeout, 30);
+        assert_eq!(def.matcher, None);
+    }
+
+    #[test]
+    fn test_config_without_hooks_is_empty_vec() {
+        let toml_str = r#"
+default_model = ""
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn test_hook_def_invalid_event_fails() {
+        let toml_str = r#"
+event = "UnknownEvent"
+command = "echo bad"
+"#;
+        let result: std::result::Result<HookDef, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "unknown event should fail to parse");
+    }
 }

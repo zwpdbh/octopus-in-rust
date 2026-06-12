@@ -46,6 +46,7 @@
 | `octopus-cli/src/tools/plan/mod.rs` | EnterPlanMode / ExitPlanMode | ~80 | 🔄 |
 | `octopus-cli/src/tools/agent/mod.rs` | AgentTool | ~? | 🔄 |
 | `octopus-cli/src/tools/background/mod.rs` | TaskOutput / TaskStop | ~106 | 🔄 Skeleton |
+| `octopus-cli/src/plugin/mod.rs` | WASM plugin discovery + `WasmPluginTool` | ~180 | ✅ |
 
 ## What's Done
 
@@ -60,15 +61,18 @@
 - [x] `SetTodoListTool` — todo list management
 - [x] `ThinkTool` — reasoning tool
 - [x] `EnterPlanModeTool` / `ExitPlanModeTool`
-- [x] `AgentTool` — subagent dispatch
+- [x] `AgentTool` — full subagent dispatch with `LaborMarket`, `ToolPolicy`, model override
 - [x] `TaskOutputTool` / `TaskStopTool` stubs
+- [x] `WasmPluginTool` — Extism-based WASM plugin execution
+- [x] `discover_plugins()` — scans `~/.kimi/plugins/` for `.wasm` + `.json` pairs
+- [x] Plugin security manifest — deny-by-default `allowed_hosts`, `allowed_paths`, `timeout_ms`, `max_memory_pages`
 
 ## What's Missing
 
 - [ ] `SearchWebTool` full implementation (stub — needs service config wiring)
 - [x] `FetchURLTool` full implementation (HTTP GET with content extraction)
+- [x] `dmail` tool (`SendDMailTool`)
 - [ ] `display` tool
-- [ ] `dmail` tool
 - [ ] `test` tool
 - [ ] KaosPath integration (file paths use raw `PathBuf`)
 - [ ] File tool validation (sensitive file checks, path escaping)

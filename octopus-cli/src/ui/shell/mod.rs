@@ -43,7 +43,7 @@ pub struct ShellUI {
     last_frame_width: u16,
     // Approval flow
     approval_runtime: Option<crate::approval_runtime::ApprovalRuntime>,
-    wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<serde_json::Value>>,
+    wire_hub_receiver: Option<tokio::sync::broadcast::Receiver<crate::wire::WireEvent>>,
     pending_approval: Option<crate::wire::ApprovalRequestEvent>,
     // Input history
     history: Vec<String>,
@@ -198,15 +198,28 @@ impl ShellUI {
                         self.run_external_editor(terminal).await?;
                     }
                 }
-                Ok(value) = async {
+                Ok(event) = async {
                     if let Some(rx) = self.wire_hub_receiver.as_mut() {
                         rx.recv().await
                     } else {
                         std::future::pending().await
                     }
                 } => {
-                    if let Ok(req) = serde_json::from_value::<crate::wire::ApprovalRequestEvent>(value) {
-                        self.pending_approval = Some(req);
+                    match event {
+                        crate::wire::WireEvent::ApprovalRequest(req) => {
+                            self.pending_approval = Some(req);
+                        }
+                        crate::wire::WireEvent::HookResolved(resolved) if resolved.action == "block" => {
+                            if !resolved.reason.is_empty() {
+                                self.messages.push((
+                                    "system".to_string(),
+                                    format!("Hook blocked {}: {}", resolved.event, resolved.reason),
+                                ));
+                            }
+                        }
+                        // HookTriggered is a progress indicator for GUI clients;
+                        // shell mode has no transient status area so we ignore it.
+                        _ => {}
                     }
                 }
             }
@@ -272,7 +285,9 @@ impl ShellUI {
                     if let Some(ref rt) = self.approval_runtime {
                         rt.resolve(
                             &pending.id,
-                            crate::approval_runtime::ApprovalResponse::Approve,
+                            crate::approval_runtime::ApprovalResponse::Allow {
+                                scope: crate::approval_runtime::ApprovalScope::Once,
+                            },
                         );
                     }
                     self.pending_approval = None;
@@ -294,7 +309,9 @@ impl ShellUI {
                     if let Some(ref rt) = self.approval_runtime {
                         rt.resolve(
                             &pending.id,
-                            crate::approval_runtime::ApprovalResponse::ApproveForSession,
+                            crate::approval_runtime::ApprovalResponse::Allow {
+                                scope: crate::approval_runtime::ApprovalScope::Session,
+                            },
                         );
                     }
                     self.pending_approval = None;

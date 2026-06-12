@@ -1,13 +1,5 @@
-pub struct PluginManager;
+mod discovery;
+pub use discovery::{WasmPluginTool, default_plugins_dir, discover_plugins};
 
-impl PluginManager {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for PluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+mod manifest;
+pub use manifest::PluginManifest;

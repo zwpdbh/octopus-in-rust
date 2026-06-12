@@ -1,0 +1,34 @@
+{
+  "name": "HttpRequest",
+  "description": "Make HTTP requests to external APIs and websites. Returns status code and response body.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "The URL to request"
+      },
+      "method": {
+        "type": "string",
+        "description": "HTTP method: GET, POST, PUT, DELETE, PATCH",
+        "default": "GET"
+      },
+      "headers": {
+        "type": "object",
+        "description": "Optional HTTP headers as key-value pairs",
+        "additionalProperties": { "type": "string" }
+      },
+      "body": {
+        "type": "string",
+        "description": "Optional request body"
+      }
+    },
+    "required": ["url"]
+  },
+  "allowed_hosts": [
+    "httpbin.org",
+    "*.httpbin.org"
+  ],
+  "timeout_ms": 30000,
+  "max_memory_pages": 128
+}

@@ -1,16 +1,16 @@
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::session_state::TodoStatus;
-use crate::tools::Tool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SetTodoListParams {
     pub todos: Vec<TodoItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TodoItem {
     pub title: String,
     pub status: TodoStatus,
@@ -25,7 +25,9 @@ impl SetTodoListTool {
 }
 
 #[async_trait]
-impl Tool for SetTodoListTool {
+impl CallableTool2 for SetTodoListTool {
+    type Params = SetTodoListParams;
+
     fn name(&self) -> &str {
         "SetTodoList"
     }
@@ -34,37 +36,8 @@ impl Tool for SetTodoListTool {
         "Set the todo list for the current session."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "SetTodoList",
-            "description": "Set the todo list for the current session.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "todos": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": { "type": "string" },
-                                "status": { "type": "string", "enum": ["pending", "in_progress", "done"] }
-                                // Note: JSON schema stays as strings for LLM compatibility;
-                                // deserialization maps to TodoStatus enum.
-                            },
-                            "required": ["title", "status"]
-                        }
-                    }
-                },
-                "required": ["todos"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: SetTodoListParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
-        Ok(format!(
+    async fn call_typed(&self, params: SetTodoListParams) -> ToolReturnValue {
+        ToolReturnValue::ok(format!(
             "Todo list updated with {} items.",
             params.todos.len()
         ))

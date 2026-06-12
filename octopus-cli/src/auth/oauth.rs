@@ -24,23 +24,36 @@ pub const MAX_REFRESH_RETRIES: usize = 3;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthToken {
     pub access_token: String,
+    #[serde(default)]
     pub refresh_token: String,
     /// Absolute Unix timestamp when the token expires.
+    #[serde(default)]
     pub expires_at: f64,
+    #[serde(default)]
     pub scope: String,
+    #[serde(default = "default_bearer")]
     pub token_type: String,
     #[serde(default)]
     pub expires_in: f64,
 }
 
-#[derive(Debug, Clone)]
+fn default_bearer() -> String {
+    "Bearer".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct DeviceAuthorization {
     pub user_code: String,
     pub device_code: String,
     pub verification_uri: String,
     pub verification_uri_complete: String,
     pub expires_in: Option<u64>,
+    #[serde(default = "default_interval")]
     pub interval: u64,
+}
+
+fn default_interval() -> u64 {
+    5
 }
 
 // ============================================================================
@@ -126,7 +139,7 @@ pub async fn request_device_authorization() -> Result<DeviceAuthorization> {
         .map_err(|e| OctopusError::Other(format!("Device authorization request failed: {}", e)))?;
 
     let status = response.status();
-    let body: serde_json::Value = response.json().await.map_err(|e| {
+    let body: DeviceAuthorization = response.json().await.map_err(|e| {
         OctopusError::Other(format!(
             "Failed to parse device authorization response: {}",
             e
@@ -140,17 +153,7 @@ pub async fn request_device_authorization() -> Result<DeviceAuthorization> {
         )));
     }
 
-    Ok(DeviceAuthorization {
-        user_code: body["user_code"].as_str().unwrap_or("").to_string(),
-        device_code: body["device_code"].as_str().unwrap_or("").to_string(),
-        verification_uri: body["verification_uri"].as_str().unwrap_or("").to_string(),
-        verification_uri_complete: body["verification_uri_complete"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        expires_in: body["expires_in"].as_u64(),
-        interval: body["interval"].as_u64().unwrap_or(5),
-    })
+    Ok(body)
 }
 
 pub async fn poll_device_token(
@@ -226,21 +229,7 @@ pub async fn login_kimi_code() -> Result<OAuthToken> {
     println!("Or enter this code: {}\n", device_auth.user_code);
 
     // Try to open browser automatically
-    #[cfg(not(target_os = "android"))]
-    {
-        if let Ok(mut child) = std::process::Command::new("python3")
-            .args(&[
-                "-c",
-                &format!(
-                    "import webbrowser; webbrowser.open('{}')",
-                    device_auth.verification_uri_complete
-                ),
-            ])
-            .spawn()
-        {
-            let _ = child.wait();
-        }
-    }
+    let _ = webbrowser::open(&device_auth.verification_uri_complete);
 
     let token = poll_device_token(
         &device_auth.device_code,
@@ -339,36 +328,14 @@ pub async fn refresh_token(refresh_token_str: &str) -> Result<OAuthToken> {
 // ============================================================================
 
 fn parse_token_response(body: &serde_json::Value) -> Result<OAuthToken> {
-    let access_token = body["access_token"]
-        .as_str()
-        .ok_or_else(|| OctopusError::Other("Missing access_token in response".to_string()))?
-        .to_string();
+    let mut token: OAuthToken = serde_json::from_value(body.clone())
+        .map_err(|e| OctopusError::Other(format!("Invalid token response: {}", e)))?;
 
-    let refresh_token = body["refresh_token"].as_str().unwrap_or("").to_string();
+    if token.expires_in > 0.0 && token.expires_at == 0.0 {
+        token.expires_at = now_secs() + token.expires_in;
+    }
 
-    let expires_in = body["expires_in"]
-        .as_f64()
-        .or_else(|| body["expires_in"].as_u64().map(|v| v as f64))
-        .unwrap_or(0.0);
-
-    let expires_at = if expires_in > 0.0 {
-        now_secs() + expires_in
-    } else {
-        0.0
-    };
-
-    let scope = body["scope"].as_str().unwrap_or("").to_string();
-
-    let token_type = body["token_type"].as_str().unwrap_or("Bearer").to_string();
-
-    Ok(OAuthToken {
-        access_token,
-        refresh_token,
-        expires_at,
-        scope,
-        token_type,
-        expires_in,
-    })
+    Ok(token)
 }
 
 pub fn now_secs() -> f64 {

@@ -1,17 +1,16 @@
 use async_trait::async_trait;
+use kosong::tooling::{CallableTool2, ToolReturnValue};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::tools::Tool;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskOutputParams {
     pub task_id: String,
     #[serde(default)]
     pub block: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskStopParams {
     pub task_id: String,
     #[serde(default)]
@@ -39,7 +38,9 @@ impl TaskStopTool {
 }
 
 #[async_trait]
-impl Tool for TaskOutputTool {
+impl CallableTool2 for TaskOutputTool {
+    type Params = TaskOutputParams;
+
     fn name(&self) -> &str {
         "TaskOutput"
     }
@@ -48,30 +49,11 @@ impl Tool for TaskOutputTool {
         "Get the output of a background task."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "TaskOutput",
-            "description": "Get the output of a background task.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": { "type": "string", "description": "Task ID" },
-                    "block": { "type": "boolean", "default": false, "description": "Wait for completion" }
-                },
-                "required": ["task_id"]
-            }
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: TaskOutputParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
-        let (status, output) = self
-            .bg_manager
-            .get_output(&params.task_id)
-            .await
-            .ok_or_else(|| format!("Task '{}' not found", params.task_id))?;
+    async fn call_typed(&self, params: TaskOutputParams) -> ToolReturnValue {
+        let (status, output) = match self.bg_manager.get_output(&params.task_id).await {
+            Some(result) => result,
+            None => return ToolReturnValue::error(format!("Task '{}' not found", params.task_id)),
+        };
 
         let status_str = match status {
             crate::background::TaskStatus::Running => "running".to_string(),
@@ -88,11 +70,15 @@ impl Tool for TaskOutputTool {
             let mut current_output = output;
             while matches!(current_status, crate::background::TaskStatus::Running) {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let result = self
-                    .bg_manager
-                    .get_output(&params.task_id)
-                    .await
-                    .ok_or_else(|| format!("Task '{}' disappeared", params.task_id))?;
+                let result = match self.bg_manager.get_output(&params.task_id).await {
+                    Some(r) => r,
+                    None => {
+                        return ToolReturnValue::error(format!(
+                            "Task '{}' disappeared",
+                            params.task_id
+                        ));
+                    }
+                };
                 current_status = result.0;
                 current_output = result.1;
             }
@@ -104,18 +90,20 @@ impl Tool for TaskOutputTool {
                 crate::background::TaskStatus::Killed => "killed".to_string(),
                 _ => "unknown".to_string(),
             };
-            return Ok(format!(
+            return ToolReturnValue::ok(format!(
                 "Status: {}\n\nOutput:\n{}",
                 final_status, current_output
             ));
         }
 
-        Ok(format!("Status: {}\n\nOutput:\n{}", status_str, output))
+        ToolReturnValue::ok(format!("Status: {}\n\nOutput:\n{}", status_str, output))
     }
 }
 
 #[async_trait]
-impl Tool for TaskStopTool {
+impl CallableTool2 for TaskStopTool {
+    type Params = TaskStopParams;
+
     fn name(&self) -> &str {
         "TaskStop"
     }
@@ -124,31 +112,12 @@ impl Tool for TaskStopTool {
         "Stop a background task."
     }
 
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "name": "TaskStop",
-            "description": "Stop a background task.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": { "type": "string", "description": "Task ID" },
-                    "reason": { "type": "string", "default": "Stopped by TaskStop" }
-                },
-                "required": ["task_id"]
-            }
-        })
-    }
+    async fn call_typed(&self, params: TaskStopParams) -> ToolReturnValue {
+        if let Err(e) = self.bg_manager.stop(&params.task_id).await {
+            return ToolReturnValue::error(format!("Failed to stop task: {}", e));
+        }
 
-    async fn call(&self, arguments: Value) -> Result<String, String> {
-        let params: TaskStopParams =
-            serde_json::from_value(arguments).map_err(|e| format!("Invalid parameters: {}", e))?;
-
-        self.bg_manager
-            .stop(&params.task_id)
-            .await
-            .map_err(|e| format!("Failed to stop task: {}", e))?;
-
-        Ok(format!(
+        ToolReturnValue::ok(format!(
             "Task {} stopped. Reason: {}",
             params.task_id, params.reason
         ))

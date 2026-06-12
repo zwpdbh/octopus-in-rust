@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use tracing;
 
-use crate::cli::UiMode;
-use crate::config::{Config, LLMModel, LLMProvider, load_config};
+use crate::cli::{ConfigSource, UiMode};
+use crate::config::{Config, LLMModel, LLMProvider, load_config, load_config_from_string};
 use crate::exception::Result;
 use crate::llm::{LLM, augment_provider_with_env_vars, create_llm};
 use crate::session::Session;
@@ -44,42 +44,42 @@ pub struct AppRuntime {
 
 #[derive(Debug, Clone)]
 pub struct ApprovalRuntime {
-    yolo: bool,
-    afk: bool,
+    mode: crate::soul::approval::ApprovalMode,
 }
 
 impl ApprovalRuntime {
     pub fn is_yolo(&self) -> bool {
-        self.yolo
+        self.mode.is_yolo()
     }
 
     pub fn is_afk(&self) -> bool {
-        self.afk
+        self.mode.is_afk()
     }
 }
 
 impl OctopusCLI {
     pub async fn create(
         session: Session,
-        config: Option<Config>,
-        config_path: Option<PathBuf>,
+        config_source: Option<ConfigSource>,
         model_name: Option<String>,
-        thinking: Option<bool>,
-        yolo: bool,
-        afk: bool,
-        plan_mode: bool,
+        approval_mode: crate::soul::approval::ApprovalMode,
         resumed: bool,
         ui_mode: UiMode,
         max_steps_per_turn: Option<usize>,
         max_retries_per_step: Option<usize>,
         max_ralph_iterations: Option<i32>,
         agent_file: Option<PathBuf>,
+        mcp_configs: Vec<crate::mcp::McpConfig>,
     ) -> Result<Self> {
-        let mut config = match config {
-            Some(c) => c,
-            None => load_config(config_path.as_deref())?,
+        // 1. Load configuration and apply CLI overrides.
+        // 1.1 Load config from the provided source (inline, file, or default location).
+        let mut config = match config_source {
+            Some(ConfigSource::Inline(s)) => load_config_from_string(&s)?,
+            Some(ConfigSource::File(p)) => load_config(Some(&p))?,
+            None => load_config(None)?,
         };
 
+        // 1.2 Apply CLI overrides for loop-control settings.
         if let Some(max_steps) = max_steps_per_turn {
             config.loop_control.max_steps_per_turn = max_steps;
         }
@@ -90,63 +90,113 @@ impl OctopusCLI {
             config.loop_control.max_ralph_iterations = max_ralph;
         }
 
-        let mut model: Option<LLMModel> = None;
-        let mut provider: Option<LLMProvider> = None;
-
-        if model_name.is_none() && !config.default_model.is_empty() {
-            if let Some(m) = config.models.get(&config.default_model) {
-                model = Some(m.clone());
-                provider = config.providers.get(&m.provider).cloned();
-            }
-        }
-        if let Some(ref name) = model_name {
-            if let Some(m) = config.models.get(name) {
-                model = Some(m.clone());
-                provider = config.providers.get(&m.provider).cloned();
-            }
-        }
-
-        let mut model = model.unwrap_or_else(|| LLMModel {
-            provider: String::new(),
-            model: String::new(),
-            max_context_size: 100_000,
-            capabilities: None,
-            display_name: None,
-        });
-        let mut provider = provider.unwrap_or_else(|| LLMProvider {
-            provider_type: crate::config::ProviderType::Kimi,
-            base_url: String::new(),
-            api_key: None,
-            env: None,
-            custom_headers: None,
-            reasoning_key: None,
-            oauth: None,
-        });
-
-        let env_overrides = augment_provider_with_env_vars(&mut provider, &mut model);
-
-        let _thinking = thinking.unwrap_or(config.default_thinking);
-        let yolo = yolo || config.default_yolo;
-        let _plan_mode = if resumed {
-            false
+        // 2. Resolve model and provider.
+        // 2.1 Look up explicit model (from --model) and default model (from config).
+        let explicit = model_name.as_ref().and_then(|n| config.models.get(n));
+        let default = if config.default_model.is_empty() {
+            None
         } else {
-            plan_mode || config.default_plan_mode
+            config.models.get(&config.default_model)
         };
 
+        // 2.2 Pre-compute existence booleans for explicit/default lookups.
+        let name_given = model_name.is_some();
+        let name_exists = explicit.is_some();
+        let default_given = !config.default_model.is_empty();
+        let default_exists = default.is_some();
+
+        // 2.3 Match on the tuple to pick model/provider with clear priority.
+        let (mut model, mut provider) =
+            match (name_given, name_exists, default_given, default_exists) {
+                // Explicit model requested and found in config.
+                (true, true, _, _) => {
+                    let m = explicit.unwrap().clone();
+                    let p = config
+                        .providers
+                        .get(&m.provider)
+                        .cloned()
+                        .unwrap_or_else(|| LLMProvider {
+                            provider_type: crate::config::ProviderType::Kimi,
+                            base_url: String::new(),
+                            api_key: None,
+                            env: None,
+                            custom_headers: None,
+                            reasoning_key: None,
+                            oauth: None,
+                        });
+                    (m, p)
+                }
+                // No explicit model; default configured and found in config.
+                (false, _, true, true) => {
+                    let m = default.unwrap().clone();
+                    let p = config
+                        .providers
+                        .get(&m.provider)
+                        .cloned()
+                        .unwrap_or_else(|| LLMProvider {
+                            provider_type: crate::config::ProviderType::Kimi,
+                            base_url: String::new(),
+                            api_key: None,
+                            env: None,
+                            custom_headers: None,
+                            reasoning_key: None,
+                            oauth: None,
+                        });
+                    (m, p)
+                }
+                // Everything else falls back to hard-coded defaults:
+                //   - explicit name given but not found
+                //   - no explicit name and no default configured
+                //   - no explicit name and default configured but not found
+                _ => {
+                    let m = LLMModel {
+                        provider: String::new(),
+                        model: String::new(),
+                        max_context_size: 100_000,
+                        capabilities: None,
+                        display_name: None,
+                    };
+                    let p = LLMProvider {
+                        provider_type: crate::config::ProviderType::Kimi,
+                        base_url: String::new(),
+                        api_key: None,
+                        env: None,
+                        custom_headers: None,
+                        reasoning_key: None,
+                        oauth: None,
+                    };
+                    (m, p)
+                }
+            };
+
+        // 2.4 Apply environment variable overrides to provider and model.
+        let env_overrides = augment_provider_with_env_vars(&mut provider, &mut model);
+
+        // 3. Resolve derived settings.
+        // 3.2 Instantiate the LLM client only when provider and model are configured.
         let llm = if !provider.base_url.is_empty() && !model.model.is_empty() {
-            create_llm(&provider, &model, thinking, Some(&session.id))
+            create_llm(&provider, &model)
         } else {
             None
         };
 
-        let approval = ApprovalState {
-            yolo: session.state.approval.yolo || yolo,
-            afk: session.state.approval.afk || afk,
+        // 4. Build approval state from session state merged with CLI flags.
+        // CLI > config default > persisted session state.
+        let mode = if approval_mode != crate::soul::approval::ApprovalMode::Ask {
+            approval_mode
+        } else if config.default_yolo {
+            crate::soul::approval::ApprovalMode::Yolo
+        } else {
+            session.state.approval.mode
+        };
+        let approval_state = ApprovalState {
+            mode,
             auto_approve_actions: session.state.approval.auto_approve_actions.clone(),
         };
 
-        // Build the heavyweight runtime for agent loading.
-        let approval_wrapper = crate::soul::approval::Approval::with_state(approval.clone());
+        // 5. Construct agent and soul.
+        // 5.1 Build approval wrapper and builtin prompt arguments.
+        let approval_wrapper = crate::soul::approval::Approval::with_state(approval_state.clone());
         let builtin_args = crate::soul::agent::BuiltinSystemPromptArgs {
             kimi_now: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             kimi_work_dir: session.work_dir.clone(),
@@ -157,6 +207,7 @@ impl OctopusCLI {
             kimi_os: std::env::consts::OS.to_string(),
             kimi_shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
         };
+        // 5.2 Build the AppRuntime needed for agent loading.
         let app_runtime = crate::soul::agent::AppRuntime::new(
             config.clone(),
             session.clone(),
@@ -165,9 +216,9 @@ impl OctopusCLI {
             builtin_args,
         );
 
-        // Load agent from spec, or fall back to a default agent.
+        // 5.3 Load agent from file spec, or fall back to a default agent.
         let agent = if let Some(ref path) = agent_file {
-            match crate::soul::agent::load_agent(path, app_runtime).await {
+            match crate::soul::agent::load_agent(path, app_runtime, mcp_configs.clone()).await {
                 Ok(agent) => agent,
                 Err(e) => {
                     tracing::warn!(
@@ -181,7 +232,8 @@ impl OctopusCLI {
                         config.clone(),
                         session.clone(),
                         llm.clone(),
-                        approval.clone(),
+                        approval_state.clone(),
+                        mcp_configs.clone(),
                     )
                 }
             }
@@ -192,20 +244,26 @@ impl OctopusCLI {
                 config.clone(),
                 session.clone(),
                 llm.clone(),
-                approval.clone(),
+                approval_state.clone(),
+                mcp_configs.clone(),
             )
         };
 
+        // 5.4 Construct the KimiSoul (heart of the CLI).
         let soul = KimiSoul::new(
             config.clone(),
             session.clone(),
             llm.clone(),
-            approval.clone(),
+            approval_state.clone(),
             agent,
+            None,
         );
 
-        let approval_runtime = ApprovalRuntime { yolo, afk };
+        // 6. Assemble the lightweight runtime exposed to the UI layer.
+        // 6.1 Approval runtime (yolo/afk flags).
+        let approval_runtime = ApprovalRuntime { mode };
 
+        // 6.2 Full AppRuntime with all resolved components.
         let runtime = AppRuntime {
             config: config.clone(),
             session: session.clone(),
@@ -215,12 +273,14 @@ impl OctopusCLI {
             resumed,
         };
 
-        // Initialize telemetry
+        // 7. Initialize telemetry.
+        // 7.1 Determine whether telemetry is disabled via config or env var.
         let telemetry_disabled =
             !config.telemetry || std::env::var("KIMI_DISABLE_TELEMETRY").is_ok();
         if telemetry_disabled {
             crate::telemetry::disable();
         } else {
+            // 7.2 Set up the telemetry sink and start periodic flushing.
             let device_id = crate::telemetry::get_or_create_device_id();
             crate::telemetry::set_context(device_id.clone(), session.id.clone());
             let transport = crate::telemetry::transport::AsyncTransport::new(
@@ -240,6 +300,7 @@ impl OctopusCLI {
             crate::telemetry::track_session_started_once(&ui_mode_str, resumed);
         }
 
+        // 8. Return the fully initialized CLI handle.
         Ok(OctopusCLI {
             soul: Some(soul),
             runtime,
@@ -298,8 +359,13 @@ impl OctopusCLI {
 
     pub async fn run_wire_stdio(&mut self) -> Result<()> {
         tracing::info!("Running Wire server over stdio");
-        println!("Wire server not yet implemented");
-        Ok(())
+
+        let soul = self.soul.take().ok_or_else(|| {
+            crate::exception::OctopusError::Other("Soul already consumed".to_string())
+        })?;
+
+        let server = crate::wire_server::WireServer::new(soul);
+        server.serve().await
     }
 
     pub async fn shutdown_background_tasks(&mut self) {

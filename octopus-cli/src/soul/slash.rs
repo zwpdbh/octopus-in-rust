@@ -110,7 +110,7 @@ impl Default for SlashCommandRegistry {
 // Each block below mirrors a Python async function decorated with
 // `@registry.command(...)` in `kimi_cli/soul/slash.py`.
 // Where Python uses `wire_send(TextPart(...))`, the Rust code uses
-// `crate::wire::wire_send(TextPart { text: ... })`.
+// `crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart { text: ... })`.
 // =============================================================================
 
 pub fn build_default_slash_commands() -> SlashCommandRegistry {
@@ -125,25 +125,25 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 if let Err(e) = soul.context.clear().await {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Failed to clear context: {e}"),
-                    });
+                    }));
                     return;
                 }
                 let _ = soul
                     .context
                     .write_system_prompt(&soul.agent.system_prompt)
                     .await;
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "The context has been cleared.".to_string(),
-                });
+                }));
                 let snap = soul.status_snapshot();
-                crate::wire::wire_send(StatusUpdate {
+                crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                     context_usage: Some(snap.context_usage),
                     context_tokens: Some(snap.context_tokens),
                     max_context_tokens: Some(snap.max_context_tokens),
                     ..Default::default()
-                });
+                }));
             })
         }),
         description: "Clear the context".to_string(),
@@ -159,24 +159,24 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "yolo".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.yolo() {
-                    soul.approval.set_yolo(false);
-                    if soul.approval.afk() {
-                        crate::wire::wire_send(TextPart {
+                if soul.approval.is_yolo() {
+                    soul.approval.toggle_yolo();
+                    if soul.approval.state().mode.is_afk() {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "Yolo disabled, but afk is still on — tool calls remain auto-approved. Use /afk to turn off afk.".to_string(),
-                        });
+                        }));
                     } else {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "You only die once! Actions will require approval.".to_string(),
-                        });
+                        }));
                     }
                 } else {
-                    soul.approval.set_yolo(true);
-                    crate::wire::wire_send(TextPart {
+                    soul.approval.toggle_yolo();
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "You only live once! All actions will be auto-approved.".to_string(),
-                    });
+                    }));
                 }
-                soul._sync_approval_state();
+                soul.sync_approval_state();
             })
         }),
         description: "Toggle YOLO mode (auto-approve all actions)".to_string(),
@@ -192,23 +192,23 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "afk".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if soul.approval.afk() {
-                    soul.approval.set_afk(false);
+                if soul.approval.state().mode.is_afk() {
+                    soul.approval.toggle_afk();
                     soul.notify_afk_changed(false).await;
-                    let msg = if soul.approval.yolo() {
+                    let msg = if soul.approval.is_yolo() {
                         "afk mode disabled. You are back at the terminal. Yolo is still on."
                     } else {
                         "afk mode disabled. You are back at the terminal."
                     };
-                    crate::wire::wire_send(TextPart { text: msg.to_string() });
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart { text: msg.to_string() }));
                 } else {
-                    soul.approval.set_afk(true);
+                    soul.approval.toggle_afk();
                     soul.notify_afk_changed(true).await;
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "afk mode enabled. AskUserQuestion will be auto-dismissed and tool calls auto-approved.".to_string(),
-                    });
+                    }));
                 }
-                soul._sync_approval_state();
+                soul.sync_approval_state();
             })
         }),
         description: "Toggle afk mode (auto-dismiss AskUserQuestion, auto-approve tool calls)"
@@ -230,60 +230,60 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         if !soul.plan_mode {
                             soul.toggle_plan_mode();
                         }
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Plan mode ON. Plan file: {:?}", soul.get_plan_file_path()),
-                        });
-                        crate::wire::wire_send(StatusUpdate {
+                        }));
+                        crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                             plan_mode: Some(soul.plan_mode),
                             ..Default::default()
-                        });
+                        }));
                     }
                     "off" => {
                         if soul.plan_mode {
                             soul.toggle_plan_mode();
                         }
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "Plan mode OFF. All tools are now available.".to_string(),
-                        });
-                        crate::wire::wire_send(StatusUpdate {
+                        }));
+                        crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                             plan_mode: Some(soul.plan_mode),
                             ..Default::default()
-                        });
+                        }));
                     }
                     "view" => {
                         let content = soul.read_current_plan().unwrap_or_default();
                         if content.is_empty() {
-                            crate::wire::wire_send(TextPart {
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                                 text: "No plan file found for this session.".to_string(),
-                            });
+                            }));
                         } else {
-                            crate::wire::wire_send(TextPart { text: content });
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart { text: content }));
                         }
                     }
                     "clear" => {
                         soul.clear_current_plan();
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "Plan cleared.".to_string(),
-                        });
+                        }));
                     }
                     _ => {
                         let new_state = soul.toggle_plan_mode();
                         if new_state {
-                            crate::wire::wire_send(TextPart {
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                                 text: format!(
                                     "Plan mode ON. Write your plan to: {:?}\nUse ExitPlanMode when done, or /plan off to exit manually.",
                                     soul.get_plan_file_path()
                                 ),
-                            });
+                            }));
                         } else {
-                            crate::wire::wire_send(TextPart {
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                                 text: "Plan mode OFF. All tools are now available.".to_string(),
-                            });
+                            }));
                         }
-                        crate::wire::wire_send(StatusUpdate {
+                        crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                             plan_mode: Some(soul.plan_mode),
                             ..Default::default()
-                        });
+                        }));
                     }
                 }
             })
@@ -301,27 +301,27 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
                 if soul.context.n_checkpoints() == 0 {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "The context is empty.".to_string(),
-                    });
+                    }));
                     return;
                 }
                 if let Err(e) = soul.compact_context(args.trim()).await {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Compaction failed: {e}"),
-                    });
+                    }));
                     return;
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "The context has been compacted.".to_string(),
-                });
+                }));
                 let snap = soul.status_snapshot();
-                crate::wire::wire_send(StatusUpdate {
+                crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                     context_usage: Some(snap.context_usage),
                     context_tokens: Some(snap.context_tokens),
                     max_context_tokens: Some(snap.max_context_tokens),
                     ..Default::default()
-                });
+                }));
             })
         }),
         description: "Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)".to_string(),
@@ -345,9 +345,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         lines.push(format!("  /{} - alias for /{}", alias, cmd.name));
                     }
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: lines.join("\n"),
-                });
+                }));
             })
         }),
         description: "Show help information".to_string(),
@@ -384,7 +384,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     }
                     None => "No CHANGELOG.md found.".to_string(),
                 };
-                crate::wire::wire_send(TextPart { text });
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart { text }));
             })
         }),
         description: "Show release notes".to_string(),
@@ -412,8 +412,8 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             .unwrap_or_else(|| "none".to_string())
                     ),
                     format!("  Plan mode:      {}", soul.plan_mode),
-                    format!("  YOLO:           {}", soul.approval.yolo()),
-                    format!("  AFK:            {}", soul.approval.afk()),
+                    format!("  YOLO:           {}", soul.approval.is_yolo()),
+                    format!("  AFK:            {}", soul.approval.state().mode.is_afk()),
                     format!(
                         "  Context tokens: {} / {} ({:.1}%)",
                         snap.context_tokens,
@@ -422,9 +422,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     ),
                     format!("  Checkpoints:    {}", soul.context.n_checkpoints()),
                 ];
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: lines.join("\n"),
-                });
+                }));
             })
         }),
         description: "Debug the context".to_string(),
@@ -443,40 +443,40 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 if path.is_empty() {
                     let dirs = &soul.config.workspace_dirs;
                     if dirs.is_empty() {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "No additional directories in the workspace.\nUsage: /add-dir <path>".to_string(),
-                        });
+                        }));
                     } else {
                         let mut lines = vec!["Added directories:".to_string()];
                         for d in dirs {
                             lines.push(format!("  - {}", d.display()));
                         }
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: lines.join("\n"),
-                        });
+                        }));
                     }
                     return;
                 }
                 let p = std::path::PathBuf::from(path);
                 if !p.exists() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Path does not exist: {}", path),
-                    });
+                    }));
                     return;
                 }
                 if !p.is_dir() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Path is not a directory: {}", path),
-                    });
+                    }));
                     return;
                 }
                 let canonical = p.canonicalize().unwrap_or(p);
                 if !soul.config.workspace_dirs.contains(&canonical) {
                     soul.config.workspace_dirs.push(canonical.clone());
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: format!("Added directory to workspace: {}", canonical.display()),
-                });
+                }));
             })
         }),
         description: "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs".to_string(),
@@ -491,9 +491,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "exit".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "Use Ctrl-D or type 'exit' to quit.".to_string(),
-                });
+                }));
             })
         }),
         description: "Exit the CLI".to_string(),
@@ -507,9 +507,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "version".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: format!("kimi, version {}", crate::constant::get_version()),
-                });
+                }));
             })
         }),
         description: "Show version information".to_string(),
@@ -543,18 +543,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             }
                         })
                         .unwrap_or_else(|| "no model".to_string());
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Current model: {}", model),
-                    });
+                    }));
                     return;
                 }
 
                 // --- list available models ---
                 if arg == "list" {
                     if soul.config.models.is_empty() {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: "No models configured.".to_string(),
-                        });
+                        }));
                         return;
                     }
                     let mut lines = vec!["Available models:".to_string()];
@@ -570,9 +570,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         let marker = if current_marker { " (current)" } else { "" };
                         lines.push(format!("  - {}{}", display, marker));
                     }
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: lines.join("\n"),
-                    });
+                    }));
                     return;
                 }
 
@@ -595,19 +595,19 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             Some(alias),
                             soul.config.models.get(alias),
                         );
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Switched to model: {}", display),
-                        });
+                        }));
                     }
                     Ok(None) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Model '{}' not found in configuration.", alias),
-                        });
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Failed to switch model '{}': {}", alias, e),
-                        });
+                        }));
                     }
                 }
             })
@@ -626,16 +626,16 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 let text = args.trim();
                 if text.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "Spot a bug or have feedback? Visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
-                    });
+                    }));
                     return;
                 }
                 // In a full implementation, this would POST to the platform feedback API.
                 // For now, print the GitHub issues URL as fallback.
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "Feedback submission via API is not yet implemented. Please visit https://github.com/MoonshotAI/kimi-cli/issues".to_string(),
-                });
+                }));
             })
         }),
         description: "Submit feedback to make Kimi Code CLI better".to_string(),
@@ -657,17 +657,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 match crate::session::Session::create(&work_dir, None).await {
                     Ok(new_session) => {
                         let id = new_session.id.clone();
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!(
                                 "New session created: {}. Restart octopus to switch to it.",
                                 id
                             ),
-                        });
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Failed to create new session: {}", e),
-                        });
+                        }));
                     }
                 }
             })
@@ -686,9 +686,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 let new_title = args.trim();
                 if new_title.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Session title: {}", soul.session.title),
-                    });
+                    }));
                     return;
                 }
                 let trimmed = new_title.chars().take(200).collect::<String>();
@@ -700,9 +700,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 soul.session.state.custom_title = Some(trimmed.clone());
                 soul.session.state.title_generated = true;
                 soul.session.title = trimmed.clone();
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: format!("Session title set to: {}", trimmed),
-                });
+                }));
             })
         }),
         description: "Set or show the session title".to_string(),
@@ -720,9 +720,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 let work_dir = soul.session.work_dir.clone();
                 let sessions = crate::session::Session::list(&work_dir).await;
                 if sessions.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "No sessions found.".to_string(),
-                    });
+                    }));
                     return;
                 }
                 let mut lines = vec!["Sessions:".to_string(), String::new()];
@@ -739,9 +739,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         marker
                     ));
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: lines.join("\n"),
-                });
+                }));
             })
         }),
         description: "List sessions and resume optionally".to_string(),
@@ -756,9 +756,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "web".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "Web UI is not yet implemented in octopus-cli.".to_string(),
-                });
+                }));
             })
         }),
         description: "Open Kimi Code Web UI in browser".to_string(),
@@ -773,9 +773,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "vis".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "Visualizer is not yet implemented in octopus-cli.".to_string(),
-                });
+                }));
             })
         }),
         description: "Open Kimi Agent Tracing Visualizer in browser".to_string(),
@@ -800,13 +800,13 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                             server.tools.len()
                         ));
                     }
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: lines.join("\n"),
-                    });
+                    }));
                 } else {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "No MCP servers configured.".to_string(),
-                    });
+                    }));
                 }
             })
         }),
@@ -823,10 +823,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
                 if soul.config.hooks.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "No hooks configured. Add [[hooks]] sections to your config.toml."
                             .to_string(),
-                    });
+                    }));
                     return;
                 }
                 let mut lines = vec!["Configured hooks:".to_string(), String::new()];
@@ -837,9 +837,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         hook.event, matcher, hook.command
                     ));
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: lines.join("\n"),
-                });
+                }));
             })
         }),
         description: "List configured hooks".to_string(),
@@ -857,9 +857,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 let turns = enumerate_turns(&soul.session.wire_file_path);
                 if turns.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "No turns found in this session.".to_string(),
-                    });
+                    }));
                     return;
                 }
 
@@ -874,9 +874,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                                 lines.push(format!("  {}. {}", i + 1, text));
                             }
                             lines.push("Usage: /undo <turn_number>".to_string());
-                            crate::wire::wire_send(TextPart {
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                                 text: lines.join("\n"),
-                            });
+                            }));
                             return;
                         }
                     }
@@ -904,19 +904,19 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
 
                 match result {
                     Ok(new_id) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!(
                                 "Undone to turn {}. New session: {}. Restart with --session {} to switch.",
                                 turn_idx + 1,
                                 new_id,
                                 new_id
                             ),
-                        });
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Undo failed: {}", e),
-                        });
+                        }));
                     }
                 }
             })
@@ -937,17 +937,17 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 let work_dir = soul.session.work_dir.clone();
                 match fork_session(&soul.session, &work_dir, None, "Fork").await {
                     Ok(new_id) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!(
                                 "Forked session: {}. Restart with --session {} to switch.",
                                 new_id, new_id
                             ),
-                        });
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Fork failed: {}", e),
-                        });
+                        }));
                     }
                 }
             })
@@ -967,21 +967,21 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 let question = args.trim();
                 if question.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "Usage: /btw <question>".to_string(),
-                    });
+                    }));
                     return;
                 }
 
-                crate::wire::wire_send(BtwBegin {
+                crate::wire::wire_send(crate::wire::WireEvent::BtwBegin(BtwBegin {
                     question: question.to_string(),
-                });
+                }));
 
                 let Some(ref llm) = soul.llm else {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "No LLM configured. Set a model first.".to_string(),
-                    });
-                    crate::wire::wire_send(BtwEnd {});
+                    }));
+                    crate::wire::wire_send(crate::wire::WireEvent::BtwEnd(BtwEnd {}));
                     return;
                 };
 
@@ -1004,16 +1004,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 {
                     Ok(result) => {
                         let answer = result.message.extract_text("\n");
-                        crate::wire::wire_send(TextPart { text: answer });
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
+                            text: answer,
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Side question failed: {}", e),
-                        });
+                        }));
                     }
                 }
 
-                crate::wire::wire_send(BtwEnd {});
+                crate::wire::wire_send(crate::wire::WireEvent::BtwEnd(BtwEnd {}));
             })
         }),
         description: "Ask a side question without interrupting the main conversation".to_string(),
@@ -1038,9 +1040,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     } else {
                         soul.config.default_editor.clone()
                     };
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Current editor: {}. Usage: /editor <command>", current),
-                    });
+                    }));
                     return;
                 }
 
@@ -1057,18 +1059,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 };
 
                 if !in_path {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Warning: '{}' not found in PATH. Setting anyway.", binary),
-                    });
+                    }));
                 }
 
                 soul.config.default_editor = arg.to_string();
                 if let Some(ref source) = soul.config.source_file {
                     let _ = crate::config::save_config(&soul.config, Some(source));
                 }
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: format!("Editor set to: {}. Restart to apply.", arg),
-                });
+                }));
             })
         }),
         description: "Set default external editor for Ctrl-O".to_string(),
@@ -1108,9 +1110,9 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                     match last {
                         Some(content) => content,
                         None => {
-                            crate::wire::wire_send(TextPart {
+                            crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                                 text: "No assistant message found to copy.".to_string(),
-                            });
+                            }));
                             return;
                         }
                     }
@@ -1118,18 +1120,18 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
 
                 match crate::utils::clipboard::copy_text(&text) {
                     Ok(()) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: if arg == "all" {
                                 "Copied entire conversation to clipboard.".to_string()
                             } else {
                                 "Copied last assistant message to clipboard.".to_string()
                             },
-                        });
+                        }));
                     }
                     Err(e) => {
-                        crate::wire::wire_send(TextPart {
+                        crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                             text: format!("Failed to copy to clipboard: {}", e),
-                        });
+                        }));
                     }
                 }
             })
@@ -1148,10 +1150,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "task".to_string(),
         func: Arc::new(|_soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "Background task browser is not yet implemented in octopus-cli."
                         .to_string(),
-                });
+                }));
             })
         }),
         description: "Browse and manage background tasks".to_string(),
@@ -1168,24 +1170,24 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
             Box::pin(async move {
                 let arg = args.trim().to_lowercase();
                 if arg.is_empty() {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!(
                             "Current theme: {}. Usage: /theme dark | /theme light",
                             soul.config.theme
                         ),
-                    });
+                    }));
                     return;
                 }
                 if arg != "dark" && arg != "light" {
-                    crate::wire::wire_send(TextPart {
+                    crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "Unknown theme. Use 'dark' or 'light'.".to_string(),
-                    });
+                    }));
                     return;
                 }
                 soul.config.theme = arg.clone();
-                crate::wire::wire_send(TextPart {
+                crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: format!("Theme set to: {}. Restart to apply.", arg),
-                });
+                }));
             })
         }),
         description: "Switch terminal color theme (dark/light)".to_string(),
