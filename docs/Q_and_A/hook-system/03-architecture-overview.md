@@ -1,6 +1,6 @@
 # 3. Architecture Overview
 
-The hook system in `octopus-cli` is a **hybrid local + remote permission layer**. It is implemented across six Rust modules and interacts with both the local file system and remote wire clients.
+The hook system in `octopus-cli` is a **hybrid local + remote permission layer**. It is implemented across seven Rust modules and interacts with both the local file system and remote wire clients.
 
 ## 3.1 Module Map
 
@@ -8,7 +8,8 @@ The hook system in `octopus-cli` is a **hybrid local + remote permission layer**
 octopus-cli/src/
 ├── hooks/
 │   ├── mod.rs          # Re-exports
-│   ├── event.rs        # HookEvent enum + discriminant serde helpers
+│   ├── event.rs        # HookEventKind + HookEvent enums
+│   ├── hook.rs         # Hook trait + CommandHook + WireHook + contexts
 │   ├── engine.rs       # HookEngine — matching, dispatch, aggregation
 │   └── runner.rs       # run_hook() — subprocess execution + typed stdout parsing
 ├── config.rs           # HookDef struct for config deserialization
@@ -22,12 +23,40 @@ octopus-cli/src/
 
 ## 3.2 Core Types
 
-### HookEvent — The Strong Enum
+### HookEventKind — The Registry Key
 
 **File:** `src/hooks/event.rs`
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+// octopus-cli/src/hooks/event.rs ~line 12 — HookEventKind
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HookEventKind {
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    UserPromptSubmit,
+    Stop,
+    StopFailure,
+    PreCompact,
+    PostCompact,
+    Notification,
+}
+```
+
+`HookEventKind` is a **discriminant-only** enum. It carries no runtime data, implements `Hash`/`Eq`, and serializes to just the PascalCase variant name (e.g., `"PreToolUse"`). It is used for:
+
+- `config.toml` keys (`event = "PreToolUse"`).
+- The `HookEngine` registry index.
+- Wire subscription event names.
+
+### HookEvent — The Runtime Payload
+
+**File:** `src/hooks/event.rs`
+
+```rust
+// octopus-cli/src/hooks/event.rs ~line 31 — HookEvent (runtime payload)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "hook_event_name", rename_all = "PascalCase")]
 pub enum HookEvent {
     PreToolUse {
@@ -45,20 +74,19 @@ pub enum HookEvent {
 }
 ```
 
-**Key design:** equality and hashing are **discriminant-only**:
+`HookEvent` is the **concrete runtime payload**. It always carries the full data available when the event fires and is serialized to the full JSON payload when sent to hook scripts or wire clients.
+
+The split avoids the awkward dual role where one type tried to be both a config key and a payload:
 
 ```rust
-// octopus-cli/src/hooks/event.rs ~line 77 — discriminant-only PartialEq
-impl PartialEq for HookEvent {
-    fn eq(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
+// octopus-cli/src/hooks/event.rs ~line 286 — kind + matcher_value helpers
+impl HookEvent {
+    pub fn kind(&self) -> HookEventKind { ... }
+    pub fn matcher_value(&self) -> Option<&str> { ... }
 }
 ```
 
-This means `HookEvent::PreToolUse { tool_name: "A", ... }` == `HookEvent::PreToolUse { tool_name: "B", ... }`. The same type acts as both a **payload** and a **HashMap key** in the engine.
-
-**Python comparison:** The Python version used `HookEventType = Literal["PreToolUse", ...]` — a string literal. Typos were runtime errors; refactoring required `grep`. In Rust, `HookEvent::PreToolUse` is checked at compile time.
+**Python comparison:** The Python version used `HookEventType = Literal["PreToolUse", ...]` — a string literal. Typos were runtime errors; refactoring required `grep`. In Rust, `HookEventKind::PreToolUse` is checked at compile time, while `HookEvent::PreToolUse { ... }` still carries the full typed payload.
 
 ### HookDef — The Configuration
 
@@ -68,8 +96,7 @@ This means `HookEvent::PreToolUse { tool_name: "A", ... }` == `HookEvent::PreToo
 // octopus-cli/src/config.rs ~line 1 — HookDef
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDef {
-    #[serde(with = "crate::hooks::event::discriminant_serde")]
-    pub event: crate::hooks::HookEvent,
+    pub event: crate::hooks::HookEventKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
     #[serde(skip)]
@@ -82,14 +109,22 @@ pub struct HookDef {
 Hooks are loaded from `config.toml` under `[[hooks]]` tables:
 
 ```toml
+# ~/.config/octopus/config.toml
 [[hooks]]
 event = "PreToolUse"
-command = "python /home/user/hooks/block_shell.py"
-matcher = "shell"
+matcher = "Shell|WriteFile"
+command = "python /home/user/.config/octopus/hooks/block_shell.py"
 timeout = 5
 ```
 
-The `discriminant_serde` helper deserializes `"PreToolUse"` into `HookEvent::PreToolUse` with empty default fields. The `compiled_matcher` field is populated once at load time by `HookDef::compile_matcher()`.
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `event` | Yes | Which lifecycle moment to intercept (e.g., `PreToolUse`, `UserPromptSubmit`). This selects the `HookEventKind`. |
+| `matcher` | No | A regex. The hook only runs when this regex matches the event's natural matcher field (`tool_name` for `PreToolUse`, `prompt` for `UserPromptSubmit`). Empty or omitted matches everything. |
+| `command` | Yes | The shell command to execute. It receives the full `HookEvent` JSON on stdin. |
+| `timeout` | No | Seconds to wait before treating the hook as failed (default 30). |
+
+The `event` field deserializes directly into `HookEventKind` thanks to `#[serde(rename_all = "PascalCase")]`. The runtime payload (`session_id`, `cwd`, `tool_name`, etc.) is filled in later when the event is triggered. The `compiled_matcher` field is populated once at load time by `HookDef::compile_matcher()`.
 
 **Python comparison:** Python's `HookDef` had no compiled regex field; `re.search` was called on every trigger.
 
@@ -116,16 +151,40 @@ pub struct HookResult {
 }
 ```
 
-### WireHookSubscription — Remote Interest
+### Hook — The Unified Runtime Interface
 
-**File:** `src/hooks/engine.rs`
+**File:** `src/hooks/hook.rs`
+
+Server-side and wire-side hooks are exposed through the same trait:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 13 — WireHookSubscription
+// octopus-cli/src/hooks/hook.rs ~line 65 — Hook trait
+#[async_trait::async_trait]
+pub trait Hook: Send + Sync + std::fmt::Debug + HookClone {
+    fn kind(&self) -> HookEventKind;
+    fn matcher(&self) -> Option<&Regex>;
+    fn source(&self) -> &'static str;
+    async fn run(&self, event: &HookEvent, ctx: &HookRunContext) -> HookResult;
+}
+```
+
+Two implementations exist:
+
+- `CommandHook` — runs a local shell command via `run_hook()`.
+- `WireHook` — forwards the event to a wire client and awaits a decision.
+
+This lightweight factory pattern lets `HookEngine` treat both sources uniformly: it only needs `kind()` for indexing, `matcher()` for filtering, and `run()` for execution.
+
+### WireHookSubscription — Remote Interest
+
+**File:** `src/hooks/hook.rs`
+
+```rust
+// octopus-cli/src/hooks/hook.rs ~line 39 — WireHookSubscription
 #[derive(Debug, Clone)]
 pub struct WireHookSubscription {
     pub id: String,
-    pub event: HookEvent,
+    pub event: HookEventKind,
     pub matcher: String,
     /// Compiled regex from `matcher`, computed when the subscription is added.
     pub compiled_matcher: Option<Regex>,
@@ -133,52 +192,50 @@ pub struct WireHookSubscription {
 }
 ```
 
-When a client connects via the wire protocol, it can subscribe to hooks remotely. The server then forwards matching events to the client and awaits a decision.
+When a client connects via the wire protocol, it can subscribe to hooks remotely. The server builds a `WireHook` from each subscription and adds it to the engine alongside any local `CommandHook`s.
 
 ## 3.3 The HookEngine
 
 **File:** `src/hooks/engine.rs`
 
-The `HookEngine` is the central dispatcher. It maintains two indexes:
+The `HookEngine` is the central dispatcher. It maintains one unified index:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 59 — HookEngine (abbreviated)
+// octopus-cli/src/hooks/engine.rs ~line 55 — HookEngine (abbreviated)
 pub struct HookEngine {
-    hooks: Vec<HookDef>,
-    wire_subs: Vec<WireHookSubscription>,
-    by_event: HashMap<HookEvent, Vec<HookDef>>,
-    wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
-    // callbacks omitted for brevity
+    by_event: HashMap<HookEventKind, Vec<Box<dyn Hook>>>,
+    cwd: Option<PathBuf>,
+    callbacks: HookCallbacks,
 }
 ```
 
 ### Registration
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 108 — Registration API
-engine.add_hooks(vec![hook_def]);        // server-side from config
-engine.add_wire_subscriptions(vec![sub]); // remote subscriptions
+// octopus-cli/src/hooks/engine.rs ~line 100 — Registration API
+engine.add_hooks(vec![hook_def]);          // server-side from config
+engine.add_wire_subscriptions(vec![sub]);  // remote subscriptions
 ```
 
-Both methods call `rebuild_index()`, which groups hooks by discriminant for O(1) lookup.
+Both methods wrap the input in `Box<dyn Hook>` (`CommandHook` or `WireHook`) and group by `HookEventKind` for O(1) lookup.
 
 ### Trigger Flow
 
 ```
-Core calls engine.trigger(HookEvent::PreToolUse { ... }, "shell")
+Core calls engine.trigger(HookEvent::PreToolUse { ... })
                     │
                     ▼
-        ┌───────────────────────┐
-        │ 1. Wrap in Arc        │ ──▶ Avoid cloning payload per hook
-        │ 2. Pre-serialize JSON │ ──▶ Avoid re-serializing per wire hook
-        │ 3. Match by discriminant│ ──▶ O(1) HashMap lookup
-        │ 4. Filter by regex    │ ──▶ Use pre-compiled Regex::is_match
-        │ 5. Deduplicate        │ ──▶ Skip duplicate commands
-        │ 6. Match wire subs    │ ──▶ Same logic for remote hooks
-        │ 7. Run in parallel    │ ──▶ tokio::spawn + try_join_all
-        │ 8. Aggregate          │ ──▶ block if ANY result.action == Block
-        │ 9. Cleanup callbacks  │ ──▶ on_wire_hook_done removes stale handles
-        └───────────────────────┘
+        ┌─────────────────────────┐
+        │ 1. Derive HookEventKind │ ──O(1) HashMap lookup
+        │ 2. Derive matcher_value │ ──from event payload (e.g., tool_name)
+        │ 3. Wrap in Arc          │ ──Avoid cloning payload per hook
+        │ 4. Pre-serialize JSON   │ ──Avoid re-serializing per wire hook
+        │ 5. Match by kind        │ ──O(1) HashMap lookup
+        │ 6. Filter by regex      │ ──Use pre-compiled Regex::is_match
+        │ 7. Run in parallel      │ ──tokio::spawn + try_join_all
+        │ 8. Aggregate            │ ──block if ANY result.action == Block
+        │ 9. Cleanup callbacks    │ ──on_wire_hook_done removes stale handles
+        └─────────────────────────┘
 ```
 
 ## 3.4 Payload Construction

@@ -41,10 +41,11 @@ The **HookEngine** sits between the core business logic and external handlers. I
 
 ## 9.3 Quick Checklist: Adding a New Hook
 
-- [ ] Add the event variant to `HookEvent` enum in `src/hooks/event.rs`.
+- [ ] Add the event variant to `HookEventKind` enum in `src/hooks/event.rs`.
+- [ ] Add the corresponding payload variant to `HookEvent` enum in `src/hooks/event.rs`.
 - [ ] Add a constructor method `HookEvent::new_event_name(...)` in `event.rs`.
-- [ ] Add the variant to `discriminant_serde::deserialize` so config files can reference it.
-- [ ] Add the variant to the `Display` impl.
+- [ ] Add the variant to `HookEvent::kind()` and `HookEvent::matcher_value()` helpers.
+- [ ] Add the variant to the `Display` impl on `HookEventKind`.
 - [ ] Add the trigger site in the core system (e.g., `toolset.rs`, `kimisoul.rs`).
 - [ ] Decide: is this hook **blocking** or **fire-and-forget**?
   - If blocking: check `results` for `HookAction::Block` and abort the operation.
@@ -54,7 +55,7 @@ The **HookEngine** sits between the core business logic and external handlers. I
   - [ ] Happy path (hook runs, returns allow).
   - [ ] Block path (hook returns block, operation aborts).
   - [ ] Fail-open path (hook crashes/times out, operation proceeds).
-  - [ ] Regex matching (hook only triggers for matching `matcher_value`).
+  - [ ] Regex matching (hook only triggers for the event's natural matcher field).
 
 ## 9.4 Quick Checklist: Porting from Python
 
@@ -70,7 +71,45 @@ The **HookEngine** sits between the core business logic and external handlers. I
 - [ ] Add `on_wire_hook_done` cleanup callback to prevent wire handle leaks.
 - [ ] Use typed structs (`Deserialize`) for parsing hook stdout instead of `serde_json::Value` indexing.
 
-## 9.5 Debugging Hooks
+## 9.5 Minimal Working Hook Starter
+
+### `~/.config/octopus/config.toml`
+
+```toml
+[[hooks]]
+event = "PreToolUse"
+matcher = "Shell|WriteFile"
+command = "python3 /home/user/.config/octopus/hooks/block_outside_workspace.py"
+timeout = 5
+```
+
+### `~/.config/octopus/hooks/block_outside_workspace.py`
+
+```python
+#!/usr/bin/env python3
+import json
+import sys
+
+payload = json.load(sys.stdin)
+cwd = payload.get("cwd", "")
+tool_name = payload.get("tool_name", "")
+
+if not cwd.startswith("/home/user/work"):
+    print(f"Refusing {tool_name} outside workspace: {cwd}", file=sys.stderr)
+    sys.exit(2)  # block
+
+sys.exit(0)  # allow
+```
+
+### Manual test
+
+```bash
+echo '{"hook_event_name":"PreToolUse","cwd":"/etc","tool_name":"WriteFile","tool_input":{},"tool_call_id":"call_1"}' \
+  | python3 /home/user/.config/octopus/hooks/block_outside_workspace.py
+echo $?   # should print 2
+```
+
+## 9.6 Debugging Hooks
 
 ### "My hook isn't running"
 
@@ -99,14 +138,14 @@ The **HookEngine** sits between the core business logic and external handlers. I
 3. Ensure the client responds before the timeout.
 4. Check that `on_wire_hook_done` is registered (otherwise timeouts leak the handle).
 
-## 9.6 Security Reminders
+## 9.7 Security Reminders
 
 - **Fail-open by design**: a broken hook never accidentally blocks the system.
 - **Shell injection**: `command` strings are passed to `/bin/sh -c`. Never construct `command` from user input.
 - **Timeouts**: always set a reasonable timeout. A missing timeout is a DoS vector.
 - **Wire trust**: wire clients can claim any `subscription_id`. The server does not authenticate subscriptions.
 
-## 9.7 Further Reading
+## 9.8 Further Reading
 
 | Section | File | Topic |
 |---------|------|-------|
@@ -122,4 +161,4 @@ The **HookEngine** sits between the core business logic and external handlers. I
 
 *Tutorial complete. For questions or corrections, update the relevant section and bump the last-edited date below.*
 
-**Last edited:** 2026-06-06
+**Last edited:** 2026-06-12

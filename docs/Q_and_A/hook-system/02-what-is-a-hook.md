@@ -110,7 +110,70 @@ The **HookEngine** sits between the core business logic and external handlers. I
 4. **Two backends**: Server-side (local `tokio::process::Command`) and wire-side (remote client over JSON-RPC).
 5. **Strong typing**: `HookEvent` is an enum with associated data, not a string literal. Payloads are typed variants, not `dict[str, Any]` or `serde_json::Value`.
 
-## 2.6 Python vs. Rust at a Glance
+## 2.7 Concrete Example: A Workspace-Safety Hook
+
+Here is what a real server-side hook looks like from the user's perspective.
+
+### `config.toml`
+
+```toml
+# ~/.config/octopus/config.toml
+[[hooks]]
+event = "PreToolUse"
+matcher = "Shell|WriteFile"
+command = "python /home/user/.config/octopus/hooks/block_outside_workspace.py"
+timeout = 5
+```
+
+This tells the engine:
+
+- **When**: before any `Shell` or `WriteFile` tool runs (`event = "PreToolUse"`).
+- **Which tools**: only those whose name matches the regex `Shell|WriteFile` (`matcher`).
+- **What to run**: the Python script (`command`).
+- **How long to wait**: 5 seconds (`timeout`).
+
+### The Hook Script
+
+```python
+# /home/user/.config/octopus/hooks/block_outside_workspace.py
+import json
+import sys
+
+payload = json.load(sys.stdin)
+cwd = payload.get("cwd", "")
+tool_name = payload.get("tool_name", "")
+
+if not cwd.startswith("/home/user/work"):
+    print(
+        f"Refusing {tool_name} outside workspace: {cwd}",
+        file=sys.stderr,
+    )
+    sys.exit(2)  # exit 2 = block
+
+sys.exit(0)  # exit 0 = allow
+```
+
+When the agent tries to run `Shell` or `WriteFile` outside `/home/user/work`, the hook receives JSON like this on stdin:
+
+```json
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess_abc123",
+  "cwd": "/etc",
+  "tool_name": "WriteFile",
+  "tool_input": { "path": "/etc/passwd", "content": "..." },
+  "tool_call_id": "call_xyz789"
+}
+```
+
+Because `cwd` is `/etc`, the script exits with code `2`. The engine treats that as a **block**, and the tool never runs.
+
+**Key takeaways:**
+- The user config never mentions `session_id`, `cwd`, or `tool_input` — those are runtime payload fields.
+- The config only declares the **event type** (`PreToolUse`) and the **filter regex** (`matcher`).
+- The hook script is a normal program that reads JSON from stdin and decides via exit code.
+
+## 2.8 Python vs. Rust at a Glance
 
 | Aspect | Python (kimi-cli) | Rust (octopus-cli) |
 |--------|-------------------|-------------------|

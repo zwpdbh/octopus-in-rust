@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, mpsc};
 use crate::approval_runtime::{ApprovalResponse, ApprovalScope};
 use crate::exception::{OctopusError, Result};
 use crate::hooks::runner::HookAction;
-use crate::hooks::{HookEvent, OnWireHook, WireHookHandle};
+use crate::hooks::{HookEventKind, OnWireHook, WireHookHandle};
 use crate::soul::KimiSoul;
 use crate::wire::channel::Wire;
 use crate::wire::file::WireFile;
@@ -438,7 +438,7 @@ impl WireServer {
         // Build the client-side hook dispatch callback.
         let pending = self.pending_requests.clone();
         let write_tx = self.write_tx.clone();
-        let on_wire_hook: OnWireHook = Box::new(move |handle: WireHookHandle| {
+        let on_wire_hook: OnWireHook = Arc::new(move |handle: WireHookHandle| {
             let pending = pending.clone();
             let write_tx = write_tx.clone();
             Box::pin(async move {
@@ -703,12 +703,8 @@ impl WireServer {
 // Hook event parsing
 // ============================================================================
 
-fn parse_hook_event(name: &str) -> Option<HookEvent> {
-    use serde_json::Deserializer;
-
-    let json = format!("\"{}\"", name);
-    let mut de = Deserializer::from_str(&json);
-    crate::hooks::event::discriminant_serde::deserialize(&mut de)
+fn parse_hook_event(name: &str) -> Option<HookEventKind> {
+    serde_json::from_str(&format!("\"{}\"", name))
         .map_err(|e: serde_json::Error| {
             tracing::debug!("Failed to parse hook event '{}': {}", name, e);
             e

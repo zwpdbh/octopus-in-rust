@@ -208,18 +208,19 @@ tasks.push(tokio::spawn(async move {
 ### After (Rust)
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — Arc optimization
+// octopus-cli/src/hooks/engine.rs ~line 115 — Arc optimization
 let event = Arc::new(event);
 // ...
 let event = Arc::clone(&event);  // cheap refcount bump
 tasks.push(tokio::spawn(async move {
-    run_hook(&command, &*event, timeout, cwd.as_deref()).await
+    hook.run(&event, &ctx).await
 }));
 ```
 
 **Why this is better:**
 - `HookEvent` contains `HashMap<String, Value>` for `tool_input`. Cloning it for every matching hook is O(n) in map size.
 - `Arc::clone` is O(1) and shares the data immutably.
+- The `Hook` trait hides whether the hook is a local command or a wire client, so the same sharing works for both.
 
 ## 8.7 Eliminate Wire Handle Leaks with Explicit Cleanup
 

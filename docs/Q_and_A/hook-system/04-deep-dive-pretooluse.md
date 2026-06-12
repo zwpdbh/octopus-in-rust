@@ -169,7 +169,7 @@ handle_inner(tool_call)
   ├── 4. >>> PRETOOLUSE HOOK <<<  ← YOU ARE HERE
   │      │
   │      ├── Build HookEvent::PreToolUse payload
-  │      ├── Call hook_engine.trigger(event, tool_name)
+  │      ├── Call hook_engine.trigger(event)
   │      └── If any hook returns Block → return error immediately
   │
   ├── 5. Approval check  ← Only if PreToolUse did NOT block
@@ -204,11 +204,8 @@ let event = HookEvent::pre_tool_use(
 );
 
 // Fast path: skip all work if no hooks are registered for this event
-if self.hook_engine.has_hooks_for(&event) {
-    let results = self
-        .hook_engine
-        .trigger(event, &tool_call.function.name)
-        .await;
+if self.hook_engine.has_hooks_for(event.kind()) {
+    let results = self.hook_engine.trigger(event).await;
 
     for r in &results {
         if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
@@ -234,6 +231,25 @@ Notice the `has_hooks_for` guard. If no hooks are registered for `PreToolUse`, t
 ## 4.5 Layer 3: The Payload — What Data Does the Hook Receive?
 
 **File:** `octopus-cli/src/hooks/event.rs`
+
+Before looking at the payload, recall how a user registers a hook for this event. A `config.toml` entry like this:
+
+```toml
+# ~/.config/octopus/config.toml
+[[hooks]]
+event = "PreToolUse"
+matcher = "StrReplaceFile"
+command = "python /home/user/.config/octopus/hooks/log_file_edits.py"
+timeout = 3
+```
+
+tells the engine:
+
+- **Event**: only `PreToolUse` events are eligible.
+- **Matcher**: among those, only ones where the tool name matches `StrReplaceFile`.
+- **Command**: run this Python script when matched.
+
+The config file does **not** contain `session_id`, `cwd`, or `tool_input`. Those are runtime values supplied when the event is constructed in `KimiToolset::handle_inner`.
 
 The hook receives a fully-typed Rust enum that serializes to JSON. Here is the definition:
 
@@ -293,7 +309,7 @@ For a `StrReplaceFile` call, the JSON that gets piped into the hook script's std
 }
 ```
 
-**Key design decision:** `HookEvent` implements `PartialEq` and `Hash` using **only the discriminant** (the variant name), not the payload data. This means a config hook registered for `PreToolUse` matches **any** runtime `PreToolUse` event, regardless of `tool_name`, `session_id`, etc. The regex `matcher` field is what filters by tool name.
+**Key design decision:** Hooks are indexed by `HookEventKind`, a discriminant-only enum, while the runtime payload is a separate concrete `HookEvent`. A config hook registered for `PreToolUse` matches **any** runtime `PreToolUse` event, regardless of `tool_name`, `session_id`, etc. The regex `matcher` field is what filters by tool name.
 
 ---
 
@@ -301,54 +317,50 @@ For a `StrReplaceFile` call, the JSON that gets piped into the hook script's std
 
 **File:** `octopus-cli/src/hooks/engine.rs`
 
-The `HookEngine` is the central dispatcher. It maintains two indexes:
+The `HookEngine` is the central dispatcher. It maintains one unified index:
 
-- `by_event: HashMap<HookEvent, Vec<HookDef>>` — server-side hooks from `config.toml`
-- `wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>` — client-side hooks from wire `initialize`
+- `by_event: HashMap<HookEventKind, Vec<Box<dyn Hook>>>` — both server-side and wire-side hooks
+
+Server-side hooks become `CommandHook`; wire subscriptions become `WireHook`. Both implement the same `Hook` trait.
 
 When `trigger()` is called, the engine does six things:
 
-### Step 1: Match server-side hooks
+### Step 1: Derive kind and matcher value
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 1: match server-side hooks)
-let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
-let mut server_matched: Vec<&HookDef> = Vec::new();
-for h in self.by_event.get(&*event).into_iter().flatten() {
-    if !Self::match_regex(
-        h.compiled_matcher.as_ref(),
-        h.matcher.as_deref().unwrap_or(""),
-        matcher_value,
-    ) {
-        continue;
-    }
-    if seen_commands.contains(&h.command) {
-        continue;  // skip duplicate commands
-    }
-    seen_commands.insert(h.command.clone());
-    server_matched.push(h);
-}
+// octopus-cli/src/hooks/engine.rs ~line 110 — HookEngine::trigger
+let kind = event.kind();
+let matcher_value = event.matcher_value().unwrap_or("").to_string();
+let event = Arc::new(event);
 ```
 
-### Step 2: Match wire subscriptions
+### Step 2: Match hooks
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 2: match wire subscriptions)
-let wire_matched: Vec<&WireHookSubscription> = self
-    .wire_by_event
-    .get(&*event)
-    .into_iter()
-    .flatten()
-    .filter(|s| Self::match_regex(s.compiled_matcher.as_ref(), &s.matcher, matcher_value))
-    .collect();
+// octopus-cli/src/hooks/engine.rs ~line 120 — HookEngine::trigger (matching loop)
+let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
+let mut matched: Vec<&Box<dyn Hook>> = Vec::new();
+for h in self.by_event.get(&kind).into_iter().flatten() {
+    if let Some(cmd) = h.command() {
+        if seen_commands.contains(cmd) {
+            continue;  // skip duplicate commands
+        }
+        seen_commands.insert(cmd.to_string());
+    }
+    match h.matcher() {
+        None => matched.push(h),
+        Some(re) if re.is_match(&matcher_value) => matched.push(h),
+        _ => {}
+    }
+}
 ```
 
 ### Step 3: Emit triggered callback
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 3: emit triggered callback)
-if let Some(ref cb) = self.on_triggered {
-    cb(&*event, matcher_value, total);
+// octopus-cli/src/hooks/engine.rs ~line 140 — HookEngine::trigger (Step 3: emit triggered callback)
+if let Some(ref cb) = self.callbacks.on_triggered {
+    cb(&event, &matcher_value, total);
 }
 ```
 
@@ -357,35 +369,30 @@ This broadcasts `WireEvent::HookTriggered` so GUI clients can show "Running hook
 ### Step 4: Run everything in parallel
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 4: run everything in parallel)
-let t0 = std::time::Instant::now();
-let mut tasks: Vec<tokio::task::JoinHandle<HookResult>> = Vec::new();
+// octopus-cli/src/hooks/engine.rs ~line 145 — HookEngine::trigger (Step 4: run everything in parallel)
+let ctx = HookRunContext {
+    cwd: self.cwd.clone(),
+    callbacks: self.callbacks.clone(),
+};
 
-// Server hooks: spawn subprocesses
-for h in server_matched {
-    let command = h.command.clone();
+for hook in matched {
+    let hook = hook.clone_box();
     let event = Arc::clone(&event);
-    let timeout = h.timeout;
-    let cwd = self.cwd.clone();
+    let ctx = ctx.clone();
     tasks.push(tokio::spawn(async move {
-        run_hook(&command, &*event, timeout, cwd.as_deref()).await
+        hook.run(&event, &ctx).await
     }));
-}
-
-// Wire hooks: dispatch to external client
-for s in wire_matched {
-    // ... create WireHookHandle, send request, await response ...
 }
 ```
 
 ### Step 5: Aggregate results
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 5: aggregate results)
+// octopus-cli/src/hooks/engine.rs ~line 160 — HookEngine::trigger (Step 5: aggregate results)
 let results: Vec<HookResult> = match futures::future::try_join_all(tasks).await {
     Ok(r) => r,
     Err(e) => {
-        tracing::warn!("Hook engine task join error for {}: {}", event, e);
+        tracing::warn!("Hook engine task join error for {}: {}", kind, e);
         return Vec::new();
     }
 };
@@ -396,18 +403,18 @@ If any task panics or fails to join, the engine logs a warning and returns empty
 ### Step 6: Block wins
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — HookEngine::trigger (Step 6: block wins, emit resolved)
+// octopus-cli/src/hooks/engine.rs ~line 170 — HookEngine::trigger (Step 6: block wins, emit resolved)
 let mut action = HookAction::Allow;
 for r in &results {
     if let HookAction::Block(ref reason) = r.action {
         action = HookAction::Block(reason.clone());
-        tracing::warn!("Hook blocked {} (matcher={}): {}", event, matcher_value, reason);
+        tracing::warn!("Hook blocked {} (matcher={}): {}", kind, matcher_value, reason);
         break;
     }
 }
 
-if let Some(ref cb) = self.on_resolved {
-    cb(&event, matcher_value, action, duration_ms);
+if let Some(ref cb) = self.callbacks.on_resolved {
+    cb(&event, &matcher_value, action, duration_ms);
 }
 ```
 
@@ -684,9 +691,9 @@ sequenceDiagram
 1. **Block wins over allow**: Even if 9 hooks say `allow` and 1 says `block`, the tool is blocked.
 2. **Fail-open**: A crashed hook, timeout, or malformed response is treated as `allow`.
 3. **Parallel, not serial**: All matched hooks run simultaneously; total latency is the slowest hook, not the sum.
-4. **Regex filtering**: A hook only runs if its `matcher` regex matches the `matcher_value` (tool name for `PreToolUse`). The regex is compiled **once** at config load time.
+4. **Regex filtering**: A hook only runs if its `matcher` regex matches the event's natural matcher field (tool name for `PreToolUse`). The regex is compiled **once** at config load time.
 5. **No leaks**: Wire hook handles are removed from `pending_requests` whether the client responds, drops, or times out.
-6. **Fast path**: `has_hooks_for` checks the index before serializing or spawning anything. If no hooks match, `trigger` is essentially free.
+6. **Fast path**: `has_hooks_for(event.kind())` checks the index before serializing or spawning anything. If no hooks match, `trigger` is essentially free.
 7. **Hook before approval**: `PreToolUse` runs **before** the approval dialog. A blocked hook means the user never sees the approval request.
 
 ---

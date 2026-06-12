@@ -316,11 +316,8 @@ impl KimiToolset {
             &tool_input_map,
             &tool_call.id,
         );
-        if self.hook_engine.has_hooks_for(&event) {
-            let results = self
-                .hook_engine
-                .trigger(event, &tool_call.function.name)
-                .await;
+        if self.hook_engine.has_hooks_for(event.kind()) {
+            let results = self.hook_engine.trigger(event).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
                     let result = kosong::tooling::ToolResult {
@@ -422,10 +419,8 @@ impl KimiToolset {
                 &error_text,
                 &tool_call.id,
             );
-            if self.hook_engine.has_hooks_for(&event) {
-                let _ = self
-                    .hook_engine
-                    .fire_and_forget_trigger(event, &tool_call.function.name);
+            if self.hook_engine.has_hooks_for(event.kind()) {
+                let _ = self.hook_engine.fire_and_forget_trigger(event);
             }
         } else {
             // PostToolUse is awaited so hook stderr can be surfaced to the LLM
@@ -444,11 +439,8 @@ impl KimiToolset {
                 &output_text[..output_text.len().min(2000)],
                 &tool_call.id,
             );
-            if self.hook_engine.has_hooks_for(&event) {
-                let hook_results = self
-                    .hook_engine
-                    .trigger(event, &tool_call.function.name)
-                    .await;
+            if self.hook_engine.has_hooks_for(event.kind()) {
+                let hook_results = self.hook_engine.trigger(event).await;
 
                 // Collect non-empty stderr from hooks for LLM visibility
                 let mut hook_stderr_lines: Vec<String> = Vec::new();

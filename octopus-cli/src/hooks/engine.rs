@@ -1,55 +1,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use regex::Regex;
 
 use crate::config::HookDef;
-use crate::hooks::event::HookEvent;
-use crate::hooks::runner::{HookAction, HookResult, run_hook};
-
-/// A client-side hook subscription registered via wire initialize.
-#[derive(Debug, Clone)]
-pub struct WireHookSubscription {
-    pub id: String,
-    pub event: HookEvent,
-    pub matcher: String,
-    /// Compiled regex from `matcher`, computed when the subscription is added.
-    pub compiled_matcher: Option<Regex>,
-    pub timeout: u64,
-}
-
-/// Callback signatures for wire integration.
-pub type OnTriggered = Box<dyn Fn(&HookEvent, &str, usize) + Send + Sync>;
-pub type OnResolved = Box<dyn Fn(&HookEvent, &str, HookAction, u64) + Send + Sync>;
-pub type OnWireHook = Box<
-    dyn Fn(WireHookHandle) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
->;
-pub type OnWireHookDone = Arc<dyn Fn(&str) + Send + Sync>;
-
-/// A pending wire hook request waiting for client response.
-#[derive(Debug)]
-pub struct WireHookHandle {
-    pub id: String,
-    pub subscription_id: String,
-    pub event_name: String,
-    pub target: String,
-    pub input_data: serde_json::Value,
-    tx: Option<tokio::sync::oneshot::Sender<HookResult>>,
-}
-
-impl WireHookHandle {
-    pub fn resolve(self, action: HookAction) {
-        if let Some(tx) = self.tx {
-            let result = match action {
-                HookAction::Allow => HookResult::allow(),
-                HookAction::Block(reason) => HookResult::block(reason),
-            };
-            let _ = tx.send(result);
-        }
-    }
-}
+use crate::hooks::event::{HookEvent, HookEventKind};
+use crate::hooks::hook::{
+    CommandHook, Hook, HookCallbacks, HookRunContext, OnWireHookDone, WireHook,
+    WireHookSubscription,
+};
+use crate::hooks::runner::{HookAction, HookResult};
 
 /// Loads hook definitions and executes matching hooks in parallel.
 ///
@@ -57,31 +18,19 @@ impl WireHookHandle {
 /// - Server-side (config.toml): shell commands executed locally
 /// - Client-side (wire subscriptions): forwarded to client via HookRequest
 pub struct HookEngine {
-    hooks: Vec<HookDef>,
-    wire_subs: Vec<WireHookSubscription>,
+    by_event: HashMap<HookEventKind, Vec<Box<dyn Hook>>>,
     cwd: Option<PathBuf>,
-    on_triggered: Option<OnTriggered>,
-    on_resolved: Option<OnResolved>,
-    on_wire_hook: Option<OnWireHook>,
-    on_wire_hook_done: Option<OnWireHookDone>,
-    by_event: HashMap<HookEvent, Vec<HookDef>>,
-    wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
+    callbacks: HookCallbacks,
 }
 
 impl HookEngine {
     pub fn new(hooks: Vec<HookDef>) -> Self {
         let mut engine = Self {
-            hooks,
-            wire_subs: Vec::new(),
-            cwd: None,
-            on_triggered: None,
-            on_resolved: None,
-            on_wire_hook: None,
-            on_wire_hook_done: None,
             by_event: HashMap::new(),
-            wire_by_event: HashMap::new(),
+            cwd: None,
+            callbacks: HookCallbacks::default(),
         };
-        engine.rebuild_index();
+        engine.add_hooks(hooks);
         engine
     }
 
@@ -90,232 +39,123 @@ impl HookEngine {
         self
     }
 
-    pub fn set_callbacks(
-        &mut self,
-        on_triggered: Option<OnTriggered>,
-        on_resolved: Option<OnResolved>,
-        on_wire_hook: Option<OnWireHook>,
-    ) {
-        self.on_triggered = on_triggered;
-        self.on_resolved = on_resolved;
-        self.on_wire_hook = on_wire_hook;
+    pub fn set_callbacks(&mut self, callbacks: HookCallbacks) {
+        self.callbacks = callbacks;
     }
 
     pub fn set_on_wire_hook_done(&mut self, cb: Option<OnWireHookDone>) {
-        self.on_wire_hook_done = cb;
+        self.callbacks.on_wire_hook_done = cb;
     }
 
     pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
-        for h in &hooks {
-            self.by_event
-                .entry(h.event.clone())
-                .or_default()
-                .push(h.clone());
+        for mut def in hooks {
+            if def.compiled_matcher.is_none() {
+                def.compile_matcher();
+            }
+            let hook = Box::new(CommandHook::new(&def));
+            self.by_event.entry(hook.kind()).or_default().push(hook);
         }
-        self.hooks.extend(hooks);
     }
 
     pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
         for s in &mut subs {
-            s.compiled_matcher = Regex::new(&s.matcher).ok();
+            if s.compiled_matcher.is_none() {
+                s.compiled_matcher = Regex::new(&s.matcher).ok();
+            }
         }
-        for s in &subs {
-            self.wire_by_event
-                .entry(s.event.clone())
-                .or_default()
-                .push(s.clone());
+        for s in subs {
+            let hook = Box::new(WireHook::new(&s));
+            self.by_event.entry(hook.kind()).or_default().push(hook);
         }
-        self.wire_subs.extend(subs);
     }
 
     pub fn has_hooks(&self) -> bool {
-        !self.hooks.is_empty() || !self.wire_subs.is_empty()
+        self.by_event.values().any(|v| !v.is_empty())
     }
 
-    pub fn has_hooks_for(&self, event: &HookEvent) -> bool {
-        self.by_event.contains_key(event) || self.wire_by_event.contains_key(event)
+    pub fn has_hooks_for(&self, kind: HookEventKind) -> bool {
+        self.by_event.contains_key(&kind)
     }
 
     pub fn summary(&self) -> HashMap<String, usize> {
         let mut counts: HashMap<String, usize> = HashMap::new();
-        for (event, hooks) in &self.by_event {
-            *counts.entry(event.to_string()).or_insert(0) += hooks.len();
-        }
-        for (event, subs) in &self.wire_by_event {
-            *counts.entry(event.to_string()).or_insert(0) += subs.len();
+        for hook in self.by_event.values().flatten() {
+            *counts.entry(hook.kind().to_string()).or_insert(0) += 1;
         }
         counts
     }
 
     pub fn details(&self) -> HashMap<String, Vec<HashMap<String, String>>> {
         let mut result: HashMap<String, Vec<HashMap<String, String>>> = HashMap::new();
-        for (event, hooks) in &self.by_event {
-            let entries = result.entry(event.to_string()).or_default();
-            for h in hooks {
-                let mut entry = HashMap::new();
-                entry.insert("matcher".to_string(), h.matcher.clone().unwrap_or_default());
-                entry.insert("source".to_string(), "server".to_string());
-                entry.insert("command".to_string(), h.command.clone());
-                entries.push(entry);
+        for hook in self.by_event.values().flatten() {
+            let entries = result.entry(hook.kind().to_string()).or_default();
+            let mut entry = HashMap::new();
+            entry.insert(
+                "matcher".to_string(),
+                hook.matcher()
+                    .map(|re| re.as_str().to_string())
+                    .unwrap_or_default(),
+            );
+            entry.insert("source".to_string(), hook.source().to_string());
+            if let Some(cmd) = hook.command() {
+                entry.insert("command".to_string(), cmd.to_string());
             }
-        }
-        for (event, subs) in &self.wire_by_event {
-            let entries = result.entry(event.to_string()).or_default();
-            for s in subs {
-                let mut entry = HashMap::new();
-                entry.insert("matcher".to_string(), s.matcher.clone());
-                entry.insert("source".to_string(), "wire".to_string());
-                entry.insert("command".to_string(), "(client-side)".to_string());
-                entries.push(entry);
-            }
+            entries.push(entry);
         }
         result
     }
 
-    fn rebuild_index(&mut self) {
-        self.by_event.clear();
-        for h in &self.hooks {
-            self.by_event
-                .entry(h.event.clone())
-                .or_default()
-                .push(h.clone());
-        }
-        self.wire_by_event.clear();
-        for s in &self.wire_subs {
-            self.wire_by_event
-                .entry(s.event.clone())
-                .or_default()
-                .push(s.clone());
-        }
-    }
-
-    fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
-        if pattern.is_empty() {
-            return true;
-        }
-        match compiled {
-            Some(re) => re.is_match(value),
-            None => {
-                // Invalid regex was already logged when compiled; treat as no-match.
-                false
-            }
-        }
-    }
-
     /// Run all matching hooks (server + wire) in parallel.
-    pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+    pub async fn trigger(&self, event: HookEvent) -> Vec<HookResult> {
+        let kind = event.kind();
+        let matcher_value = event.matcher_value().unwrap_or("").to_string();
         let event = Arc::new(event);
-        let input_data = serde_json::to_value(&*event).unwrap_or_default();
 
-        // Match server-side hooks
         let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut server_matched: Vec<&HookDef> = Vec::new();
-        for h in self.by_event.get(&*event).into_iter().flatten() {
-            if !Self::match_regex(
-                h.compiled_matcher.as_ref(),
-                h.matcher.as_deref().unwrap_or(""),
-                matcher_value,
-            ) {
-                continue;
+        let mut matched: Vec<&Box<dyn Hook>> = Vec::new();
+        for h in self.by_event.get(&kind).into_iter().flatten() {
+            // Server-side hooks are deduplicated by command string.
+            if let Some(cmd) = h.command() {
+                if seen_commands.contains(cmd) {
+                    continue;
+                }
+                seen_commands.insert(cmd.to_string());
             }
-            if seen_commands.contains(&h.command) {
-                continue;
+            match h.matcher() {
+                None => matched.push(h),
+                Some(re) if re.is_match(&matcher_value) => matched.push(h),
+                _ => {}
             }
-            seen_commands.insert(h.command.clone());
-            server_matched.push(h);
         }
 
-        // Match wire subscriptions
-        let wire_matched: Vec<&WireHookSubscription> = self
-            .wire_by_event
-            .get(&*event)
-            .into_iter()
-            .flatten()
-            .filter(|s| Self::match_regex(s.compiled_matcher.as_ref(), &s.matcher, matcher_value))
-            .collect();
-
-        let total = server_matched.len() + wire_matched.len();
+        let total = matched.len();
         if total == 0 {
             return Vec::new();
         }
 
-        // Emit triggered callback
-        if let Some(ref cb) = self.on_triggered {
-            cb(&*event, matcher_value, total);
+        if let Some(ref cb) = self.callbacks.on_triggered {
+            cb(&event, &matcher_value, total);
         }
 
         let t0 = std::time::Instant::now();
         let mut tasks: Vec<tokio::task::JoinHandle<HookResult>> = Vec::new();
 
-        // Server-side: run shell commands
-        for h in server_matched {
-            let command = h.command.clone();
-            let event = Arc::clone(&event);
-            let timeout = h.timeout;
-            let cwd = self.cwd.clone();
-            tasks.push(tokio::spawn(async move {
-                run_hook(&command, &*event, timeout, cwd.as_deref()).await
-            }));
-        }
+        let ctx = HookRunContext {
+            cwd: self.cwd.clone(),
+            callbacks: self.callbacks.clone(),
+        };
 
-        // Wire-side: dispatch to client via callback
-        let on_done = self.on_wire_hook_done.clone();
-        for s in wire_matched {
-            if let Some(ref cb) = self.on_wire_hook {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let handle = WireHookHandle {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    subscription_id: s.id.clone(),
-                    event_name: event.to_string(),
-                    target: matcher_value.to_string(),
-                    input_data: input_data.clone(),
-                    tx: Some(tx),
-                };
-                let handle_id = handle.id.clone();
-                let timeout_secs = s.timeout;
-                let target = matcher_value.to_string();
-                let cb_future = cb(handle);
-                let on_done = on_done.clone();
-                tasks.push(tokio::spawn(async move {
-                    // First let the callback send the request to the client.
-                    cb_future.await;
-                    // Then wait for the client response with a timeout.
-                    let result = match tokio::time::timeout(
-                        tokio::time::Duration::from_secs(timeout_secs),
-                        rx,
-                    )
-                    .await
-                    {
-                        Ok(Ok(result)) => result,
-                        Ok(Err(_)) => {
-                            tracing::warn!("Wire hook resolver dropped without resolving");
-                            HookResult::allow()
-                        }
-                        Err(_) => {
-                            tracing::warn!("Wire hook timed out: {}", target);
-                            HookResult {
-                                action: HookAction::Allow,
-                                stdout: String::new(),
-                                stderr: String::new(),
-                                exit_code: 0,
-                                timed_out: true,
-                            }
-                        }
-                    };
-                    if let Some(ref cb) = on_done {
-                        cb(&handle_id);
-                    }
-                    result
-                }));
-            } else {
-                tasks.push(tokio::spawn(async move { HookResult::allow() }));
-            }
+        for hook in matched {
+            let hook = hook.clone_box();
+            let event = Arc::clone(&event);
+            let ctx = ctx.clone();
+            tasks.push(tokio::spawn(async move { hook.run(&event, &ctx).await }));
         }
 
         let results: Vec<HookResult> = match futures::future::try_join_all(tasks).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("Hook engine task join error for {}: {}", event, e);
+                tracing::warn!("Hook engine task join error for {}: {}", kind, e);
                 return Vec::new();
             }
         };
@@ -329,7 +169,7 @@ impl HookEngine {
                 action = HookAction::Block(reason.clone());
                 tracing::warn!(
                     "Hook blocked {} (matcher={}): {}",
-                    event,
+                    kind,
                     matcher_value,
                     reason
                 );
@@ -337,9 +177,8 @@ impl HookEngine {
             }
         }
 
-        // Emit resolved callback
-        if let Some(ref cb) = self.on_resolved {
-            cb(&event, matcher_value, action, duration_ms);
+        if let Some(ref cb) = self.callbacks.on_resolved {
+            cb(&event, &matcher_value, action, duration_ms);
         }
 
         results
@@ -352,29 +191,24 @@ impl HookEngine {
     pub fn fire_and_forget_trigger(
         &self,
         event: HookEvent,
-        matcher_value: &str,
     ) -> tokio::task::JoinHandle<Vec<HookResult>> {
-        let matcher_value = matcher_value.to_string();
         let engine = self.clone();
-        tokio::spawn(async move { engine.trigger(event, &matcher_value).await })
+        tokio::spawn(async move { engine.trigger(event).await })
     }
 }
 
 impl Clone for HookEngine {
     fn clone(&self) -> Self {
-        let mut engine = Self {
-            hooks: self.hooks.clone(),
-            wire_subs: self.wire_subs.clone(),
+        let mut by_event = HashMap::new();
+        for (kind, hooks) in &self.by_event {
+            let cloned = hooks.iter().map(|h| h.clone_box()).collect();
+            by_event.insert(*kind, cloned);
+        }
+        Self {
+            by_event,
             cwd: self.cwd.clone(),
-            on_triggered: None,
-            on_resolved: None,
-            on_wire_hook: None,
-            on_wire_hook_done: None,
-            by_event: HashMap::new(),
-            wire_by_event: HashMap::new(),
-        };
-        engine.rebuild_index();
-        engine
+            callbacks: self.callbacks.clone(),
+        }
     }
 }
 
@@ -393,12 +227,11 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Build a HookDef the same way config deserialization does: event has
-    /// empty payload fields because the config file only stores the variant
-    /// name (e.g. `event = "PreToolUse"`).
-    fn config_hook_def(event: HookEvent, command: &str, matcher: Option<&str>) -> HookDef {
+    /// Build a HookDef the same way config deserialization does:
+    /// `event = "PreToolUse"` parses into `HookEventKind::PreToolUse`.
+    fn config_hook_def(kind: HookEventKind, command: &str, matcher: Option<&str>) -> HookDef {
         let mut def = HookDef {
-            event,
+            event: kind,
             matcher: matcher.map(|s| s.to_string()),
             compiled_matcher: None,
             command: command.to_string(),
@@ -410,19 +243,9 @@ mod tests {
 
     #[test]
     fn test_config_event_matches_runtime_event() {
-        // This is what the engine sees after loading from config.toml:
-        // event = "PreToolUse"  ->  HookEvent::PreToolUse with all empty strings
-        let config_event = HookEvent::PreToolUse {
-            session_id: String::new(),
-            cwd: String::new(),
-            tool_name: String::new(),
-            tool_input: HashMap::new(),
-            tool_call_id: String::new(),
-        };
-        let def = config_hook_def(config_event, "echo ok", None);
+        let def = config_hook_def(HookEventKind::PreToolUse, "echo ok", None);
         let engine = HookEngine::new(vec![def]);
 
-        // This is the real runtime event fired when a tool is about to run:
         let runtime_event = HookEvent::pre_tool_use(
             "real-sess",
             "/real/cwd",
@@ -432,21 +255,18 @@ mod tests {
         );
 
         assert!(
-            engine.has_hooks_for(&runtime_event),
-            "config hook with empty payload should match runtime event with real payload"
+            engine.has_hooks_for(runtime_event.kind()),
+            "config hook should match runtime event with same kind"
         );
     }
 
     #[test]
     fn test_different_events_do_not_match() {
-        let config_event = HookEvent::PreToolUse {
-            session_id: String::new(),
-            cwd: String::new(),
-            tool_name: String::new(),
-            tool_input: HashMap::new(),
-            tool_call_id: String::new(),
-        };
-        let engine = HookEngine::new(vec![config_hook_def(config_event, "echo ok", None)]);
+        let engine = HookEngine::new(vec![config_hook_def(
+            HookEventKind::PreToolUse,
+            "echo ok",
+            None,
+        )]);
 
         let runtime_event = HookEvent::post_tool_use(
             "real-sess",
@@ -458,52 +278,63 @@ mod tests {
         );
 
         assert!(
-            !engine.has_hooks_for(&runtime_event),
+            !engine.has_hooks_for(runtime_event.kind()),
             "PreToolUse config hook should not match PostToolUse runtime event"
         );
     }
 
     #[test]
-    fn test_summary_counts_by_discriminant() {
+    fn test_summary_counts_by_kind() {
         let hooks = vec![
-            config_hook_def(
-                HookEvent::PreToolUse {
-                    session_id: String::new(),
-                    cwd: String::new(),
-                    tool_name: String::new(),
-                    tool_input: HashMap::new(),
-                    tool_call_id: String::new(),
-                },
-                "echo 1",
-                None,
-            ),
-            config_hook_def(
-                HookEvent::PreToolUse {
-                    session_id: "other".into(),
-                    cwd: "/other".into(),
-                    tool_name: "other".into(),
-                    tool_input: HashMap::new(),
-                    tool_call_id: "other".into(),
-                },
-                "echo 2",
-                None,
-            ),
-            config_hook_def(
-                HookEvent::PostToolUse {
-                    session_id: String::new(),
-                    cwd: String::new(),
-                    tool_name: String::new(),
-                    tool_input: HashMap::new(),
-                    tool_output: String::new(),
-                    tool_call_id: String::new(),
-                },
-                "echo 3",
-                None,
-            ),
+            config_hook_def(HookEventKind::PreToolUse, "echo 1", None),
+            config_hook_def(HookEventKind::PreToolUse, "echo 2", None),
+            config_hook_def(HookEventKind::PostToolUse, "echo 3", None),
         ];
         let engine = HookEngine::new(hooks);
         let summary = engine.summary();
         assert_eq!(summary.get("PreToolUse"), Some(&2));
         assert_eq!(summary.get("PostToolUse"), Some(&1));
+    }
+
+    #[test]
+    fn test_matcher_filters_hooks() {
+        let hooks = vec![
+            config_hook_def(HookEventKind::PreToolUse, "echo A", Some("Read.*")),
+            config_hook_def(HookEventKind::PreToolUse, "echo B", Some("Write.*")),
+        ];
+        let engine = HookEngine::new(hooks);
+
+        let write_event = HookEvent::pre_tool_use("s", "/", "WriteFile", &HashMap::new(), "c");
+
+        let matched = engine
+            .by_event
+            .get(&HookEventKind::PreToolUse)
+            .unwrap()
+            .iter()
+            .filter(|h| match h.matcher() {
+                None => true,
+                Some(re) => re.is_match(write_event.matcher_value().unwrap_or("")),
+            })
+            .count();
+        assert_eq!(matched, 1);
+    }
+
+    #[test]
+    fn test_duplicate_commands_are_deduplicated() {
+        let hooks = vec![
+            config_hook_def(HookEventKind::PreToolUse, "echo same", None),
+            config_hook_def(HookEventKind::PreToolUse, "echo same", None),
+            config_hook_def(HookEventKind::PreToolUse, "echo different", None),
+        ];
+        let engine = HookEngine::new(hooks);
+
+        let event = HookEvent::pre_tool_use("s", "/", "WriteFile", &HashMap::new(), "c");
+        let results = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(engine.trigger(event));
+
+        // "echo same" should run once due to deduplication;
+        // "echo different" should run once.
+        assert_eq!(results.len(), 2);
     }
 }

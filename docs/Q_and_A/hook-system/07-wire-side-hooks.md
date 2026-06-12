@@ -128,27 +128,33 @@ if let Some(hooks) = msg.params.hooks {
 When `HookEngine::trigger()` matches a wire subscription, it creates a `WireHookHandle` and calls the `on_wire_hook` callback:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 251 — Wire hook trigger flow
+// octopus-cli/src/hooks/hook.rs ~line 145 — WireHook::run
+let on_wire_hook = match ctx.callbacks.on_wire_hook.as_ref() {
+    Some(cb) => cb.clone(),
+    None => return HookResult::allow(),
+};
+let on_done = ctx.callbacks.on_wire_hook_done.clone();
+
 let (tx, rx) = tokio::sync::oneshot::channel();
+let input_data = serde_json::to_value(event).unwrap_or_default();
 let handle = WireHookHandle {
     id: uuid::Uuid::new_v4().to_string(),
-    subscription_id: s.id.clone(),
-    event_name: event.to_string(),
-    target: matcher_value.to_string(),
-    input_data: input_data.clone(),
+    subscription_id: self.subscription_id.clone(),
+    event_name: event.kind().to_string(),
+    target: event.matcher_value().unwrap_or("").to_string(),
+    input_data,
     tx: Some(tx),
 };
 let handle_id = handle.id.clone();
-let timeout_secs = s.timeout;
-let target = matcher_value.to_string();
-let cb_future = cb(handle);
-let on_done = on_done.clone();
-tasks.push(tokio::spawn(async move {
-    cb_future.await;
-    let result = match tokio::time::timeout(
-        tokio::time::Duration::from_secs(timeout_secs),
-        rx,
-    ).await {
+let target = handle.target.clone();
+let timeout_secs = self.timeout;
+
+let cb_future = on_wire_hook(handle);
+cb_future.await;
+let result = match tokio::time::timeout(
+    tokio::time::Duration::from_secs(timeout_secs),
+    rx,
+).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => {
             tracing::warn!("Wire hook resolver dropped without resolving");

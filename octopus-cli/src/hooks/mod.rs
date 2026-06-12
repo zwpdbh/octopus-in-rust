@@ -1,8 +1,11 @@
 pub mod event;
+pub mod hook;
 pub mod runner;
 
 mod engine;
-pub use engine::{
-    HookEngine, OnResolved, OnTriggered, OnWireHook, WireHookHandle, WireHookSubscription,
+pub use engine::HookEngine;
+pub use event::{HookEvent, HookEventKind};
+pub use hook::{
+    CommandHook, HookCallbacks, HookRunContext, OnResolved, OnTriggered, OnWireHook,
+    OnWireHookDone, WireHook, WireHookHandle, WireHookSubscription,
 };
-pub use event::HookEvent;

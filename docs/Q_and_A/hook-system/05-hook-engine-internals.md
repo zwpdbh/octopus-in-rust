@@ -5,119 +5,129 @@ The `HookEngine` is the brain of the hook system. It decides *which* hooks run, 
 ## 5.1 Data Structures
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 59 — HookEngine
+// octopus-cli/src/hooks/engine.rs ~line 55 — HookEngine
 pub struct HookEngine {
-    hooks: Vec<HookDef>,
-    wire_subs: Vec<WireHookSubscription>,
+    by_event: HashMap<HookEventKind, Vec<Box<dyn Hook>>>,
     cwd: Option<PathBuf>,
-    on_triggered: Option<OnTriggered>,
-    on_resolved: Option<OnResolved>,
-    on_wire_hook: Option<OnWireHook>,
-    on_wire_hook_done: Option<OnWireHookDone>,
-    by_event: HashMap<HookEvent, Vec<HookDef>>,
-    wire_by_event: HashMap<HookEvent, Vec<WireHookSubscription>>,
+    callbacks: HookCallbacks,
 }
 ```
 
-The engine maintains **two indexes**:
-- `by_event`: maps `HookEvent::PreToolUse` → list of local `HookDef` objects.
-- `wire_by_event`: maps `HookEvent::PreToolUse` → list of remote `WireHookSubscription` objects.
+The engine maintains a **single unified index**:
+- `by_event`: maps `HookEventKind::PreToolUse` → list of `Box<dyn Hook>` objects.
 
-**Python comparison:** The Python engine used `dict[str, list[HookDef]]` — string keys instead of enum keys. The lookup was `self._by_event.get("PreToolUse")`.
+Each entry in the list can be either a `CommandHook` (local shell command) or a `WireHook` (remote client subscription). They share the same runtime trait, so the engine does not need separate code paths for matching, dispatch, or aggregation.
 
-## 5.2 Index Rebuilding
+**Python comparison:** The Python engine used `dict[str, list[HookDef]]` — string keys instead of enum keys. The lookup was `self._by_event.get("PreToolUse")`. Rust uses a typed `HookEventKind` key.
 
-```rust
-// octopus-cli/src/hooks/engine.rs ~line 175 — rebuild_index
-fn rebuild_index(&mut self) {
-    self.by_event.clear();
-    for h in &self.hooks {
-        self.by_event
-            .entry(h.event.clone())
-            .or_default()
-            .push(h.clone());
-    }
-    self.wire_by_event.clear();
-    for s in &self.wire_subs {
-        self.wire_by_event
-            .entry(s.event.clone())
-            .or_default()
-            .push(s.clone());
-    }
-}
-```
+## 5.2 Index Building
 
-This is simple but effective: it trades a small amount of startup time for O(1) event lookup at trigger time.
-
-Because `HookEvent` equality is **discriminant-only**, `h.event.clone()` is cheap — it only clones the enum discriminant and a few empty strings (for config-loaded hooks) or the actual payload (for runtime events). In practice, the `Arc<HookEvent>` optimization in `trigger()` makes this cost negligible.
-
-## 5.3 Registration API
-
-### Adding Server-Side Hooks
+When hooks are registered, they are wrapped in `Box<dyn Hook>` and grouped by kind:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 108 — add_hooks
+// octopus-cli/src/hooks/engine.rs ~line 100 — add_hooks
 pub fn add_hooks(&mut self, hooks: Vec<HookDef>) {
-    for h in &hooks {
+    for mut def in hooks {
+        if def.compiled_matcher.is_none() {
+            def.compile_matcher();
+        }
+        let hook = Box::new(CommandHook::new(&def));
         self.by_event
-            .entry(h.event.clone())
+            .entry(hook.kind())
             .or_default()
-            .push(h.clone());
+            .push(hook);
     }
-    self.hooks.extend(hooks);
 }
 ```
 
-Called during startup after parsing `config.toml`. The hooks are already compiled by `HookDef::compile_matcher()` during config loading.
-
-### Adding Wire Subscriptions
-
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 118 — add_wire_subscriptions
+// octopus-cli/src/hooks/engine.rs ~line 115 — add_wire_subscriptions
 pub fn add_wire_subscriptions(&mut self, mut subs: Vec<WireHookSubscription>) {
     for s in &mut subs {
-        s.compiled_matcher = Regex::new(&s.matcher).ok();
+        if s.compiled_matcher.is_none() {
+            s.compiled_matcher = Regex::new(&s.matcher).ok();
+        }
     }
-    for s in &subs {
-        self.wire_by_event
-            .entry(s.event.clone())
+    for s in subs {
+        let hook = Box::new(WireHook::new(&s));
+        self.by_event
+            .entry(hook.kind())
             .or_default()
-            .push(s.clone());
+            .push(hook);
     }
-    self.wire_subs.extend(subs);
 }
 ```
 
-Called when a wire client sends its subscription list during initialization.
+This is simple but effective: it trades a small amount of setup time for O(1) event lookup at trigger time. Because `HookEventKind` is `Copy` and contains no runtime data, indexing is cheap.
 
-**Python comparison:** Python's `add_wire_subscriptions` stored the raw string matcher and compiled it on every trigger.
+## 5.3 The Hook Trait
+
+Both hook sources implement the same trait:
+
+```rust
+// octopus-cli/src/hooks/hook.rs ~line 65 — Hook trait
+#[async_trait::async_trait]
+pub trait Hook: Send + Sync + std::fmt::Debug + HookClone {
+    fn kind(&self) -> HookEventKind;
+    fn matcher(&self) -> Option<&Regex>;
+    fn source(&self) -> &'static str;
+    fn command(&self) -> Option<&str> { None }
+    async fn run(&self, event: &HookEvent, ctx: &HookRunContext) -> HookResult;
+}
+```
+
+- `kind()` provides the registry key.
+- `matcher()` returns `None` for "match everything" or a compiled regex for filtering.
+- `source()` returns `"server"` or `"wire"` for diagnostics.
+- `command()` returns the shell command for server-side hooks; wire hooks return `None`.
+- `run()` executes the hook for a concrete event.
+
+**Python comparison:** Python had separate code paths in `trigger()` for local and remote hooks. Rust unifies them behind one trait.
 
 ## 5.4 Matching with Compiled Regexes
 
+The engine filters hooks by calling `Regex::is_match` on the event's natural matcher field:
+
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 192 — match_regex
-fn match_regex(compiled: Option<&Regex>, pattern: &str, value: &str) -> bool {
-    if pattern.is_empty() {
-        return true;
-    }
-    match compiled {
-        Some(re) => re.is_match(value),
-        None => {
-            // Invalid regex was already logged when compiled; treat as no-match.
-            false
+// octopus-cli/src/hooks/engine.rs ~line 120 — matching loop
+for h in self.by_event.get(&kind).into_iter().flatten() {
+    // Server-side hooks are deduplicated by command string.
+    if let Some(cmd) = h.command() {
+        if seen_commands.contains(cmd) {
+            continue;
         }
+        seen_commands.insert(cmd.to_string());
+    }
+    match h.matcher() {
+        None => matched.push(h),
+        Some(re) if re.is_match(&matcher_value) => matched.push(h),
+        _ => {}
     }
 }
 ```
 
 ### Regex Behavior
 
-- `matcher = ""` → matches everything (default).
-- `matcher = "shell"` → matches exactly the string `shell` anywhere in `matcher_value`.
+- `matcher = ""` (or omitted) → matches everything (`None` stored in the hook).
+- `matcher = "shell"` → matches exactly the string `shell` anywhere in the matcher field.
 - `matcher = "shell|bash"` → matches either `shell` or `bash`.
 - Invalid regex → logged once at compilation time; treated as no-match.
 
-**Python comparison:** Python's `match_regex` called `re.search(pattern, value)` on every trigger, compiling the regex fresh each time:
+The matcher value is derived from the concrete `HookEvent`:
+
+```rust
+// octopus-cli/src/hooks/event.rs ~line 286 — matcher_value
+pub fn matcher_value(&self) -> Option<&str> {
+    match self {
+        HookEvent::PreToolUse { tool_name, .. } => Some(tool_name),
+        HookEvent::UserPromptSubmit { prompt, .. } => Some(prompt),
+        HookEvent::Stop { .. } => None,
+        // ... one arm per variant
+    }
+}
+```
+
+**Python comparison:** Python's matching called `re.search(pattern, value)` on every trigger, compiling the regex fresh each time:
 
 ```python
 match Regex::new(pattern):  # Rust compiles once
@@ -133,30 +143,27 @@ re.search(pattern, value)   # Python compiles every call
 Server-side hooks are deduplicated by **command string**:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 200 — Deduplication
-let mut seen_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
-let mut server_matched: Vec<&HookDef> = Vec::new();
-for h in self.by_event.get(&*event).into_iter().flatten() {
-    // ... regex check ...
-    if seen_commands.contains(&h.command) {
+// octopus-cli/src/hooks/engine.rs ~line 124 — Deduplication
+if let Some(cmd) = h.command() {
+    if seen_commands.contains(cmd) {
         continue;
     }
-    seen_commands.insert(h.command.clone());
-    server_matched.push(h);
+    seen_commands.insert(cmd.to_string());
 }
 ```
 
 Why? A user might accidentally register the same script twice in `config.toml`. Deduplication prevents double-execution.
 
-Wire subscriptions are **not** deduplicated because each subscription comes from a different client and may return a different decision.
+Wire subscriptions are **not** deduplicated because each subscription comes from a different client and may return a different decision. The `command()` method returns `None` for wire hooks, so the deduplication check is skipped.
 
 ## 5.6 The Trigger Method (Detailed)
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 206 — trigger
-pub async fn trigger(&self, event: HookEvent, matcher_value: &str) -> Vec<HookResult> {
+// octopus-cli/src/hooks/engine.rs ~line 110 — trigger
+pub async fn trigger(&self, event: HookEvent) -> Vec<HookResult> {
+    let kind = event.kind();
+    let matcher_value = event.matcher_value().unwrap_or("").to_string();
     let event = Arc::new(event);
-    let input_data = serde_json::to_value(&*event).unwrap_or_default();
     // ... match, dedup, spawn tasks, gather, aggregate, callbacks
 }
 ```
@@ -173,25 +180,18 @@ let event = event.clone();  // cloned once per hook!
 Now it does:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 196 — Arc optimization
+// octopus-cli/src/hooks/engine.rs ~line 145 — Arc optimization
 let event = Arc::new(event);
 // ...
 let event = Arc::clone(&event);  // cheap refcount bump
-run_hook(&command, &*event, timeout, cwd.as_deref()).await
+hook.run(&event, &ctx).await
 ```
 
 **Python comparison:** Python passed dictionaries by reference, but each `asyncio.create_task` closure captured variables from the enclosing scope. Because Python closures capture by reference, the dict was shared — but if the dict was mutated later, all tasks would see the mutation. Rust's `Arc` makes the sharing explicit and safe.
 
 ### Pre-serialization Optimization
 
-Before the fix, wire hooks did:
-
-```rust
-// Conceptual pseudo-code: serializing once per wire hook
-input_data: serde_json::to_value(&event).unwrap_or_default(),  // once per wire hook
-```
-
-Now the event is serialized **once** before the loop, and the `Value` is cloned for each wire hook.
+Wire hooks serialize the event once per `run()` call. Because each `WireHook` runs independently, serialization happens once per matched wire hook. If multiple wire hooks match the same event, each serializes its own copy; this is acceptable because wire hooks are rare compared to server-side hooks.
 
 ## 5.7 Fail-Open Guarantee
 
@@ -210,12 +210,12 @@ This is critical for **availability**: a broken hook should not brick the entire
 ## 5.8 Aggregation Semantics
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 315 — Aggregation
+// octopus-cli/src/hooks/engine.rs ~line 170 — Aggregation
 let mut action = HookAction::Allow;
 for r in &results {
     if let HookAction::Block(ref reason) = r.action {
         action = HookAction::Block(reason.clone());
-        tracing::warn!("Hook blocked {} (matcher={}): {}", event, matcher_value, reason);
+        tracing::warn!("Hook blocked {} (matcher={}): {}", kind, matcher_value, reason);
         break;
     }
 }
@@ -228,16 +228,14 @@ for r in &results {
 The `on_wire_hook_done` callback solves a leak that existed in the Python version:
 
 ```rust
-// octopus-cli/src/hooks/engine.rs ~line 251 — Wire hook cleanup
-let on_done = self.on_wire_hook_done.clone();
+// octopus-cli/src/hooks/hook.rs ~line 145 — Wire hook cleanup
+let on_done = ctx.callbacks.on_wire_hook_done.clone();
 // ...
-tasks.push(tokio::spawn(async move {
-    let result = match tokio::time::timeout(..., rx).await { ... };
-    if let Some(ref cb) = on_done {
-        cb(&handle_id);  // ← cleanup even on timeout!
-    }
-    result
-}));
+let result = match tokio::time::timeout(..., rx).await { ... };
+if let Some(ref cb) = on_done {
+    cb(&handle_id);  // ← cleanup even on timeout!
+}
+result
 ```
 
 In the wire server, this callback removes the entry from `pending_requests`:
@@ -259,5 +257,5 @@ let on_done = Arc::new(move |id: &str| {
 
 The `HookEngine` is **not thread-safe** for mutation but is safe for concurrent triggers because:
 - `add_hooks()` and `add_wire_subscriptions()` are only called during setup.
-- `trigger()` only reads shared state (`by_event`, `wire_by_event`) and spawns independent tasks.
+- `trigger()` only reads shared state (`by_event`) and spawns independent tasks.
 - The `on_wire_hook` callback uses `Arc<Mutex<...>>` for shared mutable state in the wire server.

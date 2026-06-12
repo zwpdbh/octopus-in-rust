@@ -260,19 +260,19 @@ impl KimiSoul {
             // Wire hook callbacks: emit HookTriggered / HookResolved events.
             // Wire hook dispatch is stubbed (no request/response protocol yet)
             // so client-side hooks always fail open.
-            self.hook_engine.set_callbacks(
-                Some(Box::new(
+            self.hook_engine.set_callbacks(crate::hooks::HookCallbacks {
+                on_triggered: Some(std::sync::Arc::new(
                     |event: &crate::hooks::HookEvent, target: &str, count: usize| {
                         crate::wire::wire_send(crate::wire::WireEvent::HookTriggered(
                             crate::wire::HookTriggered {
-                                event: event.to_string(),
+                                event: event.kind().to_string(),
                                 target: target.to_string(),
                                 hook_count: count,
                             },
                         ));
                     },
                 )),
-                Some(Box::new(
+                on_resolved: Some(std::sync::Arc::new(
                     |event: &crate::hooks::HookEvent,
                      target: &str,
                      action: crate::hooks::runner::HookAction,
@@ -287,7 +287,7 @@ impl KimiSoul {
                         };
                         crate::wire::wire_send(crate::wire::WireEvent::HookResolved(
                             crate::wire::HookResolved {
-                                event: event.to_string(),
+                                event: event.kind().to_string(),
                                 target: target.to_string(),
                                 action: action_str,
                                 reason,
@@ -296,14 +296,17 @@ impl KimiSoul {
                         ));
                     },
                 )),
-                on_wire_hook.or_else(|| {
-                    Some(Box::new(|handle: crate::hooks::WireHookHandle| {
-                        // No wire request/response protocol yet — fail open.
-                        handle.resolve(crate::hooks::runner::HookAction::Allow);
-                        Box::pin(async {})
-                    }))
+                on_wire_hook: on_wire_hook.or_else(|| {
+                    Some(std::sync::Arc::new(
+                        |handle: crate::hooks::WireHookHandle| {
+                            // No wire request/response protocol yet — fail open.
+                            handle.resolve(crate::hooks::runner::HookAction::Allow);
+                            Box::pin(async {})
+                        },
+                    ))
                 }),
-            );
+                on_wire_hook_done: None,
+            });
 
             let result = self.run_turn(text).await;
 
@@ -381,8 +384,8 @@ impl KimiSoul {
                 .unwrap_or_else(|_| ".".to_string()),
             text,
         );
-        if self.hook_engine.has_hooks_for(&event) {
-            let results = self.hook_engine.trigger(event, text).await;
+        if self.hook_engine.has_hooks_for(event.kind()) {
+            let results = self.hook_engine.trigger(event).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
                     wire_send(crate::wire::WireEvent::TextPart(crate::wire::TextPart {
@@ -417,7 +420,7 @@ impl KimiSoul {
                     .unwrap_or_else(|_| ".".to_string()),
                 false,
             );
-            let _ = self.hook_engine.fire_and_forget_trigger(event, "");
+            let _ = self.hook_engine.fire_and_forget_trigger(event);
         }
 
         let result = match turn_result {
@@ -615,9 +618,7 @@ impl KimiSoul {
                         std::any::type_name_of_val(&e),
                         &format!("{}", e),
                     );
-                    let _ = self
-                        .hook_engine
-                        .fire_and_forget_trigger(event, std::any::type_name_of_val(&e));
+                    let _ = self.hook_engine.fire_and_forget_trigger(event);
                     return Err(e);
                 }
             };
@@ -787,10 +788,8 @@ impl KimiSoul {
                     &view.event.body,
                     &view.event.severity,
                 );
-                if self.hook_engine.has_hooks_for(&event) {
-                    let _ = self
-                        .hook_engine
-                        .fire_and_forget_trigger(event, &view.event.event_type);
+                if self.hook_engine.has_hooks_for(event.kind()) {
+                    let _ = self.hook_engine.fire_and_forget_trigger(event);
                 }
             }
         }
@@ -1101,8 +1100,8 @@ impl KimiSoul {
 
         // --- PreCompact hook ---
         let event = HookEvent::pre_compact(&self.session.id, &cwd, custom_instruction, token_count);
-        if self.hook_engine.has_hooks_for(&event) {
-            let results = self.hook_engine.trigger(event, custom_instruction).await;
+        if self.hook_engine.has_hooks_for(event.kind()) {
+            let results = self.hook_engine.trigger(event).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
                     tracing::warn!("PreCompact hook blocked compaction: {}", reason);
@@ -1176,9 +1175,7 @@ impl KimiSoul {
         {
             let event =
                 HookEvent::post_compact(&self.session.id, &cwd, custom_instruction, estimated);
-            let _ = self
-                .hook_engine
-                .fire_and_forget_trigger(event, custom_instruction);
+            let _ = self.hook_engine.fire_and_forget_trigger(event);
         }
 
         // Notify injection providers that history has been rebuilt so they can

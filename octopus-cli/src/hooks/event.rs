@@ -1,14 +1,50 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Every extension point in the system where external hooks may intervene.
+/// Discriminant-only identifier for a hook event.
 ///
-/// **Equality and hashing are based only on the discriminant (the variant),**
-/// not on the payload data. This allows the same type to be used both as a
-/// typed message payload and as a `HashMap` key in the engine.
-#[derive(Debug, Clone, Serialize)]
+/// This enum is used as a registry/config key: it carries no runtime data,
+/// implements `Hash`/`Eq`, and serializes to just the PascalCase variant name
+/// (e.g. `"PreToolUse"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HookEventKind {
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    UserPromptSubmit,
+    Stop,
+    StopFailure,
+    PreCompact,
+    PostCompact,
+    Notification,
+}
+
+impl std::fmt::Display for HookEventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            HookEventKind::PreToolUse => "PreToolUse",
+            HookEventKind::PostToolUse => "PostToolUse",
+            HookEventKind::PostToolUseFailure => "PostToolUseFailure",
+            HookEventKind::UserPromptSubmit => "UserPromptSubmit",
+            HookEventKind::Stop => "Stop",
+            HookEventKind::StopFailure => "StopFailure",
+            HookEventKind::PreCompact => "PreCompact",
+            HookEventKind::PostCompact => "PostCompact",
+            HookEventKind::Notification => "Notification",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Concrete runtime payload for a hook event.
+///
+/// Unlike `HookEventKind`, this enum always carries the full data available at
+/// the moment the event fires. It is serialized to the full JSON payload when
+/// sent to hook scripts or wire clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "hook_event_name", rename_all = "PascalCase")]
 pub enum HookEvent {
     PreToolUse {
@@ -71,38 +107,6 @@ pub enum HookEvent {
         body: String,
         severity: String,
     },
-}
-
-// Discriminant-only equality so HookEvent can be used as a HashMap key.
-impl PartialEq for HookEvent {
-    fn eq(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-}
-
-impl Eq for HookEvent {}
-
-impl std::hash::Hash for HookEvent {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-    }
-}
-
-impl std::fmt::Display for HookEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            HookEvent::PreToolUse { .. } => "PreToolUse",
-            HookEvent::PostToolUse { .. } => "PostToolUse",
-            HookEvent::PostToolUseFailure { .. } => "PostToolUseFailure",
-            HookEvent::UserPromptSubmit { .. } => "UserPromptSubmit",
-            HookEvent::Stop { .. } => "Stop",
-            HookEvent::StopFailure { .. } => "StopFailure",
-            HookEvent::PreCompact { .. } => "PreCompact",
-            HookEvent::PostCompact { .. } => "PostCompact",
-            HookEvent::Notification { .. } => "Notification",
-        };
-        write!(f, "{}", s)
-    }
 }
 
 impl HookEvent {
@@ -243,91 +247,39 @@ impl HookEvent {
             severity: severity.into(),
         }
     }
-}
 
-/// Serde helpers so `HookEvent` can be stored as just a string in config files
-/// (`event = "PreToolUse"`) while still serializing to the full JSON payload
-/// when sent to hook scripts.
-pub mod discriminant_serde {
-    use super::HookEvent;
-    use serde::Deserialize;
-    use std::collections::HashMap;
-
-    pub fn serialize<S>(event: &HookEvent, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&event.to_string())
+    /// Return the discriminant identifier for this event.
+    pub fn kind(&self) -> HookEventKind {
+        match self {
+            HookEvent::PreToolUse { .. } => HookEventKind::PreToolUse,
+            HookEvent::PostToolUse { .. } => HookEventKind::PostToolUse,
+            HookEvent::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
+            HookEvent::UserPromptSubmit { .. } => HookEventKind::UserPromptSubmit,
+            HookEvent::Stop { .. } => HookEventKind::Stop,
+            HookEvent::StopFailure { .. } => HookEventKind::StopFailure,
+            HookEvent::PreCompact { .. } => HookEventKind::PreCompact,
+            HookEvent::PostCompact { .. } => HookEventKind::PostCompact,
+            HookEvent::Notification { .. } => HookEventKind::Notification,
+        }
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HookEvent, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error;
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "PreToolUse" => Ok(HookEvent::PreToolUse {
-                session_id: String::new(),
-                cwd: String::new(),
-                tool_name: String::new(),
-                tool_input: HashMap::new(),
-                tool_call_id: String::new(),
-            }),
-            "PostToolUse" => Ok(HookEvent::PostToolUse {
-                session_id: String::new(),
-                cwd: String::new(),
-                tool_name: String::new(),
-                tool_input: HashMap::new(),
-                tool_output: String::new(),
-                tool_call_id: String::new(),
-            }),
-            "PostToolUseFailure" => Ok(HookEvent::PostToolUseFailure {
-                session_id: String::new(),
-                cwd: String::new(),
-                tool_name: String::new(),
-                tool_input: HashMap::new(),
-                error: String::new(),
-                tool_call_id: String::new(),
-            }),
-            "UserPromptSubmit" => Ok(HookEvent::UserPromptSubmit {
-                session_id: String::new(),
-                cwd: String::new(),
-                prompt: String::new(),
-            }),
-            "Stop" => Ok(HookEvent::Stop {
-                session_id: String::new(),
-                cwd: String::new(),
-                stop_hook_active: false,
-            }),
-            "StopFailure" => Ok(HookEvent::StopFailure {
-                session_id: String::new(),
-                cwd: String::new(),
-                error_type: String::new(),
-                error_message: String::new(),
-            }),
-            "PreCompact" => Ok(HookEvent::PreCompact {
-                session_id: String::new(),
-                cwd: String::new(),
-                trigger: String::new(),
-                token_count: 0,
-            }),
-            "PostCompact" => Ok(HookEvent::PostCompact {
-                session_id: String::new(),
-                cwd: String::new(),
-                trigger: String::new(),
-                estimated_token_count: 0,
-            }),
-            "Notification" => Ok(HookEvent::Notification {
-                session_id: String::new(),
-                cwd: String::new(),
-                sink: String::new(),
-                notification_type: String::new(),
-                title: String::new(),
-                body: String::new(),
-                severity: String::new(),
-            }),
-            _ => Err(D::Error::custom(format!("unknown hook event: {}", s))),
+    /// Return the value that should be matched against a hook's regex matcher.
+    ///
+    /// `None` means the event has no natural matcher field; an empty string is
+    /// used in that case.
+    pub fn matcher_value(&self) -> Option<&str> {
+        match self {
+            HookEvent::PreToolUse { tool_name, .. } => Some(tool_name),
+            HookEvent::PostToolUse { tool_name, .. } => Some(tool_name),
+            HookEvent::PostToolUseFailure { tool_name, .. } => Some(tool_name),
+            HookEvent::UserPromptSubmit { prompt, .. } => Some(prompt),
+            HookEvent::Stop { .. } => None,
+            HookEvent::StopFailure { error_type, .. } => Some(error_type),
+            HookEvent::PreCompact { trigger, .. } => Some(trigger),
+            HookEvent::PostCompact { trigger, .. } => Some(trigger),
+            HookEvent::Notification {
+                notification_type, ..
+            } => Some(notification_type),
         }
     }
 }
@@ -342,7 +294,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_discriminant_equality_ignores_payload() {
+    fn test_kind_equality_ignores_payload() {
         let a = HookEvent::PreToolUse {
             session_id: "sess-a".into(),
             cwd: "/a".into(),
@@ -362,21 +314,22 @@ mod tests {
             tool_call_id: "call-b".into(),
         };
         assert_eq!(
-            a, b,
-            "same discriminant should be equal regardless of payload"
+            a.kind(),
+            b.kind(),
+            "same variant should produce same HookEventKind regardless of payload"
         );
     }
 
     #[test]
-    fn test_discriminant_inequality() {
+    fn test_kind_inequality() {
         let pre = HookEvent::pre_tool_use("s", "/", "t", &HashMap::new(), "c");
         let post = HookEvent::post_tool_use("s", "/", "t", &HashMap::new(), "out", "c");
-        assert_ne!(pre, post, "different discriminants should not be equal");
+        assert_ne!(pre.kind(), post.kind());
     }
 
     #[test]
-    fn test_discriminant_hash_as_map_key() {
-        let mut map: HashMap<HookEvent, usize> = HashMap::new();
+    fn test_kind_hash_as_map_key() {
+        let mut map: HashMap<HookEventKind, usize> = HashMap::new();
         let a = HookEvent::pre_tool_use("s", "/", "t", &HashMap::new(), "c");
         let b = HookEvent::PreToolUse {
             session_id: "other".into(),
@@ -385,22 +338,18 @@ mod tests {
             tool_input: HashMap::new(),
             tool_call_id: "other".into(),
         };
-        map.insert(a, 42);
-        assert_eq!(
-            map.get(&b),
-            Some(&42),
-            "same discriminant should hash to same bucket"
-        );
+        map.insert(a.kind(), 42);
+        assert_eq!(map.get(&b.kind()), Some(&42));
     }
 
     #[test]
     fn test_display_outputs_variant_name() {
-        let e = HookEvent::post_tool_use_failure("s", "/", "t", &HashMap::new(), "err", "c");
+        let e = HookEventKind::PostToolUseFailure;
         assert_eq!(e.to_string(), "PostToolUseFailure");
     }
 
     #[test]
-    fn test_discriminant_serde_roundtrip() {
+    fn test_kind_serde_roundtrip() {
         let original = HookEvent::pre_tool_use(
             "real-session",
             "/real",
@@ -415,37 +364,13 @@ mod tests {
             json
         );
 
-        // discriminant_serde::serialize should emit just the string name
-        let mut buf = Vec::new();
-        let mut ser = serde_json::Serializer::new(&mut buf);
-        discriminant_serde::serialize(&original, &mut ser).unwrap();
-        let discriminant_json = String::from_utf8(buf).unwrap();
-        assert_eq!(discriminant_json, "\"PreToolUse\"");
+        // HookEventKind serializes to just the string name
+        let kind_json = serde_json::to_string(&original.kind()).unwrap();
+        assert_eq!(kind_json, "\"PreToolUse\"");
 
-        // discriminant_serde::deserialize should reconstruct the variant with empty defaults
-        let mut de = serde_json::Deserializer::from_str(&discriminant_json);
-        let decoded = discriminant_serde::deserialize(&mut de).unwrap();
-        assert_eq!(
-            decoded, original,
-            "deserialized discriminant should match original variant"
-        );
-        // but payload is empty because config only stores the event name
-        match decoded {
-            HookEvent::PreToolUse {
-                session_id,
-                cwd,
-                tool_name,
-                tool_input,
-                tool_call_id,
-            } => {
-                assert_eq!(session_id, "");
-                assert_eq!(cwd, "");
-                assert_eq!(tool_name, "");
-                assert!(tool_input.is_empty());
-                assert_eq!(tool_call_id, "");
-            }
-            other => panic!("expected PreToolUse, got {:?}", other),
-        }
+        // HookEventKind deserializes from just the string name
+        let decoded: HookEventKind = serde_json::from_str(&kind_json).unwrap();
+        assert_eq!(decoded, original.kind());
     }
 
     #[test]
@@ -471,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_event_variants_deserialize_from_discriminant() {
+    fn test_all_event_variants_deserialize_from_kind() {
         let variants = vec![
             "PreToolUse",
             "PostToolUse",
@@ -485,21 +410,57 @@ mod tests {
         ];
         for name in variants {
             let json = format!("\"{}\"", name);
-            let mut de = serde_json::Deserializer::from_str(&json);
-            let event = discriminant_serde::deserialize(&mut de)
+            let kind: HookEventKind = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", name, e));
-            assert_eq!(
-                event.to_string(),
-                name,
-                "roundtripped variant name should match"
-            );
+            assert_eq!(kind.to_string(), name);
         }
     }
 
     #[test]
-    fn test_invalid_discriminant_errors() {
-        let mut de = serde_json::Deserializer::from_str("\"UnknownEvent\"");
-        let result: Result<HookEvent, _> = discriminant_serde::deserialize(&mut de);
-        assert!(result.is_err(), "unknown event should fail to deserialize");
+    fn test_invalid_kind_errors() {
+        let result: Result<HookEventKind, _> = serde_json::from_str("\"UnknownEvent\"");
+        assert!(
+            result.is_err(),
+            "unknown event kind should fail to deserialize"
+        );
+    }
+
+    #[test]
+    fn test_matcher_value_per_variant() {
+        assert_eq!(
+            HookEvent::pre_tool_use("s", "/", "WriteFile", &HashMap::new(), "c").matcher_value(),
+            Some("WriteFile")
+        );
+        assert_eq!(
+            HookEvent::post_tool_use("s", "/", "ReadFile", &HashMap::new(), "out", "c")
+                .matcher_value(),
+            Some("ReadFile")
+        );
+        assert_eq!(
+            HookEvent::post_tool_use_failure("s", "/", "Shell", &HashMap::new(), "err", "c")
+                .matcher_value(),
+            Some("Shell")
+        );
+        assert_eq!(
+            HookEvent::user_prompt_submit("s", "/", "hello").matcher_value(),
+            Some("hello")
+        );
+        assert_eq!(HookEvent::stop("s", "/", false).matcher_value(), None);
+        assert_eq!(
+            HookEvent::stop_failure("s", "/", "IOError", "msg").matcher_value(),
+            Some("IOError")
+        );
+        assert_eq!(
+            HookEvent::pre_compact("s", "/", "budget", 100).matcher_value(),
+            Some("budget")
+        );
+        assert_eq!(
+            HookEvent::post_compact("s", "/", "budget", 80).matcher_value(),
+            Some("budget")
+        );
+        assert_eq!(
+            HookEvent::notification("s", "/", "llm", "error", "t", "b", "high").matcher_value(),
+            Some("error")
+        );
     }
 }

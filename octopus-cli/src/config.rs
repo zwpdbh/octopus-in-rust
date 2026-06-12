@@ -202,8 +202,7 @@ impl Default for MCPConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookDef {
-    #[serde(with = "crate::hooks::event::discriminant_serde")]
-    pub event: crate::hooks::HookEvent,
+    pub event: crate::hooks::HookEventKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
     /// Compiled regex from `matcher`. Filled at load time; `#[serde(skip)]`
