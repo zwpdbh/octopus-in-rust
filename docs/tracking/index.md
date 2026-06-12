@@ -26,7 +26,7 @@ This directory tracks the progress of rewriting `kimi-cli` (Python) into `octopu
 | 10 | Web / Visualizer | ❌ | ~1,500 | ~0 |
 | 11 | Background Tasks | 🔄 | ~800 | ~270 |
 | 12 | Subagents | ✅ | ~1,200 | ~970 |
-| 13 | Hooks | ✅ | ~400 | ~800 |
+| 13 | Hooks | ✅ | ~400 | ~1,100 |
 | 14 | MCP Client | ✅ | ~800 | ~440 |
 | 14 | ACP Server | ❌ | ~800 | ~0 |
 | 15 | Utils | 🔄 | ~2,500 | ~80 |
