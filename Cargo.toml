@@ -1,3 +1,3 @@
 [workspace]
-members = ["octopus-cli", "kosong", "plugins/example-http", "docref", "faf-qq-bot"]
+members = ["octopus-cli", "kosong", "qqbot-plugins/example-http", "docref", "qqbot", "qqbot-core", "qqbot-plugins/summary"]
 resolver = "3"

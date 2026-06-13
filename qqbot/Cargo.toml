@@ -1,21 +1,17 @@
 [package]
-name = "faf-qq-bot"
+name = "qqbot"
 version = "0.1.0"
 edition = "2021"
-authors = ["faf-qq-bot contributors"]
-description = "A cloud-deployable QQ group summary bot that drives NapCatQQ via OneBot 11."
+authors = ["qqbot contributors"]
+description = "Supervisor that starts and manages NapCatQQ and qqbot-core."
 license = "MIT"
 
 [dependencies]
 anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-futures-util = "0.3"
-reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
