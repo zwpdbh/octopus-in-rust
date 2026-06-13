@@ -1,0 +1,56 @@
+# faf-qq-bot configuration example.
+# Copy this file to `config.toml` and fill in your own values.
+
+[onebot]
+# NapCatQQ OneBot 11 WebSocket URL.
+# If NapCatQQ is running on the same machine, this is usually:
+# ws://localhost:3001
+ws_url = "ws://localhost:3001"
+
+# Optional access token configured in NapCatQQ.
+access_token = ""
+
+[napcat]
+# Directory where NapCatQQ is installed.
+dir = "/opt/napcat"
+
+# Command used to launch NapCatQQ, relative to `dir`.
+# Adjust this to the actual launcher script/binary in your NapCatQQ package.
+launch_command = "napcat.sh"
+
+# Working directory for NapCatQQ runtime data (logs, pid file).
+data_dir = "./napcat-data"
+
+# Extra arguments passed to the launcher.
+launch_args = []
+
+[bot]
+# Only respond in these group IDs. Empty means all groups.
+allowed_groups = []
+
+# Prefix for bot commands.
+command_prefix = "/"
+
+# Time window in seconds for conversation summarization.
+summary_window_secs = 3600
+
+# Maximum number of messages to keep per group buffer.
+max_buffer_size = 200
+
+[llm]
+# Kimi (Moonshot AI) chat completion endpoint.
+# Kimi's API is OpenAI-compatible. Get a key from https://platform.moonshot.cn/.
+api_url = "https://api.moonshot.cn/v1/chat/completions"
+
+# Kimi API key.
+api_key = "sk-xxxxxxxx"
+
+# Model name. Common choices: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k.
+model = "moonshot-v1-8k"
+
+# System prompt used when generating summaries.
+system_prompt = """You are a helpful assistant summarizing a QQ group conversation.
+List key topics, decisions, and action items concisely in the user's language."""
+
+# Maximum buffered messages to send as context to the LLM.
+max_context_messages = 200
