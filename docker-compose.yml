@@ -1,0 +1,45 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: unless-stopped
+    environment:
+      # Replace with your QQ bot account number.
+      - ACCOUNT=123456789
+      # Enable OneBot 11 forward WebSocket server on port 3001.
+      - WS_ENABLE=true
+      - NAPCAT_UID=0
+      - NAPCAT_GID=0
+    ports:
+      # OneBot forward WebSocket
+      - "3001:3001"
+      # NapCatQQ WebUI for QR-code login and network config
+      - "6099:6099"
+      # OneBot HTTP (optional)
+      - "3000:3000"
+    volumes:
+      - ./napcat/app/.config/QQ:/app/.config/QQ
+      - ./napcat/app/napcat/config:/app/napcat/config
+    networks:
+      - faf-qq-bot-network
+
+  faf-qq-bot:
+    build:
+      context: .
+      dockerfile: faf-qq-bot/Dockerfile
+    container_name: faf-qq-bot
+    restart: unless-stopped
+    depends_on:
+      - napcat
+    volumes:
+      - ./faf-qq-bot/config.toml:/app/config.toml:ro
+    environment:
+      - RUST_LOG=info
+    networks:
+      - faf-qq-bot-network
+    # In config.toml, set onebot.ws_url = "ws://napcat:3001"
+    command: ["/app/config.toml"]
+
+networks:
+  faf-qq-bot-network:
+    driver: bridge

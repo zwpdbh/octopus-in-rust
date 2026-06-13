@@ -67,14 +67,74 @@ cargo run --release -- status config.toml
 
 See `config.example.toml` for all options.
 
+## Docker
+
+### Build the image
+
+```bash
+cd /path/to/octopus
+docker build -f faf-qq-bot/Dockerfile -t faf-qq-bot:latest .
+```
+
+### Run with docker-compose (NapCatQQ companion container)
+
+A `docker-compose.yml` is provided at the workspace root. It runs NapCatQQ and `faf-qq-bot` on the same Docker network.
+
+#### 1. Prepare directories and config
+
+```bash
+cd /path/to/octopus
+mkdir -p napcat/app/.config/QQ napcat/app/napcat/config
+cp faf-qq-bot/config.example.toml faf-qq-bot/config.toml
+# Edit faf-qq-bot/config.toml:
+#   onebot.ws_url = "ws://napcat:3001"
+#   onebot.access_token = ""   (or the token you set in NapCatQQ)
+#   bot.allowed_groups = [YOUR_GROUP_ID]
+#   llm.api_key = "YOUR_KIMI_KEY"
+```
+
+#### 2. Start NapCatQQ only and log in
+
+```bash
+docker compose up napcat -d
+```
+
+Open the NapCatQQ WebUI at `http://localhost:6099/webui`, find the token in `napcat/app/napcat/config/webui.json`, then:
+- Log in your QQ account via QR code.
+- Go to **Network Config** and enable **WebSocket Server** on `0.0.0.0:3001`.
+
+#### 3. Start the bot
+
+```bash
+docker compose up faf-qq-bot -d
+```
+
+#### 4. Test
+
+Send `/summary` in the allowed QQ group.
+
+#### 5. View logs
+
+```bash
+docker compose logs -f faf-qq-bot
+docker compose logs -f napcat
+```
+
+#### 6. Stop everything
+
+```bash
+docker compose down
+```
+
 ## Deployment
 
 For Alibaba Cloud or any Linux VPS:
 
-1. Install NapCatQQ + NTQQ on the server.
-2. Run NTQQ in a virtual display if needed (`Xvfb`).
-3. Copy your `config.toml` to the server.
-4. Run `faf-qq-bot` with a process manager like `systemd` or `tmux`.
+1. Push the `faf-qq-bot` image to a registry (e.g. Alibaba Cloud Container Registry).
+2. Run NapCatQQ + NTQQ on the server (either in a separate container or directly).
+3. Run `faf-qq-bot` with your `config.toml` mounted into the container.
+
+If you run NapCatQQ in a separate container, use Docker networking or the host IP so `faf-qq-bot` can reach the OneBot WebSocket.
 
 ## License
 
