@@ -88,7 +88,11 @@ enum Command {
 #[derive(Debug, Clone, Subcommand)]
 enum LlmCommand {
     /// Check whether the configured API key can authenticate and whether the model exists.
-    Test,
+    Test {
+        /// Override the API base URL (e.g. https://api.moonshot.ai/v1).
+        #[arg(long, short)]
+        base_url: Option<String>,
+    },
     /// Send a test prompt to the configured LLM and print the reply.
     Ask {
         /// Prompt to send.
@@ -96,6 +100,9 @@ enum LlmCommand {
         /// Override the model from config.toml.
         #[arg(long, short)]
         model: Option<String>,
+        /// Override the API base URL (e.g. https://api.moonshot.ai/v1).
+        #[arg(long, short)]
+        base_url: Option<String>,
     },
 }
 
@@ -213,17 +220,26 @@ fn main() -> Result<()> {
             }
         },
         Command::Llm { command } => match command {
-            LlmCommand::Test => {
+            LlmCommand::Test { base_url } => {
                 let rt = tokio::runtime::Runtime::new()?;
-                rt.block_on(llm::test(&data_dir))?;
+                rt.block_on(llm::test(&data_dir, base_url.as_deref()))?;
             }
-            LlmCommand::Ask { prompt, model } => {
+            LlmCommand::Ask {
+                prompt,
+                model,
+                base_url,
+            } => {
                 let text = prompt.join(" ");
                 if text.is_empty() {
                     anyhow::bail!("prompt is required");
                 }
                 let rt = tokio::runtime::Runtime::new()?;
-                rt.block_on(llm::ask(&data_dir, &text, model.as_deref()))?;
+                rt.block_on(llm::ask(
+                    &data_dir,
+                    &text,
+                    model.as_deref(),
+                    base_url.as_deref(),
+                ))?;
             }
         },
         Command::Reset => {

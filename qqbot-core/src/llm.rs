@@ -56,6 +56,7 @@ impl LlmClient {
     }
 
     pub async fn chat(&self, user_prompt: &str, request_id: &str) -> Result<String> {
+        let api_key = self.api_key.trim();
         let request = ChatRequest {
             model: self.model.clone(),
             messages: vec![
@@ -75,7 +76,7 @@ impl LlmClient {
         let resp = self
             .client
             .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()

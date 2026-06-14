@@ -50,17 +50,24 @@ struct LlmErrorDetail {
     typ: String,
 }
 
-pub async fn ask(data_dir: &Path, prompt: &str, model_override: Option<&str>) -> Result<()> {
+pub async fn ask(
+    data_dir: &Path,
+    prompt: &str,
+    model_override: Option<&str>,
+    base_url_override: Option<&str>,
+) -> Result<()> {
     let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
     let llm = &config.llm;
+    let api_key = llm.api_key.trim();
 
     println!("=== qqbot llm ask ===\n");
 
-    if llm.api_url.is_empty() || llm.api_key.is_empty() || llm.model.is_empty() {
+    if llm.api_url.is_empty() || api_key.is_empty() || llm.model.is_empty() {
         println!("[fail] LLM is not fully configured in config.toml");
         return Ok(());
     }
 
+    let chat_url = build_chat_url(base_url_override.unwrap_or(&llm.api_url));
     let model = model_override.unwrap_or(&llm.model);
     let request = ChatRequest {
         model: model.to_string(),
@@ -77,18 +84,19 @@ pub async fn ask(data_dir: &Path, prompt: &str, model_override: Option<&str>) ->
         max_tokens: Some(512),
     };
 
-    println!("Sending prompt to {model}...");
-    println!("Prompt: {prompt}\n");
+    println!("Endpoint: {chat_url}");
+    println!("Model:    {model}");
+    println!("Prompt:   {prompt}\n");
 
     let client = reqwest::Client::new();
     let resp = client
-        .post(&llm.api_url)
-        .header("Authorization", format!("Bearer {}", llm.api_key))
+        .post(&chat_url)
+        .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&request)
         .send()
         .await
-        .with_context(|| format!("failed to POST {}", llm.api_url))?;
+        .with_context(|| format!("failed to POST {chat_url}"))?;
 
     let status = resp.status();
     let body = resp.text().await.context("failed to read response body")?;
@@ -123,9 +131,10 @@ pub async fn ask(data_dir: &Path, prompt: &str, model_override: Option<&str>) ->
     Ok(())
 }
 
-pub async fn test(data_dir: &Path) -> Result<()> {
+pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()> {
     let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
     let llm = &config.llm;
+    let api_key = llm.api_key.trim();
 
     println!("=== qqbot llm test ===\n");
 
@@ -133,7 +142,7 @@ pub async fn test(data_dir: &Path) -> Result<()> {
         println!("[fail] llm.api_url is not configured");
         return Ok(());
     }
-    if llm.api_key.is_empty() {
+    if api_key.is_empty() {
         println!("[fail] llm.api_key is not configured");
         return Ok(());
     }
@@ -142,16 +151,8 @@ pub async fn test(data_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let key_hint = if llm.api_key.len() > 4 {
-        format!("{}...", &llm.api_key[..4])
-    } else {
-        "...".to_string()
-    };
-    println!("[ok]   api_url: {}", llm.api_url);
-    println!("[ok]   api_key: {key_hint}");
-    println!("[ok]   model:   {}", llm.model);
-
-    let models_url = match build_models_url(&llm.api_url) {
+    let api_url = base_url_override.unwrap_or(&llm.api_url);
+    let models_url = match build_models_url(api_url) {
         Ok(url) => url,
         Err(e) => {
             println!("[fail] Cannot derive models endpoint from api_url: {e}");
@@ -159,10 +160,20 @@ pub async fn test(data_dir: &Path) -> Result<()> {
         }
     };
 
+    let key_hint = if api_key.len() > 4 {
+        format!("{}...", &api_key[..4])
+    } else {
+        "...".to_string()
+    };
+    println!("[ok]   endpoint: {}", api_url);
+    println!("[ok]   models:   {}", models_url);
+    println!("[ok]   api_key:  {key_hint}");
+    println!("[ok]   model:    {}", llm.model);
+
     let client = reqwest::Client::new();
     let resp = client
         .get(&models_url)
-        .header("Authorization", format!("Bearer {}", llm.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .send()
         .await
         .with_context(|| format!("failed to request {models_url}"))?;
@@ -226,4 +237,13 @@ fn build_models_url(api_url: &str) -> Result<String> {
     };
     let base = base.trim_end_matches('/');
     Ok(format!("{base}/models"))
+}
+
+fn build_chat_url(api_url: &str) -> String {
+    if api_url.ends_with("/chat/completions") {
+        api_url.to_string()
+    } else {
+        let base = api_url.trim_end_matches('/');
+        format!("{base}/chat/completions")
+    }
 }
