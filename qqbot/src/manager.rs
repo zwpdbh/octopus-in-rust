@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::config::Config;
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;

@@ -279,9 +279,10 @@ async fn init(
     println!("qqbot initialized.");
     println!("Data directory: {}", data_dir.display());
     println!();
+    let no_vnc_url = hyperlink("http://localhost:6081", "http://localhost:6081");
     println!("The daemon is starting in the background. Next steps:");
     println!("  1. Wait a few seconds for SnowLuma to start.");
-    println!("  2. Open noVNC: http://localhost:6081");
+    println!("  2. Open noVNC: {no_vnc_url}");
     println!("     VNC password: vncpasswd");
     println!("  3. Scan the QQ QR code with your phone.");
     println!("  4. Check status: qqbot status");
@@ -353,4 +354,15 @@ async fn setup(
     println!("setup complete: {}", data_dir.display());
 
     Ok(())
+}
+
+fn hyperlink(url: &str, text: &str) -> String {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        // OSC 8 hyperlink escape sequence. Terminals that support it make the
+        // text clickable and open the URL in the default browser.
+        format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+    } else {
+        text.to_string()
+    }
 }
