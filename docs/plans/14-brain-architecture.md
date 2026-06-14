@@ -18,6 +18,7 @@ Both products share the same reasoning, tool-calling, and LLM-provider logic, bu
 | Tool policy | All tools are available by default. Users can exclude tools via configuration later. |
 | Approval model | Auto-approve all tool calls by default. |
 | Streaming | Supported in TUI (`octopus-cli`). In QQ, the Brain runs to completion; `qqbot-core` sends an intermediate "processing..." message, then the final message. |
+| QQ plugin directory | `data/qqbot-data/plugins/` — separate from the CLI’s `~/.kimi/plugins/`. |
 
 ## Current state
 
@@ -72,6 +73,111 @@ Both products share the same reasoning, tool-calling, and LLM-provider logic, bu
 - Mapping Brain events to QQ messages.
 - Two-phase QQ messaging ("processing..." then final reply).
 - Plugin loading / hot-reload for non-agent features.
+
+## Plugin system rethink
+
+The current `qqbot-core` plugin model (WASM modules with `on_message` / `on_command` returning host actions) is a traditional bot-plugin model. With the Brain, plugins become first-class participants in the LLM agent loop.
+
+### Core insight
+
+**Plugins are tool providers.** A plugin should expose tools that the Brain can choose to call, not just command hooks that the host dispatches manually.
+
+### New plugin responsibilities
+
+A plugin can provide any subset of:
+
+1. **Tools** — schema + implementation. The Brain registers them in its tool registry and the LLM decides when to invoke them.
+2. **Legacy command hooks** — deterministic, host-dispatched handlers for commands that should not go through the LLM (e.g., `/status`, `/help`, admin commands).
+3. **Legacy message hooks** — preprocessors or listeners for every group message (e.g., logging, link expansion, moderation).
+4. **System prompt fragments** — extra instructions the Brain adds to the system prompt when the plugin is enabled.
+
+### Example: `summary` plugin as a tool
+
+Instead of returning `LlmRequest` and `SendGroupMsg` actions, the `summary` plugin would export a tool:
+
+```rust
+// docs/plans/14-brain-architecture.md — conceptual tool definition
+{
+    "name": "summarize_group",
+    "description": "Summarize recent messages in the current QQ group.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "message_count": {
+                "type": "integer",
+                "description": "How many recent messages to include."
+            }
+        }
+    }
+}
+```
+
+When a user types `/summary`, the Brain sees the request, calls `summarize_group`, receives the summary text, and returns it to the group.
+
+### Proposed WASM ABI extension
+
+Keep the existing ABI and add new optional exports:
+
+```rust
+// docs/plans/14-brain-architecture.md — conceptual WASM ABI
+/// Returns a JSON array of ToolDef.
+pub extern "C" fn register_tools(out_ptr: *mut u8, out_cap: usize) -> i32;
+
+/// Called by the host when the Brain decides to use a plugin tool.
+/// input: JSON { "tool": "name", "arguments": {...} }
+/// output: JSON { "result": ... } or { "error": ... }
+pub extern "C" fn call_tool(
+    input_ptr: *const u8,
+    input_len: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> i32;
+```
+
+Existing `on_message` / `on_command` exports remain for backward compatibility and for deterministic commands.
+
+### Host behavior
+
+- At startup (and on SIGHUP reload), `qqbot-core` loads plugins, calls `register_tools`, and registers the returned tool definitions with each group's Brain.
+- The Brain's tool registry is the union of:
+  - built-in tools (file, shell, web search, etc.)
+  - plugin-provided tools
+- When the Brain emits a `ToolCall` event for a plugin-owned tool, `qqbot-core` dispatches `call_tool` to the plugin and feeds the result back into the Brain.
+- Legacy `on_command` handlers still run first for commands the host decides to handle outside the Brain (configurable).
+
+### Tool ownership and namespacing
+
+- Tool names should be globally unique. A plugin prefix is recommended, e.g. `summary::summarize_group`.
+- The host rejects duplicate tool names at load time.
+
+### Plugin deployment directory
+
+`qqbot-core` keeps its runtime plugin files in `data/qqbot-data/plugins/` (configurable via `bot.plugin_dir`). This is separate from the CLI’s `~/.kimi/plugins/` so that bot-specific tools and permissions do not leak between the two consumers.
+
+Expected layout:
+
+```text
+data/qqbot-data/plugins/
+├── summary.wasm
+├── summary.json          # optional Extism-style manifest
+└── ...
+```
+
+Build-and-deploy flow for a plugin developer:
+
+```bash
+cd qqbot-plugins/summary
+cargo build --target wasm32-unknown-unknown --release
+cp target/wasm32-unknown-unknown/release/summary.wasm \
+   ../../data/qqbot-data/plugins/
+# optionally copy summary.json
+```
+
+`qqbot-core` scans this directory at startup and on `SIGHUP`/`qqbot plugin reload`, loads each `.wasm` file, calls `register_tools`, and registers the returned tools with each group Brain.
+
+### Security note
+
+Because the default policy is auto-approve, any tool provided by an enabled plugin can be invoked by the LLM. Plugins run inside the WASM sandbox, but tool implementations may request host capabilities (network, file system). The host should tag tools with capability requirements and, in a future iteration, enforce per-tool approval or capability allowlists.
 
 ## Brain public API (sketch)
 
@@ -175,13 +281,16 @@ token_file = "~/.kimi/credentials/kimi-code.json"
 3. Preserve interactive approval in TUI by implementing `ApprovalPolicy`.
 4. Verify `cargo test -p octopus-cli` still passes.
 
-### Phase 3 — Integrate Brain into `qqbot-core`
+### Phase 3 — Plugin tool ABI and Brain integration into `qqbot-core`
 
-1. Add `brain` dependency to `qqbot-core`.
-2. Create a `GroupBrain` manager keyed by `group_id`.
-3. On `/summary` or any command, send the processing indicator, run the Brain turn, and post the final reply.
-4. Provide a QQ-safe toolset by default.
-5. Remove or demote the simple `LlmClient` summary plugin path.
+1. Extend the WASM plugin ABI with `register_tools` and `call_tool` exports.
+2. Implement plugin tool dispatch in `qqbot-core` and register plugin tools with each group Brain.
+3. Rewrite the `summary` plugin as a tool provider (`summarize_group`) instead of an `LlmRequest` action producer.
+4. Add `brain` dependency to `qqbot-core`.
+5. Create a `GroupBrain` manager keyed by `group_id`.
+6. On `/summary` or any command, send the processing indicator, run the Brain turn, and post the final reply.
+7. Provide a QQ-safe toolset by default.
+8. Remove or demote the simple `LlmClient` summary plugin path.
 
 ### Phase 4 — Configuration and auth unification
 
@@ -204,6 +313,8 @@ token_file = "~/.kimi/credentials/kimi-code.json"
 3. **Tool schemas for Kimi Code API.** The API rejected some tool schemas (`$ref` not supported). The Brain must normalize tool definitions before sending them.
 4. **Streaming vs non-streaming.** The Brain should support both; the QQ adapter consumes the non-streaming path.
 5. **Group session memory.** Keeping one Brain per group means memory usage grows with the number of groups. We may need compaction later.
+6. **Plugin tool lifecycle.** Hot-reloading a plugin must update the Brain's tool registry without losing in-flight turns.
+7. **Tool name collisions.** With built-in tools and plugin tools in the same registry, naming conventions and validation become important.
 
 ## Related documents
 
