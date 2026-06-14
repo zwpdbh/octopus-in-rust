@@ -155,21 +155,36 @@ pub async fn check(
 async fn connect(
     config: &CoreConfigFile,
 ) -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>> {
+    use tokio_tungstenite::tungstenite::Error as WsError;
+
     let ws_url = &config.onebot.ws_url;
     let token = &config.onebot.access_token;
 
-    let (ws, _) = if token.is_empty() {
-        connect_async(ws_url)
-            .await
-            .context("failed to connect to OneBot WebSocket for health check")?
+    let res = if token.is_empty() {
+        connect_async(ws_url).await
     } else {
         let req = http::Request::builder()
             .uri(ws_url)
             .header("Authorization", format!("Bearer {token}"))
             .body(())?;
-        connect_async(req)
-            .await
-            .context("failed to connect to OneBot WebSocket for health check")?
+        connect_async(req).await
+    };
+
+    let (ws, _) = match res {
+        Ok(pair) => pair,
+        Err(WsError::Io(ref e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            anyhow::bail!("OneBot WebSocket TCP connection refused (is SnowLuma running?)")
+        }
+        Err(WsError::Io(ref e)) => {
+            anyhow::bail!("OneBot WebSocket TCP error: {e}")
+        }
+        Err(WsError::Http(ref resp)) => {
+            let code = resp.status();
+            anyhow::bail!(
+                "OneBot WebSocket handshake failed with HTTP {code} (QQ may not be logged in yet)"
+            )
+        }
+        Err(e) => anyhow::bail!("OneBot WebSocket handshake failed: {e}"),
     };
     Ok(ws)
 }

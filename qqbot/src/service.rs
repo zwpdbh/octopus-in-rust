@@ -384,7 +384,7 @@ pub fn default_snowluma_onebot_config() -> String {
         "role": "Universal",
         "accessToken": "",
         "messageFormat": "array",
-        "reportSelfMessage": false
+        "reportSelfMessage": true
       }
     ],
     "wsClients": []
