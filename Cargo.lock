@@ -3336,6 +3336,7 @@ dependencies = [
  "http 1.4.0",
  "libc",
  "nix",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -3363,6 +3364,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "wasmtime 29.0.1",
 ]
 

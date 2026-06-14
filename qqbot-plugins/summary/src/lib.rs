@@ -169,6 +169,10 @@ pub extern "C" fn on_command(
                     level: "info".to_string(),
                     message: format!("Summarizing group {}", group_id),
                 },
+                Action::SendGroupMsg {
+                    group_id,
+                    text: "Generating summary, please wait...".to_string(),
+                },
                 Action::LlmRequest { group_id, prompt },
             ];
             actions

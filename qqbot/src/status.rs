@@ -151,7 +151,8 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     }
 
     // Application-level health summary.
-    let infra_ok = daemon_alive && container_running && ws_tcp_ok && ws_handshake_ok && core_running;
+    let infra_ok =
+        daemon_alive && container_running && ws_tcp_ok && ws_handshake_ok && core_running;
     if infra_ok {
         match CoreConfigFile::from_file(data_dir.join("config.toml")) {
             Ok(config) => {
@@ -194,7 +195,9 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                         println!("[warn] Health check failed: {e}");
                         println!();
                         println!("       What this means:");
-                        println!("       qqbot could not log in through the OneBot WebSocket to verify");
+                        println!(
+                            "       qqbot could not log in through the OneBot WebSocket to verify"
+                        );
                         println!("       that the bot can send and receive group messages. The checklist");
                         println!("       above may look healthy while OneBot itself is still starting or");
                         println!("       rejecting connections.");
@@ -207,7 +210,9 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                         println!("       How to fix:");
                         println!("         - Wait a few seconds if SnowLuma just started, then re-run status.");
                         println!("         - qqbot restart      (restart only qqbot-core)");
-                        println!("         - qqbot service restart   (restart SnowLuma + qqbot-core)");
+                        println!(
+                            "         - qqbot service restart   (restart SnowLuma + qqbot-core)"
+                        );
                         hints.push(format!(
                             "Health-check error: {e}. See the detailed explanation above."
                         ));

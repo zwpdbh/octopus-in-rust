@@ -11,7 +11,7 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -141,19 +141,32 @@ async fn handle_event(
         let trimmed = text.trim_start().strip_prefix(prefix).unwrap_or("").trim();
         let mut parts = trimmed.split_whitespace();
         let cmd = parts.next().unwrap_or("");
+        let req_id = uuid::Uuid::new_v4().to_string();
 
-        for plugin in plugins.iter_mut() {
-            match plugin.on_command(cmd, &event_json) {
-                Ok(actions) => {
-                    for action in actions {
-                        execute_action(action, group_id, action_tx, llm.clone()).await;
+        let span = info_span!(
+            "command",
+            request_id = %req_id,
+            group_id,
+            user_id = ?event.user_id,
+            cmd,
+        );
+        async {
+            info!("handling command");
+            for plugin in plugins.iter_mut() {
+                match plugin.on_command(cmd, &event_json) {
+                    Ok(actions) => {
+                        for action in actions {
+                            execute_action(action, group_id, action_tx, llm.clone(), &req_id).await;
+                        }
                     }
-                }
-                Err(e) => {
-                    error!(plugin = %plugin.name(), error = %e, "on_command failed");
+                    Err(e) => {
+                        error!(plugin = %plugin.name(), error = %e, "on_command failed");
+                    }
                 }
             }
         }
+        .instrument(span)
+        .await;
     }
 }
 
@@ -162,39 +175,49 @@ async fn execute_action(
     _group_id: i64,
     action_tx: &onebot::ActionTx,
     llm: Arc<LlmClient>,
+    req_id: &str,
 ) {
     match action {
         PluginAction::SendGroupMsg {
             group_id: gid,
             text,
         } => {
+            info!(request_id = %req_id, group_id = gid, "sending group message");
             let action = Action::send_group_msg(gid, text, None);
             if let Err(e) = action_tx.send(action) {
-                error!(error = %e, "failed to send action");
+                error!(request_id = %req_id, error = %e, "failed to send action");
             }
         }
-        PluginAction::Log { level, message } => match level.as_str() {
-            "error" => error!(message),
-            "warn" => warn!(message),
-            "debug" => debug!(message),
-            _ => info!(message),
-        },
-        PluginAction::LlmRequest { group_id, prompt } => match llm.chat(&prompt).await {
-            Ok(reply) => {
-                let action = Action::send_group_msg(group_id, reply, None);
-                if let Err(e) = action_tx.send(action) {
-                    error!(error = %e, "failed to send LLM reply");
+        PluginAction::Log { level, message } => {
+            match level.as_str() {
+                "error" => error!(request_id = %req_id, message),
+                "warn" => warn!(request_id = %req_id, message),
+                "debug" => debug!(request_id = %req_id, message),
+                _ => info!(request_id = %req_id, message),
+            };
+        }
+        PluginAction::LlmRequest { group_id, prompt } => {
+            info!(request_id = %req_id, group_id, "calling LLM");
+            match llm.chat(&prompt, req_id).await {
+                Ok(reply) => {
+                    let action = Action::send_group_msg(group_id, reply, None);
+                    if let Err(e) = action_tx.send(action) {
+                        error!(request_id = %req_id, error = %e, "failed to send LLM reply");
+                    }
+                }
+                Err(e) => {
+                    error!(request_id = %req_id, error = %e, "LLM request failed");
+                    let action = Action::send_group_msg(
+                        group_id,
+                        format!(
+                            "Sorry, I couldn't generate a summary right now: {} (request: {})",
+                            e, req_id
+                        ),
+                        None,
+                    );
+                    let _ = action_tx.send(action);
                 }
             }
-            Err(e) => {
-                error!(error = %e, "LLM request failed");
-                let action = Action::send_group_msg(
-                    group_id,
-                    format!("Sorry, I couldn't generate a summary right now: {}", e),
-                    None,
-                );
-                let _ = action_tx.send(action);
-            }
-        },
+        }
     }
 }

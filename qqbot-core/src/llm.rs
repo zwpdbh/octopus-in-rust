@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error};
 
 #[derive(Debug, Clone, Serialize)]
 struct ChatRequest {
@@ -23,6 +24,18 @@ struct Choice {
     message: Message,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct LlmErrorResponse {
+    error: LlmErrorDetail,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LlmErrorDetail {
+    message: String,
+    #[serde(rename = "type")]
+    typ: String,
+}
+
 pub struct LlmClient {
     client: reqwest::Client,
     api_url: String,
@@ -42,7 +55,7 @@ impl LlmClient {
         }
     }
 
-    pub async fn chat(&self, user_prompt: &str) -> Result<String> {
+    pub async fn chat(&self, user_prompt: &str, request_id: &str) -> Result<String> {
         let request = ChatRequest {
             model: self.model.clone(),
             messages: vec![
@@ -57,7 +70,9 @@ impl LlmClient {
             ],
         };
 
-        let response: ChatResponse = self
+        debug!(request_id, model = %self.model, "sending LLM request");
+
+        let resp = self
             .client
             .post(&self.api_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
@@ -65,10 +80,34 @@ impl LlmClient {
             .json(&request)
             .send()
             .await
-            .context("LLM request failed")?
-            .json()
+            .context("LLM request failed")?;
+
+        let status = resp.status();
+        let raw = resp
+            .text()
             .await
-            .context("failed to parse LLM response")?;
+            .context("failed to read LLM response body")?;
+
+        debug!(request_id, status = %status, body = %raw, "received LLM response");
+
+        if status.is_client_error() || status.is_server_error() {
+            if let Ok(err) = serde_json::from_str::<LlmErrorResponse>(&raw) {
+                error!(
+                    request_id,
+                    error_message = %err.error.message,
+                    error_type = %err.error.typ,
+                    status = %status,
+                    "LLM API returned an error"
+                );
+                anyhow::bail!("LLM API error: {} ({})", err.error.message, err.error.typ);
+            }
+            anyhow::bail!("LLM API returned HTTP {}", status);
+        }
+
+        let response: ChatResponse = serde_json::from_str(&raw).map_err(|e| {
+            error!(request_id, error = %e, body = %raw, "failed to parse LLM response");
+            anyhow::anyhow!("failed to parse LLM response")
+        })?;
 
         response
             .choices

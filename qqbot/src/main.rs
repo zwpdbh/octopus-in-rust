@@ -2,6 +2,7 @@ mod core_config;
 mod daemon;
 mod doctor;
 mod health;
+mod llm;
 mod logs;
 mod paths;
 mod plugins;
@@ -75,8 +76,27 @@ enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    /// Test the configured LLM API key and model.
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum LlmCommand {
+    /// Check whether the configured API key can authenticate and whether the model exists.
+    Test,
+    /// Send a test prompt to the configured LLM and print the reply.
+    Ask {
+        /// Prompt to send.
+        prompt: Vec<String>,
+        /// Override the model from config.toml.
+        #[arg(long, short)]
+        model: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -190,6 +210,20 @@ fn main() -> Result<()> {
             PluginCommand::Reload => {
                 let rt = tokio::runtime::Runtime::new()?;
                 rt.block_on(plugins::reload(&data_dir))?;
+            }
+        },
+        Command::Llm { command } => match command {
+            LlmCommand::Test => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(llm::test(&data_dir))?;
+            }
+            LlmCommand::Ask { prompt, model } => {
+                let text = prompt.join(" ");
+                if text.is_empty() {
+                    anyhow::bail!("prompt is required");
+                }
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(llm::ask(&data_dir, &text, model.as_deref()))?;
             }
         },
         Command::Reset => {
