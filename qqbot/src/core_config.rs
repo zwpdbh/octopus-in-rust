@@ -23,12 +23,21 @@ pub struct BotConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthConfig {
+    pub provider: String,
+    pub token_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub api_url: String,
+    #[serde(default)]
     pub api_key: String,
     pub model: String,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    #[serde(default)]
+    pub oauth: Option<OAuthConfig>,
 }
 
 fn default_system_prompt() -> String {

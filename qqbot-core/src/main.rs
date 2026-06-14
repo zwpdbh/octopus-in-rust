@@ -1,5 +1,6 @@
 mod config;
 mod llm;
+mod oauth;
 mod onebot;
 mod plugin_host;
 
@@ -34,11 +35,17 @@ async fn main() -> anyhow::Result<()> {
         warn!("no plugins loaded");
     }
 
+    let oauth = config
+        .llm
+        .oauth
+        .clone()
+        .map(crate::oauth::OAuthManager::new);
     let llm = LlmClient::new(
         config.llm.api_url.clone(),
         config.llm.api_key.clone(),
         config.llm.model.clone(),
         config.llm.system_prompt.clone(),
+        oauth,
     );
     let llm = Arc::new(llm);
 

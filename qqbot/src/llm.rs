@@ -58,11 +58,22 @@ pub async fn ask(
 ) -> Result<()> {
     let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
     let llm = &config.llm;
-    let api_key = llm.api_key.trim();
 
     println!("=== qqbot llm ask ===\n");
 
-    if llm.api_url.is_empty() || api_key.is_empty() || llm.model.is_empty() {
+    let api_key = match resolve_api_key(llm).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            println!("[fail] LLM is not fully configured in config.toml (no api_key or oauth)");
+            return Ok(());
+        }
+        Err(e) => {
+            println!("[fail] Failed to resolve API key / OAuth token: {e}");
+            return Ok(());
+        }
+    };
+
+    if llm.api_url.is_empty() || llm.model.is_empty() {
         println!("[fail] LLM is not fully configured in config.toml");
         return Ok(());
     }
@@ -134,7 +145,6 @@ pub async fn ask(
 pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()> {
     let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
     let llm = &config.llm;
-    let api_key = llm.api_key.trim();
 
     println!("=== qqbot llm test ===\n");
 
@@ -142,10 +152,19 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
         println!("[fail] llm.api_url is not configured");
         return Ok(());
     }
-    if api_key.is_empty() {
-        println!("[fail] llm.api_key is not configured");
-        return Ok(());
-    }
+
+    let api_key = match resolve_api_key(llm).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            println!("[fail] llm.api_key is not configured and no OAuth is set up");
+            return Ok(());
+        }
+        Err(e) => {
+            println!("[fail] Failed to resolve API key / OAuth token: {e}");
+            return Ok(());
+        }
+    };
+
     if llm.model.is_empty() {
         println!("[fail] llm.model is not configured");
         return Ok(());
@@ -246,4 +265,16 @@ fn build_chat_url(api_url: &str) -> String {
         let base = api_url.trim_end_matches('/');
         format!("{base}/chat/completions")
     }
+}
+
+async fn resolve_api_key(llm: &crate::core_config::LlmConfig) -> Result<Option<String>> {
+    let static_key = llm.api_key.trim();
+    if !static_key.is_empty() {
+        return Ok(Some(static_key.to_string()));
+    }
+    if let Some(ref oauth) = llm.oauth {
+        let token = crate::oauth::resolve_token(&oauth.token_file).await?;
+        return Ok(Some(token));
+    }
+    Ok(None)
 }

@@ -1,3 +1,4 @@
+use crate::oauth::OAuthManager;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
@@ -42,21 +43,36 @@ pub struct LlmClient {
     api_key: String,
     model: String,
     system_prompt: String,
+    oauth: Option<OAuthManager>,
 }
 
 impl LlmClient {
-    pub fn new(api_url: String, api_key: String, model: String, system_prompt: String) -> Self {
+    pub fn new(
+        api_url: String,
+        api_key: String,
+        model: String,
+        system_prompt: String,
+        oauth: Option<OAuthManager>,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             api_url,
             api_key,
             model,
             system_prompt,
+            oauth,
         }
     }
 
     pub async fn chat(&self, user_prompt: &str, request_id: &str) -> Result<String> {
-        let api_key = self.api_key.trim();
+        let api_key = match self.oauth {
+            Some(ref manager) => manager.access_token().await?,
+            None => self.api_key.trim().to_string(),
+        };
+
+        if api_key.is_empty() {
+            anyhow::bail!("LLM API key / OAuth token is empty");
+        }
         let request = ChatRequest {
             model: self.model.clone(),
             messages: vec![

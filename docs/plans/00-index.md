@@ -10,6 +10,7 @@ For day-to-day operational status, see [`STATUS.md`](../../STATUS.md).
 | # | Document | Purpose |
 |---|----------|---------|
 | 13 | [`13-feature-checklist.md`](./13-feature-checklist.md) | P0/P1/P2 feature tracker across all tracks |
+| 14 | [`14-brain-architecture.md`](./14-brain-architecture.md) | Extract a reusable Brain crate for octopus-cli and qqbot-core |
 
 ---
 

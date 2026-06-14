@@ -4,6 +4,7 @@ mod doctor;
 mod health;
 mod llm;
 mod logs;
+mod oauth;
 mod paths;
 mod plugins;
 mod reset;
@@ -272,6 +273,7 @@ async fn init(
         api_key: kimi_key,
         model: "moonshot-v1-8k".to_string(),
         system_prompt: "You are a helpful assistant summarizing a QQ group conversation. List key topics, decisions, and action items concisely in the user's language.".to_string(),
+        oauth: None,
     };
     let core_config = CoreConfigFile::new(
         ws_url,

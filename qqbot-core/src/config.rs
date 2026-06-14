@@ -23,8 +23,9 @@ impl Config {
         if self.llm.api_url.is_empty() {
             anyhow::bail!("llm.api_url must not be empty");
         }
-        if self.llm.api_key.is_empty() {
-            anyhow::bail!("llm.api_key must not be empty");
+        let has_oauth = self.llm.oauth.is_some();
+        if self.llm.api_key.is_empty() && !has_oauth {
+            anyhow::bail!("llm.api_key must not be empty unless llm.oauth is configured");
         }
         Ok(())
     }
@@ -64,10 +65,13 @@ impl BotConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub api_url: String,
+    #[serde(default)]
     pub api_key: String,
     pub model: String,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    #[serde(default)]
+    pub oauth: Option<crate::oauth::OAuthConfig>,
 }
 
 fn default_system_prompt() -> String {
