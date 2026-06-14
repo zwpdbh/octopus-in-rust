@@ -1,24 +1,18 @@
-mod config;
 mod core_config;
 mod daemon;
 mod doctor;
 mod health;
 mod logs;
-mod manager;
-mod napcat_config;
 mod paths;
 mod plugins;
 mod reset;
 mod service;
 mod status;
 
-use crate::config::{Config, CoreConfig, LlmConfig, NapcatConfig, QqConfig};
 use crate::core_config::{CoreConfigFile, LlmConfig as CoreLlmConfig};
-use crate::manager::{core_config_path, napcat_config_path};
 use crate::service::{base_dir, logs_dir, SNOWLUMA_IMAGE};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use napcat_config::OneBot11Config;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command as TokioCommand;
@@ -83,30 +77,6 @@ enum Command {
     },
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
-    /// Low-level setup: write config files only.
-    Setup {
-        /// QQ account number for the bot.
-        #[arg(long, short)]
-        account: i64,
-        /// Kimi (Moonshot AI) API key.
-        #[arg(long, short)]
-        kimi_key: String,
-        /// Group IDs the bot is allowed to respond in.
-        #[arg(long, short)]
-        group: Vec<i64>,
-        /// NapCatQQ bundle directory.
-        #[arg(long, default_value = "./napcat")]
-        napcat_dir: String,
-        /// NapCatQQ launcher script/binary, relative to napcat_dir.
-        #[arg(long, default_value = "napcat.sh")]
-        launcher: String,
-        /// OneBot WebSocket port.
-        #[arg(long, default_value_t = 3001)]
-        ws_port: u16,
-        /// NapCatQQ WebUI port.
-        #[arg(long, default_value_t = 6099)]
-        webui_port: u16,
-    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -226,20 +196,6 @@ fn main() -> Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(reset::run(&data_dir))?;
         }
-        Command::Setup {
-            account,
-            kimi_key,
-            group,
-            napcat_dir,
-            launcher,
-            ws_port,
-            webui_port,
-        } => {
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(setup(
-                data_dir, account, kimi_key, group, napcat_dir, launcher, ws_port, webui_port,
-            ))?;
-        }
     }
 
     Ok(())
@@ -247,7 +203,7 @@ fn main() -> Result<()> {
 
 async fn init(
     data_dir: PathBuf,
-    account: i64,
+    _account: i64,
     kimi_key: String,
     groups: Vec<i64>,
     ws_port: u16,
@@ -259,45 +215,29 @@ async fn init(
     std::fs::create_dir_all(logs_dir(&data_dir))?;
     std::fs::create_dir_all(data_dir.join("plugins"))?;
 
-    // Write supervisor config.
-    let config = Config {
-        qq: QqConfig { account },
-        napcat: NapcatConfig {
-            dir: "./napcat".to_string(),
-            launcher: "napcat.sh".to_string(),
-            data_dir: data_dir.join("napcat").to_string_lossy().to_string(),
-            ws_port,
-            webui_port,
-        },
-        core: CoreConfig {
-            binary: "./qqbot-core".to_string(),
-            plugin_dir: data_dir.join("plugins").to_string_lossy().to_string(),
-            config_path: core_config_path(&data_dir).to_string_lossy().to_string(),
-            allowed_groups: groups.clone(),
-        },
-        llm: LlmConfig {
-            api_key: kimi_key.clone(),
-            api_url: "https://api.moonshot.cn/v1/chat/completions".to_string(),
-            model: "moonshot-v1-8k".to_string(),
-        },
-    };
-    config.to_file(data_dir.join("qqbot.toml"))?;
-
     // Write qqbot-core config.
     let ws_url = format!("ws://127.0.0.1:{}", ws_port);
     let core_llm = CoreLlmConfig {
-        api_url: config.llm.api_url.clone(),
-        api_key: config.llm.api_key.clone(),
-        model: config.llm.model.clone(),
+        api_url: "https://api.moonshot.cn/v1/chat/completions".to_string(),
+        api_key: kimi_key,
+        model: "moonshot-v1-8k".to_string(),
         system_prompt: "You are a helpful assistant summarizing a QQ group conversation. List key topics, decisions, and action items concisely in the user's language.".to_string(),
     };
     let core_config = CoreConfigFile::new(
-        ws_url.clone(),
+        ws_url,
         data_dir.join("plugins").to_string_lossy().to_string(),
-        groups.clone(),
+        groups,
         core_llm,
     );
-    core_config.to_file(core_config_path(&data_dir))?;
+    core_config.to_file(data_dir.join("config.toml"))?;
+
+    // Write SnowLuma OneBot config.
+    let snowluma_config_dir = base.join("snowluma-data").join("config");
+    std::fs::create_dir_all(&snowluma_config_dir)?;
+    std::fs::write(
+        snowluma_config_dir.join("onebot.json"),
+        service::default_snowluma_onebot_config(),
+    )?;
 
     // Pull SnowLuma image.
     println!("Pulling SnowLuma Docker image...");
@@ -326,6 +266,7 @@ async fn init(
         );
     }
 
+    info!(webui_port = webui_port, "qqbot initialized");
     println!();
     println!("qqbot initialized.");
     println!("Data directory: {}", data_dir.display());
@@ -336,73 +277,10 @@ async fn init(
     println!("  2. Open noVNC: {no_vnc_url}");
     println!("     VNC password: vncpasswd");
     println!("  3. Scan the QQ QR code with your phone.");
-    println!("  4. Check status: qqbot status");
-    println!("  5. View logs:    qqbot logs core -n 50");
+    println!("  4. Add the bot to the allowed QQ group(s).");
+    println!("  5. Check status: qqbot status");
+    println!("  6. View logs:    qqbot logs core -n 50");
     println!();
-
-    Ok(())
-}
-
-async fn setup(
-    data_dir: PathBuf,
-    account: i64,
-    kimi_key: String,
-    groups: Vec<i64>,
-    napcat_dir: String,
-    launcher: String,
-    ws_port: u16,
-    webui_port: u16,
-) -> Result<()> {
-    let config = Config {
-        qq: QqConfig { account },
-        napcat: NapcatConfig {
-            dir: napcat_dir.clone(),
-            launcher,
-            data_dir: data_dir.join("napcat").to_string_lossy().to_string(),
-            ws_port,
-            webui_port,
-        },
-        core: CoreConfig {
-            binary: "./qqbot-core".to_string(),
-            plugin_dir: data_dir.join("plugins").to_string_lossy().to_string(),
-            config_path: core_config_path(&data_dir).to_string_lossy().to_string(),
-            allowed_groups: groups.clone(),
-        },
-        llm: LlmConfig {
-            api_key: kimi_key,
-            api_url: "https://api.moonshot.cn/v1/chat/completions".to_string(),
-            model: "moonshot-v1-8k".to_string(),
-        },
-    };
-
-    let manager = manager::ProcessManager::new(config.clone(), data_dir.clone());
-    manager.setup().await?;
-
-    // Write supervisor config.
-    config.to_file(data_dir.join("qqbot.toml"))?;
-
-    // Write qqbot-core config.
-    let ws_url = format!("ws://127.0.0.1:{}", ws_port);
-    let core_llm = CoreLlmConfig {
-        api_url: config.llm.api_url.clone(),
-        api_key: config.llm.api_key.clone(),
-        model: config.llm.model.clone(),
-        system_prompt: "You are a helpful assistant summarizing a QQ group conversation. List key topics, decisions, and action items concisely in the user's language.".to_string(),
-    };
-    let core_config = CoreConfigFile::new(
-        ws_url.clone(),
-        data_dir.join("plugins").to_string_lossy().to_string(),
-        groups.clone(),
-        core_llm,
-    );
-    core_config.to_file(core_config_path(&data_dir))?;
-
-    // Write NapCatQQ OneBot config into the NapCatQQ bundle.
-    let ob_config = OneBot11Config::with_ws_server(ws_port);
-    ob_config.to_file(napcat_config_path(&data_dir, &napcat_dir, account))?;
-
-    info!(data_dir = %data_dir.display(), "setup complete");
-    println!("setup complete: {}", data_dir.display());
 
     Ok(())
 }

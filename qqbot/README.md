@@ -2,7 +2,7 @@
 
 A bundled QQ bot solution for Linux servers. `qqbot` starts and manages two processes:
 
-1. **NapCatQQ** — the QQ protocol layer (NTQQ + OneBot 11).
+1. **SnowLuma** — the QQ protocol layer (NTQQ + OneBot 11), running inside Docker.
 2. **qqbot-core** — a general bot runtime that loads Wasm plugins.
 
 The business logic lives in **Wasm plugins**, so the same `qqbot` distribution can switch behaviors by swapping `.wasm` plugin files.
@@ -13,13 +13,13 @@ The business logic lives in **Wasm plugins**, so the same `qqbot` distribution c
 ┌─────────────────────────────────────────────┐
 │                 qqbot                       │
 │  (supervisor: configures/starts/monitors    │
-│   NapCatQQ + qqbot-core)                    │
+│   SnowLuma + qqbot-core)                    │
 └──────┬──────────────────────┬───────────────┘
        │                      │
        ▼                      ▼
 ┌──────────────┐      ┌─────────────────┐
-│   NapCatQQ   │      │   qqbot-core    │
-│   process    │      │   (bot runtime) │
+│   SnowLuma   │      │   qqbot-core    │
+│   (Docker)   │      │   (bot runtime) │
 └──────┬───────┘      └────────┬────────┘
        │                       │
        │ OneBot 11             │ loads
@@ -40,52 +40,56 @@ cargo build --release -p qqbot -p qqbot-core
 cargo build --release -p summary --target wasm32-unknown-unknown
 ```
 
-### 2. Prepare NapCatQQ
-
-Download the Linux x64 **Shell** version of NapCatQQ from the [NapCatQQ releases](https://github.com/NapNeko/NapCatQQ/releases) page and extract it to `./napcat`.
-
-The release tarball of `qqbot` may also ship with NapCatQQ pre-bundled.
-
-### 3. Set up
+### 2. Initialize
 
 ```bash
-./target/release/qqbot setup \
+./target/release/qqbot init \
   --account 123456789 \
   --kimi-key sk-xxxxxx \
-  --group 987654321 \
-  --data-dir ./qqbot-data
+  --group 987654321
 ```
 
-This creates:
+This creates the runtime data layout under `./data/`:
 
-- `./qqbot-data/qqbot.toml` — supervisor config.
-- `./qqbot-data/config.toml` — `qqbot-core` config.
-- `./qqbot-data/napcat/app/napcat/config/onebot11_<account>.json` — NapCatQQ OneBot config.
-- `./qqbot-data/plugins/` — plugin directory.
+- `./data/qqbot-data/config.toml` — `qqbot-core` config
+- `./data/qqbot-data/plugins/` — plugin directory
+- `./data/snowluma-data/` — SnowLuma/QQ session state
+- `./data/run/` — pid files
+- `./data/logs/` — logs
 
-Copy the plugin into the plugin directory:
+### 3. Start
 
 ```bash
-cp target/wasm32-unknown-unknown/release/summary.wasm ./qqbot-data/plugins/
+./target/release/qqbot start
 ```
 
-### 4. Start
+`qqbot` starts SnowLuma in Docker, waits for its OneBot WebSocket port, then starts `qqbot-core`.
+
+### 4. Log in
+
+Open noVNC and scan the QR code:
+
+```text
+http://localhost:6081
+password: vncpasswd
+```
+
+### 5. Add the bot to the group
+
+`--group` configures a permission filter. You still need to add the bot QQ account as a member of the real QQ group from a normal QQ client.
+
+### 6. Verify
 
 ```bash
-./target/release/qqbot start --data-dir ./qqbot-data
+./target/release/qqbot status
+./target/release/qqbot health
 ```
 
-`qqbot` starts NapCatQQ, waits for its OneBot WebSocket port, then starts `qqbot-core`.
-
-### 5. Log in
-
-Open the NapCatQQ WebUI (usually `http://localhost:6099/webui`) and scan the QR code to log in the bot QQ account.
-
-### 6. Test
+### 7. Test
 
 In the allowed QQ group, send:
 
-```
+```text
 /summary
 ```
 
@@ -94,11 +98,22 @@ The bot buffers messages and asks the configured LLM to summarize the recent con
 ## Commands
 
 ```bash
-qqbot setup --account <QQ> --kimi-key <KEY> [--group <ID>]... [--data-dir <DIR>]
+qqbot init --account <QQ> --kimi-key <KEY> [--group <ID>]... [--data-dir <DIR>]
 qqbot start [--data-dir <DIR>]
 qqbot stop [--data-dir <DIR>]
+qqbot restart [--data-dir <DIR>]
 qqbot status [--data-dir <DIR>]
+qqbot health [--data-dir <DIR>]
+qqbot doctor [--data-dir <DIR>]
+qqbot logs [core|snowluma|supervisor] [-n N] [--data-dir <DIR>]
+qqbot plugin list [--data-dir <DIR>]
+qqbot plugin enable <name> [--data-dir <DIR>]
+qqbot plugin disable <name> [--data-dir <DIR>]
+qqbot plugin reload [--data-dir <DIR>]
+qqbot reset [--data-dir <DIR>]
 ```
+
+See `docs/Q_and_A/qqbot/` for the full tutorial.
 
 ## Writing a plugin
 

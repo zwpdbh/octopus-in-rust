@@ -3330,7 +3330,6 @@ name = "qqbot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
  "daemonize",
  "futures",
@@ -3344,7 +3343,6 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
- "url",
  "uuid",
 ]
 

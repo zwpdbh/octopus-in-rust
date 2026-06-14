@@ -369,7 +369,7 @@ async fn wait_for_port(host: &str, port: u16, timeout_secs: u64) -> Result<()> {
     anyhow::bail!("timed out waiting for {host}:{port}")
 }
 
-fn default_snowluma_onebot_config() -> String {
+pub fn default_snowluma_onebot_config() -> String {
     r#"{
   "networks": {
     "httpServers": [],

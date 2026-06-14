@@ -3,12 +3,11 @@ name = "qqbot"
 version = "0.1.0"
 edition = "2021"
 authors = ["qqbot contributors"]
-description = "Supervisor that starts and manages NapCatQQ and qqbot-core."
+description = "Supervisor that starts and manages SnowLuma and qqbot-core."
 license = "MIT"
 
 [dependencies]
 anyhow = "1"
-chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 daemonize = "0.5"
 futures = "0.3"
@@ -22,5 +21,4 @@ tokio-tungstenite = "0.21"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2"
 uuid = { version = "1", features = ["v4"] }

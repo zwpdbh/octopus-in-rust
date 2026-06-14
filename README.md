@@ -159,7 +159,7 @@ octopus/
 │   ├── example-http/      ← Reference plugin implementation
 │   └── summary/           ← Default qqbot plugin: conversation summary
 ├── docref/                ← Documentation cross-reference tool
-├── qqbot/                 ← QQ bot supervisor (NapCatQQ + Wasm plugins)
+├── qqbot/                 ← QQ bot supervisor (SnowLuma + Wasm plugins)
 └── qqbot-core/            ← QQ bot runtime with Wasm plugin host
 
 ├── tasks/                 ← Active task specs

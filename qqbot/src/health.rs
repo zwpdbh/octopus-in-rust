@@ -203,7 +203,9 @@ async fn check_group_echo(
     lines.push(crate::plugins::help_reminder().to_string());
 
     lines.push("summary:".to_string());
-    lines.push(format!("total {enabled_count}/{available_count} features enabled"));
+    lines.push(format!(
+        "total {enabled_count}/{available_count} features enabled"
+    ));
     lines.push(format!("check id: {token}"));
     let text = lines.join("\n");
     let params = serde_json::json!({
@@ -354,10 +356,7 @@ fn print_report(report: &HealthReport) {
                     name,
                     crate::plugins::plugin_description(name)
                 );
-                println!(
-                    "          commands: {}",
-                    crate::plugins::plugin_usage(name)
-                );
+                println!("          commands: {}", crate::plugins::plugin_usage(name));
             }
             println!("       {}", crate::plugins::help_reminder());
         } else {
