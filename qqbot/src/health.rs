@@ -32,6 +32,7 @@ pub struct GroupMembership {
 pub struct GroupEcho {
     pub group_id: i64,
     pub received: bool,
+    pub features: Vec<String>,
 }
 
 pub async fn run(data_dir: &Path) -> Result<()> {
@@ -39,7 +40,7 @@ pub async fn run(data_dir: &Path) -> Result<()> {
 
     println!("=== qqbot health ===\n");
 
-    match check(&config, true).await {
+    match check(data_dir, &config, true).await {
         Ok(report) => print_report(&report),
         Err(e) => {
             error!(error = %e, "health check failed");
@@ -50,7 +51,11 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn check(config: &CoreConfigFile, send_echo: bool) -> Result<HealthReport> {
+pub async fn check(
+    data_dir: &Path,
+    config: &CoreConfigFile,
+    send_echo: bool,
+) -> Result<HealthReport> {
     let mut ws = connect(config).await?;
 
     // 1. Get login info (also verifies the bot is logged in).
@@ -111,6 +116,11 @@ pub async fn check(config: &CoreConfigFile, send_echo: bool) -> Result<HealthRep
 
     // 4. End-to-end echo: send a message to the first allowed group and
     //    confirm it appears in group history.
+    let features: Vec<String> = crate::plugins::enabled_plugins(data_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
     let mut echo: Option<GroupEcho> = None;
     if send_echo && online && bot_user_id.is_some() && group_membership.iter().any(|g| g.member) {
         let group_id = group_membership
@@ -118,13 +128,14 @@ pub async fn check(config: &CoreConfigFile, send_echo: bool) -> Result<HealthRep
             .find(|g| g.member)
             .map(|g| g.group_id)
             .unwrap();
-        match check_group_echo(config, group_id, bot_user_id.unwrap()).await {
+        match check_group_echo(data_dir, config, group_id, bot_user_id.unwrap()).await {
             Ok(e) => echo = Some(e),
             Err(e) => {
                 warn!(error = %e, "group echo check failed");
                 echo = Some(GroupEcho {
                     group_id,
                     received: false,
+                    features,
                 });
             }
         }
@@ -164,6 +175,7 @@ async fn connect(
 }
 
 async fn check_group_echo(
+    data_dir: &Path,
     config: &CoreConfigFile,
     group_id: i64,
     _bot_user_id: i64,
@@ -171,7 +183,29 @@ async fn check_group_echo(
     let mut ws = connect(config).await?;
 
     let token = uuid::Uuid::new_v4().to_string();
-    let text = format!("qqbot health check {token}");
+    let features: Vec<String> = match crate::plugins::enabled_plugins(data_dir) {
+        Ok(names) => names.into_iter().collect(),
+        Err(_) => Vec::new(),
+    };
+    let available_count = crate::plugins::available_plugins()
+        .unwrap_or_default()
+        .len();
+    let enabled_count = features.len();
+
+    let mut lines = vec!["features:".to_string()];
+    for (i, name) in features.iter().enumerate() {
+        let desc = crate::plugins::plugin_description(name);
+        let usage = crate::plugins::plugin_usage(name);
+        lines.push(format!("{}. {} -- {}", i + 1, name, desc));
+        lines.push(format!("   commands: {}", usage));
+    }
+
+    lines.push(crate::plugins::help_reminder().to_string());
+
+    lines.push("summary:".to_string());
+    lines.push(format!("total {enabled_count}/{available_count} features enabled"));
+    lines.push(format!("check id: {token}"));
+    let text = lines.join("\n");
     let params = serde_json::json!({
         "group_id": group_id,
         "message": text,
@@ -230,6 +264,7 @@ async fn check_group_echo(
     Ok(GroupEcho {
         group_id,
         received: found,
+        features,
     })
 }
 
@@ -311,6 +346,20 @@ fn print_report(report: &HealthReport) {
                 "[ok] End-to-end check: sent a test message and confirmed it in group {}",
                 echo.group_id
             );
+            println!("       Features:");
+            for (i, name) in echo.features.iter().enumerate() {
+                println!(
+                    "       {}. {} -- {}",
+                    i + 1,
+                    name,
+                    crate::plugins::plugin_description(name)
+                );
+                println!(
+                    "          commands: {}",
+                    crate::plugins::plugin_usage(name)
+                );
+            }
+            println!("       {}", crate::plugins::help_reminder());
         } else {
             println!(
                 "[warn] Sent a test message to group {} but could not confirm it in recent history",

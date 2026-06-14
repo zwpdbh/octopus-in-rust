@@ -7,8 +7,10 @@ use crate::config::Config;
 use crate::llm::LlmClient;
 use crate::onebot::types::{Action, Event};
 use crate::plugin_host::{discover_plugins, Plugin, PluginAction};
+use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::{debug, error, info, warn};
 
 #[tokio::main]
@@ -44,15 +46,27 @@ async fn main() -> anyhow::Result<()> {
     let (mut event_rx, action_tx) =
         onebot::connect(&config.onebot.ws_url, &config.onebot.access_token).await?;
 
-    info!("qqbot-core is running; press Ctrl+C to stop");
+    info!("qqbot-core is running; press Ctrl+C to stop, SIGHUP to reload plugins");
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
+
+    let mut sighup = signal(SignalKind::hangup()).context("failed to bind SIGHUP")?;
 
     loop {
         tokio::select! {
             Some(event) = event_rx.recv() => {
                 handle_event(event, &config, &mut plugins, &action_tx, llm.clone()).await;
+            }
+            _ = sighup.recv() => {
+                info!("SIGHUP received; reloading plugins");
+                match load_plugins(&config.bot.plugin_dir) {
+                    Ok(new_plugins) => {
+                        plugins = new_plugins;
+                        info!(count = plugins.len(), "plugins reloaded");
+                    }
+                    Err(e) => error!(error = %e, "failed to reload plugins"),
+                }
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received; exiting");

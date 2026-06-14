@@ -7,6 +7,7 @@ mod logs;
 mod manager;
 mod napcat_config;
 mod paths;
+mod plugins;
 mod reset;
 mod service;
 mod status;
@@ -75,6 +76,11 @@ enum Command {
     Doctor,
     /// Check whether the bot is ready to send/receive messages.
     Health,
+    /// Manage hot-reloadable plugins.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
     /// Low-level setup: write config files only.
@@ -101,6 +107,18 @@ enum Command {
         #[arg(long, default_value_t = 6099)]
         webui_port: u16,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum PluginCommand {
+    /// List available and enabled plugins.
+    List,
+    /// Enable a plugin (copy to plugin dir and reload core).
+    Enable { name: String },
+    /// Disable a plugin (remove from plugin dir and reload core).
+    Disable { name: String },
+    /// Signal qqbot-core to reload plugins without restarting.
+    Reload,
 }
 
 fn main() -> Result<()> {
@@ -179,6 +197,31 @@ fn main() -> Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(health::run(&data_dir))?;
         }
+        Command::Plugin { command } => match command {
+            PluginCommand::List => {
+                for p in plugins::list(&data_dir)? {
+                    let status = match (p.available, p.enabled) {
+                        (true, true) => "enabled",
+                        (true, false) => "available",
+                        (false, true) => "enabled (source missing)",
+                        (false, false) => "unavailable",
+                    };
+                    println!("{:<20} {}", p.name, status);
+                }
+            }
+            PluginCommand::Enable { name } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(plugins::enable(&data_dir, &name))?;
+            }
+            PluginCommand::Disable { name } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(plugins::disable(&data_dir, &name))?;
+            }
+            PluginCommand::Reload => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(plugins::reload(&data_dir))?;
+            }
+        },
         Command::Reset => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(reset::run(&data_dir))?;

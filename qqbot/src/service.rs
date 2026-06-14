@@ -79,6 +79,7 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         .append(true)
         .open(logs.join("core.log"))
         .context("failed to open core log")?;
+    let run = run_dir(data_dir);
 
     // Infer Cargo profile from the running qqbot binary path so `cargo run`
     // picks the matching debug qqbot-core binary.
@@ -99,8 +100,8 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     let core_config = data_dir.join("config.toml");
     info!(binary = %core_binary.display(), config = %core_config.display(), "starting qqbot-core");
 
-    let core = spawn_core(&core_binary, &core_config, &core_log).await?;
-    let mut core_handle = CoreHandle::new(core, core_binary, core_config, core_log);
+    let core = spawn_core(&core_binary, &core_config, &run, &core_log).await?;
+    let mut core_handle = CoreHandle::new(core, core_binary, core_config, core_log, run);
 
     // Watchdog: restart SnowLuma container and core if either fails.
     let mut container_check = tokio::time::interval(tokio::time::Duration::from_secs(5));
@@ -166,13 +167,25 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn spawn_core(binary: &Path, config: &Path, log: &std::fs::File) -> Result<Child> {
+async fn spawn_core(
+    binary: &Path,
+    config: &Path,
+    run_dir: &Path,
+    log: &std::fs::File,
+) -> Result<Child> {
     let mut cmd = Command::new(binary);
     cmd.arg(config)
         .env("RUST_LOG", "info")
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log.try_clone()?));
     let child = cmd.spawn().context("failed to spawn qqbot-core")?;
+
+    // Track the core pid so `qqbot plugin reload` can signal it.
+    if let Some(pid) = child.id() {
+        let pid_file = run_dir.join("qqbot-core.pid");
+        let _ = std::fs::write(&pid_file, pid.to_string());
+    }
+
     Ok(child)
 }
 
@@ -181,15 +194,23 @@ struct CoreHandle {
     binary: PathBuf,
     config: PathBuf,
     log: std::fs::File,
+    run_dir: PathBuf,
 }
 
 impl CoreHandle {
-    fn new(child: Child, binary: PathBuf, config: PathBuf, log: std::fs::File) -> Self {
+    fn new(
+        child: Child,
+        binary: PathBuf,
+        config: PathBuf,
+        log: std::fs::File,
+        run_dir: PathBuf,
+    ) -> Self {
         Self {
             child: Some(child),
             binary,
             config,
             log,
+            run_dir,
         }
     }
 
@@ -198,7 +219,7 @@ impl CoreHandle {
         if let Err(e) = wait_for_port("127.0.0.1", 3001, 60).await {
             warn!(error = %e, "SnowLuma WebSocket port not reachable yet; qqbot-core will retry");
         }
-        let child = spawn_core(&self.binary, &self.config, &self.log).await?;
+        let child = spawn_core(&self.binary, &self.config, &self.run_dir, &self.log).await?;
         self.child = Some(child);
         info!("qqbot-core restarted");
         Ok(())
@@ -210,6 +231,8 @@ impl CoreHandle {
             let _ = child.wait().await;
             info!("qqbot-core stopped");
         }
+        let pid_file = self.run_dir.join("qqbot-core.pid");
+        let _ = std::fs::remove_file(&pid_file);
     }
 
     async fn exited(&mut self) -> bool {
