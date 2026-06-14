@@ -73,5 +73,5 @@ Only seen from `health`. The message may have been sent but not yet visible in h
 Run:
 
 ```bash
-cargo build --release -p qqbot-core
+cargo build -p qqbot-core
 ```

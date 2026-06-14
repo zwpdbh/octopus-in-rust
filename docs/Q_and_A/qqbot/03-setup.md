@@ -16,23 +16,25 @@ rustup target add wasm32-unknown-unknown
 
 ## 2.2 Build
 
+For local development you only need to build `qqbot-core` and the plugins. `cargo run --bin qqbot` will build the supervisor itself automatically.
+
 ```bash
-cargo build --release -p qqbot -p qqbot-core
+cargo build -p qqbot-core
 cargo build --release -p summary --target wasm32-unknown-unknown
 ```
 
 After this you have:
 
-- `./target/release/qqbot` — supervisor CLI
-- `./target/release/qqbot-core` — bot runtime
-- `./target/wasm32-unknown-unknown/release/summary.wasm` — default plugin
+- `target/debug/qqbot` — supervisor CLI (built on demand by `cargo run`)
+- `target/debug/qqbot-core` — bot runtime
+- `target/wasm32-unknown-unknown/release/summary.wasm` — default plugin
 
 ## 2.3 Initialize
 
 `init` writes config files, pulls the SnowLuma Docker image, copies the default plugin, and starts the daemon.
 
 ```bash
-./target/release/qqbot init \
+cargo run --bin qqbot -- init \
   --account 3462039501 \
   --kimi-key sk-xxxxxx \
   --group 925712027
@@ -64,8 +66,8 @@ In the noVNC desktop, scan the QR code with your phone's QQ app to log in the bo
 ## 2.6 Verify
 
 ```bash
-./target/release/qqbot status
-./target/release/qqbot health
+cargo run --bin qqbot -- status
+cargo run --bin qqbot -- health
 ```
 
 `health` sends a short test message to the first allowed group and confirms it appears in the group's history. It is an explicit, user-triggered check and does not run on a schedule.

@@ -5,13 +5,13 @@
 Run:
 
 ```bash
-./target/release/qqbot logs snowluma -n 100
+cargo run --bin qqbot -- logs snowluma -n 100
 ```
 
 Common causes:
 
 - **QQ native crash during hot update.** Usually transient. The supervisor will restart the container automatically.
-- **Session corruption.** Run `./target/release/qqbot reset`, then `init` again and re-scan the QR code.
+- **Session corruption.** Run `cargo run --bin qqbot -- reset`, then `init` again and re-scan the QR code.
 - **Out of memory.** SnowLuma needs at least 2 GB RAM and `--shm-size=1g`.
 
 ## 6.2 `qqbot-core` cannot connect to OneBot
@@ -27,8 +27,8 @@ It should contain a `wsServers` entry listening on `0.0.0.0:3001` with role `Uni
 Then check logs:
 
 ```bash
-./target/release/qqbot logs core -n 50
-./target/release/qqbot logs supervisor -n 50
+cargo run --bin qqbot -- logs core -n 50
+cargo run --bin qqbot -- logs supervisor -n 50
 ```
 
 ## 6.3 The bot does not respond to `/summary`
@@ -36,19 +36,19 @@ Then check logs:
 1. Check that the `summary` plugin is enabled:
 
    ```bash
-   ./target/release/qqbot plugin list
+   cargo run --bin qqbot -- plugin list
    ```
 
 2. Check that the bot is in the group and online:
 
    ```bash
-   ./target/release/qqbot health
+   cargo run --bin qqbot -- health
    ```
 
 3. Check core logs for plugin errors:
 
    ```bash
-   ./target/release/qqbot logs core -n 100
+   cargo run --bin qqbot -- logs core -n 100
    ```
 
 4. Make sure the message starts with the configured command prefix (default `/`).
@@ -58,13 +58,13 @@ Then check logs:
 After enabling/disabling a plugin, `qqbot` sends `SIGHUP` to `qqbot-core`. If you edited a plugin manually, run:
 
 ```bash
-./target/release/qqbot plugin reload
+cargo run --bin qqbot -- plugin reload
 ```
 
 If `qqbot-core` was started before the pid-file tracking was added, restart the daemon:
 
 ```bash
-./target/release/qqbot restart
+cargo run --bin qqbot -- restart
 ```
 
 ## 6.5 noVNC shows a black screen
@@ -78,9 +78,9 @@ Open `http://localhost:6081` in a browser. The password is `vncpasswd`. The QR c
 ## 6.7 Reset everything
 
 ```bash
-./target/release/qqbot stop
-./target/release/qqbot reset
-./target/release/qqbot init --account <QQ> --kimi-key <KEY> --group <GID>
+cargo run --bin qqbot -- stop
+cargo run --bin qqbot -- reset
+cargo run --bin qqbot -- init --account <QQ> --kimi-key <KEY> --group <GID>
 ```
 
 Then open `http://localhost:6081`, scan the QR code, and add the bot to the allowed group.

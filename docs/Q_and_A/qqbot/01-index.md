@@ -14,23 +14,23 @@ This tutorial explains how the Octopus `qqbot` package works and how to run, man
 ## Quick reference
 
 ```bash
-# Build everything
-cargo build --release -p qqbot -p qqbot-core
+# Build dependencies (do once)
+cargo build -p qqbot-core
 cargo build --release -p summary --target wasm32-unknown-unknown
 
 # Initialize and start
-./target/release/qqbot init \
+cargo run --bin qqbot -- init \
   --account 3462039501 \
   --kimi-key sk-xxxxxx \
   --group 925712027
-./target/release/qqbot start
+cargo run --bin qqbot -- start
 
 # Verify
-./target/release/qqbot status
-./target/release/qqbot health
+cargo run --bin qqbot -- status
+cargo run --bin qqbot -- health
 
 # Manage plugins
-./target/release/qqbot plugin list
-./target/release/qqbot plugin disable summary
-./target/release/qqbot plugin enable summary
+cargo run --bin qqbot -- plugin list
+cargo run --bin qqbot -- plugin disable summary
+cargo run --bin qqbot -- plugin enable summary
 ```

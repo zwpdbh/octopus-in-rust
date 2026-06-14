@@ -12,7 +12,7 @@ Plugins are WebAssembly modules. `qqbot-core` discovers every `.wasm` file in th
 ## 4.2 List plugins
 
 ```bash
-./target/release/qqbot plugin list
+cargo run --bin qqbot -- plugin list
 ```
 
 Output:
@@ -25,7 +25,7 @@ example-http         available
 ## 4.3 Enable a plugin
 
 ```bash
-./target/release/qqbot plugin enable summary
+cargo run --bin qqbot -- plugin enable summary
 ```
 
 This copies `target/wasm32-unknown-unknown/release/summary.wasm` into `data/qqbot-data/plugins/` and sends `SIGHUP` to `qqbot-core`.
@@ -33,7 +33,7 @@ This copies `target/wasm32-unknown-unknown/release/summary.wasm` into `data/qqbo
 ## 4.4 Disable a plugin
 
 ```bash
-./target/release/qqbot plugin disable summary
+cargo run --bin qqbot -- plugin disable summary
 ```
 
 This removes the `.wasm` file and signals a reload.
@@ -43,7 +43,7 @@ This removes the `.wasm` file and signals a reload.
 If you manually add or remove `.wasm` files, signal a reload:
 
 ```bash
-./target/release/qqbot plugin reload
+cargo run --bin qqbot -- plugin reload
 ```
 
 ## 4.6 Writing a plugin
