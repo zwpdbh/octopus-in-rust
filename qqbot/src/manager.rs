@@ -1,5 +1,6 @@
 use crate::config::Config;
 use anyhow::{Context, Result};
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
@@ -60,12 +61,18 @@ impl ProcessManager {
             );
         }
 
-        let stdout = Stdio::from(std::fs::File::create(
-            self.data_dir.join("logs").join("napcat.stdout.log"),
-        )?);
-        let stderr = Stdio::from(std::fs::File::create(
-            self.data_dir.join("logs").join("napcat.stderr.log"),
-        )?);
+        let stdout = Stdio::from(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.data_dir.join("logs").join("napcat.stdout.log"))?,
+        );
+        let stderr = Stdio::from(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.data_dir.join("logs").join("napcat.stderr.log"))?,
+        );
 
         info!(dir = %napcat_dir.display(), launcher = %launcher.display(), "starting NapCatQQ");
 
@@ -100,12 +107,18 @@ impl ProcessManager {
             );
         }
 
-        let stdout = Stdio::from(std::fs::File::create(
-            self.data_dir.join("logs").join("core.stdout.log"),
-        )?);
-        let stderr = Stdio::from(std::fs::File::create(
-            self.data_dir.join("logs").join("core.stderr.log"),
-        )?);
+        let stdout = Stdio::from(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.data_dir.join("logs").join("core.stdout.log"))?,
+        );
+        let stderr = Stdio::from(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.data_dir.join("logs").join("core.stderr.log"))?,
+        );
 
         info!(binary = %core_binary.display(), config = %self.config.core.config_path, "starting qqbot-core");
 

@@ -101,31 +101,40 @@ async fn connect_once(
     let port = parsed.port_or_known_default().unwrap_or(3001);
 
     let request = format!("{}:{}", host, port);
-    let request_uri = format!(
-        "{}://{}{}{}",
-        parsed.scheme(),
-        request,
-        parsed.path(),
-        parsed
-            .query()
-            .map(|q| format!("?{}", q))
-            .unwrap_or_default()
-    );
 
-    let req = http::Request::builder()
-        .uri(&request_uri)
-        .header("Host", &request);
-
-    let req = if access_token.is_empty() {
-        req.body(())?
+    // Use the plain URL when no access token is required. This avoids scheme
+    // handling issues in tokio-tungstenite when building an http::Request.
+    let (ws_stream, _) = if access_token.is_empty() {
+        tokio_tungstenite::connect_async(ws_url)
+            .await
+            .context("OneBot WebSocket handshake failed")?
     } else {
-        req.header("Authorization", format!("Bearer {access_token}"))
-            .body(())?
-    };
+        let scheme = match parsed.scheme() {
+            "ws" => "http",
+            "wss" => "https",
+            s => s,
+        };
+        let request_uri = format!(
+            "{}://{}{}{}",
+            scheme,
+            request,
+            parsed.path(),
+            parsed
+                .query()
+                .map(|q| format!("?{}", q))
+                .unwrap_or_default()
+        );
 
-    let (ws_stream, _) = tokio_tungstenite::connect_async(req)
-        .await
-        .context("OneBot WebSocket handshake failed")?;
+        let req = http::Request::builder()
+            .uri(&request_uri)
+            .header("Host", &request)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .body(())?;
+
+        tokio_tungstenite::connect_async(req)
+            .await
+            .context("OneBot WebSocket handshake failed")?
+    };
 
     Ok(ws_stream.split())
 }
