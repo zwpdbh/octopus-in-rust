@@ -60,11 +60,10 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         .try_init()
     {
         use std::io::Write;
-        let mut fallback = supervisor_log.try_clone().unwrap_or_else(|_| std::fs::File::open("/dev/null").unwrap());
-        let _ = writeln!(
-            fallback,
-            "failed to initialize tracing subscriber: {e}"
-        );
+        let mut fallback = supervisor_log
+            .try_clone()
+            .unwrap_or_else(|_| std::fs::File::open("/dev/null").unwrap());
+        let _ = writeln!(fallback, "failed to initialize tracing subscriber: {e}");
     }
 
     // Ensure SnowLuma is running.
@@ -167,11 +166,7 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn spawn_core(
-    binary: &Path,
-    config: &Path,
-    log: &std::fs::File,
-) -> Result<Child> {
+async fn spawn_core(binary: &Path, config: &Path, log: &std::fs::File) -> Result<Child> {
     let mut cmd = Command::new(binary);
     cmd.arg(config)
         .env("RUST_LOG", "info")

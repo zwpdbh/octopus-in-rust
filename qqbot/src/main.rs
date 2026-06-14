@@ -2,6 +2,7 @@ mod config;
 mod core_config;
 mod daemon;
 mod doctor;
+mod health;
 mod logs;
 mod manager;
 mod napcat_config;
@@ -72,6 +73,8 @@ enum Command {
     },
     /// Run diagnostic checks.
     Doctor,
+    /// Check whether the bot is ready to send/receive messages.
+    Health,
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
     /// Low-level setup: write config files only.
@@ -114,7 +117,14 @@ fn main() -> Result<()> {
         } => {
             // Run setup synchronously before daemonizing.
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(init(data_dir.clone(), account, kimi_key, group, ws_port, webui_port))?;
+            rt.block_on(init(
+                data_dir.clone(),
+                account,
+                kimi_key,
+                group,
+                ws_port,
+                webui_port,
+            ))?;
             drop(rt);
 
             // Daemonize. Parent exits, child continues.
@@ -165,6 +175,10 @@ fn main() -> Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(doctor::run(&data_dir))?;
         }
+        Command::Health => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(health::run(&data_dir))?;
+        }
         Command::Reset => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(reset::run(&data_dir))?;
@@ -180,14 +194,7 @@ fn main() -> Result<()> {
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(setup(
-                data_dir,
-                account,
-                kimi_key,
-                group,
-                napcat_dir,
-                launcher,
-                ws_port,
-                webui_port,
+                data_dir, account, kimi_key, group, napcat_dir, launcher, ws_port, webui_port,
             ))?;
         }
     }
@@ -263,7 +270,8 @@ async fn init(
     }
 
     // Copy default plugin if built.
-    let plugin_src = paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
+    let plugin_src =
+        paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
     if plugin_src.exists() {
         let plugin_dst = data_dir.join("plugins").join("summary.wasm");
         tokio::fs::copy(&plugin_src, &plugin_dst).await?;

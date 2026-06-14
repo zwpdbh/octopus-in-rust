@@ -56,6 +56,12 @@ impl CoreConfigFile {
         }
     }
 
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&contents)?;
+        Ok(config)
+    }
+
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
         let contents = toml::to_string_pretty(self)?;
         std::fs::write(path, contents)?;

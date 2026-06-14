@@ -105,7 +105,9 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     // WebSocket handshake.
     match ws_handshake().await {
         Ok(true) => println!("[ok] OneBot WebSocket handshake succeeded"),
-        Ok(false) => println!("[info] OneBot WebSocket handshake failed (QQ may not be logged in yet)"),
+        Ok(false) => {
+            println!("[info] OneBot WebSocket handshake failed (QQ may not be logged in yet)")
+        }
         Err(e) => println!("[info] OneBot WebSocket check error: {e}"),
     }
 
@@ -159,7 +161,8 @@ async fn ws_handshake() -> Result<bool> {
     );
     stream.write_all(req.as_bytes()).await?;
     let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(3), stream.read(&mut buf)).await??;
+    let n =
+        tokio::time::timeout(std::time::Duration::from_secs(3), stream.read(&mut buf)).await??;
     let response = String::from_utf8_lossy(&buf[..n]);
     Ok(response.starts_with("HTTP/1.1 101"))
 }

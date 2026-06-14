@@ -11,10 +11,7 @@ pub fn project_root() -> PathBuf {
         let dir = exe.parent().map(Path::to_path_buf);
         // If the binary is in target/{profile}/, go up to the workspace root.
         if let Some(ref d) = dir {
-            let grandparent = d
-                .parent()
-                .and_then(|p| p.parent())
-                .map(Path::to_path_buf);
+            let grandparent = d.parent().and_then(|p| p.parent()).map(Path::to_path_buf);
             if d.file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n == "debug" || n == "release")

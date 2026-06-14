@@ -42,12 +42,7 @@ async fn tail_file(data_dir: &Path, name: &str, lines: usize) -> Result<()> {
 
 async fn tail_snowluma(lines: usize) -> Result<()> {
     let output = Command::new("docker")
-        .args([
-            "logs",
-            "--tail",
-            &lines.to_string(),
-            SNOWLUMA_CONTAINER,
-        ])
+        .args(["logs", "--tail", &lines.to_string(), SNOWLUMA_CONTAINER])
         .output()
         .await
         .context("failed to run docker logs")?;

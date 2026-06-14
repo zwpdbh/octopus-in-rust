@@ -1,4 +1,6 @@
+use crate::core_config::CoreConfigFile;
 use crate::daemon;
+use crate::health;
 use crate::service::{base_dir, SNOWLUMA_CONTAINER};
 use anyhow::Result;
 use std::path::Path;
@@ -53,6 +55,47 @@ pub async fn show(data_dir: &Path) -> Result<()> {
         println!("{symbol} {label}{suffix}");
     }
 
+    // Application-level health summary.
+    if daemon_alive && container_running && ws_reachable && core_running {
+        match CoreConfigFile::from_file(data_dir.join("config.toml")) {
+            Ok(config) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    health::check(&config, false),
+                )
+                .await
+                {
+                    Ok(Ok(report)) => {
+                        if report.online
+                            && report.bot_user_id.is_some()
+                            && report.group_membership.iter().all(|g| g.member)
+                        {
+                            println!("[ok] Bot is online and in the allowed group(s)");
+                            if let (Some(uid), Some(nick)) =
+                                (report.bot_user_id, report.bot_nickname)
+                            {
+                                println!("       Logged in as {nick} ({uid})");
+                            }
+                        } else if !report.online {
+                            println!("[fail] QQ account is not online");
+                        } else if report.bot_user_id.is_none() {
+                            println!("[fail] Could not determine bot user id");
+                        } else {
+                            for gm in &report.group_membership {
+                                if !gm.member {
+                                    println!("[fail] Bot is not a member of allowed group {} — add it to the group first", gm.group_id);
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => println!("[warn] Health check failed: {e}"),
+                    Err(_) => println!("[warn] Health check timed out"),
+                }
+            }
+            Err(e) => println!("[warn] Could not read config for health check: {e}"),
+        }
+    }
+
     println!();
     if daemon_alive && container_running && ws_reachable && core_running {
         println!("Status: all systems go.");
@@ -63,8 +106,14 @@ pub async fn show(data_dir: &Path) -> Result<()> {
 
     println!();
     println!("Data directory: {}", base_dir(data_dir).display());
-    println!("WebUI:          {}", hyperlink("http://localhost:5099", "http://localhost:5099"));
-    println!("noVNC:          {} (password: vncpasswd)", hyperlink("http://localhost:6081", "http://localhost:6081"));
+    println!(
+        "WebUI:          {}",
+        hyperlink("http://localhost:5099", "http://localhost:5099")
+    );
+    println!(
+        "noVNC:          {} (password: vncpasswd)",
+        hyperlink("http://localhost:6081", "http://localhost:6081")
+    );
 
     Ok(())
 }
@@ -92,7 +141,11 @@ async fn is_container_running() -> bool {
 }
 
 async fn is_core_running() -> bool {
-    match Command::new("pgrep").args(["-f", "qqbot-core"]).output().await {
+    match Command::new("pgrep")
+        .args(["-f", "qqbot-core"])
+        .output()
+        .await
+    {
         Ok(output) => output.status.success() && !output.stdout.is_empty(),
         Err(_) => false,
     }
