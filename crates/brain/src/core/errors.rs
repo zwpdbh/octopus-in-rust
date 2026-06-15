@@ -32,38 +32,39 @@ pub enum BrainError {
     Recovery(String),
 }
 
+/// High-level category used for retry/recovery telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrainErrorCategory {
+    RateLimit,
+    Auth,
+    Server5xx,
+    Client4xx,
+    Api,
+    Network,
+    Timeout,
+    EmptyResponse,
+    Other,
+}
+
 impl BrainError {
     /// Classify a kosong provider error into a typed BrainError.
     pub fn from_kosong_error(err: kosong::ChatProviderError) -> Self {
-        let msg = err.message;
-
-        if msg.starts_with("API status error") {
-            // Try to extract a status code from messages like:
-            // "API status error 401: ..." or "API status error 429: ..."
-            let rest = msg.strip_prefix("API status error ").unwrap_or("");
-            if let Some((code_str, tail)) = rest.split_once(':') {
-                if let Ok(status_code) = code_str.trim().parse::<u16>() {
-                    return BrainError::ApiStatus {
-                        status_code,
-                        message: tail.trim().to_string(),
-                    };
-                }
+        match err.kind {
+            kosong::ChatProviderErrorKind::Status {
+                status_code,
+                message,
+                ..
+            } => BrainError::ApiStatus {
+                status_code,
+                message,
+            },
+            kosong::ChatProviderErrorKind::Connection(message) => {
+                BrainError::ApiConnection(message)
             }
+            kosong::ChatProviderErrorKind::Timeout(message) => BrainError::ApiTimeout(message),
+            kosong::ChatProviderErrorKind::EmptyResponse => BrainError::ApiEmptyResponse,
+            kosong::ChatProviderErrorKind::Other(message) => BrainError::Llm(message),
         }
-
-        if msg.starts_with("API connection error") {
-            return BrainError::ApiConnection(msg);
-        }
-
-        if msg.starts_with("API timeout error") {
-            return BrainError::ApiTimeout(msg);
-        }
-
-        if msg == "API returned an empty response" {
-            return BrainError::ApiEmptyResponse;
-        }
-
-        BrainError::Llm(msg)
     }
 
     /// Returns the HTTP status code if this is an API status error.
@@ -71,6 +72,23 @@ impl BrainError {
         match self {
             BrainError::ApiStatus { status_code, .. } => Some(*status_code),
             _ => None,
+        }
+    }
+
+    /// Classify this error for retry/recovery telemetry.
+    pub fn category(&self) -> BrainErrorCategory {
+        match self {
+            BrainError::ApiStatus { status_code, .. } => match *status_code {
+                429 => BrainErrorCategory::RateLimit,
+                401 | 403 => BrainErrorCategory::Auth,
+                s if s >= 500 => BrainErrorCategory::Server5xx,
+                s if (400..500).contains(&s) => BrainErrorCategory::Client4xx,
+                _ => BrainErrorCategory::Api,
+            },
+            BrainError::ApiConnection(_) => BrainErrorCategory::Network,
+            BrainError::ApiTimeout(_) => BrainErrorCategory::Timeout,
+            BrainError::ApiEmptyResponse => BrainErrorCategory::EmptyResponse,
+            _ => BrainErrorCategory::Other,
         }
     }
 

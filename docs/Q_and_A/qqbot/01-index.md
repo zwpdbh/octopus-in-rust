@@ -7,7 +7,7 @@ This tutorial explains how the Octopus `qqbot` package works and how to run, man
 1. [What is qqbot?](02-overview.md)
 2. [Build and first-time setup](03-setup.md)
 3. [Command reference](04-commands.md)
-4. [Plugin management](05-plugins.md)
+4. [WASM plugin system](05-plugins.md)
 5. [Health, status, and diagnostics](06-health-status.md)
 6. [Troubleshooting](07-troubleshooting.md)
 

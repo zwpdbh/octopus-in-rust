@@ -6,6 +6,33 @@ use serde_json::Value;
 
 use crate::tools::plugin::manifest::{PluginManifest, PluginMetadata, default_schema};
 
+/// A known export of the Brain WASM plugin ABI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginExport {
+    /// Execute the tool with a JSON payload.
+    Execute,
+    /// Register one or more tools (modern ABI).
+    RegisterTools,
+    /// Legacy metadata export.
+    ToolMetadata,
+}
+
+impl PluginExport {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PluginExport::Execute => "execute",
+            PluginExport::RegisterTools => "register_tools",
+            PluginExport::ToolMetadata => "tool_metadata",
+        }
+    }
+}
+
+impl std::fmt::Display for PluginExport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A tool backed by a WebAssembly plugin using the Extism runtime.
 #[derive(Clone)]
 pub struct WasmPluginTool {
@@ -45,7 +72,7 @@ impl kosong::tooling::CallableTool for WasmPluginTool {
             };
 
             plugin
-                .call::<&str, &str>("execute", &input)
+                .call::<&str, &str>(PluginExport::Execute.as_str(), &input)
                 .map_err(|e| format!("Plugin execution error: {}", e))
                 .map(|s| s.to_string())
         })
@@ -178,13 +205,14 @@ fn load_metadata_from_register_tools(
     let mut plugin = Plugin::new_from_compiled(compiled)
         .map_err(|e| format!("Failed to instantiate plugin for register_tools: {}", e))?;
 
-    if !plugin.function_exists("register_tools") {
-        return Err("Plugin does not export 'register_tools'".to_string());
+    let export = PluginExport::RegisterTools;
+    if !plugin.function_exists(export.as_str()) {
+        return Err(format!("Plugin does not export '{}'", export));
     }
 
     let json = plugin
-        .call::<&str, &str>("register_tools", "")
-        .map_err(|e| format!("register_tools call failed: {}", e))?;
+        .call::<&str, &str>(export.as_str(), "")
+        .map_err(|e| format!("{} call failed: {}", export, e))?;
 
     let defs: Vec<crate::tools::plugin::manifest::ToolDef> =
         serde_json::from_str(json).map_err(|e| {
@@ -216,13 +244,14 @@ fn load_metadata_from_plugin(
     let mut plugin = Plugin::new_from_compiled(compiled)
         .map_err(|e| format!("Failed to instantiate plugin for metadata: {}", e))?;
 
-    if !plugin.function_exists("tool_metadata") {
-        return Err("Plugin does not export 'tool_metadata'".to_string());
+    let export = PluginExport::ToolMetadata;
+    if !plugin.function_exists(export.as_str()) {
+        return Err(format!("Plugin does not export '{}'", export));
     }
 
     let json = plugin
-        .call::<&str, &str>("tool_metadata", "")
-        .map_err(|e| format!("tool_metadata call failed: {}", e))?;
+        .call::<&str, &str>(export.as_str(), "")
+        .map_err(|e| format!("{} call failed: {}", export, e))?;
 
     serde_json::from_str(json).map_err(|e| {
         format!(

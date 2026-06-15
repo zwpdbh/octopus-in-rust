@@ -1,6 +1,4 @@
-use crate::chat_provider::{
-    APIConnectionError, APIStatusError, APITimeoutError, ChatProviderError, convert_httpx_error,
-};
+use crate::chat_provider::{ChatProviderError, convert_httpx_error};
 use crate::provider::openai_types::ChatCompletionTool;
 use crate::tooling::Tool;
 
@@ -19,10 +17,10 @@ pub fn tool_to_openai(tool: &Tool) -> ChatCompletionTool {
 /// Convert a reqwest error into a kosong error.
 pub fn convert_reqwest_error(err: reqwest::Error) -> ChatProviderError {
     if err.is_timeout() {
-        return ChatProviderError::new(APITimeoutError(err.to_string()).to_string());
+        return ChatProviderError::timeout(err.to_string());
     }
     if err.is_connect() || err.is_request() {
-        return ChatProviderError::new(APIConnectionError(err.to_string()).to_string());
+        return ChatProviderError::connection(err.to_string());
     }
     convert_httpx_error(&err)
 }
@@ -33,14 +31,7 @@ pub fn convert_status_error(
     body: String,
     request_id: Option<String>,
 ) -> ChatProviderError {
-    ChatProviderError::new(
-        APIStatusError {
-            status_code: status.as_u16(),
-            message: body,
-            request_id,
-        }
-        .to_string(),
-    )
+    ChatProviderError::status(status.as_u16(), body, request_id)
 }
 
 /// Map kosong ThinkingEffort to OpenAI reasoning_effort string.

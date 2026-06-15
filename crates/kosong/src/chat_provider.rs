@@ -47,48 +47,96 @@ pub trait RetryableChatProvider: ChatProvider {
     fn on_retryable_error(&self, error: &ChatProviderError) -> bool;
 }
 
+/// The kind of error that occurred while talking to a chat provider.
+#[derive(Debug, Clone)]
+pub enum ChatProviderErrorKind {
+    /// A network-level connection failure.
+    Connection(String),
+    /// The request timed out.
+    Timeout(String),
+    /// The provider returned a non-success HTTP status.
+    Status {
+        status_code: u16,
+        message: String,
+        request_id: Option<String>,
+    },
+    /// The provider returned an empty response body.
+    EmptyResponse,
+    /// Any other provider error.
+    Other(String),
+}
+
 /// Base error type for chat providers.
 #[derive(Debug, Error, Clone)]
 #[error("Chat provider error: {message}")]
 pub struct ChatProviderError {
+    pub kind: ChatProviderErrorKind,
     pub message: String,
 }
 
 impl ChatProviderError {
+    /// Create a generic provider error from a message.
     pub fn new(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
-            message: message.into(),
+            kind: ChatProviderErrorKind::Other(message.clone()),
+            message,
+        }
+    }
+
+    /// Create a connection error.
+    pub fn connection(message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            kind: ChatProviderErrorKind::Connection(message.clone()),
+            message: format!("API connection error: {message}"),
+        }
+    }
+
+    /// Create a timeout error.
+    pub fn timeout(message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            kind: ChatProviderErrorKind::Timeout(message.clone()),
+            message: format!("API timeout error: {message}"),
+        }
+    }
+
+    /// Create an HTTP status error.
+    pub fn status(
+        status_code: u16,
+        message: impl Into<String>,
+        request_id: Option<String>,
+    ) -> Self {
+        let message = message.into();
+        Self {
+            kind: ChatProviderErrorKind::Status {
+                status_code,
+                message: message.clone(),
+                request_id: request_id.clone(),
+            },
+            message: format!(
+                "API status error {status_code}: {message} (request_id={request_id:?})"
+            ),
+        }
+    }
+
+    /// Create an empty-response error.
+    pub fn empty_response() -> Self {
+        Self {
+            kind: ChatProviderErrorKind::EmptyResponse,
+            message: "API returned an empty response".to_string(),
         }
     }
 }
 
-#[derive(Debug, Error, Clone)]
-#[error("API connection error: {0}")]
-pub struct APIConnectionError(pub String);
-
-#[derive(Debug, Error, Clone)]
-#[error("API timeout error: {0}")]
-pub struct APITimeoutError(pub String);
-
-#[derive(Debug, Error, Clone)]
-#[error("API status error {status_code}: {message} (request_id={request_id:?})")]
-pub struct APIStatusError {
-    pub status_code: u16,
-    pub message: String,
-    pub request_id: Option<String>,
-}
-
-#[derive(Debug, Error, Clone)]
-#[error("API returned an empty response")]
-pub struct APIEmptyResponseError;
-
 /// Convert an HTTP / reqwest error into a kosong error.
 pub fn convert_httpx_error(err: &reqwest::Error) -> ChatProviderError {
     if err.is_timeout() {
-        return ChatProviderError::new(APITimeoutError(err.to_string()).to_string());
+        return ChatProviderError::timeout(err.to_string());
     }
     if err.is_connect() || err.is_request() {
-        return ChatProviderError::new(APIConnectionError(err.to_string()).to_string());
+        return ChatProviderError::connection(err.to_string());
     }
     ChatProviderError::new(err.to_string())
 }

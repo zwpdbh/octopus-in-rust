@@ -22,7 +22,7 @@ pub use brain::Brain;
 pub use builder::BrainBuilder;
 pub use checkpoint::{CheckpointPolicy, NoOpCheckpointPolicy};
 pub use config::BrainConfig;
-pub use errors::BrainError;
+pub use errors::{BrainError, BrainErrorCategory};
 pub use events::{BrainEvent, EventPolicy, NoOpEventPolicy, ProviderRefreshSender};
 pub use provider::{DefaultProviderFactory, ProviderFactory};
 pub use recovery::{DefaultRecoveryPolicy, RecoveryAction, RecoveryPolicy};

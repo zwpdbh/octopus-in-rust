@@ -1,6 +1,4 @@
-use crate::chat_provider::{
-    APIConnectionError, APIStatusError, APITimeoutError, ChatProviderError, Part,
-};
+use crate::chat_provider::{ChatProviderError, Part};
 use crate::message::{
     AudioUrl, ContentPart, FunctionBody, ImageUrl, TokenUsage, ToolCall, ToolCallPart, VideoUrl,
 };
@@ -332,14 +330,10 @@ fn raise_simulated_error(
     let lower = first.to_lowercase();
 
     if lower == "connection" {
-        return Err(ChatProviderError::new(
-            APIConnectionError(message.to_string()).to_string(),
-        ));
+        return Err(ChatProviderError::connection(message));
     }
     if lower == "timeout" {
-        return Err(ChatProviderError::new(
-            APITimeoutError(message.to_string()).to_string(),
-        ));
+        return Err(ChatProviderError::timeout(message));
     }
 
     let status_code: u16 = first.parse().map_err(|_| {
@@ -349,16 +343,11 @@ fn raise_simulated_error(
         ))
     })?;
 
-    Err(ChatProviderError::new(
-        APIStatusError {
-            status_code,
-            message: if message.is_empty() {
-                format!("Simulated {} error", status_code)
-            } else {
-                message.to_string()
-            },
-            request_id: None,
-        }
-        .to_string(),
-    ))
+    let status_message = if message.is_empty() {
+        format!("Simulated {} error", status_code)
+    } else {
+        message.to_string()
+    };
+
+    Err(ChatProviderError::status(status_code, status_message, None))
 }

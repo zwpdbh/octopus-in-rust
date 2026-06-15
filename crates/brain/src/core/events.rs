@@ -3,6 +3,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::core::errors::BrainErrorCategory;
+
 /// Identifier for a checkpoint.
 pub type CheckpointId = usize;
 
@@ -45,7 +47,7 @@ pub enum BrainEvent {
         next_attempt: usize,
         max_attempts: usize,
         wait_s: f64,
-        error_type: String,
+        error_type: BrainErrorCategory,
         status_code: Option<u16>,
     },
 

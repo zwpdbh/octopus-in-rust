@@ -404,7 +404,7 @@ async fn run_single_step_with_retry(
                                 next_attempt: attempt + 1,
                                 max_attempts: config.retry_policy.max_attempts(),
                                 wait_s: wait.as_secs_f64(),
-                                error_type: error_type(&err).to_string(),
+                                error_type: err.category(),
                                 status_code: err.status_code(),
                             },
                         );
@@ -467,22 +467,6 @@ async fn run_single_step_with_retry(
                 }
             }
         }
-    }
-}
-
-fn error_type(err: &BrainError) -> &'static str {
-    match err {
-        BrainError::ApiStatus { status_code, .. } => match *status_code {
-            429 => "rate_limit",
-            401 | 403 => "auth",
-            s if s >= 500 => "5xx_server",
-            s if (400..500).contains(&s) => "4xx_client",
-            _ => "api",
-        },
-        BrainError::ApiConnection(_) => "network",
-        BrainError::ApiTimeout(_) => "timeout",
-        BrainError::ApiEmptyResponse => "empty_response",
-        _ => "other",
     }
 }
 

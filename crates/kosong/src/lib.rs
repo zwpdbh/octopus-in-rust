@@ -9,8 +9,8 @@ pub mod utils;
 
 // Re-export commonly used items at crate root.
 pub use chat_provider::{
-    APIConnectionError, APIEmptyResponseError, APIStatusError, APITimeoutError, ChatProvider,
-    ChatProviderError, RetryableChatProvider, StreamedMessage, StreamedMessagePart, ThinkingEffort,
+    ChatProvider, ChatProviderError, ChatProviderErrorKind, RetryableChatProvider, StreamedMessage,
+    StreamedMessagePart, ThinkingEffort,
 };
 pub use generate::{GenerateResult, generate};
 pub use message::{
