@@ -84,6 +84,9 @@ schemars = "0.8"
 # Kosong LLM abstraction layer
 kosong = { path = "../kosong" }
 
+# Reusable agent core
+brain = { path = "../brain" }
+
 # Unicode display width
 unicode-width = "0.2"
 

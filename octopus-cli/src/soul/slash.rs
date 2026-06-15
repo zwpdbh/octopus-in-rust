@@ -124,7 +124,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "clear".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if let Err(e) = soul.context.clear().await {
+                if let Err(e) = soul.context.lock().await.clear().await {
                     crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: format!("Failed to clear context: {e}"),
                     }));
@@ -132,12 +132,14 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 }
                 let _ = soul
                     .context
+                    .lock()
+                    .await
                     .write_system_prompt(&soul.agent.system_prompt)
                     .await;
                 crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "The context has been cleared.".to_string(),
                 }));
-                let snap = soul.status_snapshot();
+                let snap = soul.status_snapshot().await;
                 crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                     context_usage: Some(snap.context_usage),
                     context_tokens: Some(snap.context_tokens),
@@ -300,7 +302,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "compact".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
-                if soul.context.n_checkpoints() == 0 {
+                if soul.context.lock().await.n_checkpoints() == 0 {
                     crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                         text: "The context is empty.".to_string(),
                     }));
@@ -315,7 +317,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                 crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: "The context has been compacted.".to_string(),
                 }));
-                let snap = soul.status_snapshot();
+                let snap = soul.status_snapshot().await;
                 crate::wire::wire_send(crate::wire::WireEvent::StatusUpdate(StatusUpdate {
                     context_usage: Some(snap.context_usage),
                     context_tokens: Some(snap.context_tokens),
@@ -399,7 +401,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "debug".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                let snap = soul.status_snapshot();
+                let snap = soul.status_snapshot().await;
                 let lines = vec![
                     "Debug context:".to_string(),
                     String::new(),
@@ -420,7 +422,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         snap.max_context_tokens,
                         snap.context_usage * 100.0
                     ),
-                    format!("  Checkpoints:    {}", soul.context.n_checkpoints()),
+                    format!(
+                        "  Checkpoints:    {}",
+                        soul.context.lock().await.n_checkpoints()
+                    ),
                 ];
                 crate::wire::wire_send(crate::wire::WireEvent::TextPart(TextPart {
                     text: lines.join("\n"),
@@ -790,7 +795,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         name: "mcp".to_string(),
         func: Arc::new(|soul: &mut KimiSoul, _args: &str| {
             Box::pin(async move {
-                if let Some(ref mcp) = soul.status_snapshot().mcp_status {
+                if let Some(ref mcp) = soul.status_snapshot().await.mcp_status {
                     let mut lines = vec!["MCP Servers:".to_string(), String::new()];
                     for server in &mcp.servers {
                         lines.push(format!(
@@ -1086,10 +1091,10 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
         func: Arc::new(|soul: &mut KimiSoul, args: &str| {
             Box::pin(async move {
                 let arg = args.trim();
+                let history = soul.context.lock().await.history().to_vec();
                 let text = if arg == "all" {
                     // Copy entire conversation context
-                    soul.context
-                        .history()
+                    history
                         .iter()
                         .map(|m| {
                             let role = &m.role;
@@ -1100,9 +1105,7 @@ pub fn build_default_slash_commands() -> SlashCommandRegistry {
                         .join("\n\n")
                 } else {
                     // Copy last assistant message
-                    let last = soul
-                        .context
-                        .history()
+                    let last = history
                         .iter()
                         .rev()
                         .find(|m| m.role == "assistant")

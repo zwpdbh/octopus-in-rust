@@ -254,6 +254,26 @@ impl Context {
         Ok(())
     }
 
+    /// Replace the in-memory history and persist it, preserving the system prompt.
+    pub async fn replace_history(&mut self, history: Vec<Message>) -> std::io::Result<()> {
+        self.history = history.clone();
+        self.pending_token_estimate = estimate_text_tokens(&history);
+
+        let mut lines = Vec::new();
+        if let Some(prompt) = &self.system_prompt {
+            lines.push(format!(
+                "{}\n",
+                serde_json::json!({"role": "_system_prompt", "content": prompt})
+            ));
+        }
+        for msg in &history {
+            lines.push(format!("{}\n", serde_json::to_string(msg).unwrap()));
+        }
+
+        fs::write(&self.file_backend, lines.concat()).await?;
+        Ok(())
+    }
+
     pub async fn append_message(&mut self, message: impl IntoMessages) -> std::io::Result<()> {
         let messages = message.into_messages();
         self.history.extend(messages.clone());

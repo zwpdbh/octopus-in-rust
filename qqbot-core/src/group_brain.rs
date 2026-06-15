@@ -133,7 +133,10 @@ impl GroupBrainManager {
             ..Default::default()
         };
 
-        let mut brain = Brain::new(config)?;
+        let mut brain = brain::BrainBuilder::default()
+            .from_config(config)
+            .build()
+            .await?;
         brain.register_tool(Box::new(kosong::tooling::CallableTool2Adapter::new(
             RecentMessagesTool::new(self.memory.clone(), group_id),
         )));

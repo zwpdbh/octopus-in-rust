@@ -429,6 +429,7 @@ pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::To
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn kosong_to_wire_tool_result(
     result: kosong::tooling::ToolResult,
 ) -> crate::wire::ToolResult {

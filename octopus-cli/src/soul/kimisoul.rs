@@ -1,31 +1,39 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::approval_runtime::{ApprovalRuntime, ApprovalSource};
 use crate::auth::OAuthManager;
 use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
 use crate::hooks::{HookEngine, HookEvent};
-use crate::llm::LLM;
+use crate::llm::{LLM, kosong_to_wire_usage};
 use crate::notifications::llm::{build_notification_message, extract_notification_ids};
 use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::soul::approval::{Approval, ApprovalState};
+use crate::soul::brain_bridge::{
+    CliCompactionPolicy, CliInjectionPolicy, CliProviderFactory, CliRecoveryPolicy, CliRetryPolicy,
+    ContextMessageStore,
+};
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
 use crate::soul::context::Context;
-use crate::soul::dynamic_injection::{DynamicInjectionProvider, InjectionContext};
-use crate::soul::message::{check_message, normalize_history, tool_result_to_message};
+use crate::soul::dynamic_injection::{
+    DynamicInjection, DynamicInjectionProvider, InjectionContext,
+};
+use crate::soul::message::{check_message, tool_result_to_message};
 use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call};
 use crate::soul::toolset::KimiToolset;
 use crate::wire::{
     CompactionBegin, CompactionEnd, ContentPart, Message, RootWireHub, StatusUpdate, SteerInput,
-    StepBegin, StepInterrupted, StepRetry, TurnBegin, TurnEnd, wire_send,
+    StepBegin, StepInterrupted, TextPart, ToolResult, TurnBegin, TurnEnd, wire_send,
 };
+use futures::StreamExt;
 
 pub struct KimiSoul {
     pub config: Config,
     pub session: Session,
     pub llm: Option<LLM>,
-    pub context: Context,
+    pub context: Arc<tokio::sync::Mutex<Context>>,
     pub toolset: std::sync::Arc<KimiToolset>,
     pub approval: Approval,
     pub plan_mode: bool,
@@ -40,6 +48,8 @@ pub struct KimiSoul {
     pub denwa_renji: std::sync::Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
     pub skills: crate::skills::SkillRegistry,
     pub bg_manager: crate::background::BackgroundTaskManager,
+    pub brain: Option<brain::Brain>,
+    injection_policy: Arc<CliInjectionPolicy>,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
     current_step_no: usize,
@@ -69,6 +79,11 @@ impl KimiSoul {
         let context_file = session.context_file.clone();
         let mut context = Context::new(context_file);
         let _ = context.restore_sync();
+
+        // Ack any notification IDs already present in restored context.
+        let ack_ids = extract_notification_ids(context.history());
+
+        let context = Arc::new(tokio::sync::Mutex::new(context));
 
         let bg_manager = agent.runtime.background_tasks.clone();
         let denwa_renji =
@@ -161,8 +176,6 @@ impl KimiSoul {
         let notification_manager =
             NotificationManager::new(notification_root, config.notifications.clone());
 
-        // Ack any notification IDs already present in restored context.
-        let ack_ids = extract_notification_ids(context.history());
         if !ack_ids.is_empty() {
             notification_manager.ack_ids("llm", &ack_ids);
         }
@@ -175,6 +188,91 @@ impl KimiSoul {
         if let Some(ref mut l) = llm {
             l.oauth = Some(oauth.clone());
         }
+
+        // Dynamic injection state is shared with Brain and updated when toggles change.
+        let plan_file_path = plan_session_id.as_ref().map(|id| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".kimi")
+                .join("plans")
+                .join(format!("{id}.md"))
+        });
+        let injection_context = InjectionContext {
+            plan_mode,
+            effective_afk: approval.is_afk(),
+            persisted_afk: approval.state().mode.is_afk(),
+            plan_file_path: plan_file_path.as_deref(),
+            pending_plan_activation: false,
+        };
+        let injection_policy = Arc::new(CliInjectionPolicy::new(
+            vec![
+                Box::new(
+                    crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new(),
+                ),
+                Box::new(
+                    crate::soul::dynamic_injections::afk_mode::AfkModeInjectionProvider::new(),
+                ),
+            ],
+            injection_context,
+        ));
+
+        // Build the reusable Brain agent core.
+        let brain = match llm.as_ref() {
+            Some(llm) => match llm.build_kosong_provider() {
+                Ok(provider) => {
+                    let message_store = Arc::new(tokio::sync::Mutex::new(
+                        ContextMessageStore::new(context.clone()),
+                    ));
+                    let compaction_policy = Arc::new(CliCompactionPolicy::new(
+                        SimpleCompaction::new(2),
+                        Arc::new(llm.clone()),
+                        llm.max_context_size,
+                        config.loop_control.compaction_trigger_ratio,
+                        config.loop_control.reserved_context_size,
+                        String::new(),
+                    ));
+                    let hook_policy = Arc::new(brain::hooks::policy::NoOpHookPolicy);
+                    let provider_factory = Arc::new(CliProviderFactory::new(
+                        Arc::new(llm.clone()),
+                        oauth.clone(),
+                    ));
+                    let retry_policy = Arc::new(CliRetryPolicy::new(max_retries));
+                    let recovery_policy =
+                        Arc::new(CliRecoveryPolicy::new(oauth.clone(), Arc::new(llm.clone())));
+                    let brain_config = brain::BrainConfig {
+                        system_prompt: agent.system_prompt.clone(),
+                        base_url: String::new(),
+                        api_key: String::new(),
+                        model: String::new(),
+                        max_steps_per_turn: max_steps,
+                        max_step_attempts: max_retries,
+                        provider: Some(provider),
+                        provider_factory,
+                        approval_runtime: Arc::new(
+                            brain::core::approval::DefaultApprovalRuntime::new(Arc::new(
+                                brain::core::approval::AutoApprove,
+                            )),
+                        ),
+                        tool_sources: Vec::new(),
+                        toolset: Some(Arc::new(crate::soul::toolset::KimiToolsetHandle(
+                            toolset.clone(),
+                        ))),
+                        message_store,
+                        compaction_policy: Some(compaction_policy),
+                        injection_policy: None,
+                        hook_policy,
+                        retry_policy,
+                        recovery_policy,
+                    };
+                    brain::Brain::new(brain_config).ok()
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to build chat provider for Brain: {}", e);
+                    None
+                }
+            },
+            None => None,
+        };
 
         Self {
             config,
@@ -195,6 +293,8 @@ impl KimiSoul {
             denwa_renji,
             skills,
             bg_manager,
+            brain,
+            injection_policy,
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
             current_step_no: 0,
@@ -473,21 +573,23 @@ impl KimiSoul {
         self.current_turn_id = Some(uuid::Uuid::new_v4().to_string());
         self.last_tool_calls = Vec::new();
 
-        self.context
-            .checkpoint(false)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .append_message(user_message)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
+        {
+            let mut ctx = self.context.lock().await;
+            ctx.checkpoint(false)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+            ctx.append_message(user_message)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+        }
 
         self.agent_loop().await
     }
 
     async fn agent_loop(&mut self) -> Result<TurnOutcome> {
-        // Discard stale steers
+        // Discard stale steers and consume any new ones before the turn starts.
         self.steer_queue.clear();
+        let _ = self.consume_pending_steers().await;
 
         // ── MCP deferred loading ──
         // Mirrors Python's background MCP loading in `_agent_loop()`.
@@ -558,7 +660,7 @@ impl KimiSoul {
                 let trigger_ratio = self.config.loop_control.compaction_trigger_ratio;
                 let reserved = self.config.loop_control.reserved_context_size;
                 if should_auto_compact(
-                    self.context.token_count_with_pending(),
+                    self.context.lock().await.token_count_with_pending(),
                     max_size,
                     trigger_ratio,
                     reserved,
@@ -569,14 +671,17 @@ impl KimiSoul {
                 }
             }
 
-            self.context
-                .checkpoint(self.checkpoint_with_user_message)
-                .await
-                .map_err(|e| OctopusError::Io(e))?;
+            {
+                let mut ctx = self.context.lock().await;
+                ctx.checkpoint(self.checkpoint_with_user_message)
+                    .await
+                    .map_err(|e| OctopusError::Io(e))?;
+            }
+            let n_checkpoints = self.context.lock().await.n_checkpoints();
             self.denwa_renji
                 .lock()
                 .unwrap()
-                .set_n_checkpoints(self.context.n_checkpoints());
+                .set_n_checkpoints(n_checkpoints);
 
             self.current_step_no = step_no;
             wire_send(crate::wire::WireEvent::StepBegin(StepBegin { n: step_no }));
@@ -589,20 +694,23 @@ impl KimiSoul {
                         "BackToTheFuture: reverting to checkpoint {}",
                         e.checkpoint_id
                     );
-                    self.context
-                        .revert_to(e.checkpoint_id)
-                        .await
-                        .map_err(|io_err| OctopusError::Io(io_err))?;
+                    {
+                        let mut ctx = self.context.lock().await;
+                        ctx.revert_to(e.checkpoint_id)
+                            .await
+                            .map_err(|io_err| OctopusError::Io(io_err))?;
+                    }
                     self.last_tool_calls = Vec::new();
-                    self.context
-                        .checkpoint(self.checkpoint_with_user_message)
-                        .await
-                        .map_err(|e| OctopusError::Io(e))?;
-                    for msg in &e.messages {
-                        self.context
-                            .append_message(msg.clone())
+                    {
+                        let mut ctx = self.context.lock().await;
+                        ctx.checkpoint(self.checkpoint_with_user_message)
                             .await
                             .map_err(|e| OctopusError::Io(e))?;
+                        for msg in &e.messages {
+                            ctx.append_message(msg.clone())
+                                .await
+                                .map_err(|e| OctopusError::Io(e))?;
+                        }
                     }
                     continue;
                 }
@@ -643,110 +751,11 @@ impl KimiSoul {
     }
 
     async fn step(&mut self) -> Result<Option<StepOutcome>> {
-        let max_attempts = self.max_retries_per_step;
-        let mut last_error: Option<OctopusError> = None;
-
-        for attempt in 1..=max_attempts {
-            match self.run_step_once().await {
-                Ok(outcome) => return Ok(outcome),
-                Err(e) if Self::is_retryable_error(&e) && attempt < max_attempts => {
-                    let wait_s = Self::retry_wait_secs(attempt);
-                    self.emit_step_retry(attempt, max_attempts, wait_s, &e);
-                    tracing::warn!(
-                        "Retrying step {} for the {} time (last error: {:?}). Waiting {:.1}s.",
-                        self.current_step_no,
-                        attempt,
-                        e,
-                        wait_s
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(wait_s)).await;
-                    last_error = Some(e);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        // Exhausted all retries
-        Err(last_error.unwrap_or_else(|| OctopusError::Other("Step failed".to_string())))
+        self.run_brain_step().await
     }
 
-    /// Execute a single LLM step with connection recovery.
-    ///
-    /// Mirrors Python's `_run_with_connection_recovery()` in `kimisoul.py`.
-    /// Handles 401 → OAuth refresh and connection-error recovery, each once.
-    async fn run_step_once(&mut self) -> Result<Option<StepOutcome>> {
-        let mut auth_retried = false;
-        let mut connection_retried = false;
-
-        loop {
-            let llm = self
-                .llm
-                .clone()
-                .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
-            let result = self.run_step_once_inner(&llm).await;
-            match result {
-                Ok(v) => return Ok(v),
-                Err(OctopusError::APIStatus(ref e)) if e.status_code == 401 && !auth_retried => {
-                    let has_oauth = self
-                        .llm
-                        .as_ref()
-                        .and_then(|l| l.provider_config.as_ref())
-                        .and_then(|p| p.oauth.as_ref())
-                        .is_some();
-                    if !has_oauth {
-                        return Err(OctopusError::APIStatus(e.clone()));
-                    }
-                    tracing::warn!(
-                        "Received 401 during step {}, attempting token refresh",
-                        self.current_step_no
-                    );
-                    let llm = self
-                        .llm
-                        .as_ref()
-                        .ok_or_else(|| OctopusError::Other("LLM not set".to_string()))?;
-                    match self.oauth.ensure_fresh(llm, true).await {
-                        Ok(true) => {
-                            // Token cache refreshed; the next build_kosong_provider()
-                            // call will pick up the new token automatically.
-                        }
-                        Ok(false) => {}
-                        Err(refresh_err) => {
-                            tracing::error!("OAuth refresh failed: {}", refresh_err);
-                            return Err(OctopusError::APIStatus(e.clone()));
-                        }
-                    }
-                    auth_retried = true;
-                    continue;
-                }
-                Err(OctopusError::APIConnection(ref e)) if !connection_retried => {
-                    tracing::warn!(
-                        "Connection error during step {}: {}. Attempting recovery.",
-                        self.current_step_no,
-                        e
-                    );
-                    // TODO: chat provider recovery via RetryableChatProvider.
-                    // For now, retry once without explicit provider recovery.
-                    connection_retried = true;
-                    continue;
-                }
-                Err(OctopusError::APITimeout(ref e)) if !connection_retried => {
-                    tracing::warn!(
-                        "Timeout during step {}: {}. Attempting recovery.",
-                        self.current_step_no,
-                        e
-                    );
-                    // TODO: chat provider recovery via RetryableChatProvider.
-                    // For now, retry once without explicit provider recovery.
-                    connection_retried = true;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    /// The actual LLM step logic, without any recovery wrapper.
-    async fn run_step_once_inner(&mut self, llm: &LLM) -> Result<Option<StepOutcome>> {
+    /// The actual LLM step logic, using Brain::run_step.
+    async fn run_brain_step(&mut self) -> Result<Option<StepOutcome>> {
         // ── Dynamic Injection ───────────────────────────────────────────────
         let injections = self.collect_injections().await;
         if !injections.is_empty() {
@@ -755,17 +764,17 @@ impl KimiSoul {
                 .map(|inj| format!("<system-reminder>\n{}\n</system-reminder>", inj.content))
                 .collect::<Vec<_>>()
                 .join("\n");
-            self.context
-                .append_message(Message {
-                    role: "user".to_string(),
-                    content: vec![ContentPart::Text {
-                        text: reminder_text,
-                    }],
-                    tool_call_id: None,
-                    tool_calls: None,
-                })
-                .await
-                .map_err(|e| OctopusError::Io(e))?;
+            let mut ctx = self.context.lock().await;
+            ctx.append_message(Message {
+                role: "user".to_string(),
+                content: vec![ContentPart::Text {
+                    text: reminder_text,
+                }],
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .map_err(|e| OctopusError::Io(e))?;
         }
 
         // --- Notification delivery (root only) ---
@@ -773,7 +782,7 @@ impl KimiSoul {
             let notifs = self.notification_manager.claim_for_sink("llm", 8);
             for view in notifs {
                 let msg = build_notification_message(&view);
-                if let Err(e) = self.context.append_message(msg).await {
+                if let Err(e) = self.context.lock().await.append_message(msg).await {
                     tracing::warn!("Failed to append notification to context: {}", e);
                 }
                 // Fire Notification hook (fire-and-forget)
@@ -794,147 +803,109 @@ impl KimiSoul {
             }
         }
 
-        // Build effective history and normalize adjacent user messages.
-        let history = normalize_history(self.context.history());
-
-        // Prepare kosong inputs
-        let provider = llm.build_kosong_provider()?;
-        let kosong_history: Vec<kosong::Message> = history
-            .iter()
-            .map(crate::llm::wire_to_kosong_message)
-            .collect();
-
-        let mut on_message_part = |part: kosong::StreamedMessagePart| {
-            use kosong::chat_provider::Part;
-            match part {
-                Part::Content(cp) => {
-                    let wire_cp = crate::llm::kosong_to_wire_content_part(cp);
-                    wire_send(crate::wire::WireEvent::ContentPart(wire_cp));
-                }
-                Part::ToolCall(_) | Part::ToolCallPart(_) => {}
-            }
-        };
-
         // Setup dedup before the step, matching Python's `begin_step` ordering.
         let turn_id = self.current_turn_id.clone().unwrap_or_default();
         self.toolset
             .begin_step(self.last_tool_calls.clone(), self.current_step_no, turn_id);
 
-        let t0 = std::time::Instant::now();
+        let brain = self
+            .brain
+            .as_mut()
+            .ok_or_else(|| OctopusError::Other("Brain not initialized".to_string()))?;
+        let mut stream = brain
+            .run_step()
+            .await
+            .map_err(|e| OctopusError::Other(format!("Brain step failed: {e}")))?;
 
-        let step_result = kosong::step_with_callbacks(
-            provider.as_ref(),
-            &self.agent.system_prompt,
-            &crate::soul::toolset::KimiToolsetHandle(self.toolset.clone()),
-            &kosong_history,
-            Some(&mut on_message_part),
-            Some(std::sync::Arc::new(
-                |result: &kosong::tooling::ToolResult| {
-                    let wire_rv = crate::wire::ToolReturnValue {
-                        is_error: result.return_value.is_error,
-                        output: result.return_value.output.as_ref().map(|v| match v {
-                            serde_json::Value::String(s) => {
-                                crate::wire::ToolOutput::Text(s.clone())
-                            }
-                            other => crate::wire::ToolOutput::Parts(vec![
-                                crate::wire::ContentPart::Text {
-                                    text: serde_json::to_string(other).unwrap_or_default(),
-                                },
-                            ]),
-                        }),
-                        message: result.return_value.message.clone(),
-                        brief: None,
-                    };
-                    let wire_result = crate::wire::ToolResult {
-                        tool_call_id: result.tool_call_id.clone(),
-                        return_value: wire_rv,
-                    };
-                    wire_send(crate::wire::WireEvent::ToolResult(wire_result));
-                },
-            )),
-        )
-        .await;
+        let mut assistant_content: Vec<ContentPart> = Vec::new();
+        let mut tool_results: Vec<ToolResult> = Vec::new();
+        let mut any_tool_error = false;
 
-        let elapsed = t0.elapsed();
+        while let Some(event) = stream.next().await {
+            match event {
+                // KimiSoul's outer loop already emits StepBegin with the real
+                // step number; Brain's step number is always 0 here, so ignore
+                // it to avoid duplicate/confusing wire events.
+                brain::BrainEvent::StepBegin { .. } => {}
+                brain::BrainEvent::TextPart(text) => {
+                    assistant_content.push(ContentPart::Text { text: text.clone() });
+                    wire_send(crate::wire::WireEvent::TextPart(TextPart { text }));
+                }
+                brain::BrainEvent::ThinkingPart(think) => {
+                    assistant_content.push(ContentPart::Think {
+                        think: think.clone(),
+                    });
+                    wire_send(crate::wire::WireEvent::ContentPart(ContentPart::Think {
+                        think,
+                    }));
+                }
+                brain::BrainEvent::ToolResult {
+                    id,
+                    output,
+                    is_error,
+                } => {
+                    any_tool_error |= is_error;
+                    let wire_result = ToolResult {
+                        tool_call_id: id,
+                        return_value: crate::wire::ToolReturnValue {
+                            is_error,
+                            output: Some(crate::wire::ToolOutput::Text(output.clone())),
+                            message: Some(output),
+                            brief: None,
+                        },
+                    };
+                    wire_send(crate::wire::WireEvent::ToolResult(wire_result.clone()));
+                    tool_results.push(wire_result);
+                }
+                brain::BrainEvent::Usage { usage } => {
+                    let wire_usage = kosong_to_wire_usage(usage);
+                    {
+                        let mut ctx = self.context.lock().await;
+                        ctx.update_token_count(wire_usage.input)
+                            .await
+                            .map_err(|e| OctopusError::Io(e))?;
+                    }
+                    let status_update = StatusUpdate {
+                        token_usage: Some(wire_usage),
+                        message_id: None,
+                        plan_mode: Some(self.plan_mode),
+                        context_usage: Some(self.context_usage().await),
+                        context_tokens: Some(self.context.lock().await.token_count()),
+                        max_context_tokens: self.llm.as_ref().map(|l| l.max_context_size),
+                        ..Default::default()
+                    };
+                    wire_send(crate::wire::WireEvent::StatusUpdate(status_update));
+                }
+                brain::BrainEvent::Error(e) => {
+                    return Err(crate::llm::classify_kosong_error(e));
+                }
+                _ => {}
+            }
+        }
 
         self.last_tool_calls = self.toolset.end_step();
 
-        let step_result = match step_result {
-            Ok(r) => r,
-            Err(e) => {
-                let err = crate::llm::classify_kosong_error(e.message);
-                let (error_type, status_code) = Self::classify_api_error(&err);
-                if let Some(sc) = status_code {
-                    crate::track!(
-                        "api_error",
-                        error_type = error_type,
-                        status_code = sc,
-                        duration_ms = elapsed.as_millis() as u64,
-                    );
-                } else {
-                    crate::track!(
-                        "api_error",
-                        error_type = error_type,
-                        duration_ms = elapsed.as_millis() as u64,
-                    );
-                }
-                return Err(err);
-            }
+        let build_assistant_message = |content: Vec<ContentPart>| Message {
+            role: "assistant".to_string(),
+            content,
+            tool_call_id: None,
+            tool_calls: None,
         };
 
-        let assistant_message = crate::llm::kosong_to_wire_message(step_result.message.clone());
-        let usage = step_result
-            .usage
-            .clone()
-            .map(crate::llm::kosong_to_wire_usage);
-
-        // Update token count
-        if let Some(ref u) = usage {
-            self.context
-                .update_token_count(u.input)
-                .await
-                .map_err(|e| OctopusError::Io(e))?;
-        }
-
-        let status_update = StatusUpdate {
-            token_usage: usage.clone(),
-            message_id: step_result.id.clone(),
-            plan_mode: Some(self.plan_mode),
-            context_usage: Some(self.context_usage()),
-            context_tokens: Some(self.context.token_count()),
-            max_context_tokens: self.llm.as_ref().map(|l| l.max_context_size),
-            ..Default::default()
-        };
-        wire_send(crate::wire::WireEvent::StatusUpdate(status_update));
-
-        // Gather tool results and grow context
-        if !step_result.tool_calls.is_empty() {
-            let kosong_results = step_result.tool_results().await;
-            let tool_results: Vec<crate::wire::ToolResult> = kosong_results
-                .into_iter()
-                .map(crate::llm::kosong_to_wire_tool_result)
-                .collect();
-
-            self.grow_context(&assistant_message, &tool_results).await?;
-
-            // Check for rejections
-            let rejected: Vec<_> = tool_results
-                .iter()
-                .filter(|r| r.return_value.is_error())
-                .collect();
-
-            if !rejected.is_empty() {
+        if !tool_results.is_empty() {
+            if any_tool_error {
                 let _ = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
                 return Ok(Some(StepOutcome {
                     stop_reason: "tool_rejected".to_string(),
-                    assistant_message,
+                    assistant_message: build_assistant_message(assistant_content),
                 }));
             }
 
-            // Handle pending D-Mail
-            if let Some(dmail) = self.denwa_renji.lock().unwrap().fetch_pending_dmail() {
+            let dmail = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
+            if let Some(dmail) = dmail {
+                let n_checkpoints = self.context.lock().await.n_checkpoints();
                 assert!(
-                    dmail.checkpoint_id < self.context.n_checkpoints(),
+                    dmail.checkpoint_id < n_checkpoints,
                     "DenwaRenji guarantees checkpoint_id < n_checkpoints"
                 );
                 return Err(crate::exception::BackToTheFuture {
@@ -963,69 +934,12 @@ impl KimiSoul {
         } else {
             Ok(Some(StepOutcome {
                 stop_reason: "no_tool_calls".to_string(),
-                assistant_message,
+                assistant_message: build_assistant_message(assistant_content),
             }))
         }
     }
 
-    fn is_retryable_error(error: &OctopusError) -> bool {
-        use crate::exception::APIStatusError;
-        match error {
-            OctopusError::APIConnection(_) | OctopusError::APITimeout(_) => true,
-            OctopusError::APIEmptyResponse(_) => true,
-            OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
-                matches!(status_code, 429 | 500 | 502 | 503 | 504)
-            }
-            _ => false,
-        }
-    }
-
-    fn retry_wait_secs(attempt: usize) -> f64 {
-        // Exponential backoff with jitter: initial=0.3, max=5, jitter=0.5
-        let base = 0.3_f64 * 2_f64.powi((attempt - 1) as i32);
-        let capped = base.min(5.0);
-        let jitter = rand::random::<f64>() * 0.5;
-        capped + jitter
-    }
-
-    fn emit_step_retry(
-        &self,
-        attempt: usize,
-        max_attempts: usize,
-        wait_s: f64,
-        error: &OctopusError,
-    ) {
-        let (error_type, status_code) = Self::classify_api_error(error);
-        wire_send(crate::wire::WireEvent::StepRetry(StepRetry {
-            n: self.current_step_no,
-            next_attempt: attempt + 1,
-            max_attempts,
-            wait_s,
-            error_type,
-            status_code,
-        }));
-    }
-
-    fn classify_api_error(error: &OctopusError) -> (String, Option<u16>) {
-        use crate::exception::APIStatusError;
-        match error {
-            OctopusError::APIStatus(APIStatusError { status_code, .. }) => {
-                let typ = match *status_code {
-                    429 => "rate_limit",
-                    401 | 403 => "auth",
-                    s if s >= 500 => "5xx_server",
-                    s if (400..500).contains(&s) => "4xx_client",
-                    _ => "api",
-                };
-                (typ.to_string(), Some(*status_code))
-            }
-            OctopusError::APIConnection(_) => ("network".to_string(), None),
-            OctopusError::APITimeout(_) => ("timeout".to_string(), None),
-            OctopusError::APIEmptyResponse(_) => ("empty_response".to_string(), None),
-            _ => ("other".to_string(), None),
-        }
-    }
-
+    #[allow(dead_code)]
     async fn grow_context(
         &mut self,
         assistant_message: &Message,
@@ -1045,16 +959,45 @@ impl KimiSoul {
             }
         }
 
-        self.context
-            .append_message(assistant_message.clone())
+        let mut ctx = self.context.lock().await;
+        ctx.append_message(assistant_message.clone())
             .await
             .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .append_message(tool_messages)
+        ctx.append_message(tool_messages)
             .await
             .map_err(|e| OctopusError::Io(e))?;
 
         Ok(())
+    }
+
+    async fn collect_injections(&mut self) -> Vec<DynamicInjection> {
+        let plan_file_path = self.get_plan_file_path();
+        let ctx = InjectionContext {
+            plan_mode: self.plan_mode,
+            effective_afk: self.approval.is_afk(),
+            persisted_afk: self.approval.state().mode.is_afk(),
+            plan_file_path: plan_file_path.as_deref(),
+            pending_plan_activation: self.consume_pending_plan_activation_injection(),
+        };
+        let mut injections = Vec::new();
+        for provider in &mut self.injection_providers {
+            match provider
+                .get_injections(self.context.lock().await.history(), &ctx)
+                .await
+            {
+                result => injections.extend(result),
+            }
+        }
+        injections
+    }
+
+    async fn context_usage(&self) -> f64 {
+        let max_size = self.llm.as_ref().map(|l| l.max_context_size).unwrap_or(0);
+        if max_size > 0 {
+            self.context.lock().await.token_count() as f64 / max_size as f64
+        } else {
+            0.0
+        }
     }
 
     async fn consume_pending_steers(&mut self) -> bool {
@@ -1068,7 +1011,7 @@ impl KimiSoul {
                 tool_call_id: None,
                 tool_calls: None,
             };
-            if let Err(e) = self.context.append_message(steer_msg).await {
+            if let Err(e) = self.context.lock().await.append_message(steer_msg).await {
                 tracing::warn!("Failed to append steer message: {}", e);
             }
             wire_send(crate::wire::WireEvent::SteerInput(SteerInput {
@@ -1092,8 +1035,10 @@ impl KimiSoul {
 
     pub async fn compact_context(&mut self, custom_instruction: &str) -> Result<()> {
         let llm = self.llm.as_ref().ok_or(LLMNotSet::NotSet)?;
-        let messages = self.context.history().to_vec();
-        let token_count = self.context.token_count();
+        let (messages, token_count) = {
+            let ctx = self.context.lock().await;
+            (ctx.history().to_vec(), ctx.token_count())
+        };
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string());
@@ -1139,26 +1084,22 @@ impl KimiSoul {
 
         let estimated = result.estimated_token_count();
 
-        self.context
-            .clear()
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .write_system_prompt(&self.agent.system_prompt)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .checkpoint(false)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .append_message(result.messages)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        self.context
-            .update_token_count(estimated)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
+        {
+            let mut ctx = self.context.lock().await;
+            ctx.clear().await.map_err(|e| OctopusError::Io(e))?;
+            ctx.write_system_prompt(&self.agent.system_prompt)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+            ctx.checkpoint(false)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+            ctx.append_message(result.messages)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+            ctx.update_token_count(estimated)
+                .await
+                .map_err(|e| OctopusError::Io(e))?;
+        }
 
         wire_send(crate::wire::WireEvent::CompactionEnd(CompactionEnd {}));
 
@@ -1189,26 +1130,6 @@ impl KimiSoul {
     // Dynamic Injection
     // ========================================================================
 
-    async fn collect_injections(
-        &mut self,
-    ) -> Vec<crate::soul::dynamic_injection::DynamicInjection> {
-        let plan_file_path = self.get_plan_file_path();
-        let ctx = InjectionContext {
-            plan_mode: self.plan_mode,
-            effective_afk: self.approval.is_afk(),
-            persisted_afk: self.approval.state().mode.is_afk(),
-            plan_file_path: plan_file_path.as_deref(),
-            pending_plan_activation: self.consume_pending_plan_activation_injection(),
-        };
-        let mut injections = Vec::new();
-        for provider in &mut self.injection_providers {
-            match provider.get_injections(self.context.history(), &ctx).await {
-                result => injections.extend(result),
-            }
-        }
-        injections
-    }
-
     async fn notify_injection_providers_compacted(&mut self) {
         for provider in &mut self.injection_providers {
             provider.on_context_compacted().await;
@@ -1219,6 +1140,19 @@ impl KimiSoul {
         for provider in &mut self.injection_providers {
             provider.on_afk_changed(enabled).await;
         }
+        self.sync_injection_policy();
+    }
+
+    fn sync_injection_policy(&mut self) {
+        let pending_plan_activation = self.consume_pending_plan_activation_injection();
+        let state = crate::soul::brain_bridge::InjectionState {
+            plan_mode: self.plan_mode,
+            effective_afk: self.approval.is_afk(),
+            persisted_afk: self.approval.state().mode.is_afk(),
+            plan_file_path: self.get_plan_file_path(),
+            pending_plan_activation,
+        };
+        self.injection_policy.set_state(state);
     }
 
     // ========================================================================
@@ -1260,6 +1194,7 @@ impl KimiSoul {
             self.session.state.plan_session_id = None;
             self.session.state.plan_slug = None;
         }
+        self.sync_injection_policy();
         let _ = self.session.save_state();
     }
 
@@ -1280,8 +1215,8 @@ impl KimiSoul {
         }
     }
 
-    pub fn status_snapshot(&self) -> StatusSnapshot {
-        let token_count = self.context.token_count();
+    pub async fn status_snapshot(&self) -> StatusSnapshot {
+        let token_count = self.context.lock().await.token_count();
         let max_size = self.llm.as_ref().map(|l| l.max_context_size).unwrap_or(0);
         StatusSnapshot {
             context_usage: if max_size > 0 {
@@ -1295,15 +1230,6 @@ impl KimiSoul {
             context_tokens: token_count,
             max_context_tokens: max_size,
             mcp_status: None,
-        }
-    }
-
-    fn context_usage(&self) -> f64 {
-        let max_size = self.llm.as_ref().map(|l| l.max_context_size).unwrap_or(0);
-        if max_size > 0 {
-            self.context.token_count() as f64 / max_size as f64
-        } else {
-            0.0
         }
     }
 

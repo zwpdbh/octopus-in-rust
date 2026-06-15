@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod approval;
+pub mod brain_bridge;
 pub mod compaction;
 pub mod context;
 pub mod dynamic_injection;

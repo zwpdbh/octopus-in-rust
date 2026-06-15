@@ -4,29 +4,18 @@ use std::sync::Arc;
 use anyhow::Result;
 use futures::{Stream, StreamExt};
 use kosong::message::{ContentPart, Message, Role};
-use kosong::provider::openai_legacy::OpenAILegacy;
 use kosong::tooling::{HandleResult, ToolReturnValue};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::core::approval::{ApprovalPolicy, ApprovalRequest, ApprovalResponse};
+use crate::core::approval::{ApprovalRequest, ApprovalResponse, ApprovalRuntime};
 use crate::core::config::BrainConfig;
+use crate::core::errors::BrainError;
 use crate::core::events::BrainEvent;
+use crate::core::recovery::RecoveryAction;
 use crate::core::registry::ToolRegistry;
 use crate::core::turn::{TurnInput, TurnResult};
-
-/// Errors that can occur while running the Brain.
-#[derive(Debug, thiserror::Error)]
-pub enum BrainError {
-    #[error("No LLM provider configured")]
-    NoProvider,
-    #[error("LLM error: {0}")]
-    Llm(String),
-    #[error("Tool error: {0}")]
-    Tool(String),
-    #[error("Turn exceeded maximum steps ({0})")]
-    MaxSteps(usize),
-}
+use crate::hooks::policy::HookAction;
 
 /// A reusable agent core.
 #[derive(Clone)]
@@ -34,28 +23,35 @@ pub struct Brain {
     config: BrainConfig,
     provider: Arc<dyn kosong::ChatProvider>,
     registry: ToolRegistry,
+    custom_toolset: Option<Arc<dyn kosong::Toolset>>,
 }
 
 impl Brain {
     /// Create a new Brain from configuration.
-    pub fn new(config: BrainConfig) -> Result<Self> {
-        let provider = build_provider(&config)?;
+    ///
+    /// This constructor is synchronous and expects either a pre-built provider
+    /// in `config.provider` or a provider constructed beforehand. For async
+    /// construction, use [`BrainBuilder`](crate::core::builder::BrainBuilder).
+    pub fn new(config: BrainConfig) -> Result<Self, BrainError> {
+        let provider = config.provider.clone().ok_or(BrainError::NoProvider)?;
         let registry = ToolRegistry::new();
+        let custom_toolset = config.toolset.clone();
 
-        // Load tools from configured external sources.
-        for source in &config.tool_sources {
-            for tool in source.load_tools() {
-                let name = tool.name().to_string();
-                if registry.find(&name).is_some() {
-                    tracing::warn!(
-                        "Tool '{}' from source '{}' conflicts with an existing tool, skipping",
-                        name,
-                        source.name()
-                    );
-                    continue;
+        if custom_toolset.is_none() {
+            for source in &config.tool_sources {
+                for tool in source.load_tools() {
+                    let name = tool.name().to_string();
+                    if registry.find(&name).is_some() {
+                        tracing::warn!(
+                            "Tool '{}' from source '{}' conflicts with an existing tool, skipping",
+                            name,
+                            source.name()
+                        );
+                        continue;
+                    }
+                    registry.register(tool);
+                    tracing::info!("Registered tool '{}' from source '{}'", name, source.name());
                 }
-                registry.register(tool);
-                tracing::info!("Registered tool '{}' from source '{}'", name, source.name());
             }
         }
 
@@ -63,6 +59,7 @@ impl Brain {
             config,
             provider,
             registry,
+            custom_toolset,
         })
     }
 
@@ -72,15 +69,17 @@ impl Brain {
     }
 
     /// Access the message store.
-    pub fn message_store(&self) -> &Arc<std::sync::Mutex<dyn crate::session::store::MessageStore>> {
+    pub fn message_store(
+        &self,
+    ) -> &Arc<tokio::sync::Mutex<dyn crate::session::store::MessageStore>> {
         &self.config.message_store
     }
 
     /// Run a single user turn and return a stream of events.
     ///
-    /// The stream emits `BrainEvent`s as they happen: `TurnBegin`, text/thinking
-    /// fragments, tool calls, approval requests/resolutions, tool results, and
-    /// finally `TurnEnd` or `Error`.
+    /// The stream emits `BrainEvent`s as they happen: `TurnBegin`, step events,
+    /// text/thinking fragments, tool calls, approval requests/resolutions, tool
+    /// results, provider-refresh events, and finally `TurnEnd` or `Error`.
     pub async fn run_turn(
         &mut self,
         input: TurnInput,
@@ -90,9 +89,10 @@ impl Brain {
         let config = self.config.clone();
         let provider = self.provider.clone();
         let registry = self.registry.clone();
+        let custom_toolset = self.custom_toolset.clone();
 
         tokio::spawn(async move {
-            run_turn_loop(config, provider, registry, input, tx).await;
+            run_turn_loop(config, provider, registry, custom_toolset, input, tx).await;
         });
 
         Ok(Box::pin(
@@ -101,9 +101,6 @@ impl Brain {
     }
 
     /// Run a single user turn to completion (non-streaming).
-    ///
-    /// Convenience wrapper around [`Self::run_turn`] that collects all events
-    /// and returns the final text.
     pub async fn run_turn_to_completion(&mut self, input: TurnInput) -> Result<TurnResult> {
         let mut stream = self.run_turn(input).await?;
         let mut events = Vec::new();
@@ -132,9 +129,36 @@ impl Brain {
         tracing::info!("Registered host tool: {}", name);
     }
 
+    /// Run a single reasoning step and return a stream of events.
+    ///
+    /// Unlike [`Self::run_turn`], this does not push a user message or emit
+    /// `TurnBegin`/`TurnEnd`. It assumes the caller has already seeded the
+    /// message store and manages the outer turn loop.
+    pub async fn run_step(&mut self) -> Result<Pin<Box<dyn Stream<Item = BrainEvent> + Send>>> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let config = self.config.clone();
+        let provider = self.provider.clone();
+        let registry = self.registry.clone();
+        let custom_toolset = self.custom_toolset.clone();
+
+        tokio::spawn(async move {
+            run_step_loop(config, provider, registry, custom_toolset, tx).await;
+        });
+
+        Ok(Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+        ))
+    }
+
     /// Replace the current system prompt.
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.config.system_prompt = prompt;
+    }
+
+    /// Replace the underlying chat provider (e.g. after an OAuth token refresh).
+    pub fn set_provider(&mut self, provider: Arc<dyn kosong::ChatProvider>) {
+        self.provider = provider;
     }
 }
 
@@ -142,179 +166,78 @@ async fn run_turn_loop(
     config: BrainConfig,
     provider: Arc<dyn kosong::ChatProvider>,
     registry: ToolRegistry,
+    custom_toolset: Option<Arc<dyn kosong::Toolset>>,
     input: TurnInput,
     tx: UnboundedSender<BrainEvent>,
 ) {
     let _ = tx.send(BrainEvent::TurnBegin);
 
-    config
+    if let HookAction::Block { reason } = config
         .hook_policy
         .on_user_prompt_submit(&input.user_message)
-        .await;
-
+        .await
     {
-        let mut store = config.message_store.lock().unwrap();
-        store.push(Message {
-            role: Role::User,
-            name: None,
-            content: vec![ContentPart::Text {
-                text: input.user_message,
-            }],
-            tool_calls: None,
-            tool_call_id: None,
-            partial: None,
-        });
+        let _ = tx.send(BrainEvent::Error(reason.clone()));
+        let _ = tx.send(BrainEvent::TurnEnd);
+        config.hook_policy.on_turn_failure(&reason).await;
+        return;
     }
 
-    let toolset = ApprovalToolset {
-        inner: registry.clone(),
-        policy: config.approval_policy.clone(),
-        event_tx: tx.clone(),
+    {
+        let mut store = config.message_store.lock().await;
+        store
+            .push(Message {
+                role: Role::User,
+                name: None,
+                content: vec![ContentPart::Text {
+                    text: input.user_message,
+                }],
+                tool_calls: None,
+                tool_call_id: None,
+                partial: None,
+            })
+            .await;
+    }
+
+    let base_toolset: Arc<dyn kosong::Toolset> = match custom_toolset {
+        Some(toolset) => toolset,
+        None => Arc::new(ApprovalToolset {
+            inner: registry.clone(),
+            runtime: config.approval_runtime.clone(),
+            event_tx: tx.clone(),
+        }),
+    };
+    let toolset = HookAwareToolset {
+        inner: base_toolset,
+        hook_policy: config.hook_policy.clone(),
     };
 
     let mut final_text = String::new();
 
-    for _step_no in 0..config.max_steps_per_turn {
-        // Build the effective history for this step.
-        let base_history = config.message_store.lock().unwrap().history().to_vec();
+    for step_no in 0..config.max_steps_per_turn {
+        let _ = tx.send(BrainEvent::StepBegin { n: step_no });
 
-        // Optional compaction.
-        let base_history = if let Some(policy) = &config.compaction_policy {
-            if let Some(compacted) = policy.maybe_compact(&base_history).await {
-                config
-                    .message_store
-                    .lock()
-                    .unwrap()
-                    .set_history(compacted.clone());
-                compacted
-            } else {
-                base_history
-            }
-        } else {
-            base_history
-        };
-
-        // Optional dynamic injection (not persisted).
-        let injected = if let Some(policy) = &config.injection_policy {
-            policy.inject(&base_history).await
-        } else {
-            Vec::new()
-        };
-        let step_history: Vec<Message> = injected
-            .iter()
-            .chain(base_history.iter())
-            .cloned()
-            .collect();
-
-        let step_result = match kosong::step(
-            provider.as_ref(),
-            &config.system_prompt,
-            &toolset,
-            &step_history,
-            None,
-        )
-        .await
+        match run_single_step_with_retry(&config, &toolset, step_no, provider.clone(), tx.clone())
+            .await
         {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = e.message;
+            Ok(StepOutcome::Final(text)) => {
+                final_text = text;
+                let _ = tx.send(BrainEvent::StepEnd { n: step_no });
+                break;
+            }
+            Ok(StepOutcome::Continue) => {
+                let _ = tx.send(BrainEvent::StepEnd { n: step_no });
+                continue;
+            }
+            Err(err) => {
+                let msg = err.to_string();
                 let _ = tx.send(BrainEvent::Error(msg.clone()));
+                let _ = tx.send(BrainEvent::StepInterrupted);
                 let _ = tx.send(BrainEvent::TurnEnd);
                 config.hook_policy.on_turn_failure(&msg).await;
                 return;
             }
-        };
-
-        // Extract text / thinking / tool-call events from the assistant message.
-        let assistant_message = step_result.message.clone();
-        let mut assistant_text = String::new();
-        for part in &assistant_message.content {
-            match part {
-                ContentPart::Text { text } => {
-                    let _ = tx.send(BrainEvent::TextPart(text.clone()));
-                    assistant_text.push_str(text);
-                }
-                ContentPart::Think { think, .. } => {
-                    let _ = tx.send(BrainEvent::ThinkingPart(think.clone()));
-                }
-                _ => {}
-            }
         }
-
-        // If the assistant requested tool calls, emit events and execute them.
-        if let Some(ref tool_calls) = assistant_message.tool_calls {
-            // Persist the assistant message (with tool_calls) before awaiting tools.
-            config
-                .message_store
-                .lock()
-                .unwrap()
-                .push(assistant_message.clone());
-
-            for tc in tool_calls {
-                let args = tc.function.arguments.clone().unwrap_or_default();
-                let args_value = serde_json::from_str(&args).unwrap_or(Value::Null);
-
-                let _ = tx.send(BrainEvent::ToolCall {
-                    id: tc.id.clone(),
-                    name: tc.function.name.clone(),
-                    arguments: args_value.clone(),
-                });
-
-                config
-                    .hook_policy
-                    .on_pre_tool_use(&tc.function.name, &args_value, &tc.id)
-                    .await;
-            }
-
-            let results = step_result.tool_results().await;
-
-            for result in results {
-                let output = result
-                    .return_value
-                    .output
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let message = result
-                    .return_value
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| output.clone());
-
-                let _ = tx.send(BrainEvent::ToolResult {
-                    id: result.tool_call_id.clone(),
-                    output: message.clone(),
-                    is_error: result.return_value.is_error,
-                });
-
-                append_tool_result(
-                    &config.message_store,
-                    &result.tool_call_id,
-                    result.return_value.clone(),
-                );
-
-                if result.return_value.is_error {
-                    config
-                        .hook_policy
-                        .on_post_tool_use_failure("", &Value::Null, &message, &result.tool_call_id)
-                        .await;
-                } else {
-                    config
-                        .hook_policy
-                        .on_post_tool_use("", &Value::Null, &message, &result.tool_call_id)
-                        .await;
-                }
-            }
-
-            final_text.clear();
-            continue;
-        }
-
-        // No tool calls: this is the final answer for the turn.
-        config.message_store.lock().unwrap().push(assistant_message);
-        final_text = assistant_text;
-        break;
     }
 
     if final_text.is_empty() {
@@ -332,8 +255,301 @@ async fn run_turn_loop(
     config.hook_policy.on_turn_end(&final_text).await;
 }
 
-fn append_tool_result(
-    message_store: &Arc<std::sync::Mutex<dyn crate::session::store::MessageStore>>,
+async fn run_step_loop(
+    config: BrainConfig,
+    provider: Arc<dyn kosong::ChatProvider>,
+    registry: ToolRegistry,
+    custom_toolset: Option<Arc<dyn kosong::Toolset>>,
+    tx: UnboundedSender<BrainEvent>,
+) {
+    let base_toolset: Arc<dyn kosong::Toolset> = match custom_toolset {
+        Some(toolset) => toolset,
+        None => Arc::new(ApprovalToolset {
+            inner: registry.clone(),
+            runtime: config.approval_runtime.clone(),
+            event_tx: tx.clone(),
+        }),
+    };
+    let toolset = HookAwareToolset {
+        inner: base_toolset,
+        hook_policy: config.hook_policy.clone(),
+    };
+
+    match run_single_step_with_retry(&config, &toolset, 0, provider, tx.clone()).await {
+        Ok(StepOutcome::Final(text)) => {
+            // The caller already received streamed text parts, so do not emit
+            // a duplicate final TextPart here.
+            let _ = tx.send(BrainEvent::StepEnd { n: 0 });
+            let _ = text;
+        }
+        Ok(StepOutcome::Continue) => {
+            let _ = tx.send(BrainEvent::StepEnd { n: 0 });
+        }
+        Err(err) => {
+            let _ = tx.send(BrainEvent::Error(err.to_string()));
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StepOutcome {
+    /// The step executed tool calls; the caller should decide whether to continue.
+    Continue,
+    /// The step produced a final assistant message.
+    Final(String),
+}
+
+async fn run_single_step_with_retry(
+    config: &BrainConfig,
+    toolset: &HookAwareToolset,
+    step_no: usize,
+    mut provider: Arc<dyn kosong::ChatProvider>,
+    tx: UnboundedSender<BrainEvent>,
+) -> Result<StepOutcome, BrainError> {
+    let mut attempt: usize = 0;
+
+    loop {
+        attempt += 1;
+
+        match execute_step(config, toolset, step_no, provider.clone(), &tx).await {
+            Ok(outcome) => return Ok(outcome),
+            Err(err) => {
+                if attempt < config.retry_policy.max_attempts() {
+                    if let Some(wait) = config.retry_policy.should_retry(&err, attempt) {
+                        let _ = tx.send(BrainEvent::StepRetry {
+                            n: step_no,
+                            next_attempt: attempt + 1,
+                            max_attempts: config.retry_policy.max_attempts(),
+                            wait_s: wait.as_secs_f64(),
+                            error_type: error_type(&err).to_string(),
+                            status_code: err.status_code(),
+                        });
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                }
+
+                // Retry policy exhausted; ask recovery policy what to do.
+                match config.recovery_policy.recover(&err).await {
+                    RecoveryAction::RefreshProvider => {
+                        let _ = tx.send(BrainEvent::ProviderRefreshing {
+                            reason: format!("recovering from {}", err),
+                        });
+                        match config.build_provider().await {
+                            Ok(new_provider) => {
+                                provider = new_provider;
+                                attempt = 0;
+                                let _ = tx.send(BrainEvent::ProviderRefreshed);
+                                continue;
+                            }
+                            Err(build_err) => {
+                                return Err(BrainError::Recovery(format!(
+                                    "failed to refresh provider: {build_err}"
+                                )));
+                            }
+                        }
+                    }
+                    RecoveryAction::RequestInteractiveProvider { reason } => {
+                        let (refresh_tx, mut refresh_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let _ = tx.send(BrainEvent::ProviderRefreshRequested {
+                            reason,
+                            sender: crate::core::events::ProviderRefreshSender(refresh_tx),
+                        });
+                        match refresh_rx.recv().await {
+                            Some(new_provider) => {
+                                provider = new_provider;
+                                attempt = 0;
+                                let _ = tx.send(BrainEvent::ProviderRefreshed);
+                                continue;
+                            }
+                            None => {
+                                return Err(BrainError::Recovery(
+                                    "interactive provider refresh cancelled".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    RecoveryAction::Retry { wait } => {
+                        tokio::time::sleep(wait).await;
+                        attempt = 0;
+                        continue;
+                    }
+                    RecoveryAction::Abort => return Err(err),
+                }
+            }
+        }
+    }
+}
+
+fn error_type(err: &BrainError) -> &'static str {
+    match err {
+        BrainError::ApiStatus { status_code, .. } => match *status_code {
+            429 => "rate_limit",
+            401 | 403 => "auth",
+            s if s >= 500 => "5xx_server",
+            s if (400..500).contains(&s) => "4xx_client",
+            _ => "api",
+        },
+        BrainError::ApiConnection(_) => "network",
+        BrainError::ApiTimeout(_) => "timeout",
+        BrainError::ApiEmptyResponse => "empty_response",
+        _ => "other",
+    }
+}
+
+async fn execute_step(
+    config: &BrainConfig,
+    toolset: &HookAwareToolset,
+    step_no: usize,
+    provider: Arc<dyn kosong::ChatProvider>,
+    tx: &UnboundedSender<BrainEvent>,
+) -> Result<StepOutcome, BrainError> {
+    let _ = tx.send(BrainEvent::StepBegin { n: step_no });
+
+    // Build the effective history for this step.
+    let base_history = config.message_store.lock().await.history().await;
+
+    // Optional compaction.
+    let base_history = if let Some(policy) = &config.compaction_policy {
+        if let Some(compacted) = policy.maybe_compact(&base_history).await {
+            config
+                .message_store
+                .lock()
+                .await
+                .set_history(compacted.clone())
+                .await;
+            compacted
+        } else {
+            base_history
+        }
+    } else {
+        base_history
+    };
+
+    // Optional dynamic injection (not persisted).
+    let injected = if let Some(policy) = &config.injection_policy {
+        policy.inject(&base_history).await
+    } else {
+        Vec::new()
+    };
+    let step_history: Vec<Message> = injected
+        .iter()
+        .chain(base_history.iter())
+        .cloned()
+        .collect();
+
+    let step_result = match kosong::step(
+        provider.as_ref(),
+        &config.system_prompt,
+        toolset,
+        &step_history,
+        None,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(BrainError::from_kosong_error(e)),
+    };
+
+    if let Some(usage) = step_result.usage.clone() {
+        let _ = tx.send(BrainEvent::Usage { usage });
+    }
+
+    // Extract text / thinking / tool-call events from the assistant message.
+    let assistant_message = step_result.message.clone();
+    let mut assistant_text = String::new();
+    for part in &assistant_message.content {
+        match part {
+            ContentPart::Text { text } => {
+                let _ = tx.send(BrainEvent::TextPart(text.clone()));
+                assistant_text.push_str(text);
+            }
+            ContentPart::Think { think, .. } => {
+                let _ = tx.send(BrainEvent::ThinkingPart(think.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    // If the assistant requested tool calls, emit events and execute them.
+    if let Some(ref tool_calls) = assistant_message.tool_calls {
+        // Persist the assistant message (with tool_calls) before awaiting tools.
+        {
+            let mut store = config.message_store.lock().await;
+            store.push(assistant_message.clone()).await;
+        }
+
+        for tc in tool_calls {
+            let args = tc.function.arguments.clone().unwrap_or_default();
+            let args_value = serde_json::from_str(&args).unwrap_or(Value::Null);
+
+            let _ = tx.send(BrainEvent::ToolCall {
+                id: tc.id.clone(),
+                name: tc.function.name.clone(),
+                arguments: args_value.clone(),
+            });
+
+            config
+                .hook_policy
+                .on_pre_tool_use(&tc.function.name, &args_value, &tc.id)
+                .await;
+        }
+
+        let results = step_result.tool_results().await;
+
+        for result in results {
+            let output = result
+                .return_value
+                .output
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let message = result
+                .return_value
+                .message
+                .clone()
+                .unwrap_or_else(|| output.clone());
+
+            let _ = tx.send(BrainEvent::ToolResult {
+                id: result.tool_call_id.clone(),
+                output: message.clone(),
+                is_error: result.return_value.is_error,
+            });
+
+            append_tool_result(
+                &config.message_store,
+                &result.tool_call_id,
+                result.return_value.clone(),
+            )
+            .await;
+
+            if result.return_value.is_error {
+                config
+                    .hook_policy
+                    .on_post_tool_use_failure("", &Value::Null, &message, &result.tool_call_id)
+                    .await;
+            } else {
+                config
+                    .hook_policy
+                    .on_post_tool_use("", &Value::Null, &message, &result.tool_call_id)
+                    .await;
+            }
+        }
+
+        return Ok(StepOutcome::Continue);
+    }
+
+    // No tool calls: this is the final answer for the step.
+    {
+        let mut store = config.message_store.lock().await;
+        store.push(assistant_message).await;
+    }
+    Ok(StepOutcome::Final(assistant_text))
+}
+
+async fn append_tool_result(
+    message_store: &Arc<tokio::sync::Mutex<dyn crate::session::store::MessageStore>>,
     tool_call_id: &str,
     return_value: ToolReturnValue,
 ) {
@@ -349,20 +565,24 @@ fn append_tool_result(
         })
         .unwrap_or_default();
 
-    message_store.lock().unwrap().push(Message {
-        role: Role::Tool,
-        name: None,
-        content: vec![ContentPart::Text { text: message }],
-        tool_calls: None,
-        tool_call_id: Some(tool_call_id.to_string()),
-        partial: None,
-    });
+    let mut store = message_store.lock().await;
+    store
+        .push(Message {
+            role: Role::Tool,
+            name: None,
+            content: vec![ContentPart::Text { text: message }],
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+            partial: None,
+        })
+        .await;
 }
 
-/// Toolset wrapper that gates each tool call through an [`ApprovalPolicy`].
+/// Toolset wrapper that gates each tool call through an [`ApprovalRuntime`].
+#[derive(Clone)]
 struct ApprovalToolset {
     inner: ToolRegistry,
-    policy: Arc<dyn ApprovalPolicy>,
+    runtime: Arc<dyn ApprovalRuntime>,
     event_tx: UnboundedSender<BrainEvent>,
 }
 
@@ -372,7 +592,7 @@ impl kosong::Toolset for ApprovalToolset {
     }
 
     fn handle(&self, tool_call: &kosong::ToolCall) -> HandleResult {
-        let policy = self.policy.clone();
+        let runtime = self.runtime.clone();
         let inner = self.inner.clone();
         let event_tx = self.event_tx.clone();
         let tc = tool_call.clone();
@@ -385,12 +605,6 @@ impl kosong::Toolset for ApprovalToolset {
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or(Value::Null);
 
-            let _ = event_tx.send(BrainEvent::ApprovalRequested {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.function.name.clone(),
-                arguments: args_value.clone(),
-            });
-
             let request = ApprovalRequest {
                 tool_name: tc.function.name.clone(),
                 tool_input: args_value,
@@ -398,18 +612,8 @@ impl kosong::Toolset for ApprovalToolset {
                 display: Vec::new(),
             };
 
-            let response = policy.request(request).await;
+            let response = runtime.request(request, event_tx.clone()).await;
             let approved = response.is_approved();
-            let reason = match response {
-                ApprovalResponse::Approved => None,
-                ApprovalResponse::Rejected { feedback } => Some(feedback),
-            };
-
-            let _ = event_tx.send(BrainEvent::ApprovalResolved {
-                tool_call_id: tc.id.clone(),
-                approved,
-                reason: reason.clone(),
-            });
 
             if approved {
                 match inner.handle(&tc) {
@@ -426,6 +630,10 @@ impl kosong::Toolset for ApprovalToolset {
                     },
                 }
             } else {
+                let reason = match response {
+                    ApprovalResponse::Approved => None,
+                    ApprovalResponse::Rejected { feedback } => Some(feedback),
+                };
                 kosong::tooling::ToolResult {
                     tool_call_id: tc.id,
                     return_value: kosong::tooling::ToolReturnValue::error(
@@ -439,20 +647,55 @@ impl kosong::Toolset for ApprovalToolset {
     }
 }
 
-fn build_provider(config: &BrainConfig) -> Result<Arc<dyn kosong::ChatProvider>> {
-    if config.base_url.is_empty() || config.model.is_empty() {
-        return Err(BrainError::NoProvider.into());
+/// Toolset wrapper that enforces the [`HookPolicy`] before each tool call.
+#[derive(Clone)]
+struct HookAwareToolset {
+    inner: Arc<dyn kosong::Toolset>,
+    hook_policy: Arc<dyn crate::hooks::policy::HookPolicy>,
+}
+
+impl kosong::Toolset for HookAwareToolset {
+    fn tools(&self) -> Vec<kosong::Tool> {
+        self.inner.tools()
     }
 
-    let provider = OpenAILegacy::new(&config.model)
-        .with_base_url(&config.base_url)
-        .with_stream(false);
+    fn handle(&self, tool_call: &kosong::ToolCall) -> HandleResult {
+        let args_value = tool_call
+            .function
+            .arguments
+            .as_ref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(Value::Null);
 
-    let provider = if config.api_key.is_empty() {
-        provider
-    } else {
-        provider.with_api_key(&config.api_key)
-    };
+        let hook_policy = self.hook_policy.clone();
+        let inner = self.inner.clone();
+        let tc = tool_call.clone();
 
-    Ok(Arc::new(provider))
+        let handle = tokio::spawn(async move {
+            match hook_policy
+                .on_pre_tool_use(&tc.function.name, &args_value, &tc.id)
+                .await
+            {
+                crate::hooks::policy::HookAction::Allow => match inner.handle(&tc) {
+                    HandleResult::Ready(result) => result,
+                    HandleResult::Pending(handle) => match handle.await {
+                        Ok(result) => result,
+                        Err(e) => kosong::tooling::ToolResult {
+                            tool_call_id: tc.id,
+                            return_value: kosong::tooling::ToolReturnValue::error(format!(
+                                "Tool execution failed: {}",
+                                e
+                            )),
+                        },
+                    },
+                },
+                crate::hooks::policy::HookAction::Block { reason } => kosong::tooling::ToolResult {
+                    tool_call_id: tc.id,
+                    return_value: kosong::tooling::ToolReturnValue::error(reason),
+                },
+            }
+        });
+
+        HandleResult::Pending(handle)
+    }
 }
