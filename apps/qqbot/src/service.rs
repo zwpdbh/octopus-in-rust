@@ -248,7 +248,7 @@ impl CoreHandle {
     }
 }
 
-async fn start_snowluma(base_dir: &Path) -> Result<()> {
+pub(crate) async fn start_snowluma(base_dir: &Path) -> Result<()> {
     let sd = snowluma_data_dir(base_dir);
     std::fs::create_dir_all(sd.join("config"))?;
     std::fs::create_dir_all(sd.join(".config"))?;
@@ -335,7 +335,7 @@ async fn start_snowluma(base_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn stop_snowluma() -> Result<()> {
+pub(crate) async fn stop_snowluma() -> Result<()> {
     let output = Command::new("docker")
         .args(["stop", "-t", "10", SNOWLUMA_CONTAINER])
         .output()
@@ -349,7 +349,7 @@ async fn stop_snowluma() -> Result<()> {
     Ok(())
 }
 
-async fn container_running() -> Result<bool> {
+pub(crate) async fn container_running() -> Result<bool> {
     let output = Command::new("docker")
         .args(["ps", "-q", "-f", &format!("name={SNOWLUMA_CONTAINER}")])
         .output()
@@ -358,7 +358,7 @@ async fn container_running() -> Result<bool> {
     Ok(!output.stdout.is_empty())
 }
 
-async fn wait_for_port(host: &str, port: u16, timeout_secs: u64) -> Result<()> {
+pub(crate) async fn wait_for_port(host: &str, port: u16, timeout_secs: u64) -> Result<()> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
     while tokio::time::Instant::now() < deadline {
         if TcpStream::connect((host, port)).await.is_ok() {
@@ -367,6 +367,43 @@ async fn wait_for_port(host: &str, port: u16, timeout_secs: u64) -> Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
     anyhow::bail!("timed out waiting for {host}:{port}")
+}
+
+/// Try to read the SnowLuma WebUI initial password from the container logs.
+/// SnowLuma prints this only once, on the first start of a fresh data volume.
+/// We poll for a few seconds because Docker may need a moment to flush the line.
+pub(crate) async fn extract_snowluma_webui_password() -> Option<String> {
+    for _ in 0..10 {
+        let output = match Command::new("sh")
+            .args([
+                "-c",
+                &format!(
+                    "docker logs {SNOWLUMA_CONTAINER} 2>&1 | grep -E 'initial credentials|临时密码' | tail -n 1"
+                ),
+            ])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => String::new(),
+        };
+
+        let line = output.trim();
+        if !line.is_empty() {
+            if let Some(idx) = line.find("password=") {
+                let rest = &line[idx + "password=".len()..];
+                return rest.split_whitespace().next().map(|s| s.to_string());
+            }
+            if let Some(idx) = line.find("临时密码:") {
+                let rest = &line[idx + "临时密码:".len()..];
+                return rest.split_whitespace().next().map(|s| s.to_string());
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    None
 }
 
 pub fn default_snowluma_onebot_config() -> String {

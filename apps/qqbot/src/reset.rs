@@ -40,6 +40,14 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         }
     }
 
+    // Reset the SnowLuma WebUI admin password so the next container start
+    // generates a new initial credential and prints it to the logs.
+    let webui_password_file = base.join("snowluma-data/config/webui.json");
+    if webui_password_file.exists() {
+        println!("Resetting SnowLuma WebUI password: {}", webui_password_file.display());
+        tokio::fs::remove_file(&webui_password_file).await?;
+    }
+
     // Remove pid file.
     let pid_file = data_dir.join("run/qqbot.pid");
     if pid_file.exists() {
@@ -48,5 +56,7 @@ pub async fn run(data_dir: &Path) -> Result<()> {
 
     println!("\nReset complete.");
     println!("Run `qqbot init` to reconfigure, then `qqbot start` to scan the QR code again.");
+    println!("After SnowLuma starts, find the new WebUI password with:");
+    println!("  docker logs snowluma 2>&1 | grep -E 'initial credentials'");
     Ok(())
 }

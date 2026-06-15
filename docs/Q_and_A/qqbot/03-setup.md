@@ -31,7 +31,7 @@ After this you have:
 
 ## 2.3 Initialize
 
-`init` writes config files, pulls the SnowLuma Docker image, copies the default plugin, and starts the daemon.
+`init` writes config files, pulls the SnowLuma Docker image, copies the default plugin, starts SnowLuma, and prints a step-by-step checklist. On a fresh SnowLuma start it also prints the WebUI initial password.
 
 ```bash
 cargo run --bin qqbot -- init \
@@ -46,15 +46,47 @@ Flags:
 - `--kimi-key` — Moonshot API key
 - `--group` — allowed group ID (repeatable for multiple groups)
 - `--data-dir` — defaults to `./data/qqbot-data`
+- `--ws-port` — OneBot WebSocket port, defaults to `3001`
+- `--webui-port` — SnowLuma WebUI port, defaults to `5099`
+- `--reset-webui-password` — reset the SnowLuma WebUI admin password and print the new one-time password
+
+### Using a `.env` file
+
+Instead of passing secrets on the command line, create a `.env` file in the
+working directory:
+
+```bash
+QQBOT_ACCOUNT=3462039501
+QQBOT_KIMI_KEY=sk-xxxxxx
+QQBOT_GROUP=925712027
+# optional:
+# QQBOT_WS_PORT=3001
+# QQBOT_WEBUI_PORT=5099
+```
+
+Then run:
+
+```bash
+cargo run --bin qqbot -- init
+```
+
+`init` loads `.env` automatically. Environment variables use the same names and
+override any command-line flags you do provide.
 
 ## 2.4 Log in
 
-After `init`, SnowLuma starts inside Docker. Open noVNC and scan the QQ QR code:
+After `init`, SnowLuma is already running inside Docker. The `init` output shows:
+
+- noVNC URL: `http://localhost:6081` (password: `vncpasswd`)
+- SnowLuma WebUI username: `admin` and the one-time password (only on the first fresh start, or when `--reset-webui-password` is used)
+
+The WebUI password is one-time: use it for the first login, then change it in the WebUI. If you forget it, run `init` again with `--reset-webui-password`.
+
+Open noVNC and scan the QQ QR code:
 
 ```bash
-# URL and password
 http://localhost:6081
-# password: vncpasswd
+# VNC password: vncpasswd
 ```
 
 In the noVNC desktop, scan the QR code with your phone's QQ app to log in the bot account.

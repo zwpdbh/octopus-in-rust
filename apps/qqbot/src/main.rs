@@ -35,22 +35,29 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// One-shot setup: write configs, ensure SnowLuma image, start daemon.
+    ///
+    /// Values can also be provided via a `.env` file or environment variables:
+    ///   QQBOT_ACCOUNT, QQBOT_KIMI_KEY, QQBOT_GROUP, QQBOT_WS_PORT, QQBOT_WEBUI_PORT.
     Init {
         /// QQ account number for the bot.
-        #[arg(long, short)]
+        #[arg(long, short, env = "QQBOT_ACCOUNT")]
         account: i64,
         /// Kimi (Moonshot AI) API key.
-        #[arg(long, short)]
+        #[arg(long, short, env = "QQBOT_KIMI_KEY")]
         kimi_key: String,
-        /// Group IDs the bot is allowed to respond in.
-        #[arg(long, short)]
+        /// Group IDs the bot is allowed to respond in (comma-separated when set via env).
+        #[arg(long, short, env = "QQBOT_GROUP", value_delimiter = ',')]
         group: Vec<i64>,
         /// OneBot WebSocket port.
-        #[arg(long, default_value_t = 3001)]
+        #[arg(long, default_value_t = 3001, env = "QQBOT_WS_PORT")]
         ws_port: u16,
         /// SnowLuma WebUI port.
-        #[arg(long, default_value_t = 5099)]
+        #[arg(long, default_value_t = 5099, env = "QQBOT_WEBUI_PORT")]
         webui_port: u16,
+        /// Reset the SnowLuma WebUI admin password and print the new one-time password.
+        /// Use this if you do not know the current WebUI password.
+        #[arg(long)]
+        reset_webui_password: bool,
     },
     /// Start the bot service in the background.
     Start,
@@ -120,6 +127,11 @@ enum PluginCommand {
 }
 
 fn main() -> Result<()> {
+    // Load `.env` from the current working directory if present. This lets
+    // users keep init secrets (API key, QQ account, group IDs) out of shell
+    // history and command lines.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
     let data_dir = paths::resolve(&cli.data_dir);
 
@@ -130,6 +142,7 @@ fn main() -> Result<()> {
             group,
             ws_port,
             webui_port,
+            reset_webui_password,
         } => {
             // Run setup synchronously before daemonizing.
             let rt = tokio::runtime::Runtime::new()?;
@@ -140,6 +153,7 @@ fn main() -> Result<()> {
                 group,
                 ws_port,
                 webui_port,
+                reset_webui_password,
             ))?;
             drop(rt);
 
@@ -254,13 +268,24 @@ fn main() -> Result<()> {
 
 async fn init(
     data_dir: PathBuf,
-    _account: i64,
+    account: i64,
     kimi_key: String,
     groups: Vec<i64>,
     ws_port: u16,
     webui_port: u16,
+    reset_webui_password: bool,
 ) -> Result<()> {
     let base = base_dir(&data_dir);
+
+    // If a daemon is already running, stop it so we can re-bind the pid file
+    // and take over management of SnowLuma.
+    if daemon::is_alive(&data_dir) {
+        println!("Stopping existing qqbot daemon...");
+        daemon::stop(&data_dir)
+            .await
+            .context("failed to stop existing qqbot daemon")?;
+    }
+
     std::fs::create_dir_all(&base)?;
     std::fs::create_dir_all(&data_dir)?;
     std::fs::create_dir_all(logs_dir(&data_dir))?;
@@ -278,7 +303,7 @@ async fn init(
     let core_config = CoreConfigFile::new(
         ws_url,
         data_dir.join("plugins").to_string_lossy().to_string(),
-        groups,
+        groups.clone(),
         core_llm,
     );
     core_config.to_file(data_dir.join("config.toml"))?;
@@ -318,23 +343,103 @@ async fn init(
         );
     }
 
+    // Optionally reset the SnowLuma WebUI password so SnowLuma prints a new
+    // one-time password on the next start.
+    let webui_password_file = base
+        .join("snowluma-data")
+        .join("config")
+        .join("webui.json");
+    let webui_existed = webui_password_file.exists();
+    if reset_webui_password {
+        if webui_existed {
+            println!("Resetting SnowLuma WebUI password...");
+            tokio::fs::remove_file(&webui_password_file).await?;
+        }
+        if service::container_running().await.unwrap_or(false) {
+            println!("Stopping existing SnowLuma container to apply password reset...");
+            service::stop_snowluma()
+                .await
+                .context("failed to stop SnowLuma container")?;
+        }
+    }
+
+    // Start SnowLuma now so the user can scan the QR code right away.
+    println!("Starting SnowLuma container...");
+    service::start_snowluma(&base)
+        .await
+        .context("failed to start SnowLuma container")?;
+
+    // Wait for the services to be reachable before printing the guide.
+    println!("Waiting for SnowLuma services...");
+    let _ = service::wait_for_port("127.0.0.1", 5099, 30).await;
+    let _ = service::wait_for_port("127.0.0.1", 6081, 30).await;
+    let _ = service::wait_for_port("127.0.0.1", 3001, 30).await;
+
+    // Show the WebUI one-time password only when it is genuinely a fresh
+    // SnowLuma start (either the data was empty or the user asked to reset it).
+    let show_webui_password = reset_webui_password || !webui_existed;
+    if show_webui_password {
+        match service::extract_snowluma_webui_password().await {
+            Some(password) => {
+                println!("SnowLuma WebUI one-time password (first login only, username: admin): {password}");
+            }
+            None => {
+                println!("SnowLuma WebUI username: admin");
+                println!("The new one-time password could not be read from the container logs.");
+                println!("You can find it with:");
+                println!("  docker logs snowluma 2>&1 | grep -E \"initial credentials|临时密码\"");
+            }
+        }
+    } else {
+        println!("SnowLuma WebUI username: admin");
+        println!("Existing WebUI password preserved. If you forgot it, re-run init with --reset-webui-password.");
+    }
+
     info!(webui_port = webui_port, "qqbot initialized");
     println!();
     println!("qqbot initialized.");
     println!("Data directory: {}", data_dir.display());
     println!();
-    let no_vnc_url = hyperlink("http://localhost:6081", "http://localhost:6081");
-    println!("The daemon is starting in the background. Next steps:");
-    println!("  1. Wait a few seconds for SnowLuma to start.");
-    println!("  2. Open noVNC: {no_vnc_url}");
-    println!("     VNC password: vncpasswd");
-    println!("  3. Scan the QQ QR code with your phone.");
-    println!("  4. Add the bot to the allowed QQ group(s).");
-    println!("  5. Check status: qqbot status");
-    println!("  6. View logs:    qqbot logs core -n 50");
+    print_init_guide(account, &groups, &data_dir);
     println!();
 
     Ok(())
+}
+
+fn print_init_guide(account: i64, groups: &[i64], data_dir: &std::path::Path) {
+    let no_vnc_url = hyperlink("http://localhost:6081", "http://localhost:6081");
+    let webui_url = hyperlink("http://localhost:5099", "http://localhost:5099");
+    let config_path = data_dir.join("config.toml");
+
+    println!("The daemon is starting in the background. Complete these steps:");
+    println!();
+    println!("  1. Open noVNC and scan the QQ QR code:");
+    println!("     {no_vnc_url}");
+    println!("     VNC password: vncpasswd");
+    println!();
+    println!("  2. Use your phone's QQ app to scan the QR code in the noVNC window.");
+    println!("     This logs in the bot account: {account}");
+    println!();
+    println!("  3. Add the bot account ({account}) to the QQ group(s) it should monitor.");
+    println!();
+    if groups.is_empty() {
+        println!("  4. Allow those groups in the bot config:");
+        println!("     Edit {}", config_path.display());
+        println!("     Set allowed_groups = [123456789]  (replace with your group ID(s))");
+        println!("     Then run: cargo run --bin qqbot -- restart");
+    } else {
+        println!("  4. The bot is configured to respond in these groups:");
+        println!("     allowed_groups = {groups:?}");
+        println!("     Make sure the bot account is a member of each group.");
+    }
+    println!();
+    println!("  5. Wait for the OneBot WebSocket handshake. Run:");
+    println!("     cargo run --bin qqbot -- status");
+    println!();
+    println!("  6. View logs:");
+    println!("     cargo run --bin qqbot -- logs core -n 50");
+    println!();
+    println!("SnowLuma WebUI (optional): {webui_url}  (username: admin)");
 }
 
 fn hyperlink(url: &str, text: &str) -> String {

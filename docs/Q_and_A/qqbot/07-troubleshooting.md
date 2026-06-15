@@ -77,10 +77,24 @@ Open `http://localhost:6081` in a browser. The password is `vncpasswd`. The QR c
 
 ## 6.7 Reset everything
 
+`reset` stops the daemon, removes the SnowLuma container, clears the QQ login
+session, and also resets the SnowLuma WebUI admin password. Configs and enabled
+plugins are preserved.
+
 ```bash
 cargo run --bin qqbot -- stop
 cargo run --bin qqbot -- reset
 cargo run --bin qqbot -- init --account <QQ> --kimi-key <KEY> --group <GID>
 ```
 
-Then open `http://localhost:6081`, scan the QR code, and add the bot to the allowed group.
+After SnowLuma starts again, grab the new WebUI password from the container logs:
+
+```bash
+docker logs snowluma 2>&1 | grep -E "initial credentials|临时密码"
+```
+
+The default WebUI username is `admin`. The password is the one printed by the
+line above.
+
+Then open `http://localhost:6081`, scan the QR code, and add the bot to the
+allowed group.
