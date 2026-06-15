@@ -40,4 +40,4 @@
 - [ ] Wire server for web/vis communication
 - [x] Root hub for multi-agent routing
 - [ ] JSON-RPC protocol layer
-- [ ] Notification pump (`_pump_notifications_to_wire()`)
+- [x] Notification pump (`KimiSoul::start_notification_pump()`)

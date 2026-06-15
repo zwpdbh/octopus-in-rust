@@ -20,7 +20,7 @@ Tracks the extraction of a reusable **Brain** crate from `octopus-cli` and its i
 |-------|------|--------|
 | 0 | Decisions & design | ✅ |
 | 1 | Extract + layer the Brain crate | ✅ |
-| 2 | Make `octopus-cli` a consumer | ⬜ |
+| 2 | Make `octopus-cli` a consumer | ✅ |
 | 3 | Plugin tool ABI + `qqbot-core` integration | ✅ |
 | 4 | Configuration / auth unification | ⬜ |
 
@@ -34,6 +34,7 @@ Tracks the extraction of a reusable **Brain** crate from `octopus-cli` and its i
 | 2026-06-14 | QQ plugins live in `data/qqbot-data/plugins/`, not `~/.kimi/plugins/`. | Separate security posture and deploy flow from CLI plugins. |
 | 2026-06-14 | Plugins expose tools via `register_tools` / `call_tool`; legacy `on_message` / `on_command` kept for deterministic commands. | Turns plugins into first-class agent tools. |
 | 2026-06-15 | Layer `brain` into `core` / `tools` / `session` / `hooks`; add `ApprovalPolicy`, `ToolSource`, and streaming API. | Keeps `qqbot-core` minimal while letting `octopus-cli` opt into full features later. |
+| 2026-06-15 | Add policy traits (`StepPolicy`, `CheckpointPolicy`, `SystemPromptPolicy`, `ToolResultTransformer`, `EventPolicy`) and move CLI-specific checkpoint/D-Mail, dynamic injection, and notification delivery into Brain policy bridges. | Lets `octopus-cli` keep its outer turn loop for steers/wire mapping while Brain owns the reasoning loop. |
 
 ## Task backlog
 
@@ -42,22 +43,28 @@ Tracks the extraction of a reusable **Brain** crate from `octopus-cli` and its i
 - [x] Create `brain` workspace member.
 - [x] Layer modules: `core`, `tools`, `session`, `hooks`.
 - [x] Define agent-loop types and logic:
-  - [x] `BrainEvent` enum (TextPart, ThinkingPart, ToolCall, ToolResult, ApprovalRequested, ApprovalResolved, TurnBegin, TurnEnd, Error).
-  - [x] `Brain` struct with `run_turn` (streaming) and `run_turn_to_completion`.
+  - [x] `BrainEvent` enum (TextPart, ThinkingPart, ToolCall, ToolResult, ApprovalRequested, ApprovalResolved, TurnBegin, TurnEnd, StepBegin, StepEnd, StepInterrupted, StepRetry, CheckpointCreated, CheckpointReverted, ProviderRefreshing, ProviderRefreshRequested, ProviderRefreshed, Error).
+  - [x] `Brain` struct with `run_turn` (streaming), `run_turn_to_completion`, and `run_step`.
   - [x] `ToolRegistry` abstraction + `ToolSource` trait.
-  - [x] `ApprovalPolicy` trait with `AutoApprove` default.
+  - [x] `ApprovalPolicy` / `ApprovalRuntime` traits with `AutoApprove` default.
   - [x] `MessageStore`, `CompactionPolicy`, `InjectionPolicy`, `HookPolicy` traits with no-op defaults.
+  - [x] `StepPolicy`, `CheckpointPolicy`, `SystemPromptPolicy`, `ToolResultTransformer`, `EventPolicy` traits with no-op defaults.
   - [x] LLM-provider resolution via `kosong`.
 - [x] `cargo check --workspace` passes.
 - [x] `cargo test --workspace` passes.
 
 ### Phase 2 — Make `octopus-cli` a consumer
 
-- [ ] Replace inline `KimiSoul` agent loop with `Brain::run_turn`.
-- [ ] Map `BrainEvent`s to existing UI render paths.
-- [ ] Implement interactive `ApprovalPolicy` for TUI.
-- [ ] `cargo test -p octopus-cli` passes with no regressions.
-- [ ] `octopus-cli --print` still produces answers.
+- [x] Delegate each reasoning step from `KimiSoul` to `Brain::run_step`, keeping a thin outer loop for steers and wire event mapping.
+- [x] Map `BrainEvent`s to existing UI render paths.
+- [x] Implement CLI-specific Brain policy bridges:
+  - [x] `CliStepPolicy` — per-step dedup, notification delivery, D-Mail rewinds, tool-rejection stops.
+  - [x] `CliCheckpointPolicy` — file-backed checkpoints and `DenwaRenji` synchronization.
+  - [x] `CliInjectionPolicy` — dynamic plan-mode / AFK reminders.
+  - [x] `CliCompactionPolicy`, `CliProviderFactory`, `CliRetryPolicy`, `CliRecoveryPolicy`.
+- [x] Preserve interactive approval through `KimiToolset` (auto-approve runtime inside Brain; approval UI in toolset).
+- [x] `cargo test -p octopus-cli` passes with no regressions.
+- [x] `octopus-cli --print` still produces answers.
 
 ### Phase 3 — Plugin tool ABI and `qqbot-core` integration
 

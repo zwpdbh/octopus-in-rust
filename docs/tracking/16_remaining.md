@@ -45,18 +45,16 @@
 | `octopus-cli/src/notifications/manager.rs` | Claim/ack/deliver/recover | ~176 | ✅ |
 | `octopus-cli/src/notifications/llm.rs` | `build_notification_message()` | ~64 | ✅ |
 
-### What's Done
-
 - [x] Notification models (Event, Delivery, View, SinkState)
 - [x] Persistent store (file-based JSON)
-- [x] Delivery to LLM context in `_step()`
+- [x] Delivery to LLM context via `CliStepPolicy::before_step`
 - [x] `build_notification_message()` with XML format
 - [x] Ack on context restore
 - [x] Dedupe key support
+- [x] Delivery to wire via `KimiSoul::start_notification_pump()`
 
 ### What's Missing
 
-- [ ] Delivery to wire (pump loop)
 - [ ] LLM-generated notification summaries
 - [ ] Background task output tailing in notification messages
 

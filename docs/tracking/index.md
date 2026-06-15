@@ -67,7 +67,7 @@ This directory tracks the progress of rewriting `kimi-cli` (Python) into `octopu
 
 | Initiative | Tracker | Status |
 |------------|---------|--------|
-| Brain crate extraction & QQ integration | [`brain/index.md`](brain/index.md) | ✅ Phase 3 complete; Phase 2 (octopus-cli consumer) next |
+| Brain crate extraction & QQ integration | [`brain/index.md`](brain/index.md) | ✅ Phase 2 (octopus-cli consumer) and Phase 3 (qqbot-core integration) complete; Phase 4 (config/auth unification) next |
 
 ## How to Update This Tracker
 

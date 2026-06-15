@@ -22,7 +22,8 @@ Both products share the same reasoning, tool-calling, and LLM-provider logic, bu
 
 ## Current state
 
-- `octopus-cli` contains the full agent loop in `src/soul/kimisoul.rs` and surrounding modules.
+- `brain` is a dedicated workspace crate with a policy-driven agent core.
+- `octopus-cli` consumes `brain` through CLI-specific policy bridges (`CliStepPolicy`, `CliCheckpointPolicy`, `CliInjectionPolicy`, etc.); `KimiSoul` no longer owns checkpoint/D-Mail, dynamic injection, notification delivery, or the per-step reasoning loop.
 - `kosong` provides LLM-provider abstraction and tool-call plumbing, but not session/agent orchestration.
 - `qqbot-core` dispatches OneBot events to WASM plugins and calls a simple `LlmClient` for one-shot completions.
 - The `summary` plugin builds a prompt and asks for a single summary; there is no reasoning loop or tool use.
@@ -39,6 +40,7 @@ Both products share the same reasoning, tool-calling, and LLM-provider logic, bu
 ┌─────────────────────────────────────────────────────────────────┐
 │                          Brain crate                             │
 │  Session · Agent loop · Tool registry · Approval policy · Events │
+│  StepPolicy · CheckpointPolicy · InjectionPolicy · HookPolicy    │
 └─────────────────────────────────────────────────────────────────┘
                               ▲
                               │ uses
@@ -57,14 +59,20 @@ Both products share the same reasoning, tool-calling, and LLM-provider logic, bu
 - Streaming/non-streaming response handling.
 - Event/output abstraction: `TextPart`, `ThinkingPart`, `ToolCall`, `ToolResult`, `TurnBegin`, `TurnEnd`, `Error`.
 - LLM provider resolution and OAuth credential lookup.
+- Policy abstractions for the agent lifecycle: `StepPolicy`, `CheckpointPolicy`, `SystemPromptPolicy`, `ToolResultTransformer`, `EventPolicy`, `InjectionPolicy`, `CompactionPolicy`, and `HookPolicy`.
 
 ### What stays in `octopus-cli`
 
 - UI rendering and input handling.
-- Interactive approval dialogs.
+- Interactive approval dialogs (implemented inside `KimiToolset`, driven by Brain tool calls).
 - Work-dir detection, shell environment, clipboard, theme.
 - Wire/ACP server adapters.
 - Skills/MCP integration as additional tool sources.
+- CLI-specific Brain policy bridges:
+  - `CliStepPolicy` — per-step dedup, notification delivery, D-Mail rewinds, tool-rejection stops.
+  - `CliCheckpointPolicy` — file-backed checkpoints via the CLI `Context`.
+  - `CliInjectionPolicy` — dynamic system-reminder injection (plan mode, AFK mode).
+  - `CliCompactionPolicy`, `CliProviderFactory`, `CliRetryPolicy`, `CliRecoveryPolicy`.
 
 ### What stays in `qqbot-core`
 
@@ -183,15 +191,37 @@ Because the default policy is auto-approve, any tool provided by an enabled plug
 
 ```rust
 // docs/plans/14-brain-architecture.md — conceptual API sketch
+pub struct BrainConfig {
+    pub system_prompt: String,
+    pub max_steps_per_turn: usize,
+    pub max_step_attempts: usize,
+    pub provider: Option<Arc<dyn ChatProvider>>,
+    pub provider_factory: Arc<dyn ProviderFactory>,
+    pub approval_runtime: Arc<dyn ApprovalRuntime>,
+    pub message_store: Arc<tokio::sync::Mutex<dyn MessageStore>>,
+    pub toolset: Option<Arc<dyn Toolset>>,
+    pub tool_sources: Vec<Arc<dyn ToolSource>>,
+    pub step_policy: Option<Arc<dyn StepPolicy>>,
+    pub checkpoint_policy: Option<Arc<dyn CheckpointPolicy>>,
+    pub system_prompt_policy: Arc<dyn SystemPromptPolicy>,
+    pub tool_result_transformer: Option<Arc<dyn ToolResultTransformer>>,
+    pub event_policy: Option<Arc<dyn EventPolicy>>,
+    pub injection_policy: Option<Arc<dyn InjectionPolicy>>,
+    pub compaction_policy: Option<Arc<dyn CompactionPolicy>>,
+    pub hook_policy: Arc<dyn HookPolicy>,
+    pub retry_policy: Arc<dyn RetryPolicy>,
+    pub recovery_policy: Arc<dyn RecoveryPolicy>,
+}
+
 pub struct Brain {
-    session: Session,
-    tool_registry: ToolRegistry,
-    approval: Arc<dyn ApprovalPolicy>,
-    llm: Arc<dyn ChatProvider>,
+    config: BrainConfig,
+    provider: Arc<dyn ChatProvider>,
+    registry: ToolRegistry,
+    custom_toolset: Option<Arc<dyn Toolset>>,
 }
 
 impl Brain {
-    pub fn new(config: BrainConfig) -> Self;
+    pub fn new(config: BrainConfig) -> Result<Self, BrainError>;
 
     /// Run one user turn and return events as a stream.
     pub async fn run_turn(
@@ -201,20 +231,36 @@ impl Brain {
 
     /// Synchronous, non-streaming convenience for hosts that need a final result.
     pub async fn run_turn_to_completion(&mut self, input: TurnInput) -> Result<TurnResult>;
+
+    /// Run a single reasoning step (used by `octopus-cli` while it still owns
+    /// the outer turn loop and steers).
+    pub async fn run_step(
+        &mut self,
+    ) -> Result<Pin<Box<dyn Stream<Item = BrainEvent> + Send>>>;
 }
 
 pub enum BrainEvent {
     TextPart(String),
     ThinkingPart(String),
     ToolCall { id: String, name: String, arguments: Value },
-    ToolResult { id: String, output: ToolOutput },
+    ToolResult { id: String, output: String, is_error: bool },
+    Usage { usage: Usage },
     TurnBegin,
     TurnEnd,
+    StepBegin { n: usize },
+    StepEnd { n: usize },
+    StepInterrupted,
+    StepRetry { ... },
+    CheckpointCreated { id: CheckpointId },
+    CheckpointReverted { id: CheckpointId },
+    ProviderRefreshing { reason: String },
+    ProviderRefreshRequested { reason: String, sender: ProviderRefreshSender },
+    ProviderRefreshed,
     Error(String),
 }
 ```
 
-The exact shape will be finalized during extraction, but the principle is: **the Brain emits events, not terminal output.**
+The exact shape will be finalized during extraction, but the principle is: **the Brain emits events, not terminal output.** Hosts implement policy traits to inject CLI-specific behavior (checkpointing, notifications, D-Mail, dynamic reminders) without the Brain knowing about terminals, files, or QQ messages.
 
 ## qqbot integration details
 
@@ -276,10 +322,14 @@ token_file = "~/.kimi/credentials/kimi-code.json"
 
 ### Phase 2 — Make `octopus-cli` a consumer
 
-1. Replace inline `KimiSoul` agent loop with `Brain::run_turn`.
-2. Map Brain events to existing UI render paths.
-3. Preserve interactive approval in TUI by implementing `ApprovalPolicy`.
-4. Verify `cargo test -p octopus-cli` still passes.
+1. Keep a thin `KimiSoul` outer turn loop (steers, wire event mapping, MCP loading) but delegate each reasoning step to `Brain::run_step`.
+2. Move CLI-specific per-step behavior into Brain policy bridges:
+   - `CliStepPolicy` — tool dedup, notification delivery, D-Mail rewinds, tool-rejection stops.
+   - `CliCheckpointPolicy` — file-backed checkpoints and `DenwaRenji` checkpoint-count synchronization.
+   - `CliInjectionPolicy` — dynamic plan-mode / AFK reminders.
+3. Map `BrainEvent`s to existing UI render paths (`TextPart`, `ToolResult`, `StatusUpdate`, etc.).
+4. Preserve interactive approval through `KimiToolset` (the Brain sees an auto-approving runtime while the toolset handles TUI approval).
+5. Verify `cargo test -p octopus-cli` still passes.
 
 ### Phase 3 — Plugin tool ABI and Brain integration into `qqbot-core`
 
