@@ -21,4 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-wasmtime = "29"
+brain = { path = "../brain" }
+schemars = "0.8"
+kosong = { path = "../kosong" }
+async-trait = "0.1"

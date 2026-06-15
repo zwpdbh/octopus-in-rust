@@ -1,0 +1,334 @@
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use extism::{CompiledPlugin, Manifest, Plugin, PluginBuilder, Wasm};
+use serde_json::Value;
+
+use crate::tools::plugin::manifest::{PluginManifest, PluginMetadata, default_schema};
+
+/// A tool backed by a WebAssembly plugin using the Extism runtime.
+#[derive(Clone)]
+pub struct WasmPluginTool {
+    name: String,
+    description: String,
+    schema: Value,
+    compiled: CompiledPlugin,
+}
+
+#[async_trait]
+impl kosong::tooling::CallableTool for WasmPluginTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn parameters(&self) -> Value {
+        self.schema.clone()
+    }
+
+    async fn call_raw(&self, arguments: Value) -> kosong::tooling::ToolReturnValue {
+        let input = serde_json::json!({
+            "tool": self.name,
+            "arguments": arguments,
+        })
+        .to_string();
+
+        let compiled = self.compiled.clone();
+
+        let output = match tokio::task::spawn_blocking(move || {
+            let mut plugin = match Plugin::new_from_compiled(&compiled) {
+                Ok(p) => p,
+                Err(e) => return Err(format!("Failed to instantiate plugin: {}", e)),
+            };
+
+            plugin
+                .call::<&str, &str>("execute", &input)
+                .map_err(|e| format!("Plugin execution error: {}", e))
+                .map(|s| s.to_string())
+        })
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return kosong::tooling::ToolReturnValue::error(e),
+            Err(e) => {
+                return kosong::tooling::ToolReturnValue::error(format!(
+                    "Plugin task panicked: {}",
+                    e
+                ));
+            }
+        };
+
+        kosong::tooling::ToolReturnValue::ok(output)
+    }
+}
+
+unsafe impl Send for WasmPluginTool {}
+unsafe impl Sync for WasmPluginTool {}
+
+/// Discover and load all WASM plugins from the given directory.
+///
+/// Scans for `.wasm` files and attempts to load each one as a plugin tool.
+/// Failures are logged as warnings and skipped.
+pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+    let mut tools = Vec::new();
+
+    if !plugins_dir.is_dir() {
+        return tools;
+    }
+
+    let entries = match std::fs::read_dir(plugins_dir) {
+        Ok(e) => e,
+        Err(_) => return tools,
+    };
+
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+
+        if path.extension() != Some(std::ffi::OsStr::new("wasm")) {
+            continue;
+        }
+
+        match load_wasm_plugin(&path) {
+            Ok(tool) => {
+                tracing::info!("Loaded WASM plugin: {}", tool.name());
+                tools.push(tool);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load WASM plugin '{}': {}", path.display(), e);
+            }
+        }
+    }
+
+    tools
+}
+
+fn load_wasm_plugin(path: &Path) -> Result<Box<dyn kosong::tooling::CallableTool>, String> {
+    let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
+
+    let manifest_path = path.with_extension("json");
+    let plugin_manifest: Option<PluginManifest> = if manifest_path.is_file() {
+        let text = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("Failed to read manifest: {}", e))?;
+        Some(serde_json::from_str(&text).map_err(|e| format!("Invalid manifest JSON: {}", e))?)
+    } else {
+        None
+    };
+
+    let extism_manifest = build_extism_manifest(&wasm_bytes, plugin_manifest.as_ref());
+
+    let compiled = PluginBuilder::new(extism_manifest)
+        .with_wasi(true)
+        .compile()
+        .map_err(|e| format!("Failed to compile WASM plugin: {}", e))?;
+
+    let metadata = if let Some(pm) = plugin_manifest {
+        pm.into_metadata()
+    } else {
+        // Prefer the Brain tool ABI; fall back to the older `tool_metadata` export.
+        load_metadata_from_register_tools(&compiled, path)
+            .or_else(|_| load_metadata_from_plugin(&compiled, path))
+            .unwrap_or_else(|_| fallback_metadata(path))
+    };
+
+    Ok(Box::new(WasmPluginTool {
+        name: metadata.name,
+        description: metadata.description,
+        schema: metadata.schema,
+        compiled,
+    }))
+}
+
+fn build_extism_manifest(wasm_bytes: &[u8], plugin_manifest: Option<&PluginManifest>) -> Manifest {
+    let mut manifest = Manifest::new([Wasm::data(wasm_bytes.to_vec())]);
+
+    if let Some(pm) = plugin_manifest {
+        if let Some(ref hosts) = pm.allowed_hosts {
+            manifest = manifest.with_allowed_hosts(hosts.iter().cloned());
+        } else {
+            manifest = manifest.disallow_all_hosts();
+        }
+
+        if let Some(ref paths) = pm.allowed_paths {
+            manifest =
+                manifest.with_allowed_paths(paths.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+
+        if let Some(pages) = pm.max_memory_pages {
+            manifest = manifest.with_memory_max(pages);
+        }
+
+        if let Some(ms) = pm.timeout_ms {
+            manifest = manifest.with_timeout(std::time::Duration::from_millis(ms));
+        }
+    } else {
+        manifest = manifest.disallow_all_hosts();
+    }
+
+    manifest
+}
+
+fn load_metadata_from_register_tools(
+    compiled: &CompiledPlugin,
+    path: &Path,
+) -> Result<PluginMetadata, String> {
+    let mut plugin = Plugin::new_from_compiled(compiled)
+        .map_err(|e| format!("Failed to instantiate plugin for register_tools: {}", e))?;
+
+    if !plugin.function_exists("register_tools") {
+        return Err("Plugin does not export 'register_tools'".to_string());
+    }
+
+    let json = plugin
+        .call::<&str, &str>("register_tools", "")
+        .map_err(|e| format!("register_tools call failed: {}", e))?;
+
+    let defs: Vec<crate::tools::plugin::manifest::ToolDef> =
+        serde_json::from_str(json).map_err(|e| {
+            format!(
+                "Invalid register_tools JSON from '{}': {}",
+                path.display(),
+                e
+            )
+        })?;
+
+    let first = defs.into_iter().next().ok_or_else(|| {
+        format!(
+            "register_tools returned empty list for '{}'",
+            path.display()
+        )
+    })?;
+
+    Ok(PluginMetadata {
+        name: first.name,
+        description: first.description,
+        schema: first.parameters,
+    })
+}
+
+fn load_metadata_from_plugin(
+    compiled: &CompiledPlugin,
+    path: &Path,
+) -> Result<PluginMetadata, String> {
+    let mut plugin = Plugin::new_from_compiled(compiled)
+        .map_err(|e| format!("Failed to instantiate plugin for metadata: {}", e))?;
+
+    if !plugin.function_exists("tool_metadata") {
+        return Err("Plugin does not export 'tool_metadata'".to_string());
+    }
+
+    let json = plugin
+        .call::<&str, &str>("tool_metadata", "")
+        .map_err(|e| format!("tool_metadata call failed: {}", e))?;
+
+    serde_json::from_str(json).map_err(|e| {
+        format!(
+            "Invalid tool_metadata JSON from '{}': {}",
+            path.display(),
+            e
+        )
+    })
+}
+
+fn fallback_metadata(path: &Path) -> PluginMetadata {
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    PluginMetadata {
+        name: name.clone(),
+        description: format!("WASM plugin tool: {}", name),
+        schema: default_schema(),
+    }
+}
+
+/// Default plugins directory path (`~/.kimi/plugins`).
+pub fn default_plugins_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".kimi/plugins"))
+}
+
+/// A [`ToolSource`] that discovers Extism `.wasm` plugins in a directory.
+#[derive(Debug, Clone)]
+pub struct ExtismPluginSource {
+    plugins_dir: PathBuf,
+}
+
+impl ExtismPluginSource {
+    /// Create a source that scans `plugins_dir` for `.wasm` files.
+    pub fn new(plugins_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            plugins_dir: plugins_dir.into(),
+        }
+    }
+}
+
+impl crate::core::registry::ToolSource for ExtismPluginSource {
+    fn name(&self) -> &str {
+        "extism-plugins"
+    }
+
+    fn load_tools(&self) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+        discover_plugins(&self.plugins_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn qqbot_plugins_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("data")
+            .join("qqbot-data")
+            .join("plugins")
+    }
+
+    #[test]
+    fn test_discover_summary_plugin() {
+        let dir = qqbot_plugins_dir();
+        if !dir.join("summary.wasm").exists() {
+            eprintln!("Skipping test: summary.wasm not found at {}", dir.display());
+            return;
+        }
+
+        let tools = discover_plugins(&dir);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(
+            names.contains(&"summary::format_conversation"),
+            "expected summary::format_conversation plugin tool, got {:?}",
+            names
+        );
+    }
+
+    #[tokio::test]
+    async fn test_summary_plugin_tool_execution() {
+        let dir = qqbot_plugins_dir();
+        let wasm_path = dir.join("summary.wasm");
+        if !wasm_path.exists() {
+            eprintln!("Skipping test: summary.wasm not found");
+            return;
+        }
+
+        let tools = discover_plugins(&dir);
+        let tool = tools
+            .into_iter()
+            .find(|t| t.name() == "summary::format_conversation")
+            .expect("summary plugin tool should be loaded");
+
+        let args = serde_json::json!({
+            "messages": "123: hello\n456: world",
+            "style": "bullet"
+        });
+
+        let result = tool.call_raw(args).await;
+        assert!(!result.is_error, "tool should succeed: {:?}", result);
+        let output = result.output.unwrap().as_str().unwrap().to_string();
+        assert!(output.contains("123: hello"));
+        assert!(output.contains("456: world"));
+    }
+}

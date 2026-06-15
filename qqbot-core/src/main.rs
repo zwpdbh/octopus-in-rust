@@ -1,13 +1,13 @@
 mod config;
-mod llm;
+mod group_brain;
+mod memory;
 mod oauth;
 mod onebot;
-mod plugin_host;
 
 use crate::config::Config;
-use crate::llm::LlmClient;
+use crate::group_brain::GroupBrainManager;
+use crate::memory::MemoryStore;
 use crate::onebot::types::{Action, Event};
-use crate::plugin_host::{discover_plugins, Plugin, PluginAction};
 use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,24 +30,21 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_file(&config_path)?;
     info!("configuration loaded");
 
-    let mut plugins = load_plugins(&config.bot.plugin_dir)?;
-    if plugins.is_empty() {
-        warn!("no plugins loaded");
-    }
+    let plugin_dir = PathBuf::from(&config.bot.plugin_dir);
+
+    let memory = MemoryStore::new(200);
 
     let oauth = config
         .llm
         .oauth
         .clone()
         .map(crate::oauth::OAuthManager::new);
-    let llm = LlmClient::new(
-        config.llm.api_url.clone(),
-        config.llm.api_key.clone(),
-        config.llm.model.clone(),
-        config.llm.system_prompt.clone(),
+    let group_brains = Arc::new(GroupBrainManager::new(
+        config.clone(),
+        memory.clone(),
         oauth,
-    );
-    let llm = Arc::new(llm);
+        plugin_dir.clone(),
+    ));
 
     info!(onebot_ws = %config.onebot.ws_url, "connecting to OneBot");
     let (mut event_rx, action_tx) =
@@ -63,17 +60,17 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             Some(event) = event_rx.recv() => {
-                handle_event(event, &config, &mut plugins, &action_tx, llm.clone()).await;
+                handle_event(
+                    event,
+                    &config,
+                    &action_tx,
+                    memory.clone(),
+                    group_brains.clone(),
+                ).await;
             }
             _ = sighup.recv() => {
-                info!("SIGHUP received; reloading plugins");
-                match load_plugins(&config.bot.plugin_dir) {
-                    Ok(new_plugins) => {
-                        plugins = new_plugins;
-                        info!(count = plugins.len(), "plugins reloaded");
-                    }
-                    Err(e) => error!(error = %e, "failed to reload plugins"),
-                }
+                info!("SIGHUP received; clearing group brains so plugins reload on next use");
+                group_brains.clear();
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received; exiting");
@@ -89,24 +86,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_plugins(plugin_dir: &str) -> anyhow::Result<Vec<Plugin>> {
-    let paths = discover_plugins(plugin_dir);
-    let mut plugins = Vec::with_capacity(paths.len());
-    for path in paths {
-        match Plugin::load(path) {
-            Ok(p) => plugins.push(p),
-            Err(e) => error!(error = %e, "failed to load plugin"),
-        }
-    }
-    Ok(plugins)
-}
-
 async fn handle_event(
     event: Event,
     config: &Config,
-    plugins: &mut [Plugin],
     action_tx: &onebot::ActionTx,
-    llm: Arc<LlmClient>,
+    memory: MemoryStore,
+    group_brains: Arc<GroupBrainManager>,
 ) {
     if event.post_type != "message" {
         return;
@@ -127,19 +112,10 @@ async fn handle_event(
     }
 
     let text = event.text_message();
-    let event_json = match serde_json::to_string(&event) {
-        Ok(j) => j,
-        Err(e) => {
-            error!(error = %e, "failed to serialize event");
-            return;
-        }
-    };
 
-    // Dispatch to all plugins for message buffering.
-    for plugin in plugins.iter_mut() {
-        if let Err(e) = plugin.on_message(&event_json) {
-            error!(plugin = %plugin.name(), error = %e, "on_message failed");
-        }
+    // Remember every group message for tools like qqbot::recent_messages.
+    if let Some(user_id) = event.user_id {
+        memory.push(group_id, user_id, text.clone());
     }
 
     // Handle commands.
@@ -159,16 +135,18 @@ async fn handle_event(
         );
         async {
             info!("handling command");
-            for plugin in plugins.iter_mut() {
-                match plugin.on_command(cmd, &event_json) {
-                    Ok(actions) => {
-                        for action in actions {
-                            execute_action(action, group_id, action_tx, llm.clone(), &req_id).await;
-                        }
-                    }
-                    Err(e) => {
-                        error!(plugin = %plugin.name(), error = %e, "on_command failed");
-                    }
+            match cmd {
+                "summary" | "s" => {
+                    handle_brain_summary(group_id, action_tx, group_brains.clone(), &req_id).await;
+                }
+                "status" => {
+                    handle_status(group_id, action_tx, memory.clone(), &req_id).await;
+                }
+                "help" | "h" => {
+                    handle_help(group_id, action_tx, &req_id).await;
+                }
+                _ => {
+                    debug!(cmd, "unknown command");
                 }
             }
         }
@@ -177,54 +155,63 @@ async fn handle_event(
     }
 }
 
-async fn execute_action(
-    action: PluginAction,
-    _group_id: i64,
+async fn handle_brain_summary(
+    group_id: i64,
     action_tx: &onebot::ActionTx,
-    llm: Arc<LlmClient>,
+    group_brains: Arc<GroupBrainManager>,
     req_id: &str,
 ) {
-    match action {
-        PluginAction::SendGroupMsg {
-            group_id: gid,
-            text,
-        } => {
-            info!(request_id = %req_id, group_id = gid, "sending group message");
-            let action = Action::send_group_msg(gid, text, None);
-            if let Err(e) = action_tx.send(action) {
-                error!(request_id = %req_id, error = %e, "failed to send action");
-            }
-        }
-        PluginAction::Log { level, message } => {
-            match level.as_str() {
-                "error" => error!(request_id = %req_id, message),
-                "warn" => warn!(request_id = %req_id, message),
-                "debug" => debug!(request_id = %req_id, message),
-                _ => info!(request_id = %req_id, message),
+    info!(request_id = %req_id, group_id, "running Brain summary");
+
+    let processing_text = "🤔 Summarizing recent messages...".to_string();
+    let _ = action_tx.send(Action::send_group_msg(group_id, processing_text, None));
+
+    let user_message = "Please summarize the recent conversation in this group.".to_string();
+    match group_brains.run_turn(group_id, user_message).await {
+        Ok(result) => {
+            let reply = if result.final_text.is_empty() {
+                "I couldn't come up with a summary.".to_string()
+            } else {
+                result.final_text
             };
-        }
-        PluginAction::LlmRequest { group_id, prompt } => {
-            info!(request_id = %req_id, group_id, "calling LLM");
-            match llm.chat(&prompt, req_id).await {
-                Ok(reply) => {
-                    let action = Action::send_group_msg(group_id, reply, None);
-                    if let Err(e) = action_tx.send(action) {
-                        error!(request_id = %req_id, error = %e, "failed to send LLM reply");
-                    }
-                }
-                Err(e) => {
-                    error!(request_id = %req_id, error = %e, "LLM request failed");
-                    let action = Action::send_group_msg(
-                        group_id,
-                        format!(
-                            "Sorry, I couldn't generate a summary right now: {} (request: {})",
-                            e, req_id
-                        ),
-                        None,
-                    );
-                    let _ = action_tx.send(action);
-                }
+            let action = Action::send_group_msg(group_id, reply, None);
+            if let Err(e) = action_tx.send(action) {
+                error!(request_id = %req_id, error = %e, "failed to send Brain reply");
             }
         }
+        Err(e) => {
+            error!(request_id = %req_id, error = %e, "Brain turn failed");
+            let action = Action::send_group_msg(
+                group_id,
+                format!(
+                    "Sorry, I couldn't generate a summary right now: {} (request: {})",
+                    e, req_id
+                ),
+                None,
+            );
+            let _ = action_tx.send(action);
+        }
+    }
+}
+
+async fn handle_status(
+    group_id: i64,
+    action_tx: &onebot::ActionTx,
+    memory: MemoryStore,
+    req_id: &str,
+) {
+    let count = memory.len(group_id);
+    let text = format!("Buffered {} messages in this group.", count);
+    let action = Action::send_group_msg(group_id, text, None);
+    if let Err(e) = action_tx.send(action) {
+        error!(request_id = %req_id, error = %e, "failed to send status reply");
+    }
+}
+
+async fn handle_help(group_id: i64, action_tx: &onebot::ActionTx, req_id: &str) {
+    let text = "Available commands: /summary (or /s), /status, /help".to_string();
+    let action = Action::send_group_msg(group_id, text, None);
+    if let Err(e) = action_tx.send(action) {
+        error!(request_id = %req_id, error = %e, "failed to send help reply");
     }
 }

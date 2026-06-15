@@ -9,9 +9,9 @@
 
 | Item | State |
 |------|-------|
-| **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` |
-| **Active Task** | *TBD — pending next priority* |
-| **Last Completed** | Hook system refactor: split `HookEventKind`/`HookEvent`, unify server/wire hooks via `Hook` trait |
+| **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` (Brain crate layered; `qqbot-core` integration complete) |
+| **Active Task** | Brain crate Phase 2 — migrate `octopus-cli` `KimiSoul` to consume `Brain` |
+| **Last Completed** | `brain` crate layered into core/tools/session/hooks with streaming + approval traits; `qqbot-core` updated to `ToolSource` API |
 | **Compilation** | `cargo check --workspace` ✅ |
 | **Tests** | `cargo test -p octopus-cli` 23 passing |
 | **Blockers** | None |

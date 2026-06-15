@@ -7,6 +7,7 @@ description = "Default qqbot plugin: conversation summarizer."
 license = "MIT"
 
 [dependencies]
+extism-pdk = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
