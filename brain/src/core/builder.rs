@@ -3,11 +3,16 @@ use std::sync::Arc;
 use kosong::ChatProvider;
 
 use crate::core::approval::{ApprovalPolicy, ApprovalRuntime, DefaultApprovalRuntime};
+use crate::core::checkpoint::CheckpointPolicy;
 use crate::core::config::BrainConfig;
 use crate::core::errors::BrainError;
+use crate::core::events::EventPolicy;
 use crate::core::provider::ProviderFactory;
 use crate::core::recovery::RecoveryPolicy;
 use crate::core::retry::RetryPolicy;
+use crate::core::step::StepPolicy;
+use crate::core::system_prompt::SystemPromptPolicy;
+use crate::core::tool_result::ToolResultTransformer;
 use crate::hooks::policy::HookPolicy;
 use crate::session::compaction::CompactionPolicy;
 use crate::session::injection::InjectionPolicy;
@@ -96,6 +101,34 @@ impl BrainBuilder {
 
     pub fn with_recovery_policy(mut self, policy: Arc<dyn RecoveryPolicy>) -> Self {
         self.config.recovery_policy = policy;
+        self
+    }
+
+    pub fn with_step_policy(mut self, policy: Arc<dyn StepPolicy>) -> Self {
+        self.config.step_policy = Some(policy);
+        self
+    }
+
+    pub fn with_checkpoint_policy(mut self, policy: Arc<dyn CheckpointPolicy>) -> Self {
+        self.config.checkpoint_policy = Some(policy);
+        self
+    }
+
+    pub fn with_system_prompt_policy(mut self, policy: Arc<dyn SystemPromptPolicy>) -> Self {
+        self.config.system_prompt_policy = policy;
+        self
+    }
+
+    pub fn with_tool_result_transformer(
+        mut self,
+        transformer: Arc<dyn ToolResultTransformer>,
+    ) -> Self {
+        self.config.tool_result_transformer = Some(transformer);
+        self
+    }
+
+    pub fn with_event_policy(mut self, policy: Arc<dyn EventPolicy>) -> Self {
+        self.config.event_policy = Some(policy);
         self
     }
 

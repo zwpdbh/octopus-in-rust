@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures::{Stream, StreamExt};
+use kosong::Toolset;
 use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::{HandleResult, ToolReturnValue};
 use serde_json::Value;
@@ -11,9 +12,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::core::approval::{ApprovalRequest, ApprovalResponse, ApprovalRuntime};
 use crate::core::config::BrainConfig;
 use crate::core::errors::BrainError;
-use crate::core::events::BrainEvent;
+use crate::core::events::{BrainEvent, ProviderRefreshSender};
 use crate::core::recovery::RecoveryAction;
 use crate::core::registry::ToolRegistry;
+use crate::core::step::{StepContext, StepControl, StepOutcome};
 use crate::core::turn::{TurnInput, TurnResult};
 use crate::hooks::policy::HookAction;
 
@@ -29,9 +31,9 @@ pub struct Brain {
 impl Brain {
     /// Create a new Brain from configuration.
     ///
-    /// This constructor is synchronous and expects either a pre-built provider
-    /// in `config.provider` or a provider constructed beforehand. For async
-    /// construction, use [`BrainBuilder`](crate::core::builder::BrainBuilder).
+    /// This constructor is synchronous and expects a pre-built provider in
+    /// `config.provider`. For async construction from a factory, use
+    /// [`BrainBuilder`](crate::core::builder::BrainBuilder).
     pub fn new(config: BrainConfig) -> Result<Self, BrainError> {
         let provider = config.provider.clone().ok_or(BrainError::NoProvider)?;
         let registry = ToolRegistry::new();
@@ -76,10 +78,6 @@ impl Brain {
     }
 
     /// Run a single user turn and return a stream of events.
-    ///
-    /// The stream emits `BrainEvent`s as they happen: `TurnBegin`, step events,
-    /// text/thinking fragments, tool calls, approval requests/resolutions, tool
-    /// results, provider-refresh events, and finally `TurnEnd` or `Error`.
     pub async fn run_turn(
         &mut self,
         input: TurnInput,
@@ -162,6 +160,10 @@ impl Brain {
     }
 }
 
+fn emit(tx: &UnboundedSender<BrainEvent>, event: BrainEvent) {
+    let _ = tx.send(event);
+}
+
 async fn run_turn_loop(
     config: BrainConfig,
     provider: Arc<dyn kosong::ChatProvider>,
@@ -170,15 +172,15 @@ async fn run_turn_loop(
     input: TurnInput,
     tx: UnboundedSender<BrainEvent>,
 ) {
-    let _ = tx.send(BrainEvent::TurnBegin);
+    emit(&tx, BrainEvent::TurnBegin);
 
     if let HookAction::Block { reason } = config
         .hook_policy
         .on_user_prompt_submit(&input.user_message)
         .await
     {
-        let _ = tx.send(BrainEvent::Error(reason.clone()));
-        let _ = tx.send(BrainEvent::TurnEnd);
+        emit(&tx, BrainEvent::Error(reason.clone()));
+        emit(&tx, BrainEvent::TurnEnd);
         config.hook_policy.on_turn_failure(&reason).await;
         return;
     }
@@ -215,25 +217,68 @@ async fn run_turn_loop(
     let mut final_text = String::new();
 
     for step_no in 0..config.max_steps_per_turn {
-        let _ = tx.send(BrainEvent::StepBegin { n: step_no });
+        let ctx = StepContext {
+            step_no,
+            turn_id: None,
+        };
 
-        match run_single_step_with_retry(&config, &toolset, step_no, provider.clone(), tx.clone())
+        emit(&tx, BrainEvent::StepBegin { n: step_no });
+
+        // Create a checkpoint before the step, if a checkpoint policy is configured.
+        if let Some(policy) = &config.checkpoint_policy {
+            let history = config.message_store.lock().await.history().await;
+            match policy.checkpoint(&ctx, &history).await {
+                Ok(id) => emit(&tx, BrainEvent::CheckpointCreated { id }),
+                Err(e) => {
+                    emit(&tx, BrainEvent::Error(e.to_string()));
+                    emit(&tx, BrainEvent::TurnEnd);
+                    config.hook_policy.on_turn_failure(&e.to_string()).await;
+                    return;
+                }
+            }
+        }
+
+        match run_single_step_with_retry(&config, &toolset, &ctx, provider.clone(), tx.clone())
             .await
         {
-            Ok(StepOutcome::Final(text)) => {
+            Ok(StepControl::Continue) => {
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
+                continue;
+            }
+            Ok(StepControl::Stop { final_text: text }) => {
                 final_text = text;
-                let _ = tx.send(BrainEvent::StepEnd { n: step_no });
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
                 break;
             }
-            Ok(StepOutcome::Continue) => {
-                let _ = tx.send(BrainEvent::StepEnd { n: step_no });
+            Ok(StepControl::RewindToCheckpoint {
+                checkpoint_id,
+                inject_messages,
+            }) => {
+                if let Some(policy) = &config.checkpoint_policy {
+                    match policy.revert_to(checkpoint_id).await {
+                        Ok(history) => {
+                            let mut store = config.message_store.lock().await;
+                            let mut new_history = history;
+                            new_history.extend(inject_messages);
+                            store.set_history(new_history).await;
+                            emit(&tx, BrainEvent::CheckpointReverted { id: checkpoint_id });
+                        }
+                        Err(e) => {
+                            emit(&tx, BrainEvent::Error(e.to_string()));
+                            emit(&tx, BrainEvent::TurnEnd);
+                            config.hook_policy.on_turn_failure(&e.to_string()).await;
+                            return;
+                        }
+                    }
+                }
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
                 continue;
             }
             Err(err) => {
                 let msg = err.to_string();
-                let _ = tx.send(BrainEvent::Error(msg.clone()));
-                let _ = tx.send(BrainEvent::StepInterrupted);
-                let _ = tx.send(BrainEvent::TurnEnd);
+                emit(&tx, BrainEvent::Error(msg.clone()));
+                emit(&tx, BrainEvent::StepInterrupted);
+                emit(&tx, BrainEvent::TurnEnd);
                 config.hook_policy.on_turn_failure(&msg).await;
                 return;
             }
@@ -245,13 +290,13 @@ async fn run_turn_loop(
             "Turn exceeded maximum steps ({})",
             config.max_steps_per_turn
         );
-        let _ = tx.send(BrainEvent::Error(error.clone()));
-        let _ = tx.send(BrainEvent::TurnEnd);
+        emit(&tx, BrainEvent::Error(error.clone()));
+        emit(&tx, BrainEvent::TurnEnd);
         config.hook_policy.on_turn_failure(&error).await;
         return;
     }
 
-    let _ = tx.send(BrainEvent::TurnEnd);
+    emit(&tx, BrainEvent::TurnEnd);
     config.hook_policy.on_turn_end(&final_text).await;
 }
 
@@ -275,71 +320,112 @@ async fn run_step_loop(
         hook_policy: config.hook_policy.clone(),
     };
 
-    match run_single_step_with_retry(&config, &toolset, 0, provider, tx.clone()).await {
-        Ok(StepOutcome::Final(text)) => {
-            // The caller already received streamed text parts, so do not emit
-            // a duplicate final TextPart here.
-            let _ = tx.send(BrainEvent::StepEnd { n: 0 });
-            let _ = text;
+    let step_no = 0;
+    loop {
+        let ctx = StepContext {
+            step_no,
+            turn_id: None,
+        };
+
+        // Create a checkpoint before the step, if a checkpoint policy is configured.
+        if let Some(policy) = &config.checkpoint_policy {
+            let history = config.message_store.lock().await.history().await;
+            match policy.checkpoint(&ctx, &history).await {
+                Ok(id) => emit(&tx, BrainEvent::CheckpointCreated { id }),
+                Err(e) => {
+                    emit(&tx, BrainEvent::Error(e.to_string()));
+                    return;
+                }
+            }
         }
-        Ok(StepOutcome::Continue) => {
-            let _ = tx.send(BrainEvent::StepEnd { n: 0 });
-        }
-        Err(err) => {
-            let _ = tx.send(BrainEvent::Error(err.to_string()));
+
+        match run_single_step_with_retry(&config, &toolset, &ctx, provider.clone(), tx.clone())
+            .await
+        {
+            Ok(StepControl::Continue) => {
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
+                break;
+            }
+            Ok(StepControl::Stop { final_text: _ }) => {
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
+                break;
+            }
+            Ok(StepControl::RewindToCheckpoint {
+                checkpoint_id,
+                inject_messages,
+            }) => {
+                if let Some(policy) = &config.checkpoint_policy {
+                    match policy.revert_to(checkpoint_id).await {
+                        Ok(history) => {
+                            let mut store = config.message_store.lock().await;
+                            let mut new_history = history;
+                            new_history.extend(inject_messages);
+                            store.set_history(new_history).await;
+                            emit(&tx, BrainEvent::CheckpointReverted { id: checkpoint_id });
+                        }
+                        Err(e) => {
+                            emit(&tx, BrainEvent::Error(e.to_string()));
+                            return;
+                        }
+                    }
+                }
+                emit(&tx, BrainEvent::StepEnd { n: step_no });
+                continue;
+            }
+            Err(err) => {
+                emit(&tx, BrainEvent::Error(err.to_string()));
+                return;
+            }
         }
     }
-}
-
-#[derive(Debug)]
-enum StepOutcome {
-    /// The step executed tool calls; the caller should decide whether to continue.
-    Continue,
-    /// The step produced a final assistant message.
-    Final(String),
 }
 
 async fn run_single_step_with_retry(
     config: &BrainConfig,
     toolset: &HookAwareToolset,
-    step_no: usize,
+    ctx: &StepContext,
     mut provider: Arc<dyn kosong::ChatProvider>,
     tx: UnboundedSender<BrainEvent>,
-) -> Result<StepOutcome, BrainError> {
+) -> Result<StepControl, BrainError> {
     let mut attempt: usize = 0;
 
     loop {
         attempt += 1;
 
-        match execute_step(config, toolset, step_no, provider.clone(), &tx).await {
-            Ok(outcome) => return Ok(outcome),
+        match execute_step(config, toolset, ctx, provider.clone(), tx.clone()).await {
+            Ok(control) => return Ok(control),
             Err(err) => {
                 if attempt < config.retry_policy.max_attempts() {
                     if let Some(wait) = config.retry_policy.should_retry(&err, attempt) {
-                        let _ = tx.send(BrainEvent::StepRetry {
-                            n: step_no,
-                            next_attempt: attempt + 1,
-                            max_attempts: config.retry_policy.max_attempts(),
-                            wait_s: wait.as_secs_f64(),
-                            error_type: error_type(&err).to_string(),
-                            status_code: err.status_code(),
-                        });
+                        emit(
+                            &tx,
+                            BrainEvent::StepRetry {
+                                n: ctx.step_no,
+                                next_attempt: attempt + 1,
+                                max_attempts: config.retry_policy.max_attempts(),
+                                wait_s: wait.as_secs_f64(),
+                                error_type: error_type(&err).to_string(),
+                                status_code: err.status_code(),
+                            },
+                        );
                         tokio::time::sleep(wait).await;
                         continue;
                     }
                 }
 
-                // Retry policy exhausted; ask recovery policy what to do.
                 match config.recovery_policy.recover(&err).await {
                     RecoveryAction::RefreshProvider => {
-                        let _ = tx.send(BrainEvent::ProviderRefreshing {
-                            reason: format!("recovering from {}", err),
-                        });
+                        emit(
+                            &tx,
+                            BrainEvent::ProviderRefreshing {
+                                reason: format!("recovering from {}", err),
+                            },
+                        );
                         match config.build_provider().await {
                             Ok(new_provider) => {
                                 provider = new_provider;
                                 attempt = 0;
-                                let _ = tx.send(BrainEvent::ProviderRefreshed);
+                                emit(&tx, BrainEvent::ProviderRefreshed);
                                 continue;
                             }
                             Err(build_err) => {
@@ -351,15 +437,18 @@ async fn run_single_step_with_retry(
                     }
                     RecoveryAction::RequestInteractiveProvider { reason } => {
                         let (refresh_tx, mut refresh_rx) = tokio::sync::mpsc::unbounded_channel();
-                        let _ = tx.send(BrainEvent::ProviderRefreshRequested {
-                            reason,
-                            sender: crate::core::events::ProviderRefreshSender(refresh_tx),
-                        });
+                        emit(
+                            &tx,
+                            BrainEvent::ProviderRefreshRequested {
+                                reason,
+                                sender: ProviderRefreshSender(refresh_tx),
+                            },
+                        );
                         match refresh_rx.recv().await {
                             Some(new_provider) => {
                                 provider = new_provider;
                                 attempt = 0;
-                                let _ = tx.send(BrainEvent::ProviderRefreshed);
+                                emit(&tx, BrainEvent::ProviderRefreshed);
                                 continue;
                             }
                             None => {
@@ -400,12 +489,10 @@ fn error_type(err: &BrainError) -> &'static str {
 async fn execute_step(
     config: &BrainConfig,
     toolset: &HookAwareToolset,
-    step_no: usize,
+    ctx: &StepContext,
     provider: Arc<dyn kosong::ChatProvider>,
-    tx: &UnboundedSender<BrainEvent>,
-) -> Result<StepOutcome, BrainError> {
-    let _ = tx.send(BrainEvent::StepBegin { n: step_no });
-
+    tx: UnboundedSender<BrainEvent>,
+) -> Result<StepControl, BrainError> {
     // Build the effective history for this step.
     let base_history = config.message_store.lock().await.history().await;
 
@@ -426,21 +513,43 @@ async fn execute_step(
         base_history
     };
 
-    // Optional dynamic injection (not persisted).
-    let injected = if let Some(policy) = &config.injection_policy {
-        policy.inject(&base_history).await
-    } else {
-        Vec::new()
-    };
-    let step_history: Vec<Message> = injected
-        .iter()
-        .chain(base_history.iter())
-        .cloned()
-        .collect();
+    let mut step_history = base_history.clone();
+
+    // Optional dynamic injection (appended to history and persisted).
+    if let Some(policy) = &config.injection_policy {
+        let injected = policy.inject(&step_history).await;
+        step_history.extend(injected.clone());
+        {
+            let mut store = config.message_store.lock().await;
+            for m in injected {
+                store.push(m).await;
+            }
+        }
+    }
+
+    // Step lifecycle hook: before_step. Any additions are persisted so that
+    // reminders, notifications, and steers survive in the context file.
+    let before_step_len = step_history.len();
+    if let Some(policy) = &config.step_policy {
+        policy.before_step(ctx, &mut step_history).await?;
+    }
+    {
+        let mut store = config.message_store.lock().await;
+        for m in step_history.iter().skip(before_step_len) {
+            store.push(m.clone()).await;
+        }
+    }
+
+    // Build effective system prompt.
+    let tools = toolset.tools();
+    let system_prompt = config
+        .system_prompt_policy
+        .build_prompt(&config.system_prompt, &tools, &step_history)
+        .await?;
 
     let step_result = match kosong::step(
         provider.as_ref(),
-        &config.system_prompt,
+        &system_prompt,
         toolset,
         &step_history,
         None,
@@ -452,7 +561,7 @@ async fn execute_step(
     };
 
     if let Some(usage) = step_result.usage.clone() {
-        let _ = tx.send(BrainEvent::Usage { usage });
+        emit(&tx, BrainEvent::Usage { usage });
     }
 
     // Extract text / thinking / tool-call events from the assistant message.
@@ -461,11 +570,11 @@ async fn execute_step(
     for part in &assistant_message.content {
         match part {
             ContentPart::Text { text } => {
-                let _ = tx.send(BrainEvent::TextPart(text.clone()));
+                emit(&tx, BrainEvent::TextPart(text.clone()));
                 assistant_text.push_str(text);
             }
             ContentPart::Think { think, .. } => {
-                let _ = tx.send(BrainEvent::ThinkingPart(think.clone()));
+                emit(&tx, BrainEvent::ThinkingPart(think.clone()));
             }
             _ => {}
         }
@@ -483,11 +592,14 @@ async fn execute_step(
             let args = tc.function.arguments.clone().unwrap_or_default();
             let args_value = serde_json::from_str(&args).unwrap_or(Value::Null);
 
-            let _ = tx.send(BrainEvent::ToolCall {
-                id: tc.id.clone(),
-                name: tc.function.name.clone(),
-                arguments: args_value.clone(),
-            });
+            emit(
+                &tx,
+                BrainEvent::ToolCall {
+                    id: tc.id.clone(),
+                    name: tc.function.name.clone(),
+                    arguments: args_value.clone(),
+                },
+            );
 
             config
                 .hook_policy
@@ -497,34 +609,43 @@ async fn execute_step(
 
         let results = step_result.tool_results().await;
 
-        for result in results {
-            let output = result
-                .return_value
+        for result in &results {
+            let transformed = if let Some(transformer) = &config.tool_result_transformer {
+                transformer
+                    .transform(
+                        &result.tool_call_id,
+                        "", // tool name is not directly available on KosongToolResult
+                        result.return_value.clone(),
+                    )
+                    .await?
+            } else {
+                result.return_value.clone()
+            };
+
+            let output = transformed
                 .output
                 .as_ref()
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let message = result
-                .return_value
+            let message = transformed
                 .message
                 .clone()
                 .unwrap_or_else(|| output.clone());
+            let is_error = transformed.is_error;
 
-            let _ = tx.send(BrainEvent::ToolResult {
-                id: result.tool_call_id.clone(),
-                output: message.clone(),
-                is_error: result.return_value.is_error,
-            });
+            emit(
+                &tx,
+                BrainEvent::ToolResult {
+                    id: result.tool_call_id.clone(),
+                    output: message.clone(),
+                    is_error,
+                },
+            );
 
-            append_tool_result(
-                &config.message_store,
-                &result.tool_call_id,
-                result.return_value.clone(),
-            )
-            .await;
+            append_tool_result(&config.message_store, &result.tool_call_id, transformed).await;
 
-            if result.return_value.is_error {
+            if is_error {
                 config
                     .hook_policy
                     .on_post_tool_use_failure("", &Value::Null, &message, &result.tool_call_id)
@@ -537,7 +658,12 @@ async fn execute_step(
             }
         }
 
-        return Ok(StepOutcome::Continue);
+        if let Some(policy) = &config.step_policy {
+            return policy
+                .after_step(ctx, &StepOutcome::Continue, &results)
+                .await;
+        }
+        return Ok(StepControl::Continue);
     }
 
     // No tool calls: this is the final answer for the step.
@@ -545,7 +671,21 @@ async fn execute_step(
         let mut store = config.message_store.lock().await;
         store.push(assistant_message).await;
     }
-    Ok(StepOutcome::Final(assistant_text))
+
+    if let Some(policy) = &config.step_policy {
+        return policy
+            .after_step(
+                ctx,
+                &StepOutcome::Final {
+                    text: assistant_text.clone(),
+                },
+                &[],
+            )
+            .await;
+    }
+    Ok(StepControl::Stop {
+        final_text: assistant_text,
+    })
 }
 
 async fn append_tool_result(

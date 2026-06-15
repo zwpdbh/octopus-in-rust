@@ -128,3 +128,19 @@ pub enum BrainEvent {
     /// An error occurred during the turn.
     Error(String),
 }
+
+/// Allows applications to filter or transform Brain events before they are
+/// emitted to the stream.
+pub trait EventPolicy: Send + Sync {
+    fn map(&self, event: BrainEvent) -> Option<BrainEvent>;
+}
+
+/// Default event policy that emits every event unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoOpEventPolicy;
+
+impl EventPolicy for NoOpEventPolicy {
+    fn map(&self, event: BrainEvent) -> Option<BrainEvent> {
+        Some(event)
+    }
+}

@@ -7,8 +7,11 @@ pub mod tools;
 pub use core::registry::ToolSource;
 pub use core::{
     ApprovalPolicy, ApprovalRequest, ApprovalResponse, ApprovalRuntime, AutoApprove, Brain,
-    BrainBuilder, BrainConfig, BrainError, BrainEvent, DefaultProviderFactory,
-    DefaultRecoveryPolicy, ExponentialBackoffRetryPolicy, ProviderFactory, RecoveryAction,
-    RecoveryPolicy, RetryPolicy, ToolRegistry, TurnInput, TurnResult,
+    BrainBuilder, BrainConfig, BrainError, BrainEvent, CheckpointPolicy, DefaultProviderFactory,
+    DefaultRecoveryPolicy, DefaultSystemPromptPolicy, EventPolicy, ExponentialBackoffRetryPolicy,
+    NoOpCheckpointPolicy, NoOpEventPolicy, NoOpStepPolicy, NoOpToolResultTransformer,
+    ProviderFactory, ProviderRefreshSender, RecoveryAction, RecoveryPolicy, RetryPolicy,
+    StepContext, StepControl, StepOutcome, StepPolicy, SystemPromptPolicy, ToolRegistry,
+    ToolResultTransformer, TurnInput, TurnResult,
 };
 pub use tools::{ExtismPluginSource, PluginManifest, WasmPluginTool, discover_plugins};

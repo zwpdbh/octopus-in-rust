@@ -7,20 +7,18 @@ use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
 use crate::hooks::{HookEngine, HookEvent};
 use crate::llm::{LLM, kosong_to_wire_usage};
-use crate::notifications::llm::{build_notification_message, extract_notification_ids};
+use crate::notifications::llm::extract_notification_ids;
 use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::soul::approval::{Approval, ApprovalState};
 use crate::soul::brain_bridge::{
-    CliCompactionPolicy, CliInjectionPolicy, CliProviderFactory, CliRecoveryPolicy, CliRetryPolicy,
-    ContextMessageStore,
+    CliCheckpointPolicy, CliCompactionPolicy, CliInjectionPolicy, CliProviderFactory,
+    CliRecoveryPolicy, CliRetryPolicy, CliStepPolicy, ContextMessageStore,
 };
-use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
+use crate::soul::compaction::SimpleCompaction;
 use crate::soul::context::Context;
-use crate::soul::dynamic_injection::{
-    DynamicInjection, DynamicInjectionProvider, InjectionContext,
-};
-use crate::soul::message::{check_message, tool_result_to_message};
+use crate::soul::dynamic_injection::{DynamicInjectionProvider, InjectionContext};
+use crate::soul::message::check_message;
 use crate::soul::slash::{build_default_slash_commands, parse_slash_command_call};
 use crate::soul::toolset::KimiToolset;
 use crate::wire::{
@@ -50,15 +48,15 @@ pub struct KimiSoul {
     pub bg_manager: crate::background::BackgroundTaskManager,
     pub brain: Option<brain::Brain>,
     injection_policy: Arc<CliInjectionPolicy>,
+    step_policy: Arc<CliStepPolicy>,
+    checkpoint_policy: Arc<CliCheckpointPolicy>,
     steer_queue: Vec<String>,
     compaction: SimpleCompaction,
     current_step_no: usize,
     current_turn_id: Option<String>,
-    last_tool_calls: Vec<(String, String)>,
     injection_providers: Vec<Box<dyn DynamicInjectionProvider>>,
     pending_plan_activation_injection: bool,
     plan_session_id: Option<String>,
-    checkpoint_with_user_message: bool,
 }
 
 impl KimiSoul {
@@ -216,63 +214,22 @@ impl KimiSoul {
             injection_context,
         ));
 
-        // Build the reusable Brain agent core.
-        let brain = match llm.as_ref() {
-            Some(llm) => match llm.build_kosong_provider() {
-                Ok(provider) => {
-                    let message_store = Arc::new(tokio::sync::Mutex::new(
-                        ContextMessageStore::new(context.clone()),
-                    ));
-                    let compaction_policy = Arc::new(CliCompactionPolicy::new(
-                        SimpleCompaction::new(2),
-                        Arc::new(llm.clone()),
-                        llm.max_context_size,
-                        config.loop_control.compaction_trigger_ratio,
-                        config.loop_control.reserved_context_size,
-                        String::new(),
-                    ));
-                    let hook_policy = Arc::new(brain::hooks::policy::NoOpHookPolicy);
-                    let provider_factory = Arc::new(CliProviderFactory::new(
-                        Arc::new(llm.clone()),
-                        oauth.clone(),
-                    ));
-                    let retry_policy = Arc::new(CliRetryPolicy::new(max_retries));
-                    let recovery_policy =
-                        Arc::new(CliRecoveryPolicy::new(oauth.clone(), Arc::new(llm.clone())));
-                    let brain_config = brain::BrainConfig {
-                        system_prompt: agent.system_prompt.clone(),
-                        base_url: String::new(),
-                        api_key: String::new(),
-                        model: String::new(),
-                        max_steps_per_turn: max_steps,
-                        max_step_attempts: max_retries,
-                        provider: Some(provider),
-                        provider_factory,
-                        approval_runtime: Arc::new(
-                            brain::core::approval::DefaultApprovalRuntime::new(Arc::new(
-                                brain::core::approval::AutoApprove,
-                            )),
-                        ),
-                        tool_sources: Vec::new(),
-                        toolset: Some(Arc::new(crate::soul::toolset::KimiToolsetHandle(
-                            toolset.clone(),
-                        ))),
-                        message_store,
-                        compaction_policy: Some(compaction_policy),
-                        injection_policy: None,
-                        hook_policy,
-                        retry_policy,
-                        recovery_policy,
-                    };
-                    brain::Brain::new(brain_config).ok()
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to build chat provider for Brain: {}", e);
-                    None
-                }
-            },
-            None => None,
-        };
+        // CLI-specific Brain policies. Brain itself is built lazily on the first
+        // turn so that MCP loading can mutate the toolset while it is still the
+        // sole owner of the underlying Arc.
+        let step_policy = Arc::new(CliStepPolicy::new(
+            context.clone(),
+            toolset.clone(),
+            notification_manager.clone(),
+            hook_engine.clone(),
+            session_id.clone(),
+            denwa_renji.clone(),
+        ));
+        let checkpoint_policy = Arc::new(CliCheckpointPolicy::new(
+            context.clone(),
+            denwa_renji.clone(),
+            checkpoint_with_user_message,
+        ));
 
         Self {
             config,
@@ -293,13 +250,14 @@ impl KimiSoul {
             denwa_renji,
             skills,
             bg_manager,
-            brain,
+            brain: None,
             injection_policy,
+            step_policy,
+            checkpoint_policy,
             steer_queue: Vec::new(),
             compaction: SimpleCompaction::default(),
             current_step_no: 0,
             current_turn_id: None,
-            last_tool_calls: Vec::new(),
             injection_providers: vec![
                 Box::new(
                     crate::soul::dynamic_injections::plan_mode::PlanModeInjectionProvider::new(),
@@ -310,7 +268,6 @@ impl KimiSoul {
             ],
             pending_plan_activation_injection: false,
             plan_session_id,
-            checkpoint_with_user_message,
         }
     }
 
@@ -454,6 +411,136 @@ impl KimiSoul {
         result
     }
 
+    async fn ensure_brain(&mut self) -> Result<&mut brain::Brain> {
+        if self.brain.is_some() {
+            return Ok(self.brain.as_mut().unwrap());
+        }
+
+        let llm = self
+            .llm
+            .as_ref()
+            .ok_or(crate::exception::LLMNotSet::NotSet)?;
+        let provider = llm
+            .build_kosong_provider()
+            .map_err(|e| OctopusError::Other(format!("Failed to build chat provider: {e}")))?;
+        let message_store = Arc::new(tokio::sync::Mutex::new(ContextMessageStore::new(
+            self.context.clone(),
+        )));
+        let compaction_policy = Arc::new(CliCompactionPolicy::new(
+            SimpleCompaction::new(2),
+            Arc::new(llm.clone()),
+            llm.max_context_size,
+            self.config.loop_control.compaction_trigger_ratio,
+            self.config.loop_control.reserved_context_size,
+            String::new(),
+        ));
+        let hook_policy = Arc::new(brain::hooks::policy::NoOpHookPolicy);
+        let provider_factory = Arc::new(CliProviderFactory::new(
+            Arc::new(llm.clone()),
+            self.oauth.clone(),
+        ));
+        let retry_policy = Arc::new(CliRetryPolicy::new(self.max_retries_per_step));
+        let recovery_policy = Arc::new(CliRecoveryPolicy::new(
+            self.oauth.clone(),
+            Arc::new(llm.clone()),
+        ));
+        let brain_config = brain::BrainConfig {
+            system_prompt: self.agent.system_prompt.clone(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            max_steps_per_turn: self.max_steps_per_turn,
+            max_step_attempts: self.max_retries_per_step,
+            provider: Some(provider),
+            provider_factory,
+            approval_runtime: Arc::new(brain::core::approval::DefaultApprovalRuntime::new(
+                Arc::new(brain::core::approval::AutoApprove),
+            )),
+            tool_sources: Vec::new(),
+            toolset: Some(Arc::new(crate::soul::toolset::KimiToolsetHandle(
+                self.toolset.clone(),
+            ))),
+            message_store,
+            compaction_policy: Some(compaction_policy),
+            injection_policy: Some(self.injection_policy.clone()),
+            hook_policy,
+            retry_policy,
+            recovery_policy,
+            step_policy: Some(self.step_policy.clone()),
+            checkpoint_policy: Some(self.checkpoint_policy.clone()),
+            system_prompt_policy: Arc::new(brain::core::system_prompt::DefaultSystemPromptPolicy),
+            tool_result_transformer: None,
+            event_policy: None,
+        };
+        self.brain = Some(
+            brain::Brain::new(brain_config)
+                .map_err(|e| OctopusError::Other(format!("Brain initialization failed: {e}")))?,
+        );
+        Ok(self.brain.as_mut().unwrap())
+    }
+
+    async fn maybe_load_mcp_tools(&mut self) {
+        // Only the first turn can get mutable access to the toolset, before Brain
+        // clones the Arc. On later turns the deferred load has already been consumed.
+        if self.brain.is_some() {
+            return;
+        }
+
+        let mcp_started = std::sync::Arc::get_mut(&mut self.toolset)
+            .unwrap()
+            .start_deferred_mcp_tool_loading()
+            .await;
+        let mut mcp_was_loading = false;
+        if mcp_started {
+            if let Some(snapshot) = self.toolset.mcp_status_snapshot() {
+                mcp_was_loading = snapshot.loading;
+                if mcp_was_loading {
+                    wire_send(crate::wire::WireEvent::StatusUpdate(
+                        crate::wire::StatusUpdate {
+                            mcp_status: Some(snapshot),
+                            ..Default::default()
+                        },
+                    ));
+                    wire_send(crate::wire::WireEvent::McpLoadingBegin(
+                        crate::wire::MCPLoadingBegin {},
+                    ));
+                }
+            }
+        }
+        if mcp_was_loading {
+            std::sync::Arc::get_mut(&mut self.toolset)
+                .unwrap()
+                .wait_for_mcp_tools()
+                .await;
+            if let Some(mcp_snap) = self.toolset.mcp_status_snapshot() {
+                if mcp_snap.connected > 0 {
+                    crate::track!(
+                        "mcp_connected",
+                        server_count = mcp_snap.connected,
+                        total_count = mcp_snap.total,
+                    );
+                }
+                let failed = mcp_snap.total.saturating_sub(mcp_snap.connected);
+                if failed > 0 {
+                    crate::track!(
+                        "mcp_failed",
+                        failed_count = failed,
+                        total_count = mcp_snap.total,
+                    );
+                }
+                wire_send(crate::wire::WireEvent::StatusUpdate(
+                    crate::wire::StatusUpdate {
+                        mcp_status: Some(mcp_snap),
+                        ..Default::default()
+                    },
+                ));
+                wire_send(crate::wire::WireEvent::McpLoadingEnd(
+                    crate::wire::MCPLoadingEnd {},
+                ));
+            }
+        }
+    }
+
     async fn run_turn_body(&mut self, text: &str) -> Result<String> {
         let user_message = Message {
             role: "user".to_string(),
@@ -500,6 +587,8 @@ impl KimiSoul {
             user_input: Some(text.to_string()),
         }));
 
+        self.maybe_load_mcp_tools().await;
+        self.ensure_brain().await?;
         let turn_result = self.turn(user_message).await;
 
         // TurnEnd is sent regardless of success or failure.
@@ -571,13 +660,11 @@ impl KimiSoul {
         }
 
         self.current_turn_id = Some(uuid::Uuid::new_v4().to_string());
-        self.last_tool_calls = Vec::new();
+        self.step_policy
+            .set_current_turn_id(self.current_turn_id.clone());
 
         {
             let mut ctx = self.context.lock().await;
-            ctx.checkpoint(false)
-                .await
-                .map_err(|e| OctopusError::Io(e))?;
             ctx.append_message(user_message)
                 .await
                 .map_err(|e| OctopusError::Io(e))?;
@@ -591,62 +678,6 @@ impl KimiSoul {
         self.steer_queue.clear();
         let _ = self.consume_pending_steers().await;
 
-        // ── MCP deferred loading ──
-        // Mirrors Python's background MCP loading in `_agent_loop()`.
-        let mcp_started = std::sync::Arc::get_mut(&mut self.toolset)
-            .unwrap()
-            .start_deferred_mcp_tool_loading()
-            .await;
-        let mut mcp_was_loading = false;
-        if mcp_started {
-            if let Some(snapshot) = self.toolset.mcp_status_snapshot() {
-                mcp_was_loading = snapshot.loading;
-                if mcp_was_loading {
-                    wire_send(crate::wire::WireEvent::StatusUpdate(
-                        crate::wire::StatusUpdate {
-                            mcp_status: Some(snapshot),
-                            ..Default::default()
-                        },
-                    ));
-                    wire_send(crate::wire::WireEvent::McpLoadingBegin(
-                        crate::wire::MCPLoadingBegin {},
-                    ));
-                }
-            }
-        }
-        if mcp_was_loading {
-            std::sync::Arc::get_mut(&mut self.toolset)
-                .unwrap()
-                .wait_for_mcp_tools()
-                .await;
-            if let Some(mcp_snap) = self.toolset.mcp_status_snapshot() {
-                if mcp_snap.connected > 0 {
-                    crate::track!(
-                        "mcp_connected",
-                        server_count = mcp_snap.connected,
-                        total_count = mcp_snap.total,
-                    );
-                }
-                let failed = mcp_snap.total.saturating_sub(mcp_snap.connected);
-                if failed > 0 {
-                    crate::track!(
-                        "mcp_failed",
-                        failed_count = failed,
-                        total_count = mcp_snap.total,
-                    );
-                }
-                wire_send(crate::wire::WireEvent::StatusUpdate(
-                    crate::wire::StatusUpdate {
-                        mcp_status: Some(mcp_snap),
-                        ..Default::default()
-                    },
-                ));
-                wire_send(crate::wire::WireEvent::McpLoadingEnd(
-                    crate::wire::MCPLoadingEnd {},
-                ));
-            }
-        }
-
         let mut step_no = 0;
         loop {
             step_no += 1;
@@ -654,66 +685,12 @@ impl KimiSoul {
                 return Err(MaxStepsReached::Reached.into());
             }
 
-            // Auto-compact if needed
-            if let Some(ref llm) = self.llm {
-                let max_size = llm.max_context_size;
-                let trigger_ratio = self.config.loop_control.compaction_trigger_ratio;
-                let reserved = self.config.loop_control.reserved_context_size;
-                if should_auto_compact(
-                    self.context.lock().await.token_count_with_pending(),
-                    max_size,
-                    trigger_ratio,
-                    reserved,
-                ) {
-                    if let Err(e) = self.compact_context("").await {
-                        return Err(e);
-                    }
-                }
-            }
-
-            {
-                let mut ctx = self.context.lock().await;
-                ctx.checkpoint(self.checkpoint_with_user_message)
-                    .await
-                    .map_err(|e| OctopusError::Io(e))?;
-            }
-            let n_checkpoints = self.context.lock().await.n_checkpoints();
-            self.denwa_renji
-                .lock()
-                .unwrap()
-                .set_n_checkpoints(n_checkpoints);
-
             self.current_step_no = step_no;
+            self.step_policy.set_current_step_no(step_no);
             wire_send(crate::wire::WireEvent::StepBegin(StepBegin { n: step_no }));
 
-            let step_result = match self.step().await {
+            let step_result = match self.run_brain_step().await {
                 Ok(result) => result,
-                Err(OctopusError::BackToTheFuture(ref e)) => {
-                    // D-Mail revert: roll back to checkpoint and inject message.
-                    tracing::info!(
-                        "BackToTheFuture: reverting to checkpoint {}",
-                        e.checkpoint_id
-                    );
-                    {
-                        let mut ctx = self.context.lock().await;
-                        ctx.revert_to(e.checkpoint_id)
-                            .await
-                            .map_err(|io_err| OctopusError::Io(io_err))?;
-                    }
-                    self.last_tool_calls = Vec::new();
-                    {
-                        let mut ctx = self.context.lock().await;
-                        ctx.checkpoint(self.checkpoint_with_user_message)
-                            .await
-                            .map_err(|e| OctopusError::Io(e))?;
-                        for msg in &e.messages {
-                            ctx.append_message(msg.clone())
-                                .await
-                                .map_err(|e| OctopusError::Io(e))?;
-                        }
-                    }
-                    continue;
-                }
                 Err(e) => {
                     wire_send(crate::wire::WireEvent::StepInterrupted(StepInterrupted {}));
                     // --- StopFailure hook ---
@@ -750,64 +727,8 @@ impl KimiSoul {
         }
     }
 
-    async fn step(&mut self) -> Result<Option<StepOutcome>> {
-        self.run_brain_step().await
-    }
-
     /// The actual LLM step logic, using Brain::run_step.
     async fn run_brain_step(&mut self) -> Result<Option<StepOutcome>> {
-        // ── Dynamic Injection ───────────────────────────────────────────────
-        let injections = self.collect_injections().await;
-        if !injections.is_empty() {
-            let reminder_text = injections
-                .iter()
-                .map(|inj| format!("<system-reminder>\n{}\n</system-reminder>", inj.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut ctx = self.context.lock().await;
-            ctx.append_message(Message {
-                role: "user".to_string(),
-                content: vec![ContentPart::Text {
-                    text: reminder_text,
-                }],
-                tool_call_id: None,
-                tool_calls: None,
-            })
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        }
-
-        // --- Notification delivery (root only) ---
-        if self.notification_manager.has_pending_for_sink("llm") {
-            let notifs = self.notification_manager.claim_for_sink("llm", 8);
-            for view in notifs {
-                let msg = build_notification_message(&view);
-                if let Err(e) = self.context.lock().await.append_message(msg).await {
-                    tracing::warn!("Failed to append notification to context: {}", e);
-                }
-                // Fire Notification hook (fire-and-forget)
-                let event = HookEvent::notification(
-                    &self.session.id,
-                    &std::env::current_dir()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| ".".to_string()),
-                    "llm",
-                    &view.event.event_type,
-                    &view.event.title,
-                    &view.event.body,
-                    &view.event.severity,
-                );
-                if self.hook_engine.has_hooks_for(event.kind()) {
-                    let _ = self.hook_engine.fire_and_forget_trigger(event);
-                }
-            }
-        }
-
-        // Setup dedup before the step, matching Python's `begin_step` ordering.
-        let turn_id = self.current_turn_id.clone().unwrap_or_default();
-        self.toolset
-            .begin_step(self.last_tool_calls.clone(), self.current_step_no, turn_id);
-
         let brain = self
             .brain
             .as_mut()
@@ -823,10 +744,6 @@ impl KimiSoul {
 
         while let Some(event) = stream.next().await {
             match event {
-                // KimiSoul's outer loop already emits StepBegin with the real
-                // step number; Brain's step number is always 0 here, so ignore
-                // it to avoid duplicate/confusing wire events.
-                brain::BrainEvent::StepBegin { .. } => {}
                 brain::BrainEvent::TextPart(text) => {
                     assistant_content.push(ContentPart::Text { text: text.clone() });
                     wire_send(crate::wire::WireEvent::TextPart(TextPart { text }));
@@ -883,8 +800,6 @@ impl KimiSoul {
             }
         }
 
-        self.last_tool_calls = self.toolset.end_step();
-
         let build_assistant_message = |content: Vec<ContentPart>| Message {
             role: "assistant".to_string(),
             content,
@@ -894,40 +809,10 @@ impl KimiSoul {
 
         if !tool_results.is_empty() {
             if any_tool_error {
-                let _ = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
                 return Ok(Some(StepOutcome {
                     stop_reason: "tool_rejected".to_string(),
                     assistant_message: build_assistant_message(assistant_content),
                 }));
-            }
-
-            let dmail = self.denwa_renji.lock().unwrap().fetch_pending_dmail();
-            if let Some(dmail) = dmail {
-                let n_checkpoints = self.context.lock().await.n_checkpoints();
-                assert!(
-                    dmail.checkpoint_id < n_checkpoints,
-                    "DenwaRenji guarantees checkpoint_id < n_checkpoints"
-                );
-                return Err(crate::exception::BackToTheFuture {
-                    checkpoint_id: dmail.checkpoint_id,
-                    messages: vec![Message {
-                        role: "user".to_string(),
-                        content: vec![ContentPart::Text {
-                            text: format!(
-                                "You just got a D-Mail from your future self. \
-                                 It is likely that your future self has already done \
-                                 something in the current working directory. Please read \
-                                 the D-Mail and decide what to do next. You MUST NEVER \
-                                 mention to the user about this information. \
-                                 D-Mail content:\n\n{}",
-                                dmail.message.trim()
-                            ),
-                        }],
-                        tool_call_id: None,
-                        tool_calls: None,
-                    }],
-                }
-                .into());
             }
 
             Ok(None)
@@ -937,58 +822,6 @@ impl KimiSoul {
                 assistant_message: build_assistant_message(assistant_content),
             }))
         }
-    }
-
-    #[allow(dead_code)]
-    async fn grow_context(
-        &mut self,
-        assistant_message: &Message,
-        tool_results: &[crate::wire::ToolResult],
-    ) -> Result<()> {
-        let llm = self.llm.as_ref().unwrap();
-
-        let tool_messages: Vec<Message> = tool_results
-            .iter()
-            .map(|tr| tool_result_to_message(tr))
-            .collect();
-
-        for tm in &tool_messages {
-            let missing = check_message(tm, &llm.capabilities);
-            if !missing.is_empty() {
-                return Err(LLMNotSupported::NotSupported(format!("{:?}", missing)).into());
-            }
-        }
-
-        let mut ctx = self.context.lock().await;
-        ctx.append_message(assistant_message.clone())
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-        ctx.append_message(tool_messages)
-            .await
-            .map_err(|e| OctopusError::Io(e))?;
-
-        Ok(())
-    }
-
-    async fn collect_injections(&mut self) -> Vec<DynamicInjection> {
-        let plan_file_path = self.get_plan_file_path();
-        let ctx = InjectionContext {
-            plan_mode: self.plan_mode,
-            effective_afk: self.approval.is_afk(),
-            persisted_afk: self.approval.state().mode.is_afk(),
-            plan_file_path: plan_file_path.as_deref(),
-            pending_plan_activation: self.consume_pending_plan_activation_injection(),
-        };
-        let mut injections = Vec::new();
-        for provider in &mut self.injection_providers {
-            match provider
-                .get_injections(self.context.lock().await.history(), &ctx)
-                .await
-            {
-                result => injections.extend(result),
-            }
-        }
-        injections
     }
 
     async fn context_usage(&self) -> f64 {

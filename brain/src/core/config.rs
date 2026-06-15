@@ -1,11 +1,16 @@
 use std::sync::Arc;
 
 use crate::core::approval::{ApprovalRuntime, AutoApprove, DefaultApprovalRuntime};
+use crate::core::checkpoint::CheckpointPolicy;
 use crate::core::errors::BrainError;
+use crate::core::events::EventPolicy;
 use crate::core::provider::{DefaultProviderFactory, ProviderFactory};
 use crate::core::recovery::{DefaultRecoveryPolicy, RecoveryPolicy};
 use crate::core::registry::ToolSource;
 use crate::core::retry::{ExponentialBackoffRetryPolicy, RetryPolicy};
+use crate::core::step::StepPolicy;
+use crate::core::system_prompt::{DefaultSystemPromptPolicy, SystemPromptPolicy};
+use crate::core::tool_result::ToolResultTransformer;
 use crate::hooks::policy::{HookPolicy, NoOpHookPolicy};
 use crate::session::compaction::CompactionPolicy;
 use crate::session::injection::InjectionPolicy;
@@ -72,6 +77,21 @@ pub struct BrainConfig {
 
     /// Recovery policy invoked after retries are exhausted.
     pub recovery_policy: Arc<dyn RecoveryPolicy>,
+
+    /// Optional step lifecycle policy.
+    pub step_policy: Option<Arc<dyn StepPolicy>>,
+
+    /// Optional checkpoint policy for undo / D-Mail rewinds.
+    pub checkpoint_policy: Option<Arc<dyn CheckpointPolicy>>,
+
+    /// Policy that builds the effective system prompt.
+    pub system_prompt_policy: Arc<dyn SystemPromptPolicy>,
+
+    /// Optional transformer for tool results before they enter history.
+    pub tool_result_transformer: Option<Arc<dyn ToolResultTransformer>>,
+
+    /// Optional event filter/transform policy.
+    pub event_policy: Option<Arc<dyn EventPolicy>>,
 }
 
 impl std::fmt::Debug for BrainConfig {
@@ -107,6 +127,11 @@ impl Default for BrainConfig {
             hook_policy: Arc::new(NoOpHookPolicy),
             retry_policy: Arc::new(ExponentialBackoffRetryPolicy::new(3)),
             recovery_policy: Arc::new(DefaultRecoveryPolicy),
+            step_policy: None,
+            checkpoint_policy: None,
+            system_prompt_policy: Arc::new(DefaultSystemPromptPolicy),
+            tool_result_transformer: None,
+            event_policy: None,
         }
     }
 }

@@ -6,9 +6,12 @@ use async_trait::async_trait;
 
 use crate::hooks::{HookEngine, HookEvent};
 use crate::llm::{LLM, kosong_to_wire_message, wire_to_kosong_message};
+use crate::notifications::llm::build_notification_message;
+use crate::notifications::manager::NotificationManager;
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
 use crate::soul::context::Context;
 use crate::soul::dynamic_injection::{DynamicInjectionProvider, InjectionContext};
+use crate::soul::toolset::KimiToolset;
 use crate::wire;
 
 /// Wraps the file-backed [`Context`] as a Brain [`MessageStore`].
@@ -226,6 +229,14 @@ impl brain::session::injection::InjectionPolicy for CliInjectionPolicy {
             }
         }
 
+        // The pending plan-activation flag is consumed once the providers have
+        // had a chance to emit it.
+        if pending_plan_activation {
+            if let Ok(mut s) = self.state.write() {
+                s.pending_plan_activation = false;
+            }
+        }
+
         injections
             .into_iter()
             .map(|m| wire_to_kosong_message(&m))
@@ -426,5 +437,218 @@ impl brain::RecoveryPolicy for CliRecoveryPolicy {
         }
 
         brain::RecoveryAction::Abort
+    }
+}
+
+/// Bridges the CLI's file-backed [`Context`] checkpoints into a Brain
+/// [`CheckpointPolicy`].
+pub struct CliCheckpointPolicy {
+    context: Arc<tokio::sync::Mutex<Context>>,
+    denwa_renji: Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
+    checkpoint_with_user_message: bool,
+}
+
+impl CliCheckpointPolicy {
+    pub fn new(
+        context: Arc<tokio::sync::Mutex<Context>>,
+        denwa_renji: Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
+        checkpoint_with_user_message: bool,
+    ) -> Self {
+        Self {
+            context,
+            denwa_renji,
+            checkpoint_with_user_message,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl brain::core::checkpoint::CheckpointPolicy for CliCheckpointPolicy {
+    async fn checkpoint(
+        &self,
+        _ctx: &brain::core::step::StepContext,
+        _history: &[kosong::Message],
+    ) -> Result<brain::core::events::CheckpointId, brain::BrainError> {
+        let mut ctx = self.context.lock().await;
+        ctx.checkpoint(self.checkpoint_with_user_message)
+            .await
+            .map_err(|e| brain::BrainError::Other(e.to_string()))?;
+        let id = ctx.n_checkpoints() - 1;
+        self.denwa_renji.lock().unwrap().set_n_checkpoints(id + 1);
+        Ok(id)
+    }
+
+    async fn revert_to(
+        &self,
+        id: brain::core::events::CheckpointId,
+    ) -> Result<Vec<kosong::Message>, brain::BrainError> {
+        let mut ctx = self.context.lock().await;
+        ctx.revert_to(id)
+            .await
+            .map_err(|e| brain::BrainError::Other(e.to_string()))?;
+        Ok(ctx.history().iter().map(wire_to_kosong_message).collect())
+    }
+
+    async fn current(&self) -> Option<brain::core::events::CheckpointId> {
+        Some(self.context.lock().await.n_checkpoints().saturating_sub(1))
+    }
+}
+
+/// Bridges CLI-specific per-step concerns (dedup, notification delivery,
+/// D-Mail rewinds, and tool-rejection stops) into a Brain [`StepPolicy`].
+pub struct CliStepPolicy {
+    context: Arc<tokio::sync::Mutex<Context>>,
+    toolset: Arc<KimiToolset>,
+    notification_manager: NotificationManager,
+    hook_engine: HookEngine,
+    session_id: String,
+    denwa_renji: Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
+    last_tool_calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    current_turn_id: Arc<std::sync::Mutex<Option<String>>>,
+    current_step_no: Arc<std::sync::Mutex<usize>>,
+}
+
+impl CliStepPolicy {
+    pub fn new(
+        context: Arc<tokio::sync::Mutex<Context>>,
+        toolset: Arc<KimiToolset>,
+        notification_manager: NotificationManager,
+        hook_engine: HookEngine,
+        session_id: String,
+        denwa_renji: Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
+    ) -> Self {
+        Self {
+            context,
+            toolset,
+            notification_manager,
+            hook_engine,
+            session_id,
+            denwa_renji,
+            last_tool_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            current_turn_id: Arc::new(std::sync::Mutex::new(None)),
+            current_step_no: Arc::new(std::sync::Mutex::new(0)),
+        }
+    }
+
+    pub fn set_current_turn_id(&self, id: Option<String>) {
+        *self.current_turn_id.lock().unwrap() = id;
+    }
+
+    pub fn set_current_step_no(&self, n: usize) {
+        *self.current_step_no.lock().unwrap() = n;
+    }
+}
+
+#[async_trait::async_trait]
+impl brain::core::step::StepPolicy for CliStepPolicy {
+    async fn before_step(
+        &self,
+        _ctx: &brain::core::step::StepContext,
+        history: &mut Vec<kosong::Message>,
+    ) -> Result<(), brain::BrainError> {
+        let turn_id = self
+            .current_turn_id
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default();
+        let step_no = *self.current_step_no.lock().unwrap();
+        let previous_calls = self.last_tool_calls.lock().unwrap().clone();
+        self.toolset.begin_step(previous_calls, step_no, turn_id);
+
+        // Deliver pending notifications to the LLM sink.
+        if self.notification_manager.has_pending_for_sink("llm") {
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string());
+            let notifs = self.notification_manager.claim_for_sink("llm", 8);
+            for view in notifs {
+                let msg = build_notification_message(&view);
+                history.push(wire_to_kosong_message(&msg));
+                let event = HookEvent::notification(
+                    &self.session_id,
+                    &cwd,
+                    "llm",
+                    &view.event.event_type,
+                    &view.event.title,
+                    &view.event.body,
+                    &view.event.severity,
+                );
+                if self.hook_engine.has_hooks_for(event.kind()) {
+                    let _ = self.hook_engine.fire_and_forget_trigger(event);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn after_step(
+        &self,
+        _ctx: &brain::core::step::StepContext,
+        outcome: &brain::core::step::StepOutcome,
+        tool_results: &[kosong::tooling::ToolResult],
+    ) -> Result<brain::core::step::StepControl, brain::BrainError> {
+        let current_calls = self.toolset.end_step();
+
+        let any_error = tool_results.iter().any(|r| r.return_value.is_error);
+        if any_error {
+            // Discard any D-Mail that may have been queued alongside the error.
+            let _ = {
+                let mut dr = self.denwa_renji.lock().unwrap();
+                dr.fetch_pending_dmail()
+            };
+            *self.last_tool_calls.lock().unwrap() = current_calls;
+            return Ok(brain::core::step::StepControl::Stop {
+                final_text: String::new(),
+            });
+        }
+
+        let dmail = {
+            let mut dr = self.denwa_renji.lock().unwrap();
+            dr.fetch_pending_dmail()
+        };
+        if let Some(dmail) = dmail {
+            // Reset dedup state across the rewind.
+            *self.last_tool_calls.lock().unwrap() = Vec::new();
+            let n_checkpoints = self.context.lock().await.n_checkpoints();
+            assert!(
+                dmail.checkpoint_id < n_checkpoints,
+                "DenwaRenji guarantees checkpoint_id < n_checkpoints"
+            );
+            let inject = wire::Message {
+                role: "user".to_string(),
+                content: vec![wire::ContentPart::Text {
+                    text: format!(
+                        "You just got a D-Mail from your future self. \
+                         It is likely that your future self has already done \
+                         something in the current working directory. Please read \
+                         the D-Mail and decide what to do next. You MUST NEVER \
+                         mention to the user about this information. \
+                         D-Mail content:\n\n{}",
+                        dmail.message.trim()
+                    ),
+                }],
+                tool_call_id: None,
+                tool_calls: None,
+            };
+            return Ok(brain::core::step::StepControl::RewindToCheckpoint {
+                checkpoint_id: dmail.checkpoint_id,
+                inject_messages: vec![wire_to_kosong_message(&inject)],
+            });
+        }
+
+        *self.last_tool_calls.lock().unwrap() = current_calls;
+
+        match outcome {
+            brain::core::step::StepOutcome::Continue => {
+                Ok(brain::core::step::StepControl::Continue)
+            }
+            brain::core::step::StepOutcome::Final { text } => {
+                Ok(brain::core::step::StepControl::Stop {
+                    final_text: text.clone(),
+                })
+            }
+        }
     }
 }

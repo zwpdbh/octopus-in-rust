@@ -7,6 +7,9 @@ pub enum BrainError {
     #[error("LLM error: {0}")]
     Llm(String),
 
+    #[error("{0}")]
+    Other(String),
+
     #[error("API status error {status_code}: {message}")]
     ApiStatus { status_code: u16, message: String },
 
