@@ -57,3 +57,28 @@ fn normalize(path: &Path) -> PathBuf {
     }
     out
 }
+
+/// Path to the marker file that remembers the last initialized data directory.
+///
+/// The file lives next to the binary/project root so that subsequent `qqbot`
+/// commands do not need a `-d` flag.
+pub fn data_dir_marker() -> PathBuf {
+    project_root().join(".qqbot")
+}
+
+/// Read the default data directory written by a previous `qqbot init`.
+pub fn read_default_data_dir() -> Option<PathBuf> {
+    let marker = data_dir_marker();
+    let contents = std::fs::read_to_string(marker).ok()?;
+    let path = PathBuf::from(contents.trim());
+    if path.is_dir() {
+        Some(normalize(&path))
+    } else {
+        None
+    }
+}
+
+/// Persist the data directory so future commands can find it without `-d`.
+pub fn write_default_data_dir(data_dir: &Path) -> std::io::Result<()> {
+    std::fs::write(data_dir_marker(), data_dir.to_string_lossy().as_bytes())
+}

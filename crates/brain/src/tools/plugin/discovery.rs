@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use extism::{CompiledPlugin, Manifest, Plugin, PluginBuilder, Wasm};
+use kosong::tooling::CallableTool;
 use serde_json::Value;
 
 use crate::tools::plugin::manifest::{PluginManifest, PluginMetadata, default_schema};
@@ -43,7 +44,7 @@ pub struct WasmPluginTool {
 }
 
 #[async_trait]
-impl kosong::tooling::CallableTool for WasmPluginTool {
+impl CallableTool for WasmPluginTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -119,7 +120,7 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::Call
             continue;
         }
 
-        match load_wasm_plugin(&path) {
+        match load_tool_from_wasm(&path) {
             Ok(tool) => {
                 tracing::info!("Loaded WASM plugin: {}", tool.name());
                 tools.push(tool);
@@ -131,42 +132,6 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::Call
     }
 
     tools
-}
-
-fn load_wasm_plugin(path: &Path) -> Result<Box<dyn kosong::tooling::CallableTool>, String> {
-    let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
-
-    let manifest_path = path.with_extension("json");
-    let plugin_manifest: Option<PluginManifest> = if manifest_path.is_file() {
-        let text = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("Failed to read manifest: {}", e))?;
-        Some(serde_json::from_str(&text).map_err(|e| format!("Invalid manifest JSON: {}", e))?)
-    } else {
-        None
-    };
-
-    let extism_manifest = build_extism_manifest(&wasm_bytes, plugin_manifest.as_ref());
-
-    let compiled = PluginBuilder::new(extism_manifest)
-        .with_wasi(true)
-        .compile()
-        .map_err(|e| format!("Failed to compile WASM plugin: {}", e))?;
-
-    let metadata = if let Some(pm) = plugin_manifest {
-        pm.into_metadata()
-    } else {
-        // Prefer the Brain tool ABI; fall back to the older `tool_metadata` export.
-        load_metadata_from_register_tools(&compiled, path)
-            .or_else(|_| load_metadata_from_plugin(&compiled, path))
-            .unwrap_or_else(|_| fallback_metadata(path))
-    };
-
-    Ok(Box::new(WasmPluginTool {
-        name: metadata.name,
-        description: metadata.description,
-        schema: metadata.schema,
-        compiled,
-    }))
 }
 
 fn build_extism_manifest(wasm_bytes: &[u8], plugin_manifest: Option<&PluginManifest>) -> Manifest {
@@ -273,6 +238,77 @@ fn fallback_metadata(path: &Path) -> PluginMetadata {
         description: format!("WASM plugin tool: {}", name),
         schema: default_schema(),
     }
+}
+
+/// Minimal metadata about a loaded WASM plugin tool, suitable for UIs and status output.
+#[derive(Debug, Clone)]
+pub struct WasmToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Load a single WASM plugin file and return the tool it exposes.
+///
+/// This is the public entry point used by tooling such as the `qqbot` CLI to
+/// validate a `.wasm` file before registering it.
+pub fn load_tool_from_wasm(path: &Path) -> Result<Box<dyn CallableTool>, String> {
+    let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
+
+    let manifest_path = path.with_extension("json");
+    let plugin_manifest: Option<PluginManifest> = if manifest_path.is_file() {
+        let text = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("Failed to read manifest: {}", e))?;
+        Some(serde_json::from_str(&text).map_err(|e| format!("Invalid manifest JSON: {}", e))?)
+    } else {
+        None
+    };
+
+    let extism_manifest = build_extism_manifest(&wasm_bytes, plugin_manifest.as_ref());
+
+    let compiled = PluginBuilder::new(extism_manifest)
+        .with_wasi(true)
+        .compile()
+        .map_err(|e| format!("Failed to compile WASM plugin: {}", e))?;
+
+    let metadata = if let Some(pm) = plugin_manifest {
+        pm.into_metadata()
+    } else {
+        // Prefer the Brain tool ABI; fall back to the older `tool_metadata` export.
+        load_metadata_from_register_tools(&compiled, path)
+            .or_else(|_| load_metadata_from_plugin(&compiled, path))
+            .unwrap_or_else(|_| fallback_metadata(path))
+    };
+
+    Ok(Box::new(WasmPluginTool {
+        name: metadata.name,
+        description: metadata.description,
+        schema: metadata.schema,
+        compiled,
+    }))
+}
+
+/// Inspect a WASM plugin file and return its tool metadata without keeping the
+/// compiled plugin alive.
+pub fn inspect_wasm_plugin(path: &Path) -> Result<WasmToolInfo, String> {
+    let tool = load_tool_from_wasm(path)?;
+    Ok(WasmToolInfo {
+        name: tool.name().to_string(),
+        description: tool.description().to_string(),
+    })
+}
+
+/// Discover and return metadata for every loadable WASM plugin in a directory.
+///
+/// Invalid plugins are skipped (with tracing warnings) rather than failing the
+/// whole scan. This is useful for status output and quick inventory.
+pub fn discover_plugin_infos(plugins_dir: &Path) -> Vec<WasmToolInfo> {
+    discover_plugins(plugins_dir)
+        .into_iter()
+        .map(|tool| WasmToolInfo {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+        })
+        .collect()
 }
 
 /// Default plugins directory path (`~/.kimi/plugins`).

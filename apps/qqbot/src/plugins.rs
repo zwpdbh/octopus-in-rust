@@ -13,6 +13,13 @@ pub struct PluginInfo {
     pub enabled: bool,
 }
 
+/// Summary of a registered WASM plugin tool, as reported by the brain loader.
+#[derive(Debug, Clone)]
+pub struct RegisteredTool {
+    pub name: String,
+    pub description: String,
+}
+
 pub fn list(data_dir: &Path) -> Result<Vec<PluginInfo>> {
     let available = available_plugins()?;
     let enabled: BTreeSet<String> = enabled_plugins(data_dir)?;
@@ -43,13 +50,95 @@ pub async fn enable(data_dir: &Path, name: &str) -> Result<()> {
         );
     }
 
-    let dst = plugin_dir(data_dir).join(format!("{name}.wasm"));
-    std::fs::create_dir_all(plugin_dir(data_dir))?;
-    tokio::fs::copy(&src, &dst).await?;
-    println!("Enabled plugin '{name}'");
-
-    reload(data_dir).await?;
+    register(data_dir, &src).await?;
     Ok(())
+}
+
+/// Register a built `.wasm` plugin file from an explicit path.
+///
+/// The file is validated by the brain plugin loader, copied into the data
+/// directory's plugin folder, and qqbot-core is signalled to reload if it is
+/// currently running.
+pub async fn register(data_dir: &Path, wasm_path: &Path) -> Result<String> {
+    if !wasm_path.exists() {
+        anyhow::bail!("WASM file not found: {}", wasm_path.display());
+    }
+    if wasm_path.extension().and_then(|e| e.to_str()) != Some("wasm") {
+        anyhow::bail!("not a .wasm file: {}", wasm_path.display());
+    }
+
+    let name = wasm_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("invalid WASM file name")?
+        .to_string();
+
+    // Validate the plugin with the internal brain loader before installing it.
+    let info = brain::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(|e| {
+        anyhow::anyhow!("failed to inspect WASM plugin {}: {e}", wasm_path.display())
+    })?;
+
+    let dst = plugin_dir(data_dir).join(format!("{name}.wasm"));
+    let already_installed = dst.exists();
+    std::fs::create_dir_all(plugin_dir(data_dir))?;
+    tokio::fs::copy(wasm_path, &dst).await?;
+    let action = if already_installed {
+        "Updated"
+    } else {
+        "Installed"
+    };
+    println!("{action} plugin '{name}' (tool: {})", info.name);
+
+    // Signal the running core only if there is a pid file. If the core is not
+    // running the plugin will be picked up on the next start.
+    let pid_file = run_dir(data_dir).join("qqbot-core.pid");
+    if pid_file.exists() {
+        reload(data_dir).await?;
+    } else {
+        println!("qqbot-core is not running; plugin will be loaded on next start");
+    }
+
+    Ok(name)
+}
+
+/// Uninstall a previously registered plugin by its file-stem name.
+///
+/// The `.wasm` file is removed from the plugin directory and the running core
+/// is signalled to reload if it is active.
+pub async fn unregister(data_dir: &Path, name: &str) -> Result<()> {
+    let dst = plugin_dir(data_dir).join(format!("{name}.wasm"));
+    if !dst.exists() {
+        anyhow::bail!("plugin '{name}' is not installed");
+    }
+    tokio::fs::remove_file(&dst).await?;
+    println!("Uninstalled plugin '{name}'");
+
+    let pid_file = run_dir(data_dir).join("qqbot-core.pid");
+    if pid_file.exists() {
+        reload(data_dir).await?;
+    } else {
+        println!("qqbot-core is not running; change will take effect on next start");
+    }
+    Ok(())
+}
+
+/// List the tools currently registered in the plugin directory.
+///
+/// Only plugins that can be successfully loaded by the brain plugin loader are
+/// returned; corrupt or incompatible files are skipped with a warning log.
+pub fn list_registered(data_dir: &Path) -> Result<Vec<RegisteredTool>> {
+    let dir = plugin_dir(data_dir);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    Ok(brain::tools::plugin::discover_plugin_infos(&dir)
+        .into_iter()
+        .map(|info| RegisteredTool {
+            name: info.name,
+            description: info.description,
+        })
+        .collect())
 }
 
 pub async fn disable(data_dir: &Path, name: &str) -> Result<()> {
@@ -136,4 +225,88 @@ fn send_sighup(pid: i32) -> Result<()> {
 #[cfg(not(unix))]
 fn send_sighup(_pid: i32) -> Result<()> {
     anyhow::bail!("plugin reload via SIGHUP is only supported on Unix")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_wasm_path() -> Option<PathBuf> {
+        let from_data = paths::project_root().join("data/qqbot-data/plugins/summary.wasm");
+        if from_data.exists() {
+            return Some(from_data);
+        }
+        let from_target =
+            paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
+        if from_target.exists() {
+            return Some(from_target);
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_register_plugin_from_wasm() {
+        let Some(src) = sample_wasm_path() else {
+            eprintln!("Skipping test_register_plugin_from_wasm: summary.wasm not found");
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        let wasm_path = data_dir.join("summary.wasm");
+        tokio::fs::copy(&src, &wasm_path).await.unwrap();
+
+        let name = register(data_dir, &wasm_path).await.unwrap();
+        assert_eq!(name, "summary");
+
+        let tools = list_registered(data_dir).unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|t| t.name == "summary_format_conversation"),
+            "expected summary_format_conversation in {:?}",
+            tools
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unregister_plugin() {
+        let Some(src) = sample_wasm_path() else {
+            eprintln!("Skipping test_unregister_plugin: summary.wasm not found");
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        let wasm_path = data_dir.join("summary.wasm");
+        tokio::fs::copy(&src, &wasm_path).await.unwrap();
+
+        register(data_dir, &wasm_path).await.unwrap();
+        assert!(plugin_dir(data_dir).join("summary.wasm").exists());
+
+        unregister(data_dir, "summary").await.unwrap();
+        assert!(!plugin_dir(data_dir).join("summary.wasm").exists());
+
+        let tools = list_registered(data_dir).unwrap();
+        assert!(tools.is_empty(), "after unregister no tools should remain");
+    }
+
+    #[test]
+    fn test_list_registered_skips_invalid_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        std::fs::create_dir_all(plugin_dir(data_dir)).unwrap();
+        std::fs::write(
+            plugin_dir(data_dir).join("not-a-plugin.wasm"),
+            b"invalid wasm bytes",
+        )
+        .unwrap();
+
+        let tools = list_registered(data_dir).unwrap();
+        assert!(
+            tools.is_empty(),
+            "invalid wasm should be skipped, got {:?}",
+            tools
+        );
+    }
 }

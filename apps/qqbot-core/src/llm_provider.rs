@@ -33,8 +33,8 @@ impl ProviderFactory for QqbotProviderFactory {
         let token = auth_token(&self.provider)
             .await
             .map_err(|e| BrainError::Other(e.to_string()))?;
-        let headers = identity_headers(&self.provider)
-            .map_err(|e| BrainError::Other(e.to_string()))?;
+        let headers =
+            identity_headers(&self.provider).map_err(|e| BrainError::Other(e.to_string()))?;
         let base_url = api_url(&self.provider);
 
         match &self.provider {
@@ -74,9 +74,7 @@ async fn auth_token(provider: &LlmProviderConfig) -> Result<String> {
 /// Build any extra headers required by the provider.
 fn identity_headers(provider: &LlmProviderConfig) -> Result<HashMap<String, String>> {
     match provider {
-        LlmProviderConfig::KimiCode { identity, .. } => {
-            build_kimi_code_identity_headers(identity)
-        }
+        LlmProviderConfig::KimiCode { identity, .. } => build_kimi_code_identity_headers(identity),
         LlmProviderConfig::OpenAiCompatible { .. } => Ok(HashMap::new()),
     }
 }
@@ -128,11 +126,7 @@ pub fn build_kimi_code_identity_headers(
     let home_dir = expand_path(&identity.home_dir);
 
     let device_id = read_device_id(&home_dir);
-    let hostname = ascii_header(
-        std::env::var("HOSTNAME")
-            .as_deref()
-            .unwrap_or("qqbot-core"),
-    );
+    let hostname = ascii_header(std::env::var("HOSTNAME").as_deref().unwrap_or("qqbot-core"));
     let device_model = ascii_header(&format_device_model());
     let os_version = ascii_header(get_sys_release().as_str());
 

@@ -9,6 +9,7 @@ use brain::{Brain, BrainConfig, BrainEvent, ExtismPluginSource};
 use futures_util::StreamExt;
 use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::ToolReturnValue;
+use kosong::Toolset;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch, Mutex};
@@ -127,6 +128,22 @@ impl GroupBrainManager {
         info!("cleared all group brains");
     }
 
+    /// Return the names of all tools currently loaded in any group Brain.
+    ///
+    /// This reflects the runtime toolset, not the plugin directory. Brains are
+    /// created lazily, so a freshly registered plugin only appears here after a
+    /// Brain has been recreated (e.g., after the next addressed message).
+    pub async fn loaded_tool_names(&self) -> Vec<String> {
+        let brains = self.brains.lock().await;
+        let mut names = std::collections::BTreeSet::new();
+        for brain in brains.values() {
+            for tool in brain.registry().tools() {
+                names.insert(tool.name);
+            }
+        }
+        names.into_iter().collect()
+    }
+
     /// Cancel an in-progress turn for a group, if any.
     ///
     /// Returns `true` if a running worker was found and asked to stop.
@@ -195,14 +212,7 @@ impl GroupBrainManager {
         let max_steps = self.max_steps_per_turn;
         let handle = tokio::spawn(async move {
             turn_worker(
-                brain,
-                group_id,
-                user_id,
-                message_id,
-                text,
-                action_tx,
-                steer_rx,
-                cancel_rx,
+                brain, group_id, user_id, message_id, text, action_tx, steer_rx, cancel_rx,
                 max_steps,
             )
             .await;
@@ -264,9 +274,17 @@ impl GroupBrainManager {
             RecentMessagesTool::new(self.memory.clone(), group_id),
         )));
 
+        let tool_names: Vec<String> = brain
+            .registry()
+            .tools()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        info!(group_id, tools = ?tool_names, "registered tools for group brain");
+
         // Append dynamic tool instructions based on what is actually loaded.
         let mut instructions = vec![
-            "When asked to summarize the conversation, first call qqbot::recent_messages to retrieve the recent messages, then provide a concise summary.".to_string(),
+            "When asked to summarize the conversation, first call qqbot_recent_messages to retrieve the recent messages, then provide a concise summary.".to_string(),
         ];
         if brain
             .registry()
@@ -326,7 +344,14 @@ fn truncate(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
         text.to_string()
     } else {
-        format!("{}...", &text[..text.char_indices().nth(max_len).map(|(i, _)| i).unwrap_or(max_len)])
+        format!(
+            "{}...",
+            &text[..text
+                .char_indices()
+                .nth(max_len)
+                .map(|(i, _)| i)
+                .unwrap_or(max_len)]
+        )
     }
 }
 
@@ -411,7 +436,11 @@ async fn turn_worker(
                             had_output.store(true, Ordering::Relaxed);
                             final_text.push_str(&text);
                         }
-                        BrainEvent::ToolCall { id, name, arguments } => {
+                        BrainEvent::ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        } => {
                             had_output.store(true, Ordering::Relaxed);
                             tool_names.insert(id, name.clone());
                             let args = format_tool_args(&arguments);
@@ -422,7 +451,11 @@ async fn turn_worker(
                                 format!("🔧 Using tool `{name}`{args}"),
                             );
                         }
-                        BrainEvent::ToolResult { id, output, is_error } => {
+                        BrainEvent::ToolResult {
+                            id,
+                            output,
+                            is_error,
+                        } => {
                             had_output.store(true, Ordering::Relaxed);
                             had_tool_results = true;
                             let name = tool_names
@@ -496,7 +529,8 @@ async fn turn_worker(
         let reply = if any_text_seen {
             final_text
         } else {
-            "I thought about it but couldn't come up with a good answer. Try rephrasing?".to_string()
+            "I thought about it but couldn't come up with a good answer. Try rephrasing?"
+                .to_string()
         };
         send_reply(&action_tx, group_id, message_id, reply);
         break;
@@ -511,4 +545,3 @@ async fn turn_worker(
         );
     }
 }
-

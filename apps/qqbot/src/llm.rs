@@ -1,4 +1,6 @@
-use crate::core_config::{AuthConfig, CoreConfigFile, KimiCodeIdentity, LlmConfig, LlmProviderConfig};
+use crate::core_config::{
+    AuthConfig, CoreConfigFile, KimiCodeIdentity, LlmConfig, LlmProviderConfig,
+};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -320,11 +322,16 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
     println!("[ok]   model:    {}", llm.model);
 
     let client = reqwest::Client::new();
-    let mut req = client.get(&models_url).header("Authorization", format!("Bearer {}", api_key));
+    let mut req = client
+        .get(&models_url)
+        .header("Authorization", format!("Bearer {}", api_key));
     for (name, value) in &headers {
         req = req.header(name, value);
     }
-    let resp = req.send().await.with_context(|| format!("failed to request {models_url}"))?;
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("failed to request {models_url}"))?;
 
     let status = resp.status();
     let body = resp.text().await.context("failed to read response body")?;
@@ -377,9 +384,7 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
     Ok(())
 }
 
-async fn resolve_provider(
-    llm: &LlmConfig,
-) -> Result<(String, String, HashMap<String, String>)> {
+async fn resolve_provider(llm: &LlmConfig) -> Result<(String, String, HashMap<String, String>)> {
     match &llm.provider {
         LlmProviderConfig::OpenAiCompatible { api_url, auth } => {
             let token = resolve_auth(auth).await?;
@@ -405,9 +410,7 @@ async fn resolve_auth(auth: &AuthConfig) -> Result<String> {
 }
 
 fn build_models_url(api_url: &str) -> Result<String> {
-    let base = api_url
-        .strip_suffix("/chat/completions")
-        .unwrap_or(api_url);
+    let base = api_url.strip_suffix("/chat/completions").unwrap_or(api_url);
     let base = base.trim_end_matches('/');
     Ok(format!("{base}/models"))
 }
@@ -502,4 +505,3 @@ fn ascii_header(value: &str) -> String {
         cleaned.to_string()
     }
 }
-

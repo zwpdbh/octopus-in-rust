@@ -89,7 +89,11 @@ impl LlmConfig {
                 }
                 auth.validate()?;
             }
-            LlmProviderConfig::KimiCode { api_url, token_file, .. } => {
+            LlmProviderConfig::KimiCode {
+                api_url,
+                token_file,
+                ..
+            } => {
                 if api_url.is_empty() {
                     anyhow::bail!("llm.api_url must not be empty");
                 }

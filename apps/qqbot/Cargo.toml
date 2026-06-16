@@ -7,6 +7,7 @@ description = "Supervisor that starts and manages SnowLuma and qqbot-core."
 license = "MIT"
 
 [dependencies]
+brain = { path = "../../crates/brain" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 daemonize = "0.5"
@@ -24,3 +25,6 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

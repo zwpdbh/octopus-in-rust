@@ -524,12 +524,7 @@ enum CommandKind {
 }
 
 impl CommandEvent {
-    fn from_kind(
-        group_id: i64,
-        user_id: i64,
-        message_id: Option<i32>,
-        kind: CommandKind,
-    ) -> Self {
+    fn from_kind(group_id: i64, user_id: i64, message_id: Option<i32>, kind: CommandKind) -> Self {
         match kind {
             CommandKind::Status => CommandEvent::Status {
                 group_id,

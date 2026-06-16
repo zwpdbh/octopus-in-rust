@@ -1,4 +1,5 @@
 mod config;
+mod control;
 mod group_brain;
 mod llm_provider;
 mod memory;
@@ -57,6 +58,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("qqbot-core is running; press Ctrl+C to stop, SIGHUP to reload plugins");
 
+    let control_handle = tokio::spawn(control::serve(config_path.clone(), group_brains.clone()));
+
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
@@ -79,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received; exiting");
+                control_handle.abort();
+                let _ = control::socket_path(&config_path)
+                    .and_then(|p| std::fs::remove_file(p).ok());
                 break;
             }
             else => {
@@ -243,7 +249,9 @@ async fn handle_command(
 
     match cmd {
         CommandEvent::Status {
-            group_id, message_id, ..
+            group_id,
+            message_id,
+            ..
         } => {
             if !config.bot.is_group_allowed(group_id) {
                 debug!(group_id, "group not allowed");
@@ -253,7 +261,9 @@ async fn handle_command(
             handle_status(group_id, message_id, action_tx, memory, &req_id).await;
         }
         CommandEvent::Help {
-            group_id, message_id, ..
+            group_id,
+            message_id,
+            ..
         } => {
             if !config.bot.is_group_allowed(group_id) {
                 debug!(group_id, "group not allowed");

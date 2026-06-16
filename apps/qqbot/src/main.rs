@@ -1,3 +1,4 @@
+mod control;
 mod core_config;
 mod daemon;
 mod doctor;
@@ -25,8 +26,12 @@ use tracing::info;
 #[command(about = "QQ bot service manager.")]
 struct Cli {
     /// Working directory for qqbot-core config and plugins.
-    #[arg(long, short, global = true, default_value = "./data/qqbot-data")]
-    data_dir: PathBuf,
+    ///
+    /// If omitted, qqbot uses the directory recorded by the most recent
+    /// `qqbot init` (stored in `<project-root>/.qqbot`) and falls back to
+    /// `./data/qqbot-data`.
+    #[arg(long, short, global = true)]
+    data_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -89,6 +94,11 @@ enum Command {
         #[command(subcommand)]
         command: LlmCommand,
     },
+    /// Register or inspect WASM plugin tool files directly.
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
+    },
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
 }
@@ -126,6 +136,18 @@ enum LlmCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+enum ToolsCommand {
+    /// Install or overwrite a built .wasm plugin from an explicit path.
+    Register { path: PathBuf },
+    /// Update an already installed plugin from a built .wasm path.
+    Update { path: PathBuf },
+    /// Uninstall a plugin by its file-stem name (e.g. `summary`).
+    Unregister { name: String },
+    /// List currently registered plugin tools.
+    List,
+}
+
+#[derive(Debug, Clone, Subcommand)]
 enum PluginCommand {
     /// List available and enabled plugins.
     List,
@@ -144,7 +166,11 @@ fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
     let cli = Cli::parse();
-    let data_dir = paths::resolve(&cli.data_dir);
+    let data_dir = cli
+        .data_dir
+        .map(|p| paths::resolve(p))
+        .or_else(|| paths::read_default_data_dir())
+        .unwrap_or_else(|| paths::resolve("./data/qqbot-data"));
 
     match cli.command {
         Command::Init {
@@ -251,6 +277,47 @@ fn main() -> Result<()> {
             PluginCommand::Reload => {
                 let rt = tokio::runtime::Runtime::new()?;
                 rt.block_on(plugins::reload(&data_dir))?;
+            }
+        },
+        Command::Tools { command } => match command {
+            ToolsCommand::Register { path } | ToolsCommand::Update { path } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(plugins::register(&data_dir, &path))?;
+            }
+            ToolsCommand::Unregister { name } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(plugins::unregister(&data_dir, &name))?;
+            }
+            ToolsCommand::List => {
+                let rt = tokio::runtime::Runtime::new()?;
+                let runtime_names = rt.block_on(control::list_runtime_tools(&data_dir));
+
+                println!("Runtime loaded tools:");
+                match &runtime_names {
+                    Ok(names) => {
+                        if names.is_empty() {
+                            println!("  (none — brains are created lazily; address the bot in a group to load tools)");
+                        } else {
+                            for name in names {
+                                println!("  {name}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  unavailable: {e}");
+                    }
+                }
+
+                println!();
+                println!("Installed plugins:");
+                let installed = plugins::list_registered(&data_dir)?;
+                if installed.is_empty() {
+                    println!("  (none)");
+                } else {
+                    for tool in installed {
+                        println!("  {:<28} {}", tool.name, tool.description);
+                    }
+                }
             }
         },
         Command::Llm { command } => match command {
@@ -421,6 +488,13 @@ async fn init(
     } else {
         println!("SnowLuma WebUI username: admin");
         println!("Existing WebUI password preserved. If you forgot it, re-run init with --reset-webui-password.");
+    }
+
+    // Remember this data directory so later commands do not need `-d`.
+    if let Err(e) = paths::write_default_data_dir(&data_dir) {
+        eprintln!(
+            "Warning: could not write default data directory marker: {e}\nYou may need to pass -d on future commands."
+        );
     }
 
     info!(webui_port = webui_port, "qqbot initialized");

@@ -1,6 +1,8 @@
+use crate::control;
 use crate::core_config::CoreConfigFile;
 use crate::daemon;
 use crate::health;
+use crate::plugins;
 use crate::service::{base_dir, SNOWLUMA_CONTAINER};
 use anyhow::Result;
 use std::path::Path;
@@ -118,6 +120,50 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             "Run `qqbot restart` to restart qqbot-core. If the daemon is not running, use `qqbot start`.",
         )
     });
+
+    // Registered / loaded plugin tools.
+    match control::list_runtime_tools(data_dir).await {
+        Ok(names) => {
+            if names.is_empty() {
+                checks.push(Check::warn(
+                    "No plugin tools loaded in running core",
+                    "Use `qqbot tools register <path>` to install a plugin, then address the bot in a group to load it.",
+                ));
+            } else {
+                checks.push(
+                    Check::ok(format!("Plugin tools loaded: {}", names.join(", ")))
+                        .with_detail(format!("{} tool(s)", names.len())),
+                );
+            }
+        }
+        Err(runtime_err) => {
+            match plugins::list_registered(data_dir) {
+                Ok(tools) => {
+                    if tools.is_empty() {
+                        checks.push(Check::warn(
+                        "No plugin tools installed",
+                        "Use `qqbot tools register <path>` to load a WASM plugin. The host tool qqbot_recent_messages is always available.",
+                    ));
+                    } else {
+                        let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+                        checks.push(
+                        Check::warn(
+                            format!("Plugin tools installed (core not reachable: {runtime_err}): {}", names.join(", ")),
+                            "Start qqbot-core to load these tools into the runtime.",
+                        )
+                        .with_detail(format!("{} tool(s)", tools.len())),
+                    );
+                    }
+                }
+                Err(e) => {
+                    checks.push(Check::warn(
+                    format!("Could not list plugin tools: runtime {runtime_err}; installed {e}"),
+                    "Check that plugin_dir in config.toml points to a readable directory and qqbot-core is running.",
+                ));
+                }
+            }
+        }
+    }
 
     // Ports.
     for (name, port) in [("SnowLuma WebUI", 5099u16), ("noVNC", 6081)] {
