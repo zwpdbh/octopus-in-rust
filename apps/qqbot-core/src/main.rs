@@ -38,12 +38,6 @@ async fn main() -> anyhow::Result<()> {
 
     let memory = MemoryStore::new(200);
 
-    let group_brains = Arc::new(GroupBrainManager::new(
-        config.clone(),
-        memory.clone(),
-        plugin_dir.clone(),
-    ));
-
     info!(onebot_ws = %config.onebot.ws_url, "connecting to OneBot");
     let (mut event_rx, action_tx) = onebot::connect(
         &config.onebot.ws_url,
@@ -53,6 +47,13 @@ async fn main() -> anyhow::Result<()> {
         config.bot.command_prefix.clone(),
     )
     .await?;
+
+    let group_brains = Arc::new(GroupBrainManager::new(
+        config.clone(),
+        memory.clone(),
+        plugin_dir.clone(),
+        action_tx.clone(),
+    ));
 
     info!("qqbot-core is running; press Ctrl+C to stop, SIGHUP to reload plugins");
 
@@ -74,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
             }
             _ = sighup.recv() => {
                 info!("SIGHUP received; clearing group brains so plugins reload on next use");
-                group_brains.clear();
+                group_brains.clear().await;
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received; exiting");
@@ -105,7 +106,7 @@ async fn handle_onebot_event(
             handle_group_chat(group_msg, config, memory).await;
         }
         OneBotEvent::SystemCommand(cmd) => {
-            handle_command(cmd, config, action_tx, memory).await;
+            handle_command(cmd, config, action_tx, memory, group_brains).await;
         }
         OneBotEvent::Notice(notice) => {
             debug!(?notice, "notice event ignored");
@@ -179,20 +180,18 @@ async fn handle_addressed_group_message(
         }
 
         if prompt.is_empty() {
-            debug!("bot addressed with no prompt; ignoring");
+            debug!("bot addressed with no prompt; sending invitation");
+            let _ = action_tx.send(Action::reply_group_msg(
+                group_id,
+                user_id,
+                "Hi! What would you like me to do?",
+                None,
+            ));
             return;
         }
 
         info!(prompt = %prompt, "handling addressed prompt");
-        handle_brain_turn(
-            group_id,
-            user_id,
-            action_tx,
-            group_brains.clone(),
-            prompt,
-            &req_id,
-        )
-        .await;
+        group_brains.handle_prompt(group_id, user_id, prompt).await;
     }
     .instrument(span)
     .await;
@@ -236,6 +235,7 @@ async fn handle_command(
     config: &Config,
     action_tx: &onebot::ActionTx,
     memory: MemoryStore,
+    group_brains: Arc<GroupBrainManager>,
 ) {
     let req_id = uuid::Uuid::new_v4().to_string();
 
@@ -256,66 +256,35 @@ async fn handle_command(
             info!(group_id, "handling /help command");
             handle_help(group_id, action_tx, &req_id).await;
         }
+        CommandEvent::Cancel {
+            group_id,
+            user_id,
+        } => {
+            if !config.bot.is_group_allowed(group_id) {
+                debug!(group_id, "group not allowed");
+                return;
+            }
+            info!(group_id, "handling /cancel command");
+            let cancelled = group_brains.cancel_turn(group_id).await;
+            if cancelled {
+                // The worker will send the cancellation confirmation after it
+                // safely stops at the next step boundary.
+            } else {
+                let action = Action::reply_group_msg(
+                    group_id,
+                    user_id,
+                    "No active reasoning to cancel.",
+                    None,
+                );
+                if let Err(e) = action_tx.send(action) {
+                    error!(request_id = %req_id, error = %e, "failed to send cancel reply");
+                }
+            }
+        }
         CommandEvent::Unknown {
             group_id, command, ..
         } => {
             debug!(group_id, command, "unknown command; ignoring");
-        }
-    }
-}
-
-async fn handle_brain_turn(
-    group_id: i64,
-    user_id: i64,
-    action_tx: &onebot::ActionTx,
-    group_brains: Arc<GroupBrainManager>,
-    user_message: String,
-    req_id: &str,
-) {
-    info!(request_id = %req_id, group_id, "running Brain turn");
-
-    let processing_text = "🤔 Thinking...".to_string();
-    let _ = action_tx.send(Action::send_group_msg(group_id, processing_text, None));
-
-    match group_brains.run_turn(group_id, user_message).await {
-        Ok(result) => {
-            let reply = if result.final_text.is_empty() {
-                "I couldn't come up with an answer.".to_string()
-            } else {
-                result.final_text
-            };
-            let action = if user_id != 0 {
-                Action::reply_group_msg(group_id, user_id, reply, None)
-            } else {
-                Action::send_group_msg(group_id, reply, None)
-            };
-            if let Err(e) = action_tx.send(action) {
-                error!(request_id = %req_id, error = %e, "failed to send Brain reply");
-            }
-        }
-        Err(e) => {
-            error!(request_id = %req_id, error = %e, "Brain turn failed");
-            let action = if user_id != 0 {
-                Action::reply_group_msg(
-                    group_id,
-                    user_id,
-                    format!(
-                        "Sorry, I couldn't process that right now: {} (request: {})",
-                        e, req_id
-                    ),
-                    None,
-                )
-            } else {
-                Action::send_group_msg(
-                    group_id,
-                    format!(
-                        "Sorry, I couldn't process that right now: {} (request: {})",
-                        e, req_id
-                    ),
-                    None,
-                )
-            };
-            let _ = action_tx.send(action);
         }
     }
 }

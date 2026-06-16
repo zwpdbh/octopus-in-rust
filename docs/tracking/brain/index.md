@@ -74,8 +74,8 @@ Tracks the extraction of a reusable **Brain** crate from `octopus-cli` and its i
 - [x] Dispatch plugin tool calls from the Brain back into the plugin.
 - [x] Create one `Brain` per allowed group in `qqbot-core` (`GroupBrainManager`).
 - [x] Implement two-phase QQ messaging (processing indicator → final reply).
-- [x] Rewrite `summary` plugin as a tool provider (`summary::format_conversation`).
-- [x] Provide a QQ-safe default toolset (`qqbot::recent_messages`).
+- [x] Rewrite `summary` plugin as a tool provider (`summary_format_conversation`).
+- [x] Provide a QQ-safe default toolset (`qqbot_recent_messages`).
 - [x] Remove the simple `LlmClient` summary path.
 - [x] `/status` and `/help` commands handled directly in the host.
 - [ ] Verify `/summary` works end-to-end against a real group.

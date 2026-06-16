@@ -45,7 +45,7 @@ the tool name and an empty parameter schema.
 #[plugin_fn]
 pub fn register_tools(_input: String) -> FnResult<String> {
     let tools = vec![ToolDef {
-        name: "summary::format_conversation".to_string(),
+        name: "summary_format_conversation".to_string(),
         description: "Format a raw conversation log for summarization.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -62,7 +62,7 @@ pub fn register_tools(_input: String) -> FnResult<String> {
 
 A single `.wasm` file can register multiple tools. The host loads each one as a
 separate callable tool. Names are usually namespaced, e.g.
-`summary::format_conversation`.
+`summary_format_conversation`.
 
 ### `tool_metadata` (single-tool fallback)
 
@@ -84,7 +84,7 @@ invokes `execute`:
 
 ```json
 {
-  "tool": "summary::format_conversation",
+  "tool": "summary_format_conversation",
   "arguments": {
     "messages": "123: hello\n456: world",
     "style": "bullet"
@@ -305,15 +305,15 @@ the current set of plugins.
 
 ### The default `summary` plugin
 
-The enabled `summary.wasm` registers `summary::format_conversation`. When a user
+The enabled `summary.wasm` registers `summary_format_conversation`. When a user
 runs `/summary`, `qqbot-core` builds a prompt like:
 
 ```text
 Please summarize the recent conversation in this group.
 ```
 
-and runs a Brain turn. The Brain may call `qqbot::recent_messages` (a host tool)
-to fetch raw messages, then call `summary::format_conversation` to format them,
+and runs a Brain turn. The Brain may call `qqbot_recent_messages` (a host tool)
+to fetch raw messages, then call `summary_format_conversation` to format them,
 and finally produce a summary for the group.
 
 ---

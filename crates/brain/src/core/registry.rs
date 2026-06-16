@@ -3,6 +3,22 @@ use std::sync::Arc;
 
 use kosong::tooling::{CallableTool, HandleResult, Tool, ToolResult, Toolset};
 
+/// Validate a tool name against OpenAI function-name rules.
+///
+/// Names must be 1–64 characters, start with an ASCII letter, and contain only
+/// ASCII letters, digits, underscores, and dashes.
+pub fn is_valid_tool_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() || name.len() > 64 {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// A source of tools that can be loaded into a [`ToolRegistry`].
 ///
 /// Loading is synchronous so that `Brain::new` can remain synchronous. If a
@@ -45,10 +61,20 @@ impl ToolRegistry {
     }
 
     /// Register a tool.
+    ///
+    /// Panics if the tool name is not a valid OpenAI function name. Valid names
+    /// start with a letter and contain only letters, digits, underscores, and
+    /// dashes, up to 64 characters long. This lets the bot fail fast at startup
+    /// instead of getting a 400 from the LLM provider at request time.
     pub fn register(&self, tool: Box<dyn CallableTool>) {
-        let name = tool.name().to_string();
+        let name = tool.name();
+        assert!(
+            is_valid_tool_name(name),
+            "tool name {:?} is invalid: must start with a letter and contain only letters, digits, underscores, and dashes (max 64 chars)",
+            name
+        );
         let mut tools = self.tools.write().unwrap();
-        tools.insert(name, Arc::from(tool));
+        tools.insert(name.to_string(), Arc::from(tool));
     }
 
     /// Register a type-safe [`kosong::tooling::CallableTool2`] via the adapter.
@@ -121,5 +147,28 @@ impl Toolset for ToolRegistry {
             }
         });
         HandleResult::Pending(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_tool_names() {
+        assert!(is_valid_tool_name("qqbot_recent_messages"));
+        assert!(is_valid_tool_name("summary_format_conversation"));
+        assert!(is_valid_tool_name("a"));
+        assert!(is_valid_tool_name("Tool_1_2"));
+    }
+
+    #[test]
+    fn test_invalid_tool_names() {
+        assert!(!is_valid_tool_name(""));
+        assert!(!is_valid_tool_name("qqbot::recent_messages"));
+        assert!(!is_valid_tool_name("summary::format_conversation"));
+        assert!(!is_valid_tool_name("1tool"));
+        assert!(!is_valid_tool_name("tool name"));
+        assert!(!is_valid_tool_name("tool.name"));
     }
 }

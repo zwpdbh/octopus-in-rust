@@ -328,8 +328,8 @@ mod tests {
         let tools = discover_plugins(&dir);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(
-            names.contains(&"summary::format_conversation"),
-            "expected summary::format_conversation plugin tool, got {:?}",
+            names.contains(&"summary_format_conversation"),
+            "expected summary_format_conversation plugin tool, got {:?}",
             names
         );
     }
@@ -346,7 +346,7 @@ mod tests {
         let tools = discover_plugins(&dir);
         let tool = tools
             .into_iter()
-            .find(|t| t.name() == "summary::format_conversation")
+            .find(|t| t.name() == "summary_format_conversation")
             .expect("summary plugin tool should be loaded");
 
         let args = serde_json::json!({

@@ -279,7 +279,7 @@ struct ToolDef {
 #[plugin_fn]
 pub fn register_tools(_input: String) -> FnResult<String> {
     let tools = vec![ToolDef {
-        name: "summary::format_conversation".to_string(),
+        name: "summary_format_conversation".to_string(),
         description: "Format a raw conversation log for summarization.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -321,7 +321,7 @@ pub fn execute(input: String) -> FnResult<String> {
     };
 
     let result = match parsed.tool.as_str() {
-        "summary::format_conversation" => format_conversation(parsed.arguments),
+        "summary_format_conversation" => format_conversation(parsed.arguments),
         _ => format!("Unknown tool: {}", parsed.tool),
     };
 

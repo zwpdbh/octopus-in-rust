@@ -29,6 +29,8 @@ pub enum CommandEvent {
     Status { group_id: i64, user_id: i64 },
     /// `/help` command.
     Help { group_id: i64, user_id: i64 },
+    /// `/cancel` (or `/c`) command.
+    Cancel { group_id: i64, user_id: i64 },
     /// Any other `/` prefixed command we do not handle.
     Unknown {
         group_id: i64,
@@ -163,9 +165,8 @@ impl MessageContent {
 
     /// Whether the message contains a real `at` segment targeting `bot_qq`.
     pub fn has_at(&self, bot_qq: i64) -> bool {
-        self.segments().map_or(false, |segments| {
-            segments.iter().any(|seg| segment_at_qq(seg, bot_qq))
-        })
+        self.segments()
+            .is_some_and(|segments| segments.iter().any(|seg| segment_at_qq(seg, bot_qq)))
     }
 }
 
@@ -505,6 +506,7 @@ impl GroupMessageEvent {
 enum CommandKind {
     Status,
     Help,
+    Cancel,
     Unknown(String),
 }
 
@@ -513,6 +515,7 @@ impl CommandEvent {
         match kind {
             CommandKind::Status => CommandEvent::Status { group_id, user_id },
             CommandKind::Help => CommandEvent::Help { group_id, user_id },
+            CommandKind::Cancel => CommandEvent::Cancel { group_id, user_id },
             CommandKind::Unknown(command) => CommandEvent::Unknown {
                 group_id,
                 user_id,
@@ -537,6 +540,7 @@ fn parse_command_kind(text: &str, command_prefix: &str) -> Option<CommandKind> {
     let kind = match cmd {
         "status" => CommandKind::Status,
         "help" | "h" => CommandKind::Help,
+        "cancel" | "c" => CommandKind::Cancel,
         _ => CommandKind::Unknown(cmd.to_string()),
     };
     Some(kind)
@@ -888,6 +892,32 @@ mod tests {
                 user_id: 123456789
             })
         ));
+    }
+
+    #[test]
+    fn test_parse_cancel_command() {
+        for command in ["/cancel", "/c"] {
+            let json = serde_json::json!({
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 925712027,
+                "user_id": 123456789,
+                "message": command,
+                "sender": {"user_id": 123456789}
+            });
+
+            let event = OneBotEvent::from_json(json, 3462039501, &[], "/").unwrap();
+            assert!(
+                matches!(
+                    event,
+                    OneBotEvent::SystemCommand(CommandEvent::Cancel {
+                        group_id: 925712027,
+                        user_id: 123456789
+                    })
+                ),
+                "expected Cancel for {command}"
+            );
+        }
     }
 
     #[test]
