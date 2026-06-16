@@ -7,7 +7,10 @@ mod onebot;
 use crate::config::Config;
 use crate::group_brain::GroupBrainManager;
 use crate::memory::MemoryStore;
-use crate::onebot::types::{Action, Event};
+use crate::onebot::types::{
+    Action, CommandEvent, GroupMessageEvent, MessageToBotEvent, MetaEvent, OneBotEvent,
+    PrivateMessageEvent,
+};
 use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,8 +50,14 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     info!(onebot_ws = %config.onebot.ws_url, "connecting to OneBot");
-    let (mut event_rx, action_tx) =
-        onebot::connect(&config.onebot.ws_url, &config.onebot.access_token).await?;
+    let (mut event_rx, action_tx) = onebot::connect(
+        &config.onebot.ws_url,
+        &config.onebot.access_token,
+        config.bot.bot_qq,
+        config.bot.bot_aliases.clone(),
+        config.bot.command_prefix.clone(),
+    )
+    .await?;
 
     info!("qqbot-core is running; press Ctrl+C to stop, SIGHUP to reload plugins");
 
@@ -60,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             Some(event) = event_rx.recv() => {
-                handle_event(
+                handle_onebot_event(
                     event,
                     &config,
                     &action_tx,
@@ -86,98 +95,178 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_event(
-    event: Event,
+async fn handle_onebot_event(
+    event: OneBotEvent,
     config: &Config,
     action_tx: &onebot::ActionTx,
     memory: MemoryStore,
     group_brains: Arc<GroupBrainManager>,
 ) {
-    if event.post_type != "message" {
-        return;
+    match event {
+        OneBotEvent::MessageToBot(msg) => {
+            handle_message_to_bot(msg, config, action_tx, memory, group_brains).await;
+        }
+        OneBotEvent::GroupChat(group_msg) => {
+            handle_group_chat(group_msg, config, memory).await;
+        }
+        OneBotEvent::SystemCommand(cmd) => {
+            handle_command(cmd, config, action_tx, memory).await;
+        }
+        OneBotEvent::Notice(notice) => {
+            debug!(?notice, "notice event ignored");
+        }
+        OneBotEvent::Request(request) => {
+            debug!(?request, "request event ignored");
+        }
+        OneBotEvent::Meta(MetaEvent::Heartbeat) => {
+            // Heartbeats are expected; keep them at trace if needed.
+        }
+        OneBotEvent::Meta(MetaEvent::Lifecycle { sub_type }) => {
+            info!(sub_type, "OneBot lifecycle event");
+        }
+        OneBotEvent::Meta(MetaEvent::Other {
+            meta_event_type, ..
+        }) => {
+            debug!(meta_event_type, "unknown meta event");
+        }
+        OneBotEvent::Unknown(value) => {
+            debug!(?value, "unknown OneBot event");
+        }
     }
+}
 
-    if event.message_type.as_deref() != Some("group") {
-        return;
+async fn handle_message_to_bot(
+    msg: MessageToBotEvent,
+    config: &Config,
+    action_tx: &onebot::ActionTx,
+    memory: MemoryStore,
+    group_brains: Arc<GroupBrainManager>,
+) {
+    match msg {
+        MessageToBotEvent::Group(event) => {
+            handle_addressed_group_message(event, config, action_tx, memory, group_brains).await;
+        }
+        MessageToBotEvent::Private(event) => {
+            handle_private_message(event, memory).await;
+        }
     }
+}
 
-    let group_id = match event.group_id {
-        Some(id) => id,
-        None => return,
-    };
-
-    if !config.bot.is_group_allowed(group_id) {
-        debug!(group_id, "group not allowed");
-        return;
-    }
-
-    let text = event.text_message();
+async fn handle_addressed_group_message(
+    event: GroupMessageEvent,
+    config: &Config,
+    action_tx: &onebot::ActionTx,
+    memory: MemoryStore,
+    group_brains: Arc<GroupBrainManager>,
+) {
+    let group_id = event.group_id;
+    let user_id = event.user_id;
+    let text = event.text();
+    let prompt = event.prompt_text(config.bot.bot_qq, &config.bot.bot_aliases);
 
     // Remember every group message for tools like qqbot::recent_messages.
-    if let Some(user_id) = event.user_id {
-        memory.push(group_id, user_id, text.clone());
-    }
+    memory.push(group_id, user_id, text.clone());
 
     let req_id = uuid::Uuid::new_v4().to_string();
     let span = info_span!(
-        "handle_event",
+        "addressed_group_message",
         request_id = %req_id,
         group_id,
-        user_id = ?event.user_id,
+        user_id,
     );
 
     async {
-        let user_id = event.user_id.unwrap_or(0);
+        debug!(text = %text, prompt = %prompt, "received addressed group message");
 
-        // 1. Explicit @-mention: treat the remaining text as a natural-language
-        //    prompt and run it through the group's Brain.
-        let bot_qq = config.bot.bot_qq;
-        if bot_qq != 0 && event.is_at(bot_qq) {
-            let prompt = event.prompt_text(bot_qq);
-            if prompt.is_empty() {
-                debug!("bot @-mentioned with no prompt; ignoring");
-                return;
-            }
-            info!(prompt = %prompt, "handling @-mention prompt");
-            handle_brain_turn(
-                group_id,
-                user_id,
-                action_tx,
-                group_brains.clone(),
-                prompt,
-                &req_id,
-            )
-            .await;
+        if !config.bot.is_group_allowed(group_id) {
+            debug!(group_id, "group not allowed");
             return;
         }
 
-        // 2. Command prefix: legacy shorthand for natural-language tasks.
-        let prefix = &config.bot.command_prefix;
-        if text.trim_start().starts_with(prefix) {
-            let trimmed = text.trim_start().strip_prefix(prefix).unwrap_or("").trim();
-            let mut parts = trimmed.split_whitespace();
-            let cmd = parts.next().unwrap_or("");
-
-            info!(cmd, "handling command");
-            match cmd {
-                "status" => {
-                    handle_status(group_id, action_tx, memory.clone(), &req_id).await;
-                }
-                "help" | "h" => {
-                    handle_help(group_id, action_tx, &req_id).await;
-                }
-                _ => {
-                    debug!(cmd, "unknown command");
-                }
-            }
+        if prompt.is_empty() {
+            debug!("bot addressed with no prompt; ignoring");
             return;
         }
 
-        // 3. Plain message: do not reply, but it is already stored in memory.
-        debug!("plain group message; not replying");
+        info!(prompt = %prompt, "handling addressed prompt");
+        handle_brain_turn(
+            group_id,
+            user_id,
+            action_tx,
+            group_brains.clone(),
+            prompt,
+            &req_id,
+        )
+        .await;
     }
     .instrument(span)
     .await;
+}
+
+async fn handle_private_message(event: PrivateMessageEvent, memory: MemoryStore) {
+    // Private messages are directed to the bot by definition. For now we just
+    // store them in memory (keyed by user_id) and log; replies are not yet
+    // implemented.
+    memory.push(event.user_id, event.user_id, event.text());
+    debug!(user_id = event.user_id, text = %event.text(), "private message ignored");
+}
+
+async fn handle_group_chat(event: GroupMessageEvent, config: &Config, memory: MemoryStore) {
+    let group_id = event.group_id;
+    let user_id = event.user_id;
+    let text = event.text();
+
+    // Remember every group message for tools like qqbot::recent_messages.
+    memory.push(group_id, user_id, text.clone());
+
+    let span = info_span!("group_chat", group_id, user_id,);
+
+    async {
+        debug!(text = %text, "received group chat");
+
+        if !config.bot.is_group_allowed(group_id) {
+            debug!(group_id, "group not allowed");
+            return;
+        }
+
+        // Plain message: stored in memory; no reply needed.
+        debug!("message not addressed to bot; ignoring");
+    }
+    .instrument(span)
+    .await;
+}
+
+async fn handle_command(
+    cmd: CommandEvent,
+    config: &Config,
+    action_tx: &onebot::ActionTx,
+    memory: MemoryStore,
+) {
+    let req_id = uuid::Uuid::new_v4().to_string();
+
+    match cmd {
+        CommandEvent::Status { group_id, .. } => {
+            if !config.bot.is_group_allowed(group_id) {
+                debug!(group_id, "group not allowed");
+                return;
+            }
+            info!(group_id, "handling /status command");
+            handle_status(group_id, action_tx, memory, &req_id).await;
+        }
+        CommandEvent::Help { group_id, .. } => {
+            if !config.bot.is_group_allowed(group_id) {
+                debug!(group_id, "group not allowed");
+                return;
+            }
+            info!(group_id, "handling /help command");
+            handle_help(group_id, action_tx, &req_id).await;
+        }
+        CommandEvent::Unknown {
+            group_id, command, ..
+        } => {
+            debug!(group_id, command, "unknown command; ignoring");
+        }
+    }
 }
 
 async fn handle_brain_turn(

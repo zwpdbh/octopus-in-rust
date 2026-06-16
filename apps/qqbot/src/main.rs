@@ -186,9 +186,7 @@ fn main() -> Result<()> {
                 eprintln!(
                     "Run: cargo run --bin qqbot -- init --account <ACCOUNT> --kimi-key <KEY>"
                 );
-                eprintln!(
-                    "For full options: cargo run --bin qqbot -- init --help"
-                );
+                eprintln!("For full options: cargo run --bin qqbot -- init --help");
                 std::process::exit(1);
             }
             // Daemonize. Parent exits, child continues.
@@ -384,10 +382,7 @@ async fn init(
 
     // Optionally reset the SnowLuma WebUI password so SnowLuma prints a new
     // one-time password on the next start.
-    let webui_password_file = base
-        .join("snowluma-data")
-        .join("config")
-        .join("webui.json");
+    let webui_password_file = base.join("snowluma-data").join("config").join("webui.json");
     let webui_existed = webui_password_file.exists();
     if reset_webui_password {
         if webui_existed {

@@ -7,19 +7,22 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, info, warn};
-use types::{Action, Event};
+use types::{Action, OneBotEvent};
 
-pub type EventRx = mpsc::Receiver<Event>;
+pub type EventRx = mpsc::Receiver<OneBotEvent>;
 pub type ActionTx = mpsc::UnboundedSender<Action>;
 
 pub async fn connect(
     ws_url: impl Into<String>,
     access_token: impl Into<String>,
+    bot_qq: i64,
+    aliases: Vec<String>,
+    command_prefix: String,
 ) -> Result<(EventRx, ActionTx)> {
     let ws_url = ws_url.into();
     let access_token = access_token.into();
 
-    let (event_tx, event_rx) = mpsc::channel::<Event>(256);
+    let (event_tx, event_rx) = mpsc::channel::<OneBotEvent>(256);
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
 
     tokio::spawn(async move {
@@ -49,15 +52,22 @@ pub async fn connect(
                                 match msg {
                                     Some(Ok(Message::Text(text))) => {
                                         debug!(text = %text, "received OneBot message");
-                                        match serde_json::from_str::<Event>(&text) {
-                                            Ok(event) => {
-                                                if event_tx.send(event).await.is_err() {
-                                                    warn!("event receiver dropped; exiting connection loop");
-                                                    return;
+                                        match serde_json::from_str::<serde_json::Value>(&text) {
+                                            Ok(value) => {
+                                                match OneBotEvent::from_json(value, bot_qq, &aliases, &command_prefix) {
+                                                    Ok(event) => {
+                                                        if event_tx.send(event).await.is_err() {
+                                                            warn!("event receiver dropped; exiting connection loop");
+                                                            return;
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        debug!(error = %e, text = %text, "failed to parse OneBot event");
+                                                    }
                                                 }
                                             }
                                             Err(e) => {
-                                                debug!(error = %e, text = %text, "failed to parse OneBot event");
+                                                debug!(error = %e, text = %text, "failed to parse OneBot JSON");
                                             }
                                         }
                                     }

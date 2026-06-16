@@ -231,7 +231,8 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                         println!("         - Wait a few seconds and run `qqbot status` again.");
                         println!("         - qqbot restart");
                         hints.push(
-                            "Health check timed out. Wait a few seconds or run `qqbot restart`.".to_string(),
+                            "Health check timed out. Wait a few seconds or run `qqbot restart`."
+                                .to_string(),
                         );
                     }
                 }

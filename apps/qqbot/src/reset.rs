@@ -44,7 +44,10 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     // generates a new initial credential and prints it to the logs.
     let webui_password_file = base.join("snowluma-data/config/webui.json");
     if webui_password_file.exists() {
-        println!("Resetting SnowLuma WebUI password: {}", webui_password_file.display());
+        println!(
+            "Resetting SnowLuma WebUI password: {}",
+            webui_password_file.display()
+        );
         tokio::fs::remove_file(&webui_password_file).await?;
     }
 

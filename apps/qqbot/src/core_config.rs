@@ -22,6 +22,8 @@ pub struct BotConfig {
     pub plugin_dir: String,
     #[serde(default)]
     pub bot_qq: i64,
+    #[serde(default)]
+    pub bot_aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +66,7 @@ impl CoreConfigFile {
                 command_prefix: "/".to_string(),
                 plugin_dir,
                 bot_qq,
+                bot_aliases: Vec::new(),
             },
             llm,
         }
