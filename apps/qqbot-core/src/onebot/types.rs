@@ -26,15 +26,28 @@ pub enum OneBotEvent {
 #[derive(Debug, Clone)]
 pub enum CommandEvent {
     /// `/status` command.
-    Status { group_id: i64, user_id: i64 },
+    Status {
+        group_id: i64,
+        user_id: i64,
+        message_id: Option<i32>,
+    },
     /// `/help` command.
-    Help { group_id: i64, user_id: i64 },
+    Help {
+        group_id: i64,
+        user_id: i64,
+        message_id: Option<i32>,
+    },
     /// `/cancel` (or `/c`) command.
-    Cancel { group_id: i64, user_id: i64 },
+    Cancel {
+        group_id: i64,
+        user_id: i64,
+        message_id: Option<i32>,
+    },
     /// Any other `/` prefixed command we do not handle.
     Unknown {
         group_id: i64,
         user_id: i64,
+        message_id: Option<i32>,
         command: String,
     },
 }
@@ -278,7 +291,7 @@ impl OneBotEvent {
                 // 1. Plain command in group chat.
                 if let Some(kind) = parse_command_kind(&event.text(), command_prefix) {
                     return Ok(OneBotEvent::SystemCommand(CommandEvent::from_kind(
-                        group_id, user_id, kind,
+                        group_id, user_id, message_id, kind,
                     )));
                 }
 
@@ -289,7 +302,7 @@ impl OneBotEvent {
                     // 2a. Addressed command (e.g. "@bot /status").
                     if let Some(kind) = parse_command_kind(&prompt, command_prefix) {
                         return Ok(OneBotEvent::SystemCommand(CommandEvent::from_kind(
-                            group_id, user_id, kind,
+                            group_id, user_id, message_id, kind,
                         )));
                     }
 
@@ -511,14 +524,32 @@ enum CommandKind {
 }
 
 impl CommandEvent {
-    fn from_kind(group_id: i64, user_id: i64, kind: CommandKind) -> Self {
+    fn from_kind(
+        group_id: i64,
+        user_id: i64,
+        message_id: Option<i32>,
+        kind: CommandKind,
+    ) -> Self {
         match kind {
-            CommandKind::Status => CommandEvent::Status { group_id, user_id },
-            CommandKind::Help => CommandEvent::Help { group_id, user_id },
-            CommandKind::Cancel => CommandEvent::Cancel { group_id, user_id },
+            CommandKind::Status => CommandEvent::Status {
+                group_id,
+                user_id,
+                message_id,
+            },
+            CommandKind::Help => CommandEvent::Help {
+                group_id,
+                user_id,
+                message_id,
+            },
+            CommandKind::Cancel => CommandEvent::Cancel {
+                group_id,
+                user_id,
+                message_id,
+            },
             CommandKind::Unknown(command) => CommandEvent::Unknown {
                 group_id,
                 user_id,
+                message_id,
                 command,
             },
         }
@@ -656,6 +687,29 @@ impl Action {
                 "message": [
                     {"type": "at", "data": {"qq": user_id.to_string()}},
                     {"type": "text", "data": {"text": format!(" {}", text.into())}},
+                ],
+            }),
+            echo,
+        }
+    }
+
+    /// Quote (reply to) a specific group message.
+    ///
+    /// OneBot v11 supports a `reply` segment whose `id` is the `message_id`
+    /// of the message being quoted. NapCat/SnowLuma render this as a QQ quote.
+    pub fn quote_group_msg(
+        group_id: i64,
+        message_id: i32,
+        text: impl Into<String>,
+        echo: Option<String>,
+    ) -> Self {
+        Self {
+            action: "send_group_msg".to_string(),
+            params: serde_json::json!({
+                "group_id": group_id,
+                "message": [
+                    {"type": "reply", "data": {"id": message_id}},
+                    {"type": "text", "data": {"text": text.into()}},
                 ],
             }),
             echo,
@@ -866,11 +920,17 @@ mod tests {
         });
 
         let event = OneBotEvent::from_json(json, 3462039501, &[], "/").unwrap();
-        let OneBotEvent::SystemCommand(CommandEvent::Status { group_id, user_id }) = event else {
+        let OneBotEvent::SystemCommand(CommandEvent::Status {
+            group_id,
+            user_id,
+            message_id,
+        }) = event
+        else {
             panic!("expected Command::Status");
         };
         assert_eq!(group_id, 925712027);
         assert_eq!(user_id, 123456789);
+        assert_eq!(message_id, None);
     }
 
     #[test]
@@ -889,7 +949,8 @@ mod tests {
             event,
             OneBotEvent::SystemCommand(CommandEvent::Help {
                 group_id: 925712027,
-                user_id: 123456789
+                user_id: 123456789,
+                message_id: None
             })
         ));
     }
@@ -912,7 +973,8 @@ mod tests {
                     event,
                     OneBotEvent::SystemCommand(CommandEvent::Cancel {
                         group_id: 925712027,
-                        user_id: 123456789
+                        user_id: 123456789,
+                        message_id: None
                     })
                 ),
                 "expected Cancel for {command}"
@@ -932,11 +994,17 @@ mod tests {
         });
 
         let event = OneBotEvent::from_json(json, 3462039501, &[], "/").unwrap();
-        let OneBotEvent::SystemCommand(CommandEvent::Status { group_id, user_id }) = event else {
+        let OneBotEvent::SystemCommand(CommandEvent::Status {
+            group_id,
+            user_id,
+            message_id,
+        }) = event
+        else {
             panic!("expected Command::Status for addressed command");
         };
         assert_eq!(group_id, 925712027);
         assert_eq!(user_id, 123456789);
+        assert_eq!(message_id, None);
     }
 
     #[test]
@@ -954,11 +1022,13 @@ mod tests {
         let OneBotEvent::SystemCommand(CommandEvent::Unknown {
             group_id,
             user_id,
+            message_id,
             command,
         }) = event
         else {
             panic!("expected Command::Unknown");
         };
+        assert_eq!(message_id, None);
         assert_eq!(group_id, 925712027);
         assert_eq!(user_id, 123456789);
         assert_eq!(command, "unknown");

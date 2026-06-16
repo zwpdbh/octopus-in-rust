@@ -181,17 +181,19 @@ async fn handle_addressed_group_message(
 
         if prompt.is_empty() {
             debug!("bot addressed with no prompt; sending invitation");
-            let _ = action_tx.send(Action::reply_group_msg(
-                group_id,
-                user_id,
-                "Hi! What would you like me to do?",
-                None,
-            ));
+            let action = if let Some(id) = event.message_id {
+                Action::quote_group_msg(group_id, id, "Hi! What would you like me to do?", None)
+            } else {
+                Action::send_group_msg(group_id, "Hi! What would you like me to do?", None)
+            };
+            let _ = action_tx.send(action);
             return;
         }
 
         info!(prompt = %prompt, "handling addressed prompt");
-        group_brains.handle_prompt(group_id, user_id, prompt).await;
+        group_brains
+            .handle_prompt(group_id, user_id, event.message_id, prompt)
+            .await;
     }
     .instrument(span)
     .await;
@@ -240,25 +242,30 @@ async fn handle_command(
     let req_id = uuid::Uuid::new_v4().to_string();
 
     match cmd {
-        CommandEvent::Status { group_id, .. } => {
+        CommandEvent::Status {
+            group_id, message_id, ..
+        } => {
             if !config.bot.is_group_allowed(group_id) {
                 debug!(group_id, "group not allowed");
                 return;
             }
             info!(group_id, "handling /status command");
-            handle_status(group_id, action_tx, memory, &req_id).await;
+            handle_status(group_id, message_id, action_tx, memory, &req_id).await;
         }
-        CommandEvent::Help { group_id, .. } => {
+        CommandEvent::Help {
+            group_id, message_id, ..
+        } => {
             if !config.bot.is_group_allowed(group_id) {
                 debug!(group_id, "group not allowed");
                 return;
             }
             info!(group_id, "handling /help command");
-            handle_help(group_id, action_tx, &req_id).await;
+            handle_help(group_id, message_id, action_tx, &req_id).await;
         }
         CommandEvent::Cancel {
             group_id,
             user_id,
+            message_id,
         } => {
             if !config.bot.is_group_allowed(group_id) {
                 debug!(group_id, "group not allowed");
@@ -270,12 +277,20 @@ async fn handle_command(
                 // The worker will send the cancellation confirmation after it
                 // safely stops at the next step boundary.
             } else {
-                let action = Action::reply_group_msg(
-                    group_id,
-                    user_id,
-                    "No active reasoning to cancel.",
-                    None,
-                );
+                let action = match message_id {
+                    Some(id) => Action::quote_group_msg(
+                        group_id,
+                        id,
+                        "No active reasoning to cancel.",
+                        None,
+                    ),
+                    None => Action::reply_group_msg(
+                        group_id,
+                        user_id,
+                        "No active reasoning to cancel.",
+                        None,
+                    ),
+                };
                 if let Err(e) = action_tx.send(action) {
                     error!(request_id = %req_id, error = %e, "failed to send cancel reply");
                 }
@@ -291,21 +306,33 @@ async fn handle_command(
 
 async fn handle_status(
     group_id: i64,
+    message_id: Option<i32>,
     action_tx: &onebot::ActionTx,
     memory: MemoryStore,
     req_id: &str,
 ) {
     let count = memory.len(group_id);
     let text = format!("Buffered {} messages in this group.", count);
-    let action = Action::send_group_msg(group_id, text, None);
+    let action = match message_id {
+        Some(id) => Action::quote_group_msg(group_id, id, text, None),
+        None => Action::send_group_msg(group_id, text, None),
+    };
     if let Err(e) = action_tx.send(action) {
         error!(request_id = %req_id, error = %e, "failed to send status reply");
     }
 }
 
-async fn handle_help(group_id: i64, action_tx: &onebot::ActionTx, req_id: &str) {
+async fn handle_help(
+    group_id: i64,
+    message_id: Option<i32>,
+    action_tx: &onebot::ActionTx,
+    req_id: &str,
+) {
     let text = "Mention me with @bot <question>, or use /status and /help.".to_string();
-    let action = Action::send_group_msg(group_id, text, None);
+    let action = match message_id {
+        Some(id) => Action::quote_group_msg(group_id, id, text, None),
+        None => Action::send_group_msg(group_id, text, None),
+    };
     if let Err(e) = action_tx.send(action) {
         error!(request_id = %req_id, error = %e, "failed to send help reply");
     }

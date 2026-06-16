@@ -12,7 +12,6 @@ use kosong::tooling::ToolReturnValue;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch, Mutex};
-use tokio::time::{interval, MissedTickBehavior};
 use tracing::{error, info};
 
 use crate::config::Config;
@@ -22,8 +21,6 @@ use crate::onebot::types::Action;
 
 const DEFAULT_MAX_STEPS_PER_TURN: usize = 16;
 const PROGRESS_UPDATE_AFTER: Duration = Duration::from_secs(10);
-const STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(1200);
-const STREAM_FLUSH_MAX_LEN: usize = 240;
 const TOOL_ARGS_MAX_LEN: usize = 120;
 const TOOL_RESULT_MAX_LEN: usize = 240;
 
@@ -152,7 +149,13 @@ impl GroupBrainManager {
     /// If a turn is already running for this group, the prompt is injected as
     /// "steer" context between reasoning steps (matching `kimi-cli`). Otherwise
     /// a new turn worker is started.
-    pub async fn handle_prompt(&self, group_id: i64, user_id: i64, text: String) {
+    pub async fn handle_prompt(
+        &self,
+        group_id: i64,
+        user_id: i64,
+        message_id: Option<i32>,
+        text: String,
+    ) {
         let mut running = self.running.lock().await;
         if let Some(group) = running.get_mut(&group_id) {
             if group.handle.is_finished() {
@@ -161,10 +164,9 @@ impl GroupBrainManager {
                 error!(group_id, error = %e, "failed to steer running turn");
                 return;
             } else {
-                let _ = self.action_tx.send(Action::reply_group_msg(
+                let _ = self.action_tx.send(Action::send_group_msg(
                     group_id,
-                    user_id,
-                    "Got it — adding that context... 🤔",
+                    "Got it — adding that context... 🤔".to_string(),
                     None,
                 ));
                 return;
@@ -196,6 +198,7 @@ impl GroupBrainManager {
                 brain,
                 group_id,
                 user_id,
+                message_id,
                 text,
                 action_tx,
                 steer_rx,
@@ -298,29 +301,24 @@ async fn push_user_message(brain: &Brain, text: &str) {
     brain.message_store().lock().await.push(msg).await;
 }
 
-/// Send a reply addressed to the user.
-fn send_addressed(action_tx: &crate::onebot::ActionTx, group_id: i64, user_id: i64, text: String) {
-    let _ = action_tx.send(Action::reply_group_msg(group_id, user_id, text, None));
-}
-
 /// Send a plain group message (used for streaming chunks and tool updates).
 fn send_plain(action_tx: &crate::onebot::ActionTx, group_id: i64, text: String) {
     let _ = action_tx.send(Action::send_group_msg(group_id, text, None));
 }
 
-/// Send an error reply addressed to the user.
-fn send_error(
+/// Send a quoted reply to the original triggering message, falling back to a
+/// plain group message if no message id is available.
+fn send_reply(
     action_tx: &crate::onebot::ActionTx,
     group_id: i64,
-    user_id: i64,
-    error: String,
+    message_id: Option<i32>,
+    text: String,
 ) {
-    send_addressed(
-        action_tx,
-        group_id,
-        user_id,
-        format!("Sorry, I couldn't process that right now: {}", error),
-    );
+    if let Some(id) = message_id {
+        let _ = action_tx.send(Action::quote_group_msg(group_id, id, text, None));
+    } else {
+        send_plain(action_tx, group_id, text);
+    }
 }
 
 /// Truncate text for display, adding an ellipsis if needed.
@@ -350,7 +348,8 @@ fn format_tool_args(arguments: &Value) -> String {
 async fn turn_worker(
     mut brain: Brain,
     group_id: i64,
-    user_id: i64,
+    _user_id: i64,
+    message_id: Option<i32>,
     initial_message: String,
     action_tx: crate::onebot::ActionTx,
     mut steer_rx: mpsc::UnboundedReceiver<String>,
@@ -360,15 +359,16 @@ async fn turn_worker(
     // Seed the initial user message.
     push_user_message(&brain, &initial_message).await;
 
-    send_addressed(
+    send_reply(
         &action_tx,
         group_id,
-        user_id,
-        "Got it — thinking... 🤔".to_string(),
+        message_id,
+        format!("Thinking about: \"{}\" 🤔", initial_message),
     );
 
     let mut cancelled = false;
     let mut any_text_seen = false;
+    let mut final_text = String::new();
 
     for _step in 0..max_steps {
         if *cancel_rx.borrow() {
@@ -382,98 +382,93 @@ async fn turn_worker(
         let progress_done = done.clone();
         let progress_had_output = had_output.clone();
         let progress_action_tx = action_tx.clone();
+        let progress_question = initial_message.clone();
         let progress_handle = tokio::spawn(async move {
             tokio::time::sleep(PROGRESS_UPDATE_AFTER).await;
             if !progress_done.load(Ordering::Relaxed)
                 && !progress_had_output.load(Ordering::Relaxed)
             {
-                let _ = progress_action_tx.send(Action::reply_group_msg(
+                send_reply(
+                    &progress_action_tx,
                     group_id,
-                    user_id,
-                    "Still working on it... ⏳",
-                    None,
-                ));
+                    message_id,
+                    format!("Still working on it: \"{}\" ⏳", progress_question),
+                );
             }
         });
 
-        let mut text_buffer = String::new();
+        final_text.clear();
         let mut had_tool_results = false;
         let mut step_error: Option<String> = None;
         let mut tool_names: HashMap<String, String> = HashMap::new();
 
         match brain.run_step().await {
             Ok(mut stream) => {
-                let mut flush_interval = interval(STREAM_FLUSH_INTERVAL);
-                flush_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                // Skip the immediate first tick.
-                let _ = flush_interval.tick().await;
-
-                loop {
-                    tokio::select! {
-                        maybe_event = stream.next() => {
-                            match maybe_event {
-                                Some(BrainEvent::TextPart(text)) => {
-                                    any_text_seen = true;
-                                    had_output.store(true, Ordering::Relaxed);
-                                    text_buffer.push_str(&text);
-                                    if text_buffer.len() >= STREAM_FLUSH_MAX_LEN {
-                                        flush_text_buffer(&action_tx, group_id, &mut text_buffer);
-                                    }
-                                }
-                                Some(BrainEvent::ToolCall { id, name, arguments }) => {
-                                    flush_text_buffer(&action_tx, group_id, &mut text_buffer);
-                                    had_output.store(true, Ordering::Relaxed);
-                                    tool_names.insert(id, name.clone());
-                                    let args = format_tool_args(&arguments);
-                                    send_plain(
-                                        &action_tx,
-                                        group_id,
-                                        format!("🔧 Using tool `{name}`{args}"),
-                                    );
-                                }
-                                Some(BrainEvent::ToolResult { id, output, is_error }) => {
-                                    had_output.store(true, Ordering::Relaxed);
-                                    had_tool_results = true;
-                                    let name = tool_names
-                                        .get(&id)
-                                        .cloned()
-                                        .unwrap_or_else(|| "tool".to_string());
-                                    let status = if is_error { "❌" } else { "📥" };
-                                    let summary = truncate(&output, TOOL_RESULT_MAX_LEN);
-                                    send_plain(
-                                        &action_tx,
-                                        group_id,
-                                        format!("{status} `{name}` result: {summary}"),
-                                    );
-                                }
-                                Some(BrainEvent::Error(e)) => {
-                                    step_error = Some(e);
-                                    break;
-                                }
-                                None => break,
-                                _ => {}
-                            }
+                while let Some(event) = stream.next().await {
+                    match event {
+                        BrainEvent::TextPart(text) => {
+                            any_text_seen = true;
+                            had_output.store(true, Ordering::Relaxed);
+                            final_text.push_str(&text);
                         }
-                        _ = flush_interval.tick() => {
-                            flush_text_buffer(&action_tx, group_id, &mut text_buffer);
+                        BrainEvent::ToolCall { id, name, arguments } => {
+                            had_output.store(true, Ordering::Relaxed);
+                            tool_names.insert(id, name.clone());
+                            let args = format_tool_args(&arguments);
+                            send_reply(
+                                &action_tx,
+                                group_id,
+                                message_id,
+                                format!("🔧 Using tool `{name}`{args}"),
+                            );
                         }
+                        BrainEvent::ToolResult { id, output, is_error } => {
+                            had_output.store(true, Ordering::Relaxed);
+                            had_tool_results = true;
+                            let name = tool_names
+                                .get(&id)
+                                .cloned()
+                                .unwrap_or_else(|| "tool".to_string());
+                            let status = if is_error { "❌" } else { "📥" };
+                            let summary = truncate(&output, TOOL_RESULT_MAX_LEN);
+                            send_reply(
+                                &action_tx,
+                                group_id,
+                                message_id,
+                                format!("{status} `{name}` result: {summary}"),
+                            );
+                        }
+                        BrainEvent::Error(e) => {
+                            step_error = Some(e);
+                            break;
+                        }
+                        _ => {}
                     }
                 }
             }
             Err(e) => {
                 done.store(true, Ordering::Relaxed);
                 progress_handle.abort();
-                send_error(&action_tx, group_id, user_id, e.to_string());
+                send_reply(
+                    &action_tx,
+                    group_id,
+                    message_id,
+                    format!("Sorry, I couldn't process that right now: {}", e),
+                );
                 return;
             }
         }
 
         done.store(true, Ordering::Relaxed);
         progress_handle.abort();
-        flush_text_buffer(&action_tx, group_id, &mut text_buffer);
 
         if let Some(err) = step_error {
-            send_error(&action_tx, group_id, user_id, err);
+            send_reply(
+                &action_tx,
+                group_id,
+                message_id,
+                format!("Sorry, I couldn't process that right now: {}", err),
+            );
             return;
         }
 
@@ -498,37 +493,22 @@ async fn turn_worker(
 
         // No tool calls: this step produced a final answer. If text was already
         // streamed, there is nothing left to send. Otherwise send a fallback.
-        if !any_text_seen {
-            send_addressed(
-                &action_tx,
-                group_id,
-                user_id,
-                "I thought about it but couldn't come up with a good answer. Try rephrasing?"
-                    .to_string(),
-            );
-        }
+        let reply = if any_text_seen {
+            final_text
+        } else {
+            "I thought about it but couldn't come up with a good answer. Try rephrasing?".to_string()
+        };
+        send_reply(&action_tx, group_id, message_id, reply);
         break;
     }
 
     if cancelled {
-        send_addressed(
+        send_reply(
             &action_tx,
             group_id,
-            user_id,
+            message_id,
             "Cancelled the current reasoning.".to_string(),
         );
     }
 }
 
-/// Flush buffered streaming text as a plain group message.
-fn flush_text_buffer(
-    action_tx: &crate::onebot::ActionTx,
-    group_id: i64,
-    buffer: &mut String,
-) {
-    let trimmed = buffer.trim();
-    if !trimmed.is_empty() {
-        send_plain(action_tx, group_id, trimmed.to_string());
-    }
-    buffer.clear();
-}
