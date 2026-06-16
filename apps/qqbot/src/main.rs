@@ -112,6 +112,17 @@ enum LlmCommand {
         #[arg(long, short)]
         base_url: Option<String>,
     },
+    /// Stream a test prompt to the configured LLM and print chunks as they arrive.
+    Stream {
+        /// Prompt to send.
+        prompt: Vec<String>,
+        /// Override the model from config.toml.
+        #[arg(long, short)]
+        model: Option<String>,
+        /// Override the API base URL (e.g. https://api.moonshot.ai/v1).
+        #[arg(long, short)]
+        base_url: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -169,6 +180,16 @@ fn main() -> Result<()> {
             if daemon::is_alive(&data_dir) {
                 println!("qqbot daemon is already running");
                 return Ok(());
+            }
+            if !is_initialized(&data_dir) {
+                eprintln!("qqbot is not initialized.");
+                eprintln!(
+                    "Run: cargo run --bin qqbot -- init --account <ACCOUNT> --kimi-key <KEY>"
+                );
+                eprintln!(
+                    "For full options: cargo run --bin qqbot -- init --help"
+                );
+                std::process::exit(1);
             }
             // Daemonize. Parent exits, child continues.
             daemon::start(&data_dir)?;
@@ -250,6 +271,23 @@ fn main() -> Result<()> {
                 }
                 let rt = tokio::runtime::Runtime::new()?;
                 rt.block_on(llm::ask(
+                    &data_dir,
+                    &text,
+                    model.as_deref(),
+                    base_url.as_deref(),
+                ))?;
+            }
+            LlmCommand::Stream {
+                prompt,
+                model,
+                base_url,
+            } => {
+                let text = prompt.join(" ");
+                if text.is_empty() {
+                    anyhow::bail!("prompt is required");
+                }
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(llm::stream(
                     &data_dir,
                     &text,
                     model.as_deref(),
@@ -404,6 +442,13 @@ async fn init(
     println!();
 
     Ok(())
+}
+
+fn is_initialized(data_dir: &std::path::Path) -> bool {
+    let config = data_dir.join("config.toml");
+    let base = base_dir(data_dir);
+    let onebot_config = base.join("snowluma-data/config/onebot.json");
+    config.exists() && onebot_config.exists()
 }
 
 fn print_init_guide(account: i64, groups: &[i64], data_dir: &std::path::Path) {

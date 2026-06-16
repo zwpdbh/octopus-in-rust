@@ -72,6 +72,13 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         return Err(e);
     }
 
+    // Wait for the OneBot WebSocket port to be reachable before starting
+    // qqbot-core, so the core does not spin-crash while SnowLuma is still
+    // booting.
+    if let Err(e) = wait_for_port("127.0.0.1", 3001, 60).await {
+        warn!(error = %e, "SnowLuma WebSocket port not reachable yet; qqbot-core will retry connection");
+    }
+
     // Start qqbot-core. Resolve paths from the project root so the daemon
     // works regardless of the current working directory.
     let core_log = OpenOptions::new()
@@ -291,6 +298,10 @@ pub(crate) async fn start_snowluma(base_dir: &Path) -> Result<()> {
         "-d",
         "--name",
         SNOWLUMA_CONTAINER,
+        "--hostname",
+        "snowluma",
+        "--mac-address",
+        "02:42:ac:11:00:99",
         "--restart",
         "unless-stopped",
         "--shm-size=1g",

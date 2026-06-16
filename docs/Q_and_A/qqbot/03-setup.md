@@ -103,3 +103,22 @@ cargo run --bin qqbot -- health
 ```
 
 `health` sends a short test message to the first allowed group and confirms it appears in the group's history. It is an explicit, user-triggered check and does not run on a schedule.
+
+## 2.7 Test the LLM
+
+You can exercise the LLM configuration without running the full bot loop:
+
+```bash
+# Verify the API key and that the configured model exists
+cargo run --bin qqbot -- llm test
+
+# Send a single prompt and print the reply
+cargo run --bin qqbot -- llm ask "summarize this"
+
+# Stream a prompt and print chunks as they arrive, showing the lifecycle
+cargo run --bin qqbot -- llm stream "hello, what is 2+2?"
+```
+
+`stream` is useful for watching the raw LLM behavior: it prints `[send]`,
+`[headers]`, `[streaming]`, and `[done]` markers while flushing each token as
+it arrives.

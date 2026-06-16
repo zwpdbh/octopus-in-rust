@@ -1,6 +1,8 @@
 use crate::core_config::CoreConfigFile;
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::io::{stdout, Write};
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -19,6 +21,8 @@ struct ChatRequest {
     messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +39,25 @@ struct ChatResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct Choice {
     message: Message,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChatCompletionChunk {
+    choices: Vec<ChunkChoice>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChunkChoice {
+    delta: ChunkDelta,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChunkDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +116,7 @@ pub async fn ask(
             },
         ],
         max_tokens: Some(512),
+        stream: None,
     };
 
     println!("Endpoint: {chat_url}");
@@ -139,6 +163,130 @@ pub async fn ask(
         None => println!("[fail] LLM returned no choices"),
     }
 
+    Ok(())
+}
+
+pub async fn stream(
+    data_dir: &Path,
+    prompt: &str,
+    model_override: Option<&str>,
+    base_url_override: Option<&str>,
+) -> Result<()> {
+    let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
+    let llm = &config.llm;
+
+    println!("=== qqbot llm stream ===\n");
+
+    let api_key = match resolve_api_key(llm).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            println!("[fail] LLM is not fully configured (no api_key or oauth)");
+            return Ok(());
+        }
+        Err(e) => {
+            println!("[fail] Failed to resolve API key / OAuth token: {e}");
+            return Ok(());
+        }
+    };
+
+    if llm.api_url.is_empty() || llm.model.is_empty() {
+        println!("[fail] LLM is not fully configured");
+        return Ok(());
+    }
+
+    let chat_url = build_chat_url(base_url_override.unwrap_or(&llm.api_url));
+    let model = model_override.unwrap_or(&llm.model);
+    let request = ChatRequest {
+        model: model.to_string(),
+        messages: vec![
+            Message {
+                role: "system".to_string(),
+                content: llm.system_prompt.clone(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            },
+        ],
+        max_tokens: Some(512),
+        stream: Some(true),
+    };
+
+    println!("[config] endpoint: {chat_url}");
+    println!("[config] model:    {model}");
+    println!("[config] prompt:   {prompt}\n");
+
+    println!("[send] POST {chat_url}");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&chat_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("failed to POST {chat_url}"))?;
+
+    let status = resp.status();
+    println!("[headers] HTTP {status}");
+
+    if !status.is_success() {
+        let body = resp.text().await.context("failed to read error body")?;
+        println!("[fail] LLM API returned HTTP {status}");
+        if let Ok(err) = serde_json::from_str::<LlmErrorResponse>(&body) {
+            println!("       Error: {} ({})", err.error.message, err.error.typ);
+        } else {
+            println!("       Response: {body}");
+        }
+        return Ok(());
+    }
+
+    println!("[streaming] waiting for first chunk...\n");
+    println!("--- reply ---");
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut started = false;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("failed to read stream chunk")?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some((event, rest)) = buffer.split_once("\n\n") {
+            let event = event.trim_end_matches('\r').to_string();
+            buffer = rest.to_string();
+            if let Some(data) = event.strip_prefix("data: ") {
+                if data == "[DONE]" {
+                    println!("\n--- end ---");
+                    println!("[done]");
+                    return Ok(());
+                }
+                match serde_json::from_str::<ChatCompletionChunk>(data) {
+                    Ok(chunk) => {
+                        for choice in chunk.choices {
+                            if let Some(content) = choice.delta.content {
+                                if !content.is_empty() {
+                                    if !started {
+                                        started = true;
+                                        println!("[first chunk received]");
+                                    }
+                                    print!("{content}");
+                                    stdout().flush()?;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("\n[warn] failed to parse chunk: {e}");
+                        eprintln!("       raw: {data}");
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\n--- end ---");
+    println!("[done] stream closed");
     Ok(())
 }
 

@@ -86,7 +86,7 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     } else {
         Check::fail(
             "SnowLuma container running",
-            "Run `qqbot service start` to start SnowLuma and the daemon.",
+            "Run `qqbot start` to start SnowLuma and the daemon.",
         )
     });
 
@@ -98,12 +98,12 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             .with_detail("ws://127.0.0.1:3001"),
         (true, false) => Check::warn(
             "OneBot WebSocket port open but handshake failed",
-            "SnowLuma is still starting or QQ is not logged in. Wait a few seconds, then run `qqbot status` again. If it persists, run `qqbot service restart`.",
+            "SnowLuma is still starting or QQ is not logged in. Wait a few seconds, then run `qqbot status` again. If it persists, run `qqbot restart`.",
         )
         .with_detail("ws://127.0.0.1:3001"),
         (false, _) => Check::fail(
             "OneBot WebSocket reachable",
-            "SnowLuma WebSocket port is closed. Run `qqbot service restart` or check `qqbot logs supervisor -n 50`.",
+            "SnowLuma WebSocket port is closed. Run `qqbot restart` or check `qqbot logs supervisor -n 50`.",
         )
         .with_detail("ws://127.0.0.1:3001"),
     });
@@ -115,7 +115,7 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     } else {
         Check::fail(
             "qqbot-core process running",
-            "Run `qqbot restart` to restart qqbot-core. If the daemon is not running, use `qqbot service start`.",
+            "Run `qqbot restart` to restart qqbot-core. If the daemon is not running, use `qqbot start`.",
         )
     });
 
@@ -126,8 +126,8 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             Check::ok(format!("{name} port {port} reachable"))
         } else {
             Check::warn(
-                format!("{name} port {port} reachable"),
-                format!("{name} is not reachable yet. If SnowLuma just started, wait a few seconds. Otherwise run `qqbot service restart`."),
+                format!("{name} port {port} not reachable"),
+                format!("{name} is not reachable yet. If SnowLuma just started, wait a few seconds. Otherwise run `qqbot restart`."),
             )
         });
     }
@@ -211,7 +211,7 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                         println!("         - Wait a few seconds if SnowLuma just started, then re-run status.");
                         println!("         - qqbot restart      (restart only qqbot-core)");
                         println!(
-                            "         - qqbot service restart   (restart SnowLuma + qqbot-core)"
+                            "         - qqbot restart           (restart SnowLuma + qqbot-core)"
                         );
                         hints.push(format!(
                             "Health-check error: {e}. See the detailed explanation above."
@@ -229,9 +229,9 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                         println!();
                         println!("       How to fix:");
                         println!("         - Wait a few seconds and run `qqbot status` again.");
-                        println!("         - qqbot service restart");
+                        println!("         - qqbot restart");
                         hints.push(
-                            "Health check timed out. Wait a few seconds or run `qqbot service restart`.".to_string(),
+                            "Health check timed out. Wait a few seconds or run `qqbot restart`.".to_string(),
                         );
                     }
                 }
