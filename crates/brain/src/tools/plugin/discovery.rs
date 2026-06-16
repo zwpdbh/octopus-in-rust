@@ -39,6 +39,7 @@ impl std::fmt::Display for PluginExport {
 pub struct WasmPluginTool {
     name: String,
     description: String,
+    prompt_fragment: Option<String>,
     schema: Value,
     compiled: CompiledPlugin,
 }
@@ -55,6 +56,10 @@ impl CallableTool for WasmPluginTool {
 
     fn parameters(&self) -> Value {
         self.schema.clone()
+    }
+
+    fn prompt_fragment(&self) -> Option<&str> {
+        self.prompt_fragment.as_deref()
     }
 
     async fn call_raw(&self, arguments: Value) -> kosong::tooling::ToolReturnValue {
@@ -198,6 +203,7 @@ fn load_metadata_from_register_tools(
     Ok(PluginMetadata {
         name: first.name,
         description: first.description,
+        prompt_fragment: first.prompt_fragment,
         schema: first.parameters,
     })
 }
@@ -236,6 +242,7 @@ fn fallback_metadata(path: &Path) -> PluginMetadata {
     PluginMetadata {
         name: name.clone(),
         description: format!("WASM plugin tool: {}", name),
+        prompt_fragment: None,
         schema: default_schema(),
     }
 }
@@ -282,6 +289,7 @@ pub fn load_tool_from_wasm(path: &Path) -> Result<Box<dyn CallableTool>, String>
     Ok(Box::new(WasmPluginTool {
         name: metadata.name,
         description: metadata.description,
+        prompt_fragment: metadata.prompt_fragment,
         schema: metadata.schema,
         compiled,
     }))

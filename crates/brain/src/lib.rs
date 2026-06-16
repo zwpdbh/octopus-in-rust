@@ -10,6 +10,7 @@ pub use core::{
     ApprovalPolicy, ApprovalRequest, ApprovalResponse, ApprovalRuntime, AutoApprove, Brain,
     BrainBuilder, BrainConfig, BrainError, BrainErrorCategory, BrainEvent, CheckpointPolicy,
     DefaultProviderFactory, DefaultRecoveryPolicy, DefaultSystemPromptPolicy, EventPolicy,
+    ToolAwareSystemPromptPolicy,
     ExponentialBackoffRetryPolicy, NoOpCheckpointPolicy, NoOpEventPolicy, NoOpStepPolicy,
     NoOpToolResultTransformer, ProviderFactory, ProviderRefreshSender, RecoveryAction,
     RecoveryPolicy, RetryPolicy, StepContext, StepControl, StepOutcome, StepPolicy,

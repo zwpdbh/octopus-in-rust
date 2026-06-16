@@ -1,6 +1,6 @@
 # 3. Command Reference
 
-All `qqbot` commands accept `--data-dir <path>` to target a non-default data directory. Paths are resolved relative to the `qqbot` executable's project root, so you can run the binary from anywhere.
+All `qqbot` commands accept `--data-dir <path>` to target a non-default data directory. After `qqbot init`, the data directory is remembered in `<project-root>/.qqbot`, so `-d` is only needed when you want a different directory. Paths are resolved relative to the `qqbot` executable's project root, so you can run the binary from anywhere.
 
 ## 3.1 Lifecycle commands
 
@@ -64,6 +64,7 @@ Example output:
 [ok] SnowLuma container running
 [ok] OneBot WebSocket reachable (ws://127.0.0.1:3001)
 [ok] qqbot-core process running
+[ok] Plugin tools loaded: summary_format_conversation (1 tool(s))
 [ok] SnowLuma WebUI port 5099 reachable
 [ok] noVNC port 6081 reachable
 [ok] Bot is online and in the allowed group(s)
@@ -98,9 +99,25 @@ cargo run --bin qqbot -- logs snowluma -n 50
 cargo run --bin qqbot -- logs supervisor -n 50
 ```
 
-## 3.3 Plugin commands
+## 3.3 Tool commands (plugin management)
 
-See [Plugin management](05-plugins.md) for details.
+See [Plugin management](05-plugins.md) for the full OS-like installation model.
+
+```bash
+# Install or upgrade a plugin from a built .wasm file
+cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/summary.wasm
+
+# Upgrade a plugin (same as register, clearer intent)
+cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/summary.wasm
+
+# Remove an installed plugin by file-stem name
+cargo run --bin qqbot -- tools unregister summary
+
+# List tools loaded in the runtime (or installed plugins if core is not running)
+cargo run --bin qqbot -- tools list
+```
+
+The older crate-name-based commands are still available:
 
 ```bash
 cargo run --bin qqbot -- plugin list

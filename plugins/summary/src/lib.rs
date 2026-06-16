@@ -273,6 +273,7 @@ fn format_conversation(args: FormatConversationArgs) -> String {
 struct ToolDef {
     name: String,
     description: String,
+    prompt_fragment: Option<String>,
     parameters: serde_json::Value,
 }
 
@@ -281,6 +282,9 @@ pub fn register_tools(_input: String) -> FnResult<String> {
     let tools = vec![ToolDef {
         name: "summary_format_conversation".to_string(),
         description: "Format a raw conversation log for summarization.".to_string(),
+        prompt_fragment: Some(
+            "You may also use summary_format_conversation to format the raw conversation before summarizing.".to_string(),
+        ),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {

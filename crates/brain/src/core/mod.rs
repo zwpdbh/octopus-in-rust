@@ -29,6 +29,8 @@ pub use recovery::{DefaultRecoveryPolicy, RecoveryAction, RecoveryPolicy};
 pub use registry::{ToolRegistry, ToolSource};
 pub use retry::{ExponentialBackoffRetryPolicy, RetryPolicy};
 pub use step::{NoOpStepPolicy, StepContext, StepControl, StepOutcome, StepPolicy};
-pub use system_prompt::{DefaultSystemPromptPolicy, SystemPromptPolicy};
+pub use system_prompt::{
+    DefaultSystemPromptPolicy, SystemPromptPolicy, ToolAwareSystemPromptPolicy,
+};
 pub use tool_result::{NoOpToolResultTransformer, ToolResultTransformer};
 pub use turn::{TurnInput, TurnResult};

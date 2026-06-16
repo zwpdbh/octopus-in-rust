@@ -5,6 +5,10 @@ binary can be loaded by the `brain` agent core, by `octopus-cli`, and by
 `qqbot-core`. All three hosts share one plugin ABI, one runtime (Extism), and
 one manifest format.
 
+In `qqbot`, plugins are managed like OS programs: you **register** a built
+`.wasm` to install it, **update** it by registering a newer build, **unregister**
+it to remove it, and **list** the tools actually loaded in the running core.
+
 This document explains the shared ABI and then shows how each host discovers,
 loads, and runs plugins.
 
@@ -47,6 +51,9 @@ pub fn register_tools(_input: String) -> FnResult<String> {
     let tools = vec![ToolDef {
         name: "summary_format_conversation".to_string(),
         description: "Format a raw conversation log for summarization.".to_string(),
+        prompt_fragment: Some(
+            "You may also use summary_format_conversation to format the raw conversation before summarizing.".to_string(),
+        ),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
@@ -110,6 +117,7 @@ Example: `plugins/example-http/manifest.json`
 {
   "name": "HttpRequest",
   "description": "Make HTTP requests to external APIs and websites...",
+  "prompt_fragment": "When the user asks for data from the web, prefer HttpRequest over guessing.",
   "schema": { "type": "object", "properties": { ... } },
   "allowed_hosts": ["httpbin.org", "*.httpbin.org"],
   "timeout_ms": 30000,
@@ -122,6 +130,7 @@ Security model: **deny-by-default**.
 | Field | Meaning |
 |-------|---------|
 | `allowed_hosts` | Hosts the plugin may reach over HTTP. `None` or `[]` means no network. |
+| `prompt_fragment` | Optional instruction appended to the system prompt by `ToolAwareSystemPromptPolicy`. |
 | `allowed_paths` | Host-to-guest path mappings for WASI filesystem access. |
 | `timeout_ms` | Maximum execution time. |
 | `max_memory_pages` | Maximum WASM memory, in 64 KiB pages. |
@@ -252,60 +261,135 @@ octopus-cli --print -p "fetch https://httpbin.org/get"
 
 ## 4.6 How plugins work in `qqbot`
 
-`qqbot` is a supervisor around two binaries:
+`qqbot` is an OS-like service manager around two binaries:
 
 - `apps/qqbot-core` — the bot runtime that connects to OneBot and runs Brain
   turns.
-- `apps/qqbot` — the supervisor CLI that starts/stops the runtime and manages
-  plugins.
+- `apps/qqbot` — the supervisor CLI that starts/stops the runtime and
+  **installs, upgrades, and removes plugin tools**.
 
-### Where plugins live
+### Installation model: Brain as OS, plugins as programs
 
-- **Source builds:** `target/wasm32-unknown-unknown/release/<name>.wasm`
-- **Enabled plugins:** `data/qqbot-data/plugins/<name>.wasm`
+After `qqbot init`, the data directory is remembered in `<project-root>/.qqbot`,
+so most commands do not need `-d`.
 
-`qqbot-core` reads its plugin directory from `config.toml`:
+| Operation | OS analogy | Command |
+|---|---|---|
+| Install a program | Copy binary into the system lib directory | `qqbot tools register <path>` |
+| Upgrade a program | Overwrite the installed binary | `qqbot tools update <path>` |
+| Uninstall a program | Remove the installed binary | `qqbot tools unregister <name>` |
+| List running programs | Query the running OS | `qqbot tools list` |
+| Check system status | `systemctl status` | `qqbot status` |
 
-```toml
-[bot]
-plugin_dir = "./data/qqbot-data/plugins"
-```
+The `.wasm` file stem is the install key. To upgrade `summary`, keep the file
+name `summary.wasm`.
 
-`GroupBrainManager` passes that directory to `brain::ExtismPluginSource`:
+### What happens during `tools register`
 
 ```rust
-let tool_sources: Vec<Arc<dyn brain::ToolSource>> = vec![
-    Arc::new(ExtismPluginSource::new(&self.plugin_dir)),
-];
+// apps/qqbot/src/plugins.rs ~line 62 — plugins::register (abbreviated)
+pub async fn register(data_dir: &Path, wasm_path: &Path) -> Result<String> {
+    // 1. Validate the .wasm with the same brain loader qqbot-core uses.
+    let info = brain::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(...)?;
+
+    // 2. Copy into the plugin directory, overwriting an existing install.
+    let dst = plugin_dir(data_dir).join(format!("{name}.wasm"));
+    tokio::fs::copy(wasm_path, &dst).await?;
+
+    // 3. Signal qqbot-core to reload if it is running.
+    let pid_file = run_dir(data_dir).join("qqbot-core.pid");
+    if pid_file.exists() {
+        reload(data_dir).await?;
+    }
+    Ok(name)
+}
 ```
 
-So `qqbot-core` does **not** have its own plugin host — it reuses the one in
-`brain`.
+Validation happens before the file is copied, so a malformed plugin never
+reaches the runtime.
 
-### Enabling, disabling, and reloading
+### Prompt fragments from tools
 
-`apps/qqbot/src/plugins.rs` implements the CLI operations:
+Tools can contribute instruction fragments to the system prompt. Host tools
+implement `CallableTool2::prompt_fragment()`; WASM plugins declare
+`prompt_fragment` in their manifest or `register_tools` export. When
+`ToolAwareSystemPromptPolicy` builds the system prompt, it collects all fragments
+from the currently registered tools and appends them under a
+`### Tool usage instructions` heading.
+
+This replaces hard-coded tool names in `qqbot-core`: the Brain now asks every
+loaded tool, *"How should I use you?"*, and composes the answer into the prompt.
+
+### Runtime control socket
+
+`qqbot-core` exposes a Unix domain control socket at
+`<data-dir>/../run/qqbot-core.sock`. The CLI uses it to ask the runtime what
+tools are actually loaded, instead of guessing from files on disk.
+
+```rust
+// apps/qqbot-core/src/control.rs ~line 28 — control::serve (abbreviated)
+pub async fn serve(config_path: PathBuf, manager: Arc<GroupBrainManager>) -> Result<()> {
+    let socket_path = socket_path(&config_path).context(...)?;
+    let listener = UnixListener::bind(&socket_path)?;
+    info!(path = %socket_path.display(), "control socket listening");
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        // read ControlRequest, dispatch, write ControlResponse
+    }
+}
+```
+
+`GroupBrainManager` reports the tools currently loaded in active Brains:
+
+```rust
+// apps/qqbot-core/src/group_brain.rs ~line 136 — GroupBrainManager::loaded_tool_names (abbreviated)
+pub async fn loaded_tool_names(&self) -> Vec<String> {
+    let brains = self.brains.lock().await;
+    let mut names = std::collections::BTreeSet::new();
+    for brain in brains.values() {
+        for tool in brain.registry().tools() {
+            names.insert(tool.name);
+        }
+    }
+    names.into_iter().collect()
+}
+```
+
+Because Brains are created lazily, `tools list` may show no runtime-loaded tools
+immediately after an upgrade until the bot is addressed in a group.
+
+### Commands
 
 ```bash
-cargo run --bin qqbot -- plugin list
-cargo run --bin qqbot -- plugin enable summary
-cargo run --bin qqbot -- plugin disable summary
-cargo run --bin qqbot -- plugin reload
+# Install (or upgrade) from a built wasm binary.
+cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/summary.wasm
+
+# Same behavior as register, but semantically clearer for upgrades.
+cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/summary.wasm
+
+# Remove a plugin by its file-stem name.
+cargo run --bin qqbot -- tools unregister summary
+
+# Query the runtime; falls back to the plugin directory if core is not running.
+cargo run --bin qqbot -- tools list
+
+# Verify in the status output.
+cargo run --bin qqbot -- status
 ```
 
-- `enable` copies the `.wasm` from `target/wasm32-unknown-unknown/release/` into
-  the enabled directory.
-- `disable` removes the `.wasm` from the enabled directory.
-- `reload` reads the `qqbot-core` PID from `data/run/qqbot-core.pid` and sends
-  `SIGHUP`.
+### Reload semantics
 
-When `qqbot-core` receives `SIGHUP`, it clears all cached `Brain` instances in
-`GroupBrainManager`. The next message to each group creates a fresh `Brain` with
-the current set of plugins.
+`register`, `update`, and `unregister` send `SIGHUP` to `qqbot-core` when it is
+running. `qqbot-core` clears all cached Brains; the next group message creates a
+fresh Brain with the current plugin directory contents.
+
+The older `plugin enable / disable / reload` commands are still available for the
+crate-name-based workflow, but `tools register/update/unregister` are preferred
+because they validate the wasm explicitly and can target any file path.
 
 ### The default `summary` plugin
 
-The enabled `summary.wasm` registers `summary_format_conversation`. When a user
+The installed `summary.wasm` registers `summary_format_conversation`. When a user
 runs `/summary`, `qqbot-core` builds a prompt like:
 
 ```text
@@ -404,15 +488,21 @@ mkdir -p ~/.kimi/plugins
 cp target/wasm32-unknown-unknown/release/my-plugin.wasm ~/.kimi/plugins/
 cp plugins/my-plugin/manifest.json ~/.kimi/plugins/my-plugin.json
 
-# For qqbot
-cargo run --bin qqbot -- plugin enable my-plugin
+# For qqbot — install, upgrade, and remove like OS packages
+# (after qqbot init these work without -d from anywhere in the project)
+cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/my-plugin.wasm
+cargo run --bin qqbot -- tools update   target/wasm32-unknown-unknown/release/my-plugin.wasm
+cargo run --bin qqbot -- tools unregister my-plugin
+cargo run --bin qqbot -- tools list
+cargo run --bin qqbot -- status
 ```
 
 Reloading:
 
 - `octopus-cli`: plugins are loaded at startup; restart the CLI.
-- `qqbot`: `cargo run --bin qqbot -- plugin reload` (or enable/disable, which
-  reloads automatically).
+- `qqbot`: `tools register` / `tools update` / `tools unregister` reload
+  automatically via `SIGHUP`. You can also run
+  `cargo run --bin qqbot -- plugin reload` for a manual reload.
 
 ---
 

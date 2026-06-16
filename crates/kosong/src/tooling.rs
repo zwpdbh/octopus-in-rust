@@ -10,6 +10,10 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// Optional instruction fragment appended to the system prompt by a
+    /// `SystemPromptPolicy`. Not sent to LLM providers.
+    #[serde(skip)]
+    pub prompt_fragment: Option<String>,
 }
 
 /// Display block for UI (placeholder; octopus-cli does not use this yet).
@@ -119,6 +123,10 @@ pub trait CallableTool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters(&self) -> Value;
+    /// Optional instruction fragment for the system prompt.
+    fn prompt_fragment(&self) -> Option<&str> {
+        None
+    }
     async fn call_raw(&self, arguments: Value) -> ToolReturnValue;
 }
 
@@ -128,6 +136,10 @@ pub trait CallableTool2: Send + Sync {
     type Params: DeserializeOwned + schemars::JsonSchema + Send;
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+    /// Optional instruction fragment for the system prompt.
+    fn prompt_fragment(&self) -> Option<&str> {
+        None
+    }
     async fn call_typed(&self, params: Self::Params) -> ToolReturnValue;
 }
 
@@ -155,6 +167,10 @@ impl<T: CallableTool2> CallableTool for CallableTool2Adapter<T> {
     fn parameters(&self) -> Value {
         let schema = schemars::schema_for!(T::Params);
         serde_json::to_value(schema).unwrap_or(Value::Null)
+    }
+
+    fn prompt_fragment(&self) -> Option<&str> {
+        self.inner.prompt_fragment()
     }
 
     async fn call_raw(&self, arguments: Value) -> ToolReturnValue {

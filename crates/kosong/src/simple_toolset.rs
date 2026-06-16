@@ -41,6 +41,7 @@ impl Toolset for SimpleToolset {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.parameters(),
+                prompt_fragment: t.prompt_fragment().map(|s| s.to_string()),
             })
             .collect()
     }

@@ -60,6 +60,10 @@ impl kosong::tooling::CallableTool2 for RecentMessagesTool {
         "Retrieve the most recent messages in the current QQ group."
     }
 
+    fn prompt_fragment(&self) -> Option<&str> {
+        Some("When asked to summarize the conversation, first call qqbot_recent_messages to retrieve the recent messages, then provide a concise summary.")
+    }
+
     async fn call_typed(&self, params: RecentMessagesParams) -> ToolReturnValue {
         let recent = self.memory.recent(self.group_id, params.limit);
         if recent.is_empty() {
@@ -268,6 +272,9 @@ impl GroupBrainManager {
         let mut brain = brain::BrainBuilder::default()
             .from_config(config)
             .with_provider_factory(provider_factory)
+            .with_system_prompt_policy(std::sync::Arc::new(
+                brain::ToolAwareSystemPromptPolicy,
+            ))
             .build()
             .await?;
         brain.register_tool(Box::new(kosong::tooling::CallableTool2Adapter::new(
@@ -281,24 +288,6 @@ impl GroupBrainManager {
             .map(|t| t.name.clone())
             .collect();
         info!(group_id, tools = ?tool_names, "registered tools for group brain");
-
-        // Append dynamic tool instructions based on what is actually loaded.
-        let mut instructions = vec![
-            "When asked to summarize the conversation, first call qqbot_recent_messages to retrieve the recent messages, then provide a concise summary.".to_string(),
-        ];
-        if brain
-            .registry()
-            .find("summary_format_conversation")
-            .is_some()
-        {
-            instructions.push("You may also use summary_format_conversation to format the raw conversation before summarizing.".to_string());
-        }
-        let system_prompt = format!(
-            "{}\n\n{}",
-            self.config.llm.system_prompt,
-            instructions.join("\n")
-        );
-        brain.set_system_prompt(system_prompt);
 
         Ok(brain)
     }

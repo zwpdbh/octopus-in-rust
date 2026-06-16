@@ -17,6 +17,10 @@ pub struct PluginManifest {
     /// Tool description shown to the LLM.
     pub description: String,
 
+    /// Optional instruction fragment appended to the system prompt.
+    #[serde(default)]
+    pub prompt_fragment: Option<String>,
+
     /// JSON Schema for the tool's parameters.
     #[serde(default = "default_schema")]
     pub schema: Value,
@@ -53,6 +57,7 @@ impl PluginManifest {
         PluginMetadata {
             name: self.name,
             description: self.description,
+            prompt_fragment: self.prompt_fragment,
             schema: self.schema,
         }
     }
@@ -63,6 +68,8 @@ impl PluginManifest {
 pub(crate) struct ToolDef {
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub prompt_fragment: Option<String>,
     pub parameters: Value,
 }
 
@@ -71,6 +78,7 @@ pub(crate) struct ToolDef {
 pub(crate) struct PluginMetadata {
     pub name: String,
     pub description: String,
+    pub prompt_fragment: Option<String>,
     #[serde(default = "default_schema")]
     pub schema: Value,
 }
