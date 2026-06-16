@@ -1,9 +1,10 @@
-use crate::core_config::CoreConfigFile;
+use crate::core_config::{AuthConfig, CoreConfigFile, KimiCodeIdentity, LlmConfig, LlmProviderConfig};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{stdout, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ModelsResponse {
@@ -73,6 +74,8 @@ struct LlmErrorDetail {
     typ: String,
 }
 
+const KIMI_CODE_PLATFORM: &str = "kimi_code_cli";
+
 pub async fn ask(
     data_dir: &Path,
     prompt: &str,
@@ -84,24 +87,14 @@ pub async fn ask(
 
     println!("=== qqbot llm ask ===\n");
 
-    let api_key = match resolve_api_key(llm).await {
-        Ok(Some(k)) => k,
-        Ok(None) => {
-            println!("[fail] LLM is not fully configured in config.toml (no api_key or oauth)");
-            return Ok(());
-        }
-        Err(e) => {
-            println!("[fail] Failed to resolve API key / OAuth token: {e}");
-            return Ok(());
-        }
-    };
+    let (api_key, api_url, headers) = resolve_provider(llm).await?;
 
-    if llm.api_url.is_empty() || llm.model.is_empty() {
+    if api_url.is_empty() || llm.model.is_empty() {
         println!("[fail] LLM is not fully configured in config.toml");
         return Ok(());
     }
 
-    let chat_url = build_chat_url(base_url_override.unwrap_or(&llm.api_url));
+    let chat_url = build_chat_url(base_url_override.unwrap_or(&api_url));
     let model = model_override.unwrap_or(&llm.model);
     let request = ChatRequest {
         model: model.to_string(),
@@ -124,10 +117,14 @@ pub async fn ask(
     println!("Prompt:   {prompt}\n");
 
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&chat_url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    for (name, value) in &headers {
+        req = req.header(name, value);
+    }
+    let resp = req
         .json(&request)
         .send()
         .await
@@ -177,24 +174,14 @@ pub async fn stream(
 
     println!("=== qqbot llm stream ===\n");
 
-    let api_key = match resolve_api_key(llm).await {
-        Ok(Some(k)) => k,
-        Ok(None) => {
-            println!("[fail] LLM is not fully configured (no api_key or oauth)");
-            return Ok(());
-        }
-        Err(e) => {
-            println!("[fail] Failed to resolve API key / OAuth token: {e}");
-            return Ok(());
-        }
-    };
+    let (api_key, api_url, headers) = resolve_provider(llm).await?;
 
-    if llm.api_url.is_empty() || llm.model.is_empty() {
+    if api_url.is_empty() || llm.model.is_empty() {
         println!("[fail] LLM is not fully configured");
         return Ok(());
     }
 
-    let chat_url = build_chat_url(base_url_override.unwrap_or(&llm.api_url));
+    let chat_url = build_chat_url(base_url_override.unwrap_or(&api_url));
     let model = model_override.unwrap_or(&llm.model);
     let request = ChatRequest {
         model: model.to_string(),
@@ -217,11 +204,16 @@ pub async fn stream(
     println!("[config] prompt:   {prompt}\n");
 
     println!("[send] POST {chat_url}");
+
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(&chat_url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    for (name, value) in &headers {
+        req = req.header(name, value);
+    }
+    let resp = req
         .json(&request)
         .send()
         .await
@@ -296,29 +288,19 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
 
     println!("=== qqbot llm test ===\n");
 
-    if llm.api_url.is_empty() {
+    let (api_key, api_url, headers) = resolve_provider(llm).await?;
+
+    if api_url.is_empty() {
         println!("[fail] llm.api_url is not configured");
         return Ok(());
     }
-
-    let api_key = match resolve_api_key(llm).await {
-        Ok(Some(k)) => k,
-        Ok(None) => {
-            println!("[fail] llm.api_key is not configured and no OAuth is set up");
-            return Ok(());
-        }
-        Err(e) => {
-            println!("[fail] Failed to resolve API key / OAuth token: {e}");
-            return Ok(());
-        }
-    };
 
     if llm.model.is_empty() {
         println!("[fail] llm.model is not configured");
         return Ok(());
     }
 
-    let api_url = base_url_override.unwrap_or(&llm.api_url);
+    let api_url = base_url_override.unwrap_or(&api_url);
     let models_url = match build_models_url(api_url) {
         Ok(url) => url,
         Err(e) => {
@@ -338,12 +320,11 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
     println!("[ok]   model:    {}", llm.model);
 
     let client = reqwest::Client::new();
-    let resp = client
-        .get(&models_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .with_context(|| format!("failed to request {models_url}"))?;
+    let mut req = client.get(&models_url).header("Authorization", format!("Bearer {}", api_key));
+    for (name, value) in &headers {
+        req = req.header(name, value);
+    }
+    let resp = req.send().await.with_context(|| format!("failed to request {models_url}"))?;
 
     let status = resp.status();
     let body = resp.text().await.context("failed to read response body")?;
@@ -355,7 +336,7 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
         println!();
         println!("       This usually means the API key is invalid or expired.");
         println!(
-            "       Update llm.api_key in {} and run `qqbot restart`.",
+            "       Update llm.auth in {} and run `qqbot restart`.",
             data_dir.join("config.toml").display()
         );
         return Ok(());
@@ -396,12 +377,37 @@ pub async fn test(data_dir: &Path, base_url_override: Option<&str>) -> Result<()
     Ok(())
 }
 
+async fn resolve_provider(
+    llm: &LlmConfig,
+) -> Result<(String, String, HashMap<String, String>)> {
+    match &llm.provider {
+        LlmProviderConfig::OpenAiCompatible { api_url, auth } => {
+            let token = resolve_auth(auth).await?;
+            Ok((token, api_url.clone(), HashMap::new()))
+        }
+        LlmProviderConfig::KimiCode {
+            api_url,
+            token_file,
+            identity,
+        } => {
+            let token = crate::oauth::resolve_token(token_file).await?;
+            let headers = build_kimi_code_identity_headers(identity)?;
+            Ok((token, api_url.clone(), headers))
+        }
+    }
+}
+
+async fn resolve_auth(auth: &AuthConfig) -> Result<String> {
+    match auth {
+        AuthConfig::ApiKey { api_key } => Ok(api_key.clone()),
+        AuthConfig::OAuth { token_file } => crate::oauth::resolve_token(token_file).await,
+    }
+}
+
 fn build_models_url(api_url: &str) -> Result<String> {
-    let base = if api_url.ends_with("/chat/completions") {
-        &api_url[..api_url.len() - "/chat/completions".len()]
-    } else {
-        api_url
-    };
+    let base = api_url
+        .strip_suffix("/chat/completions")
+        .unwrap_or(api_url);
     let base = base.trim_end_matches('/');
     Ok(format!("{base}/models"))
 }
@@ -415,14 +421,85 @@ fn build_chat_url(api_url: &str) -> String {
     }
 }
 
-async fn resolve_api_key(llm: &crate::core_config::LlmConfig) -> Result<Option<String>> {
-    let static_key = llm.api_key.trim();
-    if !static_key.is_empty() {
-        return Ok(Some(static_key.to_string()));
-    }
-    if let Some(ref oauth) = llm.oauth {
-        let token = crate::oauth::resolve_token(&oauth.token_file).await?;
-        return Ok(Some(token));
-    }
-    Ok(None)
+fn build_kimi_code_identity_headers(
+    identity: &KimiCodeIdentity,
+) -> Result<HashMap<String, String>> {
+    let home_dir = expand_path(&identity.home_dir);
+
+    let device_id = read_device_id(&home_dir);
+    let hostname = ascii_header(std::env::var("HOSTNAME").as_deref().unwrap_or("qqbot"));
+    let device_model = ascii_header(&format_device_model());
+    let os_version = ascii_header(get_sys_release().as_str());
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "User-Agent".to_string(),
+        format!("{}/{}", identity.user_agent_product, identity.version),
+    );
+    headers.insert("X-Msh-Platform".to_string(), KIMI_CODE_PLATFORM.to_string());
+    headers.insert("X-Msh-Version".to_string(), identity.version.clone());
+    headers.insert("X-Msh-Device-Name".to_string(), hostname);
+    headers.insert("X-Msh-Device-Model".to_string(), device_model);
+    headers.insert("X-Msh-Os-Version".to_string(), os_version);
+    headers.insert("X-Msh-Device-Id".to_string(), device_id);
+
+    Ok(headers)
 }
+
+fn read_device_id(home_dir: &Path) -> String {
+    let path = home_dir.join("device_id");
+    std::fs::read_to_string(&path)
+        .map(|s| ascii_header(s.trim()))
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+}
+
+fn format_device_model() -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let version = get_sys_release();
+    format!("{} {} {}", os, version, arch)
+}
+
+#[cfg(target_os = "macos")]
+fn get_sys_release() -> String {
+    std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| get_fallback_release())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_sys_release() -> String {
+    get_fallback_release()
+}
+
+fn get_fallback_release() -> String {
+    std::env::consts::OS.to_string()
+}
+
+fn expand_path(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn ascii_header(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .filter(|c| (0x20..=0x7E).contains(&(*c as u32)))
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "unknown".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+

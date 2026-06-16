@@ -10,8 +10,8 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::config::Config;
+use crate::llm_provider::QqbotProviderFactory;
 use crate::memory::MemoryStore;
-use crate::oauth::OAuthManager;
 
 /// Host-provided tool that fetches recent messages from the bot's memory.
 pub struct RecentMessagesTool {
@@ -68,22 +68,15 @@ pub struct GroupBrainManager {
     brains: Mutex<HashMap<i64, Brain>>,
     config: Config,
     memory: MemoryStore,
-    oauth: Option<OAuthManager>,
     plugin_dir: PathBuf,
 }
 
 impl GroupBrainManager {
-    pub fn new(
-        config: Config,
-        memory: MemoryStore,
-        oauth: Option<OAuthManager>,
-        plugin_dir: PathBuf,
-    ) -> Self {
+    pub fn new(config: Config, memory: MemoryStore, plugin_dir: PathBuf) -> Self {
         Self {
             brains: Mutex::new(HashMap::new()),
             config,
             memory,
-            oauth,
             plugin_dir,
         }
     }
@@ -114,27 +107,26 @@ impl GroupBrainManager {
     }
 
     async fn create_brain(&self, group_id: i64) -> Result<Brain> {
-        let api_key = match self.oauth {
-            Some(ref manager) => manager.access_token().await.unwrap_or_default(),
-            None => self.config.llm.api_key.clone(),
-        };
-
         let tool_sources: Vec<std::sync::Arc<dyn brain::ToolSource>> = vec![std::sync::Arc::new(
             ExtismPluginSource::new(&self.plugin_dir),
         )];
 
         let config = BrainConfig {
             system_prompt: self.config.llm.system_prompt.clone(),
-            base_url: self.config.llm.api_url.clone(),
-            api_key,
+            base_url: self.config.llm.api_url().to_string(),
+            api_key: String::new(),
             model: self.config.llm.model.clone(),
             max_steps_per_turn: 16,
             tool_sources,
             ..Default::default()
         };
 
+        let provider_factory =
+            std::sync::Arc::new(QqbotProviderFactory::new(self.config.llm.provider.clone()));
+
         let mut brain = brain::BrainBuilder::default()
             .from_config(config)
+            .with_provider_factory(provider_factory)
             .build()
             .await?;
         brain.register_tool(Box::new(kosong::tooling::CallableTool2Adapter::new(

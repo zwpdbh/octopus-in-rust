@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ pub struct Kimi {
     pub thinking: Option<ThinkingEffort>,
     pub generation_kwargs: Value,
     pub extra_body: Option<Value>,
+    pub headers: HashMap<String, String>,
     pub http_client: reqwest::Client,
 }
 
@@ -42,6 +44,7 @@ impl Kimi {
             thinking: None,
             generation_kwargs: Value::Object(serde_json::Map::new()),
             extra_body: None,
+            headers: HashMap::new(),
             http_client: reqwest::Client::new(),
         }
     }
@@ -73,6 +76,11 @@ impl Kimi {
 
     pub fn with_extra_body(mut self, extra_body: Value) -> Self {
         self.extra_body = Some(extra_body);
+        self
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(name.into(), value.into());
         self
     }
 
@@ -228,6 +236,9 @@ impl ChatProvider for Kimi {
         let mut req_builder = self.http_client.post(&url);
         if let Some(ref key) = self.api_key {
             req_builder = req_builder.bearer_auth(key);
+        }
+        for (name, value) in &self.headers {
+            req_builder = req_builder.header(name, value);
         }
         req_builder = req_builder.header("Content-Type", "application/json");
 

@@ -1,5 +1,6 @@
 mod config;
 mod group_brain;
+mod llm_provider;
 mod memory;
 mod oauth;
 mod onebot;
@@ -37,15 +38,9 @@ async fn main() -> anyhow::Result<()> {
 
     let memory = MemoryStore::new(200);
 
-    let oauth = config
-        .llm
-        .oauth
-        .clone()
-        .map(crate::oauth::OAuthManager::new);
     let group_brains = Arc::new(GroupBrainManager::new(
         config.clone(),
         memory.clone(),
-        oauth,
         plugin_dir.clone(),
     ));
 

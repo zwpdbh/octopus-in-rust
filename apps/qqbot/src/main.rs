@@ -11,7 +11,7 @@ mod reset;
 mod service;
 mod status;
 
-use crate::core_config::{CoreConfigFile, LlmConfig as CoreLlmConfig};
+use crate::core_config::CoreConfigFile;
 use crate::service::{base_dir, logs_dir, SNOWLUMA_IMAGE};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -329,13 +329,7 @@ async fn init(
 
     // Write qqbot-core config.
     let ws_url = format!("ws://127.0.0.1:{}", ws_port);
-    let core_llm = CoreLlmConfig {
-        api_url: "https://api.moonshot.cn/v1/chat/completions".to_string(),
-        api_key: kimi_key,
-        model: "moonshot-v1-8k".to_string(),
-        system_prompt: "You are a helpful assistant summarizing a QQ group conversation. List key topics, decisions, and action items concisely in the user's language.".to_string(),
-        oauth: None,
-    };
+    let core_llm = CoreConfigFile::default_llm_config(kimi_key);
     let core_config = CoreConfigFile::new(
         ws_url,
         data_dir.join("plugins").to_string_lossy().to_string(),

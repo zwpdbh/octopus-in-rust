@@ -138,7 +138,7 @@ pub async fn check(
                     group_id,
                     received: false,
                     features,
-                    llm_provider: Some(config.llm.api_url.clone()),
+                    llm_provider: Some(config.llm.api_url().to_string()),
                     llm_model: Some(config.llm.model.clone()),
                 });
             }
@@ -212,7 +212,7 @@ async fn check_group_echo(
     let enabled_count = features.len();
 
     let mut lines = vec!["LLM:".to_string()];
-    lines.push(format!("  provider: {}", config.llm.api_url));
+    lines.push(format!("  provider: {}", config.llm.api_url()));
     lines.push(format!("  model: {}", config.llm.model));
 
     lines.push("Tools loaded:".to_string());
@@ -290,7 +290,7 @@ async fn check_group_echo(
         group_id,
         received: found,
         features,
-        llm_provider: Some(config.llm.api_url.clone()),
+        llm_provider: Some(config.llm.api_url().to_string()),
         llm_model: Some(config.llm.model.clone()),
     })
 }

@@ -11,11 +11,7 @@ const KIMI_CODE_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const KIMI_CODE_OAUTH_HOST: &str = "https://auth.kimi.com";
 const MIN_REFRESH_THRESHOLD_SECONDS: f64 = 300.0;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthConfig {
-    pub provider: String,
-    pub token_file: String,
-}
+pub use crate::config::OAuthConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthToken {
