@@ -88,7 +88,10 @@ mod tests {
         ];
 
         let policy = ToolAwareSystemPromptPolicy;
-        let prompt = policy.build_prompt("You are helpful.", &tools, &[]).await.unwrap();
+        let prompt = policy
+            .build_prompt("You are helpful.", &tools, &[])
+            .await
+            .unwrap();
 
         assert!(prompt.contains("You are helpful."));
         assert!(prompt.contains("Call qqbot_recent_messages first."));
@@ -105,7 +108,10 @@ mod tests {
         }];
 
         let policy = ToolAwareSystemPromptPolicy;
-        let prompt = policy.build_prompt("Base prompt.", &tools, &[]).await.unwrap();
+        let prompt = policy
+            .build_prompt("Base prompt.", &tools, &[])
+            .await
+            .unwrap();
         assert_eq!(prompt, "Base prompt.");
     }
 }

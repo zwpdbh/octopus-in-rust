@@ -36,6 +36,10 @@ async fn main() -> anyhow::Result<()> {
     info!(bot_qq = config.bot.bot_qq, "configuration loaded");
 
     let plugin_dir = PathBuf::from(&config.bot.plugin_dir);
+    let data_dir = plugin_dir
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let memory = MemoryStore::new(200);
 
@@ -53,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         config.clone(),
         memory.clone(),
         plugin_dir.clone(),
+        data_dir.clone(),
         action_tx.clone(),
     ));
 

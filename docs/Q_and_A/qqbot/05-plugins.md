@@ -402,7 +402,87 @@ and finally produce a summary for the group.
 
 ---
 
-## 4.7 Writing a plugin
+## 4.7 Per-group skills
+
+Because each QQ group gets its own `Brain`, skills can be configured per group.
+A skill here is a combination of:
+
+- a group-specific **system prompt**;
+- an **enabled/disabled plugin list**.
+
+### Profile storage
+
+Each group has a TOML file at:
+
+```text
+data/qqbot-data/groups/<group_id>.toml
+```
+
+Example `data/qqbot-data/groups/925712027.toml`:
+
+```toml
+system_prompt = "You are a concise assistant for this gaming group."
+disabled_plugins = ["example-http"]
+```
+
+If `enabled_plugins` is set, only those plugin file stems are loaded for the
+group. If it is omitted, all installed plugins are loaded except those in
+`disabled_plugins`.
+
+### CLI
+
+```bash
+# Show a group's effective profile
+cargo run --bin qqbot -- group 925712027 show
+
+# Set a group-specific system prompt
+cargo run --bin qqbot -- group 925712027 set-prompt "You are a concise assistant for this gaming group."
+
+# Enable/disable plugins for a group
+cargo run --bin qqbot -- group 925712027 enable-plugin summary
+cargo run --bin qqbot -- group 925712027 disable-plugin example-http
+```
+
+Changes write the TOML file and send `SIGHUP` to `qqbot-core`, so the group's
+next Brain is created with the new skill set.
+
+### Loading flow in `qqbot-core`
+
+```rust
+// apps/qqbot-core/src/group_brain.rs ~line 258 — GroupBrainManager::create_brain (abbreviated)
+async fn create_brain(&self, group_id: i64) -> Result<Brain> {
+    let profile = match qqbot_config::GroupProfile::load(&self.data_dir, group_id) {
+        Ok(Some(p)) => p,
+        _ => qqbot_config::GroupProfile::default(),
+    };
+
+    // Only load plugins allowed for this group.
+    let tool_source: Arc<dyn brain::ToolSource> =
+        if profile.enabled_plugins.is_some() || !profile.disabled_plugins.is_empty() {
+            let installed = Self::installed_plugin_names(&self.plugin_dir);
+            let allowed = profile.filter_plugins(installed.iter().map(|s| s.as_str()));
+            Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed))
+        } else {
+            Arc::new(ExtismPluginSource::new(&self.plugin_dir))
+        };
+
+    let config = BrainConfig {
+        system_prompt: profile
+            .system_prompt
+            .clone()
+            .unwrap_or_else(|| self.config.llm.system_prompt.clone()),
+        // ...
+    };
+    // ...
+}
+```
+
+The shared `qqbot-config` crate (`crates/qqbot-config`) holds `GroupProfile` so
+both the CLI and `qqbot-core` agree on the file format.
+
+---
+
+## 4.8 Writing a plugin
 
 The easiest way is to copy `plugins/summary` or `plugins/example-http`.
 
@@ -477,7 +557,7 @@ Extism will block the request.
 
 ---
 
-## 4.8 Build and install checklist
+## 4.9 Build and install checklist
 
 ```bash
 # Build a plugin
@@ -506,7 +586,7 @@ Reloading:
 
 ---
 
-## 4.9 Security and sandboxing
+## 4.10 Security and sandboxing
 
 - Plugins run inside Extism with a per-call memory limit and timeout.
 - Network and filesystem access are **deny-by-default**.
@@ -517,7 +597,7 @@ Reloading:
 
 ---
 
-## 4.10 Legacy ABI note
+## 4.11 Legacy ABI note
 
 Older drafts of this project used a C-like ABI with exports such as `init`,
 `on_message`, `on_command`, `malloc`, and `free`. That ABI is **no longer used**

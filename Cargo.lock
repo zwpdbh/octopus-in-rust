@@ -3149,6 +3149,7 @@ dependencies = [
  "http 1.4.0",
  "libc",
  "nix",
+ "qqbot-config",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3162,6 +3163,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qqbot-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "qqbot-core"
 version = "0.1.0"
 dependencies = [
@@ -3172,6 +3183,7 @@ dependencies = [
  "futures-util",
  "http 1.4.0",
  "kosong",
+ "qqbot-config",
  "reqwest 0.12.28",
  "schemars",
  "serde",

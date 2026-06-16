@@ -87,6 +87,16 @@ impl ToolRegistry {
         self.tools.read().unwrap().get(name).cloned()
     }
 
+    /// Remove a tool by name, returning it if it existed.
+    pub fn remove(&self, name: &str) -> Option<Arc<dyn CallableTool>> {
+        self.tools.write().unwrap().remove(name)
+    }
+
+    /// Return all registered tool names.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.read().unwrap().keys().cloned().collect()
+    }
+
     /// Number of registered tools.
     pub fn len(&self) -> usize {
         self.tools.read().unwrap().len()

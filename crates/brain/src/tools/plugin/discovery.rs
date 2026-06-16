@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -105,7 +106,18 @@ unsafe impl Sync for WasmPluginTool {}
 ///
 /// Scans for `.wasm` files and attempts to load each one as a plugin tool.
 /// Failures are logged as warnings and skipped.
+/// Discover and load all WASM plugins from the given directory.
+///
+/// Scans for `.wasm` files and attempts to load each one as a plugin tool.
+/// Failures are logged as warnings and skipped.
 pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+    discover_plugins_filtered(plugins_dir, None)
+}
+
+fn discover_plugins_filtered(
+    plugins_dir: &Path,
+    allowed_names: Option<&HashSet<String>>,
+) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
     let mut tools = Vec::new();
 
     if !plugins_dir.is_dir() {
@@ -123,6 +135,13 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::Call
 
         if path.extension() != Some(std::ffi::OsStr::new("wasm")) {
             continue;
+        }
+
+        if let Some(allowed) = allowed_names {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if !allowed.contains(stem) {
+                continue;
+            }
         }
 
         match load_tool_from_wasm(&path) {
@@ -328,6 +347,7 @@ pub fn default_plugins_dir() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct ExtismPluginSource {
     plugins_dir: PathBuf,
+    allowed_names: Option<HashSet<String>>,
 }
 
 impl ExtismPluginSource {
@@ -335,6 +355,18 @@ impl ExtismPluginSource {
     pub fn new(plugins_dir: impl Into<PathBuf>) -> Self {
         Self {
             plugins_dir: plugins_dir.into(),
+            allowed_names: None,
+        }
+    }
+
+    /// Create a source that loads only plugins whose file stem is in `allowed_names`.
+    pub fn with_filter(
+        plugins_dir: impl Into<PathBuf>,
+        allowed_names: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            plugins_dir: plugins_dir.into(),
+            allowed_names: Some(allowed_names.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -345,7 +377,7 @@ impl crate::core::registry::ToolSource for ExtismPluginSource {
     }
 
     fn load_tools(&self) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
-        discover_plugins(&self.plugins_dir)
+        discover_plugins_filtered(&self.plugins_dir, self.allowed_names.as_ref())
     }
 }
 

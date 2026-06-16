@@ -371,6 +371,7 @@ pub(crate) fn wire_to_kosong_tool(tool: &dyn kosong::tooling::CallableTool) -> k
         name: tool.name().to_string(),
         description: tool.description().to_string(),
         parameters: tool.parameters(),
+        prompt_fragment: tool.prompt_fragment().map(|s| s.to_string()),
     }
 }
 

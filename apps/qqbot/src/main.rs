@@ -2,6 +2,7 @@ mod control;
 mod core_config;
 mod daemon;
 mod doctor;
+mod groups;
 mod health;
 mod llm;
 mod logs;
@@ -99,6 +100,12 @@ enum Command {
         #[command(subcommand)]
         command: ToolsCommand,
     },
+    /// Manage per-group skills (system prompt and plugin set).
+    Group {
+        group_id: i64,
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
     /// Reset runtime session data (stops services, removes container, clears QQ login).
     Reset,
 }
@@ -133,6 +140,18 @@ enum LlmCommand {
         #[arg(long, short)]
         base_url: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum GroupCommand {
+    /// Set the system prompt for this group.
+    SetPrompt { prompt: Vec<String> },
+    /// Enable a plugin for this group.
+    EnablePlugin { plugin: String },
+    /// Disable a plugin for this group.
+    DisablePlugin { plugin: String },
+    /// Show the group's effective profile.
+    Show,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -277,6 +296,24 @@ fn main() -> Result<()> {
             PluginCommand::Reload => {
                 let rt = tokio::runtime::Runtime::new()?;
                 rt.block_on(plugins::reload(&data_dir))?;
+            }
+        },
+        Command::Group { group_id, command } => match command {
+            GroupCommand::SetPrompt { prompt } => {
+                let text = prompt.join(" ");
+                if text.is_empty() {
+                    anyhow::bail!("prompt is required");
+                }
+                groups::set_prompt(&data_dir, group_id, &text)?;
+            }
+            GroupCommand::EnablePlugin { plugin } => {
+                groups::enable_plugin(&data_dir, group_id, &plugin)?;
+            }
+            GroupCommand::DisablePlugin { plugin } => {
+                groups::disable_plugin(&data_dir, group_id, &plugin)?;
+            }
+            GroupCommand::Show => {
+                groups::show(&data_dir, group_id)?;
             }
         },
         Command::Tools { command } => match command {

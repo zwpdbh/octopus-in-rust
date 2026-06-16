@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 brain = { path = "../../crates/brain" }
+qqbot-config = { path = "../../crates/qqbot-config" }
 schemars = "0.8"
 kosong = { path = "../../crates/kosong" }
 async-trait = "0.1"

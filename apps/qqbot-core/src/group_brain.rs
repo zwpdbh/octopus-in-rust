@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -94,6 +94,7 @@ pub struct GroupBrainManager {
     config: Config,
     memory: MemoryStore,
     plugin_dir: PathBuf,
+    data_dir: PathBuf,
     action_tx: crate::onebot::ActionTx,
     max_steps_per_turn: usize,
 }
@@ -103,6 +104,7 @@ impl GroupBrainManager {
         config: Config,
         memory: MemoryStore,
         plugin_dir: PathBuf,
+        data_dir: PathBuf,
         action_tx: crate::onebot::ActionTx,
     ) -> Self {
         Self {
@@ -111,9 +113,26 @@ impl GroupBrainManager {
             config,
             memory,
             plugin_dir,
+            data_dir,
             action_tx,
             max_steps_per_turn: DEFAULT_MAX_STEPS_PER_TURN,
         }
+    }
+
+    /// Return the file stems of all `.wasm` plugins in the plugin directory.
+    fn installed_plugin_names(plugin_dir: &PathBuf) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(plugin_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        names.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        names
     }
 
     /// Drop all group Brains so they are recreated with fresh plugins/config.
@@ -252,12 +271,35 @@ impl GroupBrainManager {
     }
 
     async fn create_brain(&self, group_id: i64) -> Result<Brain> {
-        let tool_sources: Vec<std::sync::Arc<dyn brain::ToolSource>> = vec![std::sync::Arc::new(
-            ExtismPluginSource::new(&self.plugin_dir),
-        )];
+        let profile = match qqbot_config::GroupProfile::load(&self.data_dir, group_id) {
+            Ok(Some(p)) => p,
+            Ok(None) => qqbot_config::GroupProfile::default(),
+            Err(e) => {
+                tracing::warn!(group_id, error = %e, "failed to load group profile; using defaults");
+                qqbot_config::GroupProfile::default()
+            }
+        };
+
+        // Determine which plugin file stems are allowed for this group.
+        let tool_source: std::sync::Arc<dyn brain::ToolSource> =
+            if profile.enabled_plugins.is_some() || !profile.disabled_plugins.is_empty() {
+                let installed = Self::installed_plugin_names(&self.plugin_dir);
+                let allowed: HashSet<String> = profile
+                    .filter_plugins(installed.iter().map(|s| s.as_str()))
+                    .into_iter()
+                    .collect();
+                std::sync::Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed))
+            } else {
+                std::sync::Arc::new(ExtismPluginSource::new(&self.plugin_dir))
+            };
+
+        let tool_sources: Vec<std::sync::Arc<dyn brain::ToolSource>> = vec![tool_source];
 
         let config = BrainConfig {
-            system_prompt: self.config.llm.system_prompt.clone(),
+            system_prompt: profile
+                .system_prompt
+                .clone()
+                .unwrap_or_else(|| self.config.llm.system_prompt.clone()),
             base_url: self.config.llm.api_url().to_string(),
             api_key: String::new(),
             model: self.config.llm.model.clone(),
@@ -272,9 +314,7 @@ impl GroupBrainManager {
         let mut brain = brain::BrainBuilder::default()
             .from_config(config)
             .with_provider_factory(provider_factory)
-            .with_system_prompt_policy(std::sync::Arc::new(
-                brain::ToolAwareSystemPromptPolicy,
-            ))
+            .with_system_prompt_policy(std::sync::Arc::new(brain::ToolAwareSystemPromptPolicy))
             .build()
             .await?;
         brain.register_tool(Box::new(kosong::tooling::CallableTool2Adapter::new(

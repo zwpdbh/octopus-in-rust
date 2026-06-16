@@ -125,3 +125,14 @@ cargo run --bin qqbot -- plugin enable summary
 cargo run --bin qqbot -- plugin disable summary
 cargo run --bin qqbot -- plugin reload
 ```
+
+## 3.4 Group commands
+
+Manage per-group skills (system prompt and plugin set). See [Per-group skills](05-plugins.md#47-per-group-skills) for details.
+
+```bash
+cargo run --bin qqbot -- group 925712027 show
+cargo run --bin qqbot -- group 925712027 set-prompt "You are a concise assistant for this gaming group."
+cargo run --bin qqbot -- group 925712027 enable-plugin summary
+cargo run --bin qqbot -- group 925712027 disable-plugin example-http
+```
