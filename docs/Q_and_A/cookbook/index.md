@@ -13,3 +13,4 @@ Practical Rust patterns used across the Octopus codebase.
 | 07 | Never hold a `std::sync::Mutex` across `.await` | [07-never-hold-std-sync-mutex-across-await.md](./07-never-hold-std-sync-mutex-across-await.md) |
 | 08 | Contribute to open source via fork + PR | [08-open-source-contribution-workflow.md](./08-open-source-contribution-workflow.md) |
 | 09 | Run a forked Python CLI alongside the official install | [09-run-forked-python-cli-alongside-official.md](./09-run-forked-python-cli-alongside-official.md) |
+| 10 | Switch LLM providers with a config-driven factory | [10-switch-llm-providers-with-config-driven-factory.md](./10-switch-llm-providers-with-config-driven-factory.md) |
