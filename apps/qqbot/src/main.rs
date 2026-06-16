@@ -342,6 +342,7 @@ async fn init(
         ws_url,
         data_dir.join("plugins").to_string_lossy().to_string(),
         groups.clone(),
+        account,
         core_llm,
     );
     core_config.to_file(data_dir.join("config.toml"))?;

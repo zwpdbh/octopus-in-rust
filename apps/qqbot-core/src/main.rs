@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!(config = %config_path.display(), "loading configuration");
     let config = Config::from_file(&config_path)?;
-    info!("configuration loaded");
+    info!(bot_qq = config.bot.bot_qq, "configuration loaded");
 
     let plugin_dir = PathBuf::from(&config.bot.plugin_dir);
 
@@ -118,27 +118,48 @@ async fn handle_event(
         memory.push(group_id, user_id, text.clone());
     }
 
-    // Handle commands.
-    let prefix = &config.bot.command_prefix;
-    if text.trim_start().starts_with(prefix) {
-        let trimmed = text.trim_start().strip_prefix(prefix).unwrap_or("").trim();
-        let mut parts = trimmed.split_whitespace();
-        let cmd = parts.next().unwrap_or("");
-        let req_id = uuid::Uuid::new_v4().to_string();
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let span = info_span!(
+        "handle_event",
+        request_id = %req_id,
+        group_id,
+        user_id = ?event.user_id,
+    );
 
-        let span = info_span!(
-            "command",
-            request_id = %req_id,
-            group_id,
-            user_id = ?event.user_id,
-            cmd,
-        );
-        async {
-            info!("handling command");
+    async {
+        let user_id = event.user_id.unwrap_or(0);
+
+        // 1. Explicit @-mention: treat the remaining text as a natural-language
+        //    prompt and run it through the group's Brain.
+        let bot_qq = config.bot.bot_qq;
+        if bot_qq != 0 && event.is_at(bot_qq) {
+            let prompt = event.prompt_text(bot_qq);
+            if prompt.is_empty() {
+                debug!("bot @-mentioned with no prompt; ignoring");
+                return;
+            }
+            info!(prompt = %prompt, "handling @-mention prompt");
+            handle_brain_turn(
+                group_id,
+                user_id,
+                action_tx,
+                group_brains.clone(),
+                prompt,
+                &req_id,
+            )
+            .await;
+            return;
+        }
+
+        // 2. Command prefix: legacy shorthand for natural-language tasks.
+        let prefix = &config.bot.command_prefix;
+        if text.trim_start().starts_with(prefix) {
+            let trimmed = text.trim_start().strip_prefix(prefix).unwrap_or("").trim();
+            let mut parts = trimmed.split_whitespace();
+            let cmd = parts.next().unwrap_or("");
+
+            info!(cmd, "handling command");
             match cmd {
-                "summary" | "s" => {
-                    handle_brain_summary(group_id, action_tx, group_brains.clone(), &req_id).await;
-                }
                 "status" => {
                     handle_status(group_id, action_tx, memory.clone(), &req_id).await;
                 }
@@ -149,46 +170,67 @@ async fn handle_event(
                     debug!(cmd, "unknown command");
                 }
             }
+            return;
         }
-        .instrument(span)
-        .await;
+
+        // 3. Plain message: do not reply, but it is already stored in memory.
+        debug!("plain group message; not replying");
     }
+    .instrument(span)
+    .await;
 }
 
-async fn handle_brain_summary(
+async fn handle_brain_turn(
     group_id: i64,
+    user_id: i64,
     action_tx: &onebot::ActionTx,
     group_brains: Arc<GroupBrainManager>,
+    user_message: String,
     req_id: &str,
 ) {
-    info!(request_id = %req_id, group_id, "running Brain summary");
+    info!(request_id = %req_id, group_id, "running Brain turn");
 
-    let processing_text = "🤔 Summarizing recent messages...".to_string();
+    let processing_text = "🤔 Thinking...".to_string();
     let _ = action_tx.send(Action::send_group_msg(group_id, processing_text, None));
 
-    let user_message = "Please summarize the recent conversation in this group.".to_string();
     match group_brains.run_turn(group_id, user_message).await {
         Ok(result) => {
             let reply = if result.final_text.is_empty() {
-                "I couldn't come up with a summary.".to_string()
+                "I couldn't come up with an answer.".to_string()
             } else {
                 result.final_text
             };
-            let action = Action::send_group_msg(group_id, reply, None);
+            let action = if user_id != 0 {
+                Action::reply_group_msg(group_id, user_id, reply, None)
+            } else {
+                Action::send_group_msg(group_id, reply, None)
+            };
             if let Err(e) = action_tx.send(action) {
                 error!(request_id = %req_id, error = %e, "failed to send Brain reply");
             }
         }
         Err(e) => {
             error!(request_id = %req_id, error = %e, "Brain turn failed");
-            let action = Action::send_group_msg(
-                group_id,
-                format!(
-                    "Sorry, I couldn't generate a summary right now: {} (request: {})",
-                    e, req_id
-                ),
-                None,
-            );
+            let action = if user_id != 0 {
+                Action::reply_group_msg(
+                    group_id,
+                    user_id,
+                    format!(
+                        "Sorry, I couldn't process that right now: {} (request: {})",
+                        e, req_id
+                    ),
+                    None,
+                )
+            } else {
+                Action::send_group_msg(
+                    group_id,
+                    format!(
+                        "Sorry, I couldn't process that right now: {} (request: {})",
+                        e, req_id
+                    ),
+                    None,
+                )
+            };
             let _ = action_tx.send(action);
         }
     }
@@ -209,7 +251,7 @@ async fn handle_status(
 }
 
 async fn handle_help(group_id: i64, action_tx: &onebot::ActionTx, req_id: &str) {
-    let text = "Available commands: /summary (or /s), /status, /help".to_string();
+    let text = "Mention me with @bot <question>, or use /status and /help.".to_string();
     let action = Action::send_group_msg(group_id, text, None);
     if let Err(e) = action_tx.send(action) {
         error!(request_id = %req_id, error = %e, "failed to send help reply");

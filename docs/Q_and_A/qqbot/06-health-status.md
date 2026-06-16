@@ -35,12 +35,13 @@ Because it does not send messages, you can run it as often as you like.
 The test message posted to the group looks like:
 
 ```text
-features:
-1. summary -- Summarize recent group chat messages
-   commands: /summary (or /s), /status
-type /help to list all available commands
-summary:
-total 1/1 features enabled
+LLM:
+  provider: https://api.moonshot.cn/v1/chat/completions
+  model: moonshot-v1-8k
+Tools loaded:
+  1. summary -- Summarize recent group chat messages
+Total: 1/1 tools available
+Mention the bot with @<question> to chat.
 check id: <uuid>
 ```
 

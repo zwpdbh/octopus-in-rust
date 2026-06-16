@@ -46,6 +46,8 @@ pub struct BotConfig {
     pub command_prefix: String,
     #[serde(default = "default_plugin_dir")]
     pub plugin_dir: String,
+    #[serde(default)]
+    pub bot_qq: i64,
 }
 
 fn default_command_prefix() -> String {

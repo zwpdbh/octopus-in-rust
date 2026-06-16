@@ -31,13 +31,9 @@ cargo run --bin qqbot -- logs core -n 50
 cargo run --bin qqbot -- logs supervisor -n 50
 ```
 
-## 6.3 The bot does not respond to `/summary`
+## 6.3 The bot does not respond to `@bot`
 
-1. Check that the `summary` plugin is enabled:
-
-   ```bash
-   cargo run --bin qqbot -- plugin list
-   ```
+1. Check that `bot_qq` in `data/qqbot-data/config.toml` matches the bot's QQ account.
 
 2. Check that the bot is in the group and online:
 
@@ -45,13 +41,13 @@ cargo run --bin qqbot -- logs supervisor -n 50
    cargo run --bin qqbot -- health
    ```
 
-3. Check core logs for plugin errors:
+3. Check core logs for plugin or connection errors:
 
    ```bash
    cargo run --bin qqbot -- logs core -n 100
    ```
 
-4. Make sure the message starts with the configured command prefix (default `/`).
+4. Make sure the message actually @-mentions the bot, e.g. `@3462039501 hello`.
 
 ## 6.4 Plugin changes are not picked up
 

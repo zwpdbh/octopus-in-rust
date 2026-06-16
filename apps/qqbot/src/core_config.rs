@@ -20,6 +20,8 @@ pub struct BotConfig {
     pub allowed_groups: Vec<i64>,
     pub command_prefix: String,
     pub plugin_dir: String,
+    #[serde(default)]
+    pub bot_qq: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +51,7 @@ impl CoreConfigFile {
         ws_url: String,
         plugin_dir: String,
         allowed_groups: Vec<i64>,
+        bot_qq: i64,
         llm: LlmConfig,
     ) -> Self {
         Self {
@@ -60,6 +63,7 @@ impl CoreConfigFile {
                 allowed_groups,
                 command_prefix: "/".to_string(),
                 plugin_dir,
+                bot_qq,
             },
             llm,
         }

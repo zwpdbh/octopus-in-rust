@@ -120,17 +120,9 @@ pub fn plugin_description(name: &str) -> &'static str {
     }
 }
 
-pub fn plugin_usage(name: &str) -> &'static str {
-    match name {
-        "summary" => "/summary (or /s), /status",
-        "example-http" => "No usage defined",
-        _ => "No usage defined",
-    }
-}
-
-/// Reminder shown in the health-check message about how to list all commands.
+/// Reminder shown in the health-check message about how to talk to the bot.
 pub fn help_reminder() -> &'static str {
-    "type /help to list all available commands"
+    "Mention the bot with @<question> to chat."
 }
 
 #[cfg(unix)]

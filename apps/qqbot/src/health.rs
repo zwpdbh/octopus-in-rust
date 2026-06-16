@@ -33,6 +33,8 @@ pub struct GroupEcho {
     pub group_id: i64,
     pub received: bool,
     pub features: Vec<String>,
+    pub llm_provider: Option<String>,
+    pub llm_model: Option<String>,
 }
 
 pub async fn run(data_dir: &Path) -> Result<()> {
@@ -136,6 +138,8 @@ pub async fn check(
                     group_id,
                     received: false,
                     features,
+                    llm_provider: Some(config.llm.api_url.clone()),
+                    llm_model: Some(config.llm.model.clone()),
                 });
             }
         }
@@ -207,20 +211,24 @@ async fn check_group_echo(
         .len();
     let enabled_count = features.len();
 
-    let mut lines = vec!["features:".to_string()];
-    for (i, name) in features.iter().enumerate() {
-        let desc = crate::plugins::plugin_description(name);
-        let usage = crate::plugins::plugin_usage(name);
-        lines.push(format!("{}. {} -- {}", i + 1, name, desc));
-        lines.push(format!("   commands: {}", usage));
+    let mut lines = vec!["LLM:".to_string()];
+    lines.push(format!("  provider: {}", config.llm.api_url));
+    lines.push(format!("  model: {}", config.llm.model));
+
+    lines.push("Tools loaded:".to_string());
+    if features.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for (i, name) in features.iter().enumerate() {
+            let desc = crate::plugins::plugin_description(name);
+            lines.push(format!("  {}. {} -- {}", i + 1, name, desc));
+        }
     }
+    lines.push(format!(
+        "Total: {enabled_count}/{available_count} tools available"
+    ));
 
     lines.push(crate::plugins::help_reminder().to_string());
-
-    lines.push("summary:".to_string());
-    lines.push(format!(
-        "total {enabled_count}/{available_count} features enabled"
-    ));
     lines.push(format!("check id: {token}"));
     let text = lines.join("\n");
     let params = serde_json::json!({
@@ -282,6 +290,8 @@ async fn check_group_echo(
         group_id,
         received: found,
         features,
+        llm_provider: Some(config.llm.api_url.clone()),
+        llm_model: Some(config.llm.model.clone()),
     })
 }
 
@@ -363,15 +373,26 @@ fn print_report(report: &HealthReport) {
                 "[ok] End-to-end check: sent a test message and confirmed it in group {}",
                 echo.group_id
             );
-            println!("       Features:");
-            for (i, name) in echo.features.iter().enumerate() {
-                println!(
-                    "       {}. {} -- {}",
-                    i + 1,
-                    name,
-                    crate::plugins::plugin_description(name)
-                );
-                println!("          commands: {}", crate::plugins::plugin_usage(name));
+            println!(
+                "       LLM provider: {}",
+                echo.llm_provider.as_deref().unwrap_or("unknown")
+            );
+            println!(
+                "       LLM model: {}",
+                echo.llm_model.as_deref().unwrap_or("unknown")
+            );
+            println!("       Tools loaded:");
+            if echo.features.is_empty() {
+                println!("         (none)");
+            } else {
+                for (i, name) in echo.features.iter().enumerate() {
+                    println!(
+                        "         {}. {} -- {}",
+                        i + 1,
+                        name,
+                        crate::plugins::plugin_description(name)
+                    );
+                }
             }
             println!("       {}", crate::plugins::help_reminder());
         } else {
