@@ -1,0 +1,21 @@
+# Template: data/qqbot-data/groups/<group_id>.toml
+#
+# Per-group configuration file. Create one file per QQ group listed in
+# config.toml bot.allowed_groups. The file name must be the group ID, e.g.:
+#
+#   data/qqbot-data/groups/123456789.toml
+#
+# These files are copied to the server at
+# /opt/qqbot/data/qqbot-data/groups/ during deploy.
+
+# System prompt used for this group. Override this to tailor the bot's
+# personality or behavior for the group.
+system_prompt = "You are a concise assistant for this group."
+
+# List of plugin WASM names (without the .wasm extension) that should be
+# enabled for this group. Plugins must be built and placed in the plugins/
+# directory (e.g., by running the build-qqbot-release script).
+enabled_plugins = ["faf_units_plugin"]
+
+# Plugins to explicitly disable for this group. Usually left empty.
+disabled_plugins = []

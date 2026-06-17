@@ -19,6 +19,8 @@ Type=simple
 # Run as the unprivileged service user created by qqbot-remote-setup.sh.
 User=qqbot
 Group=qqbot
+# Allow the service to talk to the Docker daemon.
+SupplementaryGroups=docker
 
 # Working directory for the installed qqbot layout.
 WorkingDirectory=/opt/qqbot

@@ -64,6 +64,80 @@ pub fn remote_service_cmd(action: &str) -> Result<()> {
     Ok(())
 }
 
+/// Start the remote ECS instance if it is currently stopped.
+pub fn remote_start_instance() -> Result<()> {
+    let config = load_config()?;
+    let cli = AliyunCli::new(
+        config.aliyun.aliyun_profile.clone(),
+        config.aliyun.region.clone(),
+    );
+
+    let info = cli
+        .find_instance(&config.aliyun.region, &config.aliyun.name)?
+        .context("no instance found; run `cargo xtask qqbot deploy` first")?;
+
+    match info.status.as_str() {
+        "Running" => {
+            println!(
+                "Instance {} is already Running at {}",
+                info.instance_id,
+                info.public_ip.as_deref().unwrap_or("<no ip>")
+            );
+        }
+        "Stopped" => {
+            println!("Starting instance {} ...", info.instance_id);
+            cli.start_instance(&config.aliyun.region, &info.instance_id)?;
+            let started = cli.wait_for_running(
+                &config.aliyun.region,
+                &config.aliyun.name,
+                std::time::Duration::from_secs(300),
+            )?;
+            println!(
+                "Instance {} is now Running at {}",
+                started.instance_id,
+                started.public_ip.as_deref().unwrap_or("<no ip>")
+            );
+        }
+        other => {
+            bail!("instance is in unexpected state: {other}");
+        }
+    }
+    Ok(())
+}
+
+/// Stop the remote ECS instance to save on compute charges.
+pub fn remote_stop_instance() -> Result<()> {
+    let config = load_config()?;
+    let cli = AliyunCli::new(
+        config.aliyun.aliyun_profile.clone(),
+        config.aliyun.region.clone(),
+    );
+
+    let info = cli
+        .find_instance(&config.aliyun.region, &config.aliyun.name)?
+        .context("no instance found; run `cargo xtask qqbot deploy` first")?;
+
+    match info.status.as_str() {
+        "Stopped" => {
+            println!("Instance {} is already Stopped.", info.instance_id);
+        }
+        "Running" => {
+            println!("Stopping instance {} ...", info.instance_id);
+            cli.stop_instance(&config.aliyun.region, &info.instance_id)?;
+            let stopped = cli.wait_for_stopped(
+                &config.aliyun.region,
+                &config.aliyun.name,
+                std::time::Duration::from_secs(300),
+            )?;
+            println!("Instance {} is now Stopped.", stopped.instance_id);
+        }
+        other => {
+            bail!("instance is in unexpected state: {other}");
+        }
+    }
+    Ok(())
+}
+
 /// Destroy the remote ECS instance after interactive confirmation.
 pub fn remote_destroy() -> Result<()> {
     let config = load_config()?;

@@ -10,6 +10,26 @@ use super::ssh::{maybe_sudo, SshSession};
 /// Build the release tarball and install/upgrade it on the remote host.
 pub fn install(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
     let tarball = build_release_tarball()?;
+
+    // Fresh ECS instances only have a root user. Bootstrap as root first:
+    // create the service user, install Docker, and prepare directories.
+    let root_ssh = SshSession {
+        user: "root".to_string(),
+        host: instance
+            .public_ip
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1".to_string()),
+        key: config.remote.ssh_private_key.clone(),
+    };
+    println!(
+        "Connecting to root@{} for bootstrap ...",
+        instance.public_ip.as_deref().unwrap_or("<unknown>")
+    );
+    wait_for_ssh(&root_ssh)?;
+    run_setup_script(config, instance, &root_ssh)?;
+    install_service_user_key(config, &root_ssh)?;
+
+    // Subsequent installation steps run as the unprivileged service user.
     let ssh = ssh_session(config, instance);
 
     println!(
@@ -18,11 +38,8 @@ pub fn install(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
         instance.public_ip.as_deref().unwrap_or("<unknown>")
     );
 
-    // Wait until SSH is reachable (new instances need a few seconds).
+    // Wait until SSH is reachable for the service user.
     wait_for_ssh(&ssh)?;
-
-    // Bootstrap environment: create user, install Docker, pull SnowLuma image.
-    run_setup_script(config, instance, &ssh)?;
 
     // Ensure install directory exists and binaries can land in bin/.
     let install_dir = &config.remote.install_dir;
@@ -43,13 +60,6 @@ pub fn install(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
 
     // Sync local configuration, groups, and plugins.
     sync_data_dir(config, instance)?;
-
-    // Set ownership so the service user can write logs/run files.
-    let user = &config.remote.user;
-    ssh.run_stream(&format!(
-        "{chown} -R {user}:{user} {install_dir}/data",
-        chown = maybe_sudo(user, "chown")
-    ))?;
 
     // Install and start the systemd unit.
     install_systemd_service(config, instance, &ssh)?;
@@ -156,8 +166,9 @@ fn run_setup_script(
     let root = project::root();
     let local_script = root.join("scripts/qqbot-remote-setup.sh");
     let install_dir = &config.remote.install_dir;
-    let remote_script = format!("{install_dir}/qqbot-remote-setup.sh");
-    ssh.upload(&local_script, &remote_script)?;
+    // Upload to /tmp first: the install directory is created by the script itself.
+    let remote_script = "/tmp/qqbot-remote-setup.sh";
+    ssh.upload(&local_script, remote_script)?;
     let setup_cmd = maybe_sudo(
         &config.remote.user,
         &format!(
@@ -169,12 +180,43 @@ fn run_setup_script(
     Ok(())
 }
 
+/// Install the SSH public key for the service user so the deployer can log in as that user.
+fn install_service_user_key(config: &DeployConfig, ssh: &SshSession) -> Result<()> {
+    let user = &config.remote.user;
+    let key_path = config.ssh_key_path();
+
+    // Derive the public key from the deployed private key.
+    let output = Command::new("ssh-keygen")
+        .args(["-y", "-f", key_path.to_string_lossy().as_ref()])
+        .output()
+        .with_context(|| format!("failed to derive public key from {}", key_path.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("ssh-keygen failed ({}): {stderr}", output.status);
+    }
+    let pub_key = String::from_utf8_lossy(&output.stdout);
+
+    // Write it to the service user's authorized_keys as root.
+    let auth_keys = format!("/home/{user}/.ssh/authorized_keys");
+    ssh.run_stream(&format!(
+        "mkdir -p /home/{user}/.ssh && \
+         printf '%s' '{pub_key}' > {auth_keys} && \
+         chown -R {user}:{user} /home/{user}/.ssh && \
+         chmod 700 /home/{user}/.ssh && \
+         chmod 600 {auth_keys}",
+    ))?;
+    Ok(())
+}
+
 fn sync_data_dir(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
     use crate::project;
 
     let ssh = ssh_session(config, instance);
-    let local_data = project::data_dir()?.join("qqbot-data");
+    // The .qqbot marker points at the local qqbot-data directory.
+    let local_data = project::data_dir()?;
     let remote_base = format!("{}/data/qqbot-data", config.remote.install_dir);
+
+    println!("  Syncing data from {} to {} ...", local_data.display(), remote_base);
 
     ssh.run_stream(&format!(
         "mkdir -p {remote_base}/groups {remote_base}/plugins"
@@ -182,25 +224,34 @@ fn sync_data_dir(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
 
     let config_local = local_data.join("config.toml");
     if config_local.exists() {
+        println!("  Uploading config.toml ...");
         ssh.upload(&config_local, format!("{remote_base}/config.toml"))?;
+    } else {
+        println!("  No local config.toml found; skipping.");
     }
 
     let groups_local = local_data.join("groups");
     if groups_local.is_dir() {
+        println!("  Uploading groups/ ...");
         ssh.upload_dir(&groups_local, &remote_base)?;
     }
 
     let plugins_local = local_data.join("plugins");
     if plugins_local.is_dir() {
+        println!("  Uploading plugins/ ...");
         ssh.upload_dir(&plugins_local, &remote_base)?;
     }
 
     // SnowLuma configuration (onebot.json, webui.json, etc.) is required for
     // `qqbot start` to consider the data directory initialized.
-    let local_base = project::data_dir()?;
+    // snowluma-data lives next to qqbot-data under the project data root.
+    let local_base = local_data
+        .parent()
+        .context("qqbot data directory has no parent")?;
     let snowluma_config_local = local_base.join("snowluma-data/config");
     if snowluma_config_local.is_dir() {
         let remote_snowluma = format!("{}/data/snowluma-data", config.remote.install_dir);
+        println!("  Uploading snowluma config to {} ...", remote_snowluma);
         ssh.run_stream(&format!("mkdir -p {remote_snowluma}"))?;
         ssh.upload_dir(&snowluma_config_local, &remote_snowluma)?;
     }

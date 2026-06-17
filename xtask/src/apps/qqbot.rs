@@ -33,6 +33,8 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
         "remote-start" => deploy::remote_service_cmd("start"),
         "remote-stop" => deploy::remote_service_cmd("stop"),
         "remote-restart" => deploy::remote_service_cmd("restart"),
+        "remote-start-instance" => deploy::remote_start_instance(),
+        "remote-stop-instance" => deploy::remote_stop_instance(),
         "remote-doctor" => deploy::remote_cmd("doctor"),
         "remote-destroy" => deploy::remote_destroy(),
         "help" => print_help(),
@@ -64,6 +66,8 @@ fn print_help() -> Result<()> {
     println!("  remote-start     Start the remote qqbot systemd service");
     println!("  remote-stop      Stop the remote qqbot systemd service");
     println!("  remote-restart   Restart the remote qqbot systemd service");
+    println!("  remote-start-instance  Start the AliCloud ECS instance");
+    println!("  remote-stop-instance   Stop the AliCloud ECS instance (saves compute fees)");
     println!("  remote-doctor    Run doctor on the remote host");
     println!("  remote-destroy   Delete the AliCloud ECS instance");
     Ok(())

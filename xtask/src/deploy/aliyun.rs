@@ -272,7 +272,7 @@ impl AliyunCli {
             ("InstanceChargeType", "PostPaid".to_string()),
             ("InternetChargeType", "PayByTraffic".to_string()),
             ("InternetMaxBandwidthOut", "5".to_string()),
-            ("SystemDisk.Category", "cloud_efficiency".to_string()),
+            ("SystemDisk.Category", "cloud_essd".to_string()),
             ("SystemDisk.Size", "40".to_string()),
         ];
         add_tags(&mut args, name);
@@ -359,6 +359,43 @@ impl AliyunCli {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn stop_instance(&self, region: &str, instance_id: &str) -> Result<()> {
+        self.run(
+            "ecs",
+            "StopInstance",
+            &[
+                ("RegionId", region.to_string()),
+                ("InstanceId", instance_id.to_string()),
+                ("StoppedMode", "StopCharging".to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn wait_for_stopped(
+        &self,
+        region: &str,
+        name: &str,
+        timeout: Duration,
+    ) -> Result<InstanceInfo> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(info) = self.find_instance(region, name)? {
+                if info.status == "Stopped" {
+                    return Ok(info);
+                } else if ["Running", "Pending", "Stopping"].contains(&info.status.as_str()) {
+                    // Still transitioning; keep polling.
+                } else if ["Deleted"].contains(&info.status.as_str()) {
+                    bail!("instance entered terminal state: {}", info.status);
+                }
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for instance to become Stopped");
+            }
+            thread::sleep(Duration::from_secs(5));
+        }
     }
 
     pub fn delete_instance(&self, region: &str, instance_id: &str) -> Result<()> {
