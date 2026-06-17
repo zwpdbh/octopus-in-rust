@@ -12,6 +12,15 @@ pub enum ControlRequest {
     Ping,
 }
 
+/// Runtime information about a single loaded tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolRuntimeInfo {
+    pub name: String,
+    /// Source label that identifies where the tool came from, e.g. `"host"`,
+    /// `"faf_units_plugin"`, `"example_http"`.
+    pub source: String,
+}
+
 /// Per-group runtime status reported by `qqbot-core`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupRuntimeStatus {
@@ -20,8 +29,8 @@ pub struct GroupRuntimeStatus {
     pub brain_ready: bool,
     /// Number of tools loaded for this group.
     pub tool_count: usize,
-    /// Names of tools loaded for this group.
-    pub tools: Vec<String>,
+    /// Tools loaded for this group.
+    pub tools: Vec<ToolRuntimeInfo>,
 }
 
 /// Response returned by the `qqbot-core` control socket.
@@ -29,7 +38,7 @@ pub struct GroupRuntimeStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ControlResponse {
     /// Tool names currently loaded in the runtime.
-    Tools { names: Vec<String> },
+    Tools { tools: Vec<ToolRuntimeInfo> },
     /// Per-group runtime status.
     Groups { groups: Vec<GroupRuntimeStatus> },
     /// Reply to a `Ping` request.

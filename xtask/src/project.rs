@@ -51,5 +51,9 @@ pub fn profile() -> &'static str {
 }
 
 pub fn profile_str(release: bool) -> &'static str {
-    if release { "release" } else { "debug" }
+    if release {
+        "release"
+    } else {
+        "debug"
+    }
 }

@@ -29,7 +29,11 @@ pub trait ToolSource: Send + Sync {
     fn name(&self) -> &str;
 
     /// Load tools from this source.
-    fn load_tools(&self) -> Vec<Box<dyn CallableTool>>;
+    ///
+    /// Each tool is paired with a source label that identifies where it came
+    /// from (e.g. `"host"`, `"faf_units_plugin"`, `"example_http"`). This lets
+    /// UIs and status output group tools by their originating plugin.
+    fn load_tools(&self) -> Vec<(String, Box<dyn CallableTool>)>;
 }
 
 /// Empty tool source used when no external sources are configured.
@@ -41,7 +45,7 @@ impl ToolSource for EmptyToolSource {
         "empty"
     }
 
-    fn load_tools(&self) -> Vec<Box<dyn CallableTool>> {
+    fn load_tools(&self) -> Vec<(String, Box<dyn CallableTool>)> {
         Vec::new()
     }
 }
@@ -52,6 +56,7 @@ impl ToolSource for EmptyToolSource {
 #[derive(Default, Clone)]
 pub struct ToolRegistry {
     tools: Arc<std::sync::RwLock<HashMap<String, Arc<dyn CallableTool>>>>,
+    sources: Arc<std::sync::RwLock<HashMap<String, String>>>,
 }
 
 impl ToolRegistry {
@@ -60,26 +65,35 @@ impl ToolRegistry {
         Self::default()
     }
 
-    /// Register a tool.
+    /// Register a tool with a source label.
     ///
     /// Panics if the tool name is not a valid OpenAI function name. Valid names
     /// start with a letter and contain only letters, digits, underscores, and
     /// dashes, up to 64 characters long. This lets the bot fail fast at startup
     /// instead of getting a 400 from the LLM provider at request time.
-    pub fn register(&self, tool: Box<dyn CallableTool>) {
-        let name = tool.name();
+    pub fn register(&self, tool: Box<dyn CallableTool>, source: impl Into<String>) {
+        let name = tool.name().to_string();
         assert!(
-            is_valid_tool_name(name),
+            is_valid_tool_name(&name),
             "tool name {:?} is invalid: must start with a letter and contain only letters, digits, underscores, and dashes (max 64 chars)",
             name
         );
         let mut tools = self.tools.write().unwrap();
-        tools.insert(name.to_string(), Arc::from(tool));
+        tools.insert(name.clone(), Arc::from(tool));
+        let mut sources = self.sources.write().unwrap();
+        sources.insert(name, source.into());
     }
 
     /// Register a type-safe [`kosong::tooling::CallableTool2`] via the adapter.
-    pub fn register_typed<T: kosong::tooling::CallableTool2 + 'static>(&self, tool: T) {
-        self.register(Box::new(kosong::tooling::CallableTool2Adapter::new(tool)));
+    pub fn register_typed<T: kosong::tooling::CallableTool2 + 'static>(
+        &self,
+        tool: T,
+        source: impl Into<String>,
+    ) {
+        self.register(
+            Box::new(kosong::tooling::CallableTool2Adapter::new(tool)),
+            source,
+        );
     }
 
     /// Look up a tool by name.
@@ -95,6 +109,20 @@ impl ToolRegistry {
     /// Return all registered tool names.
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.read().unwrap().keys().cloned().collect()
+    }
+
+    /// Return the source label for a registered tool, if known.
+    pub fn tool_source(&self, name: &str) -> Option<String> {
+        self.sources.read().unwrap().get(name).cloned()
+    }
+
+    /// Return all registered tools with their source labels.
+    pub fn tool_sources(&self) -> Vec<(String, String)> {
+        let sources = self.sources.read().unwrap();
+        sources
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Number of registered tools.

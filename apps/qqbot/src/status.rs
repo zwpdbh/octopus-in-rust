@@ -5,7 +5,7 @@ use crate::health;
 use crate::plugins;
 use crate::service::{base_dir, SNOWLUMA_CONTAINER};
 use anyhow::Result;
-use brain::control::GroupRuntimeStatus;
+use brain::control::{GroupRuntimeStatus, ToolRuntimeInfo};
 use std::io::IsTerminal;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -174,17 +174,33 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     // Registered / loaded plugin tools (global view).
     let runtime_tools_result = control::list_runtime_tools(data_dir).await;
     match &runtime_tools_result {
-        Ok(names) => {
-            if names.is_empty() {
+        Ok(tools) => {
+            if tools.is_empty() {
                 global_checks.push(Check::warn(
                     "No plugin tools loaded in running core",
                     "Use `qqbot tools register <path>` to install a plugin, then restart qqbot-core or send SIGHUP to load it.",
                 ));
             } else {
-                global_checks.push(
-                    Check::ok(format!("Plugin tools loaded: {}", names.join(", ")))
-                        .with_detail(format!("{} tool(s)", names.len())),
+                // Print a summary check plus the tools grouped by source plugin.
+                let total = tools.len();
+                let sources = group_tools_by_source(tools);
+                println!(
+                    "{} Runtime tools loaded ({})",
+                    term.ok("[ok]"),
+                    term.dim(&format!(
+                        "{} tool(s) from {} source(s)",
+                        total,
+                        sources.len()
+                    ))
                 );
+                for (source, names) in &sources {
+                    println!(
+                        "       {} {}: {}",
+                        term.dim("→"),
+                        term.bold(source),
+                        names.join(", ")
+                    );
+                }
             }
         }
         Err(runtime_err) => {
@@ -396,12 +412,15 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                     ));
                 }
             } else {
-                println!(
-                    "       {} tools ({}): {}",
-                    term.dim("→"),
-                    status.tool_count,
-                    status.tools.join(", ")
-                );
+                let by_source = group_tools_by_source(&status.tools);
+                println!("       {} tools ({}):", term.dim("→"), status.tool_count);
+                for (source, names) in by_source {
+                    println!(
+                        "           {} {}",
+                        term.dim(&format!("[{}]", source)),
+                        names.join(", ")
+                    );
+                }
             }
 
             if let Some(m) = membership {
@@ -504,6 +523,23 @@ fn print_check(check: &Check, hints: &mut Vec<String>) {
     if let Some(hint) = &check.hint {
         hints.push(hint.clone());
     }
+}
+
+/// Group tools by their source label, sorting names within each source.
+fn group_tools_by_source(tools: &[ToolRuntimeInfo]) -> Vec<(String, Vec<String>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for tool in tools {
+        map.entry(tool.source.clone())
+            .or_default()
+            .push(tool.name.clone());
+    }
+    map.into_iter()
+        .map(|(source, mut names)| {
+            names.sort();
+            (source, names)
+        })
+        .collect()
 }
 
 fn hyperlink(url: &str, text: &str) -> String {

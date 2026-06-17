@@ -93,8 +93,8 @@ async fn handle_request(
 ) -> ControlResponse {
     match request {
         ControlRequest::ListTools => {
-            let names = manager.loaded_tool_names().await;
-            ControlResponse::Tools { names }
+            let tools = manager.loaded_tools().await;
+            ControlResponse::Tools { tools }
         }
         ControlRequest::GroupStatus => {
             let groups = manager.group_status().await;

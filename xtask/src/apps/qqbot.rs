@@ -69,13 +69,19 @@ fn build(release: bool) -> Result<()> {
 fn start(release: bool) -> Result<()> {
     build(release)?;
     println!("Starting daemon...");
-    run_qqbot(["start"].iter().map(|s| s.to_string()), project::profile_str(release))
+    run_qqbot(
+        ["start"].iter().map(|s| s.to_string()),
+        project::profile_str(release),
+    )
 }
 
 fn restart(release: bool) -> Result<()> {
     build(release)?;
     println!("Restarting daemon...");
-    run_qqbot(["restart"].iter().map(|s| s.to_string()), project::profile_str(release))
+    run_qqbot(
+        ["restart"].iter().map(|s| s.to_string()),
+        project::profile_str(release),
+    )
 }
 
 /// Copy a freshly built plugin into the runtime plugin directory.

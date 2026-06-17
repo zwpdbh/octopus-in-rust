@@ -327,16 +327,16 @@ fn main() -> Result<()> {
             }
             ToolsCommand::List => {
                 let rt = tokio::runtime::Runtime::new()?;
-                let runtime_names = rt.block_on(control::list_runtime_tools(&data_dir));
+                let runtime_tools = rt.block_on(control::list_runtime_tools(&data_dir));
 
                 println!("Runtime loaded tools:");
-                match &runtime_names {
-                    Ok(names) => {
-                        if names.is_empty() {
+                match &runtime_tools {
+                    Ok(tools) => {
+                        if tools.is_empty() {
                             println!("  (none — ensure qqbot-core is running and check its logs)");
                         } else {
-                            for name in names {
-                                println!("  {name}");
+                            for tool in tools {
+                                println!("  {:<28} [{}]", tool.name, tool.source);
                             }
                         }
                     }

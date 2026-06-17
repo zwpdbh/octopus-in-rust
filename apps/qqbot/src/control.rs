@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use brain::control::{ControlRequest, ControlResponse, GroupRuntimeStatus};
+use brain::control::{ControlRequest, ControlResponse, GroupRuntimeStatus, ToolRuntimeInfo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::{timeout, Duration};
@@ -52,11 +52,11 @@ async fn send_request(data_dir: &Path, request: ControlRequest) -> Result<Contro
     })
 }
 
-/// Ask the running core for the names of the tools it has loaded.
+/// Ask the running core for the tools it has loaded, grouped by source plugin.
 ///
 /// On non-Unix platforms or if the core is not running, this returns an error
 /// so callers can fall back to inspecting the plugin directory.
-pub async fn list_runtime_tools(data_dir: &Path) -> Result<Vec<String>> {
+pub async fn list_runtime_tools(data_dir: &Path) -> Result<Vec<ToolRuntimeInfo>> {
     #[cfg(not(unix))]
     {
         let _ = data_dir;
@@ -65,7 +65,7 @@ pub async fn list_runtime_tools(data_dir: &Path) -> Result<Vec<String>> {
 
     #[cfg(unix)]
     match send_request(data_dir, ControlRequest::ListTools).await? {
-        ControlResponse::Tools { names } => Ok(names),
+        ControlResponse::Tools { tools } => Ok(tools),
         ControlResponse::Error { message } => anyhow::bail!("core reported error: {message}"),
         _ => anyhow::bail!("unexpected control response"),
     }

@@ -106,18 +106,20 @@ unsafe impl Sync for WasmPluginTool {}
 ///
 /// Scans for `.wasm` files and attempts to load each one as a plugin tool.
 /// Failures are logged as warnings and skipped.
-/// Discover and load all WASM plugins from the given directory.
 ///
-/// Scans for `.wasm` files and attempts to load each one as a plugin tool.
-/// Failures are logged as warnings and skipped.
-pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+/// Returns a list of `(source_label, tool)` pairs. The source label is the
+/// plugin file stem (e.g. `faf_units_plugin`), which lets callers group tools
+/// by the plugin that exposed them.
+pub fn discover_plugins(
+    plugins_dir: &Path,
+) -> Vec<(String, Box<dyn kosong::tooling::CallableTool>)> {
     discover_plugins_filtered(plugins_dir, None)
 }
 
 fn discover_plugins_filtered(
     plugins_dir: &Path,
     allowed_names: Option<&HashSet<String>>,
-) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+) -> Vec<(String, Box<dyn kosong::tooling::CallableTool>)> {
     let mut tools = Vec::new();
 
     if !plugins_dir.is_dir() {
@@ -137,9 +139,14 @@ fn discover_plugins_filtered(
             continue;
         }
 
+        let source_label = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
         if let Some(allowed) = allowed_names {
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            if !allowed.contains(stem) {
+            if !allowed.contains(&source_label) {
                 continue;
             }
         }
@@ -147,8 +154,12 @@ fn discover_plugins_filtered(
         match load_tools_from_wasm(&path) {
             Ok(plugin_tools) => {
                 for tool in plugin_tools {
-                    tracing::info!("Loaded WASM plugin tool: {}", tool.name());
-                    tools.push(tool);
+                    tracing::info!(
+                        "Loaded WASM plugin tool: {} (from {})",
+                        tool.name(),
+                        source_label
+                    );
+                    tools.push((source_label.clone(), tool));
                 }
             }
             Err(e) => {
@@ -354,7 +365,7 @@ pub fn inspect_wasm_plugin(path: &Path) -> Result<WasmToolInfo, String> {
 pub fn discover_plugin_infos(plugins_dir: &Path) -> Vec<WasmToolInfo> {
     discover_plugins(plugins_dir)
         .into_iter()
-        .map(|tool| WasmToolInfo {
+        .map(|(_source, tool)| WasmToolInfo {
             name: tool.name().to_string(),
             description: tool.description().to_string(),
         })
@@ -399,7 +410,7 @@ impl crate::core::registry::ToolSource for ExtismPluginSource {
         "extism-plugins"
     }
 
-    fn load_tools(&self) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+    fn load_tools(&self) -> Vec<(String, Box<dyn kosong::tooling::CallableTool>)> {
         discover_plugins_filtered(&self.plugins_dir, self.allowed_names.as_ref())
     }
 }
@@ -429,7 +440,7 @@ mod tests {
         }
 
         let tools = discover_plugins(&dir);
-        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        let names: Vec<&str> = tools.iter().map(|(_source, t)| t.name()).collect();
         for expected in [
             "faf_units_search",
             "faf_units_get",
@@ -443,6 +454,13 @@ mod tests {
                 names
             );
         }
+
+        // Verify each faf_units tool is tagged with the plugin file stem.
+        for (source, tool) in &tools {
+            if tool.name().starts_with("faf_units_") {
+                assert_eq!(source, "faf_units_plugin");
+            }
+        }
     }
 
     #[tokio::test]
@@ -455,9 +473,9 @@ mod tests {
         }
 
         let tools = discover_plugins(&dir);
-        let tool = tools
+        let (_source, tool) = tools
             .into_iter()
-            .find(|t| t.name() == "faf_units_search")
+            .find(|(_source, t)| t.name() == "faf_units_search")
             .expect("faf_units plugin tool should be loaded");
 
         let args = serde_json::json!({

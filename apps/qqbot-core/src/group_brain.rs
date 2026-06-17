@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use brain::{control::GroupRuntimeStatus, Brain, BrainConfig, BrainEvent, ExtismPluginSource};
+use brain::{
+    control::{GroupRuntimeStatus, ToolRuntimeInfo},
+    Brain, BrainConfig, BrainEvent, ExtismPluginSource,
+};
 use futures_util::StreamExt;
 use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::ToolReturnValue;
@@ -171,42 +174,47 @@ impl GroupBrainManager {
             .allowed_groups
             .iter()
             .map(|group_id| {
-                let mut tools: Vec<String> = brains
+                let mut tools: Vec<ToolRuntimeInfo> = brains
                     .get(group_id)
                     .map(|brain| {
                         brain
                             .registry()
-                            .tools()
-                            .iter()
-                            .map(|t| t.name.clone())
+                            .tool_sources()
+                            .into_iter()
+                            .map(|(name, source)| ToolRuntimeInfo { name, source })
                             .collect()
                     })
                     .unwrap_or_default();
-                tools.sort();
+                tools.sort_by(|a, b| a.name.cmp(&b.name));
+                let tool_count = tools.len();
                 GroupRuntimeStatus {
                     group_id: *group_id,
                     brain_ready: brains.contains_key(group_id),
-                    tool_count: tools.len(),
+                    tool_count,
                     tools,
                 }
             })
             .collect()
     }
 
-    /// Return the names of all tools currently loaded in any group Brain.
+    /// Return all tools currently loaded in any group Brain.
     ///
     /// This reflects the runtime toolset, not the plugin directory. Brains are
     /// created eagerly at startup and after each reload, so this should reflect
     /// the currently installed plugins once initialization has finished.
-    pub async fn loaded_tool_names(&self) -> Vec<String> {
+    pub async fn loaded_tools(&self) -> Vec<ToolRuntimeInfo> {
         let brains = self.brains.lock().await;
-        let mut names = std::collections::BTreeSet::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut tools = Vec::new();
         for brain in brains.values() {
-            for tool in brain.registry().tools() {
-                names.insert(tool.name);
+            for (name, source) in brain.registry().tool_sources() {
+                if seen.insert(name.clone()) {
+                    tools.push(ToolRuntimeInfo { name, source });
+                }
             }
         }
-        names.into_iter().collect()
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        tools
     }
 
     /// Cancel an in-progress turn for a group, if any.
@@ -359,9 +367,12 @@ impl GroupBrainManager {
             .with_system_prompt_policy(std::sync::Arc::new(brain::ToolAwareSystemPromptPolicy))
             .build()
             .await?;
-        brain.register_tool(Box::new(kosong::tooling::CallableTool2Adapter::new(
-            RecentMessagesTool::new(self.memory.clone(), group_id),
-        )));
+        brain.register_tool(
+            Box::new(kosong::tooling::CallableTool2Adapter::new(
+                RecentMessagesTool::new(self.memory.clone(), group_id),
+            )),
+            "host",
+        );
 
         let tool_names: Vec<String> = brain
             .registry()

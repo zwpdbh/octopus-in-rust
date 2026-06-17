@@ -41,18 +41,18 @@ impl Brain {
 
         if custom_toolset.is_none() {
             for source in &config.tool_sources {
-                for tool in source.load_tools() {
+                for (source_label, tool) in source.load_tools() {
                     let name = tool.name().to_string();
                     if registry.find(&name).is_some() {
                         tracing::warn!(
                             "Tool '{}' from source '{}' conflicts with an existing tool, skipping",
                             name,
-                            source.name()
+                            source_label
                         );
                         continue;
                     }
-                    registry.register(tool);
-                    tracing::info!("Registered tool '{}' from source '{}'", name, source.name());
+                    registry.register(tool, source_label.clone());
+                    tracing::info!("Registered tool '{}' from source '{}'", name, source_label);
                 }
             }
         }
@@ -117,14 +117,19 @@ impl Brain {
     }
 
     /// Register an additional tool at runtime (e.g. a host-provided tool).
-    pub fn register_tool(&mut self, tool: Box<dyn kosong::tooling::CallableTool>) {
+    pub fn register_tool(
+        &mut self,
+        tool: Box<dyn kosong::tooling::CallableTool>,
+        source: impl Into<String>,
+    ) {
         let name = tool.name().to_string();
         if self.registry.find(&name).is_some() {
             tracing::warn!("Tool '{}' already registered, skipping", name);
             return;
         }
-        self.registry.register(tool);
-        tracing::info!("Registered host tool: {}", name);
+        let source = source.into();
+        self.registry.register(tool, source.clone());
+        tracing::info!("Registered tool '{}' from source '{}'", name, source);
     }
 
     /// Run a single reasoning step and return a stream of events.

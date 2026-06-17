@@ -24,7 +24,10 @@ pub fn build_host(release: bool) -> Result<()> {
     if release {
         cmd.arg("--release");
     }
-    println!("Building host binaries ({})...", crate::project::profile_str(release));
+    println!(
+        "Building host binaries ({})...",
+        crate::project::profile_str(release)
+    );
     run(&mut cmd).context("host build failed")?;
     Ok(())
 }
