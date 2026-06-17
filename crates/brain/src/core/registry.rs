@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_valid_tool_names() {
         assert!(is_valid_tool_name("qqbot_recent_messages"));
-        assert!(is_valid_tool_name("summary_format_conversation"));
+        assert!(is_valid_tool_name("faf_units_search"));
         assert!(is_valid_tool_name("a"));
         assert!(is_valid_tool_name("Tool_1_2"));
     }
@@ -177,7 +177,7 @@ mod tests {
     fn test_invalid_tool_names() {
         assert!(!is_valid_tool_name(""));
         assert!(!is_valid_tool_name("qqbot::recent_messages"));
-        assert!(!is_valid_tool_name("summary::format_conversation"));
+        assert!(!is_valid_tool_name("faf::units_search"));
         assert!(!is_valid_tool_name("1tool"));
         assert!(!is_valid_tool_name("tool name"));
         assert!(!is_valid_tool_name("tool.name"));

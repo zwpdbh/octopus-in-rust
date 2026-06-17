@@ -160,7 +160,7 @@ enum ToolsCommand {
     Register { path: PathBuf },
     /// Update an already installed plugin from a built .wasm path.
     Update { path: PathBuf },
-    /// Uninstall a plugin by its file-stem name (e.g. `summary`).
+    /// Uninstall a plugin by its file-stem name (e.g. `faf_units_plugin`).
     Unregister { name: String },
     /// List currently registered plugin tools.
     List,
@@ -333,7 +333,7 @@ fn main() -> Result<()> {
                 match &runtime_names {
                     Ok(names) => {
                         if names.is_empty() {
-                            println!("  (none — brains are created lazily; address the bot in a group to load tools)");
+                            println!("  (none — ensure qqbot-core is running and check its logs)");
                         } else {
                             for name in names {
                                 println!("  {name}");
@@ -346,7 +346,7 @@ fn main() -> Result<()> {
                 }
 
                 println!();
-                println!("Installed plugins:");
+                println!("Installed plugin tools:");
                 let installed = plugins::list_registered(&data_dir)?;
                 if installed.is_empty() {
                     println!("  (none)");
@@ -466,14 +466,14 @@ async fn init(
 
     // Copy default plugin if built.
     let plugin_src =
-        paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
+        paths::project_root().join("target/wasm32-unknown-unknown/release/faf_units_plugin.wasm");
     if plugin_src.exists() {
-        let plugin_dst = data_dir.join("plugins").join("summary.wasm");
+        let plugin_dst = data_dir.join("plugins").join("faf_units_plugin.wasm");
         tokio::fs::copy(&plugin_src, &plugin_dst).await?;
-        println!("Copied summary plugin to {}", plugin_dst.display());
+        println!("Copied faf-units plugin to {}", plugin_dst.display());
     } else {
         println!(
-            "Warning: default plugin not found at {}. Build it with:\n  cargo build --release -p summary --target wasm32-unknown-unknown",
+            "Warning: default plugin not found at {}. Build it with:\n  cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown",
             plugin_src.display()
         );
     }

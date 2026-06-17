@@ -64,7 +64,7 @@ Example output:
 [ok] SnowLuma container running
 [ok] OneBot WebSocket reachable (ws://127.0.0.1:3001)
 [ok] qqbot-core process running
-[ok] Plugin tools loaded: summary_format_conversation (1 tool(s))
+[ok] Plugin tools loaded: faf_units_search, faf_units_get, faf_units_compare, faf_units_naive_dps (4 tool(s))
 [ok] SnowLuma WebUI port 5099 reachable
 [ok] noVNC port 6081 reachable
 [ok] Bot is online and in the allowed group(s)
@@ -105,13 +105,13 @@ See [Plugin management](05-plugins.md) for the full OS-like installation model.
 
 ```bash
 # Install or upgrade a plugin from a built .wasm file
-cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/summary.wasm
+cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/faf_units_plugin.wasm
 
 # Upgrade a plugin (same as register, clearer intent)
-cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/summary.wasm
+cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/faf_units_plugin.wasm
 
 # Remove an installed plugin by file-stem name
-cargo run --bin qqbot -- tools unregister summary
+cargo run --bin qqbot -- tools unregister faf_units_plugin
 
 # List tools loaded in the runtime (or installed plugins if core is not running)
 cargo run --bin qqbot -- tools list

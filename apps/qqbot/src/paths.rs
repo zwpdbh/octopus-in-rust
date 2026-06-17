@@ -9,19 +9,35 @@ pub fn project_root() -> PathBuf {
     let exe = std::env::current_exe().ok();
     if let Some(exe) = exe {
         let dir = exe.parent().map(Path::to_path_buf);
-        // If the binary is in target/{profile}/, go up to the workspace root.
+        // If the binary is under target/{profile}/ or target/{profile}/deps/,
+        // go up to the workspace root.
         if let Some(ref d) = dir {
-            let grandparent = d.parent().and_then(|p| p.parent()).map(Path::to_path_buf);
-            if d.file_name()
+            let profile_dir = if d
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n == "debug" || n == "release")
                 .unwrap_or(false)
-                && d.parent()
+            {
+                Some(d.clone())
+            } else if d.file_name().and_then(|n| n.to_str()) == Some("deps") {
+                d.parent().map(Path::to_path_buf)
+            } else {
+                None
+            };
+
+            if let Some(profile_dir) = profile_dir {
+                let grandparent = profile_dir
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .map(Path::to_path_buf);
+                if profile_dir
+                    .parent()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                     == Some("target")
-            {
-                return grandparent.unwrap_or(d.clone());
+                {
+                    return grandparent.unwrap_or(profile_dir.clone());
+                }
             }
         }
         return dir.unwrap_or_else(|| PathBuf::from("."));

@@ -1,12 +1,13 @@
 [package]
-name = "summary"
+name = "faf-units-plugin"
 version = "0.1.0"
 edition = "2021"
-authors = ["qqbot contributors"]
-description = "Default qqbot plugin: conversation summarizer."
+authors = ["octopus contributors"]
+description = "WASM plugin for querying and comparing FAF units."
 license = "MIT"
 
 [dependencies]
+faf-units = { path = "../../crates/faf-units" }
 extism-pdk = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

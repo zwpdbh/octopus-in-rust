@@ -25,7 +25,7 @@ Two example plugins live in the workspace:
 
 | Plugin | Purpose | Key ABI |
 |--------|---------|---------|
-| `plugins/summary` | Formats a conversation log for summarization | `register_tools` + `execute` |
+| `plugins/faf-units` | Query and compare FAF units | `register_tools` + `execute` |
 | `plugins/example-http` | Makes outbound HTTP requests | `tool_metadata` + `execute` |
 
 ---
@@ -46,30 +46,45 @@ the tool name and an empty parameter schema.
 ### `register_tools` (preferred)
 
 ```rust
+// plugins/faf-units/src/lib.rs ~line 52 — register_tools
 #[plugin_fn]
 pub fn register_tools(_input: String) -> FnResult<String> {
-    let tools = vec![ToolDef {
-        name: "summary_format_conversation".to_string(),
-        description: "Format a raw conversation log for summarization.".to_string(),
-        prompt_fragment: Some(
-            "You may also use summary_format_conversation to format the raw conversation before summarizing.".to_string(),
-        ),
-        parameters: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "messages": { "type": "string" },
-                "style": { "type": "string", "default": "bullet" }
-            },
-            "required": ["messages"]
-        }),
-    }];
+    let tools = vec![
+        ToolDef {
+            name: "faf_units_search".to_string(),
+            description: "Search FAF units by id, name, description or category.".to_string(),
+            prompt_fragment: Some(
+                "When the user asks about FAF units, use faf_units_search.".to_string(),
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "default": 10 }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDef {
+            name: "faf_units_compare".to_string(),
+            description: "Compare two FAF units side-by-side.".to_string(),
+            prompt_fragment: None,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id_a": { "type": "string" },
+                    "id_b": { "type": "string" }
+                },
+                "required": ["id_a", "id_b"]
+            }),
+        },
+    ];
     Ok(serde_json::to_string(&tools)?)
 }
 ```
 
 A single `.wasm` file can register multiple tools. The host loads each one as a
-separate callable tool. Names are usually namespaced, e.g.
-`summary_format_conversation`.
+separate callable tool. Names are usually namespaced, e.g. `faf_units_search`.
 
 ### `tool_metadata` (single-tool fallback)
 
@@ -91,10 +106,10 @@ invokes `execute`:
 
 ```json
 {
-  "tool": "summary_format_conversation",
+  "tool": "faf_units_search",
   "arguments": {
-    "messages": "123: hello\n456: world",
-    "style": "bullet"
+    "query": "UEF tech1 tank",
+    "limit": 5
   }
 }
 ```
@@ -281,8 +296,8 @@ so most commands do not need `-d`.
 | List running programs | Query the running OS | `qqbot tools list` |
 | Check system status | `systemctl status` | `qqbot status` |
 
-The `.wasm` file stem is the install key. To upgrade `summary`, keep the file
-name `summary.wasm`.
+The `.wasm` file stem is the install key. To upgrade `faf_units_plugin`, keep the file
+name `faf_units_plugin.wasm`.
 
 ### What happens during `tools register`
 
@@ -355,20 +370,21 @@ pub async fn loaded_tool_names(&self) -> Vec<String> {
 }
 ```
 
-Because Brains are created lazily, `tools list` may show no runtime-loaded tools
-immediately after an upgrade until the bot is addressed in a group.
+Brains are created eagerly at startup and re-created after each reload, so
+`tools list` should reflect the installed plugins once `qqbot-core` has finished
+initializing.
 
 ### Commands
 
 ```bash
 # Install (or upgrade) from a built wasm binary.
-cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/summary.wasm
+cargo run --bin qqbot -- tools register target/wasm32-unknown-unknown/release/faf_units_plugin.wasm
 
 # Same behavior as register, but semantically clearer for upgrades.
-cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/summary.wasm
+cargo run --bin qqbot -- tools update target/wasm32-unknown-unknown/release/faf_units_plugin.wasm
 
 # Remove a plugin by its file-stem name.
-cargo run --bin qqbot -- tools unregister summary
+cargo run --bin qqbot -- tools unregister faf_units_plugin
 
 # Query the runtime; falls back to the plugin directory if core is not running.
 cargo run --bin qqbot -- tools list
@@ -380,25 +396,19 @@ cargo run --bin qqbot -- status
 ### Reload semantics
 
 `register`, `update`, and `unregister` send `SIGHUP` to `qqbot-core` when it is
-running. `qqbot-core` clears all cached Brains; the next group message creates a
-fresh Brain with the current plugin directory contents.
+running. `qqbot-core` clears all cached Brains and immediately re-creates them
+with the current plugin directory contents.
 
 The older `plugin enable / disable / reload` commands are still available for the
 crate-name-based workflow, but `tools register/update/unregister` are preferred
 because they validate the wasm explicitly and can target any file path.
 
-### The default `summary` plugin
+### The default `faf-units` plugin
 
-The installed `summary.wasm` registers `summary_format_conversation`. When a user
-runs `/summary`, `qqbot-core` builds a prompt like:
-
-```text
-Please summarize the recent conversation in this group.
-```
-
-and runs a Brain turn. The Brain may call `qqbot_recent_messages` (a host tool)
-to fetch raw messages, then call `summary_format_conversation` to format them,
-and finally produce a summary for the group.
+The installed `faf_units_plugin.wasm` registers tools such as `faf_units_search`,
+`faf_units_get`, `faf_units_compare`, and `faf_units_naive_dps`. When a user asks
+about FAF units, the Brain can search the embedded unit index and compare stats
+without needing network access.
 
 ---
 
@@ -484,7 +494,7 @@ both the CLI and `qqbot-core` agree on the file format.
 
 ## 4.8 Writing a plugin
 
-The easiest way is to copy `plugins/summary` or `plugins/example-http`.
+The easiest way is to copy `plugins/faf-units` or `plugins/example-http`.
 
 ### `Cargo.toml`
 
@@ -601,6 +611,5 @@ Reloading:
 
 Older drafts of this project used a C-like ABI with exports such as `init`,
 `on_message`, `on_command`, `malloc`, and `free`. That ABI is **no longer used**
-by `brain`, `octopus-cli`, or `qqbot-core`. The `summary` plugin still contains
-those exports only as a compatibility shim; the active path is the Extism-based
+by `brain`, `octopus-cli`, or `qqbot-core`. The active path is the Extism-based
 `register_tools` / `execute` ABI described above.

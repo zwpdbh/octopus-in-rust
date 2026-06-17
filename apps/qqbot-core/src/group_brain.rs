@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use brain::{Brain, BrainConfig, BrainEvent, ExtismPluginSource};
+use brain::{control::GroupRuntimeStatus, Brain, BrainConfig, BrainEvent, ExtismPluginSource};
 use futures_util::StreamExt;
 use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::ToolReturnValue;
@@ -151,11 +151,53 @@ impl GroupBrainManager {
         info!("cleared all group brains");
     }
 
+    /// Eagerly create a Brain for every allowed group.
+    ///
+    /// This is called at startup and after each SIGHUP so that tools are loaded
+    /// immediately rather than waiting for the first addressed message.
+    pub async fn initialize(&self) {
+        for group_id in &self.config.bot.allowed_groups {
+            if let Err(e) = self.get_or_create_brain(*group_id).await {
+                error!(group_id, error = %e, "failed to eagerly create Brain for group");
+            }
+        }
+    }
+
+    /// Return runtime status for every configured allowed group.
+    pub async fn group_status(&self) -> Vec<GroupRuntimeStatus> {
+        let brains = self.brains.lock().await;
+        self.config
+            .bot
+            .allowed_groups
+            .iter()
+            .map(|group_id| {
+                let mut tools: Vec<String> = brains
+                    .get(group_id)
+                    .map(|brain| {
+                        brain
+                            .registry()
+                            .tools()
+                            .iter()
+                            .map(|t| t.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                tools.sort();
+                GroupRuntimeStatus {
+                    group_id: *group_id,
+                    brain_ready: brains.contains_key(group_id),
+                    tool_count: tools.len(),
+                    tools,
+                }
+            })
+            .collect()
+    }
+
     /// Return the names of all tools currently loaded in any group Brain.
     ///
     /// This reflects the runtime toolset, not the plugin directory. Brains are
-    /// created lazily, so a freshly registered plugin only appears here after a
-    /// Brain has been recreated (e.g., after the next addressed message).
+    /// created eagerly at startup and after each reload, so this should reflect
+    /// the currently installed plugins once initialization has finished.
     pub async fn loaded_tool_names(&self) -> Vec<String> {
         let brains = self.brains.lock().await;
         let mut names = std::collections::BTreeSet::new();

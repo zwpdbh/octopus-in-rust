@@ -80,10 +80,10 @@ mod tests {
                 prompt_fragment: Some("Call qqbot_recent_messages first.".to_string()),
             },
             Tool {
-                name: "summary_format_conversation".to_string(),
+                name: "faf_units_search".to_string(),
                 description: "...".to_string(),
                 parameters: serde_json::json!({}),
-                prompt_fragment: Some("Use summary_format_conversation to format.".to_string()),
+                prompt_fragment: Some("Use faf_units_search for FAF unit questions.".to_string()),
             },
         ];
 
@@ -95,7 +95,7 @@ mod tests {
 
         assert!(prompt.contains("You are helpful."));
         assert!(prompt.contains("Call qqbot_recent_messages first."));
-        assert!(prompt.contains("Use summary_format_conversation to format."));
+        assert!(prompt.contains("Use faf_units_search for FAF unit questions."));
     }
 
     #[tokio::test]

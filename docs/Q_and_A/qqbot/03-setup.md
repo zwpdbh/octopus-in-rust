@@ -20,14 +20,14 @@ For local development you only need to build `qqbot-core` and the plugins. `carg
 
 ```bash
 cargo build -p qqbot-core
-cargo build --release -p summary --target wasm32-unknown-unknown
+cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown
 ```
 
 After this you have:
 
 - `target/debug/qqbot` — supervisor CLI (built on demand by `cargo run`)
 - `target/debug/qqbot-core` — bot runtime
-- `target/wasm32-unknown-unknown/release/summary.wasm` — default plugin
+- `target/wasm32-unknown-unknown/release/faf_units_plugin.wasm` — default plugin
 
 ## 2.3 Initialize
 

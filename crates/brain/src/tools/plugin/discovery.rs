@@ -144,10 +144,12 @@ fn discover_plugins_filtered(
             }
         }
 
-        match load_tool_from_wasm(&path) {
-            Ok(tool) => {
-                tracing::info!("Loaded WASM plugin: {}", tool.name());
-                tools.push(tool);
+        match load_tools_from_wasm(&path) {
+            Ok(plugin_tools) => {
+                for tool in plugin_tools {
+                    tracing::info!("Loaded WASM plugin tool: {}", tool.name());
+                    tools.push(tool);
+                }
             }
             Err(e) => {
                 tracing::warn!("Failed to load WASM plugin '{}': {}", path.display(), e);
@@ -190,7 +192,7 @@ fn build_extism_manifest(wasm_bytes: &[u8], plugin_manifest: Option<&PluginManif
 fn load_metadata_from_register_tools(
     compiled: &CompiledPlugin,
     path: &Path,
-) -> Result<PluginMetadata, String> {
+) -> Result<Vec<PluginMetadata>, String> {
     let mut plugin = Plugin::new_from_compiled(compiled)
         .map_err(|e| format!("Failed to instantiate plugin for register_tools: {}", e))?;
 
@@ -212,19 +214,22 @@ fn load_metadata_from_register_tools(
             )
         })?;
 
-    let first = defs.into_iter().next().ok_or_else(|| {
-        format!(
+    if defs.is_empty() {
+        return Err(format!(
             "register_tools returned empty list for '{}'",
             path.display()
-        )
-    })?;
+        ));
+    }
 
-    Ok(PluginMetadata {
-        name: first.name,
-        description: first.description,
-        prompt_fragment: first.prompt_fragment,
-        schema: first.parameters,
-    })
+    Ok(defs
+        .into_iter()
+        .map(|def| PluginMetadata {
+            name: def.name,
+            description: def.description,
+            prompt_fragment: def.prompt_fragment,
+            schema: def.parameters,
+        })
+        .collect())
 }
 
 fn load_metadata_from_plugin(
@@ -273,11 +278,24 @@ pub struct WasmToolInfo {
     pub description: String,
 }
 
-/// Load a single WASM plugin file and return the tool it exposes.
+/// Load a single WASM plugin file and return the first tool it exposes.
 ///
 /// This is the public entry point used by tooling such as the `qqbot` CLI to
-/// validate a `.wasm` file before registering it.
+/// validate a `.wasm` file before registering it. Plugins that expose multiple
+/// tools should use [`load_tools_from_wasm`] to obtain every tool.
 pub fn load_tool_from_wasm(path: &Path) -> Result<Box<dyn CallableTool>, String> {
+    load_tools_from_wasm(path)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("WASM plugin '{}' exposed no tools", path.display()))
+}
+
+/// Load a single WASM plugin file and return every tool it exposes.
+///
+/// Modern Brain plugins export `register_tools`, which may return multiple tool
+/// definitions. This function compiles the plugin once and returns one
+/// `CallableTool` handle per definition, all sharing the same compiled plugin.
+pub fn load_tools_from_wasm(path: &Path) -> Result<Vec<Box<dyn CallableTool>>, String> {
     let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
 
     let manifest_path = path.with_extension("json");
@@ -296,22 +314,29 @@ pub fn load_tool_from_wasm(path: &Path) -> Result<Box<dyn CallableTool>, String>
         .compile()
         .map_err(|e| format!("Failed to compile WASM plugin: {}", e))?;
 
-    let metadata = if let Some(pm) = plugin_manifest {
-        pm.into_metadata()
+    let metadata_list: Vec<PluginMetadata> = if let Some(pm) = plugin_manifest {
+        vec![pm.into_metadata()]
     } else {
         // Prefer the Brain tool ABI; fall back to the older `tool_metadata` export.
         load_metadata_from_register_tools(&compiled, path)
-            .or_else(|_| load_metadata_from_plugin(&compiled, path))
-            .unwrap_or_else(|_| fallback_metadata(path))
+            .or_else(|_| {
+                load_metadata_from_plugin(&compiled, path).map(|meta| vec![meta])
+            })
+            .unwrap_or_else(|_| vec![fallback_metadata(path)])
     };
 
-    Ok(Box::new(WasmPluginTool {
-        name: metadata.name,
-        description: metadata.description,
-        prompt_fragment: metadata.prompt_fragment,
-        schema: metadata.schema,
-        compiled,
-    }))
+    Ok(metadata_list
+        .into_iter()
+        .map(|metadata| {
+            Box::new(WasmPluginTool {
+                name: metadata.name,
+                description: metadata.description,
+                prompt_fragment: metadata.prompt_fragment,
+                schema: metadata.schema,
+                compiled: compiled.clone(),
+            }) as Box<dyn CallableTool>
+        })
+        .collect())
 }
 
 /// Inspect a WASM plugin file and return its tool metadata without keeping the
@@ -388,52 +413,61 @@ mod tests {
     fn qqbot_plugins_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
+            .join("..")
             .join("data")
             .join("qqbot-data")
             .join("plugins")
     }
 
     #[test]
-    fn test_discover_summary_plugin() {
+    fn test_discover_faf_units_plugin() {
         let dir = qqbot_plugins_dir();
-        if !dir.join("summary.wasm").exists() {
-            eprintln!("Skipping test: summary.wasm not found at {}", dir.display());
+        if !dir.join("faf_units_plugin.wasm").exists() {
+            eprintln!(
+                "Skipping test: faf_units_plugin.wasm not found at {}",
+                dir.display()
+            );
             return;
         }
 
         let tools = discover_plugins(&dir);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(
-            names.contains(&"summary_format_conversation"),
-            "expected summary_format_conversation plugin tool, got {:?}",
-            names
-        );
+        for expected in ["faf_units_search", "faf_units_get", "faf_units_compare", "faf_units_naive_dps"] {
+            assert!(
+                names.contains(&expected),
+                "expected {} plugin tool, got {:?}",
+                expected,
+                names
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_summary_plugin_tool_execution() {
+    async fn test_faf_units_plugin_tool_execution() {
         let dir = qqbot_plugins_dir();
-        let wasm_path = dir.join("summary.wasm");
+        let wasm_path = dir.join("faf_units_plugin.wasm");
         if !wasm_path.exists() {
-            eprintln!("Skipping test: summary.wasm not found");
+            eprintln!("Skipping test: faf_units_plugin.wasm not found");
             return;
         }
 
         let tools = discover_plugins(&dir);
         let tool = tools
             .into_iter()
-            .find(|t| t.name() == "summary_format_conversation")
-            .expect("summary plugin tool should be loaded");
+            .find(|t| t.name() == "faf_units_search")
+            .expect("faf_units plugin tool should be loaded");
 
         let args = serde_json::json!({
-            "messages": "123: hello\n456: world",
-            "style": "bullet"
+            "query": "UEF tech1 tank",
+            "limit": 5
         });
 
         let result = tool.call_raw(args).await;
         assert!(!result.is_error, "tool should succeed: {:?}", result);
         let output = result.output.unwrap().as_str().unwrap().to_string();
-        assert!(output.contains("123: hello"));
-        assert!(output.contains("456: world"));
+        assert!(
+            output.contains("UEL0201"),
+            "expected UEL0201 in search results: {output}"
+        );
     }
 }

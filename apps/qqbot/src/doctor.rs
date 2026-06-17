@@ -48,11 +48,12 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         issues += 1;
     }
 
-    let plugin = paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
+    let plugin =
+        paths::project_root().join("target/wasm32-unknown-unknown/release/faf_units_plugin.wasm");
     if plugin.exists() {
-        println!("[ok] summary plugin found ({})", plugin.display());
+        println!("[ok] faf-units plugin found ({})", plugin.display());
     } else {
-        println!("[warn] summary plugin not found; build with `cargo build --release -p summary --target wasm32-unknown-unknown`");
+        println!("[warn] faf-units plugin not found; build with `cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown`");
     }
 
     // Config files.

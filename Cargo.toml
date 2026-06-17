@@ -3,10 +3,12 @@ members = [
     "apps/octopus-cli",
     "crates/kosong",
     "crates/brain",
+    "crates/faf-units",
+    "crates/faf-downloader",
     "plugins/example-http",
+    "plugins/faf-units",
     "apps/docref",
     "apps/qqbot",
     "apps/qqbot-core",
-    "plugins/summary",
 ]
 resolver = "3"

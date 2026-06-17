@@ -203,8 +203,8 @@ pub fn plugin_dir(data_dir: &Path) -> PathBuf {
 
 pub fn plugin_description(name: &str) -> &'static str {
     match name {
-        "summary" => "Summarize recent group chat messages",
         "example-http" => "Example HTTP-based plugin",
+        "faf_units_plugin" => "Query and compare FAF units",
         _ => "No description available",
     }
 }
@@ -232,12 +232,12 @@ mod tests {
     use super::*;
 
     fn sample_wasm_path() -> Option<PathBuf> {
-        let from_data = paths::project_root().join("data/qqbot-data/plugins/summary.wasm");
+        let from_data = paths::project_root().join("data/qqbot-data/plugins/faf_units_plugin.wasm");
         if from_data.exists() {
             return Some(from_data);
         }
-        let from_target =
-            paths::project_root().join("target/wasm32-unknown-unknown/release/summary.wasm");
+        let from_target = paths::project_root()
+            .join("target/wasm32-unknown-unknown/release/faf_units_plugin.wasm");
         if from_target.exists() {
             return Some(from_target);
         }
@@ -247,24 +247,22 @@ mod tests {
     #[tokio::test]
     async fn test_register_plugin_from_wasm() {
         let Some(src) = sample_wasm_path() else {
-            eprintln!("Skipping test_register_plugin_from_wasm: summary.wasm not found");
+            eprintln!("Skipping test_register_plugin_from_wasm: faf_units_plugin.wasm not found");
             return;
         };
 
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path();
-        let wasm_path = data_dir.join("summary.wasm");
+        let wasm_path = data_dir.join("faf_units_plugin.wasm");
         tokio::fs::copy(&src, &wasm_path).await.unwrap();
 
         let name = register(data_dir, &wasm_path).await.unwrap();
-        assert_eq!(name, "summary");
+        assert_eq!(name, "faf_units_plugin");
 
         let tools = list_registered(data_dir).unwrap();
         assert!(
-            tools
-                .iter()
-                .any(|t| t.name == "summary_format_conversation"),
-            "expected summary_format_conversation in {:?}",
+            tools.iter().any(|t| t.name == "faf_units_search"),
+            "expected faf_units_search in {:?}",
             tools
         );
     }
@@ -272,20 +270,20 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_plugin() {
         let Some(src) = sample_wasm_path() else {
-            eprintln!("Skipping test_unregister_plugin: summary.wasm not found");
+            eprintln!("Skipping test_unregister_plugin: faf_units_plugin.wasm not found");
             return;
         };
 
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path();
-        let wasm_path = data_dir.join("summary.wasm");
+        let wasm_path = data_dir.join("faf_units_plugin.wasm");
         tokio::fs::copy(&src, &wasm_path).await.unwrap();
 
         register(data_dir, &wasm_path).await.unwrap();
-        assert!(plugin_dir(data_dir).join("summary.wasm").exists());
+        assert!(plugin_dir(data_dir).join("faf_units_plugin.wasm").exists());
 
-        unregister(data_dir, "summary").await.unwrap();
-        assert!(!plugin_dir(data_dir).join("summary.wasm").exists());
+        unregister(data_dir, "faf_units_plugin").await.unwrap();
+        assert!(!plugin_dir(data_dir).join("faf_units_plugin.wasm").exists());
 
         let tools = list_registered(data_dir).unwrap();
         assert!(tools.is_empty(), "after unregister no tools should remain");

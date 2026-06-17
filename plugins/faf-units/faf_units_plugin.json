@@ -1,0 +1,11 @@
+{
+  "name": "FafUnits",
+  "description": "Query and compare Forged Alliance Forever (FAF) units. Includes search, detailed lookup, side-by-side comparison, and naive DPS calculation.",
+  "prompt_fragment": "When the user asks about FAF units, stats, or comparisons, use the faf_units_* tools.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "timeout_ms": 30000,
+  "max_memory_pages": 256
+}

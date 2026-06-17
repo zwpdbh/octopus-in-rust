@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         action_tx.clone(),
     ));
 
+    group_brains.initialize().await;
     info!("qqbot-core is running; press Ctrl+C to stop, SIGHUP to reload plugins");
 
     let control_handle = tokio::spawn(control::serve(config_path.clone(), group_brains.clone()));
@@ -82,8 +83,9 @@ async fn main() -> anyhow::Result<()> {
                 ).await;
             }
             _ = sighup.recv() => {
-                info!("SIGHUP received; clearing group brains so plugins reload on next use");
+                info!("SIGHUP received; clearing and re-initializing group brains so plugins reload");
                 group_brains.clear().await;
+                group_brains.initialize().await;
             }
             _ = &mut shutdown => {
                 info!("shutdown signal received; exiting");

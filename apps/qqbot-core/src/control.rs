@@ -96,6 +96,10 @@ async fn handle_request(
             let names = manager.loaded_tool_names().await;
             ControlResponse::Tools { names }
         }
+        ControlRequest::GroupStatus => {
+            let groups = manager.group_status().await;
+            ControlResponse::Groups { groups }
+        }
         ControlRequest::Ping => ControlResponse::Pong,
     }
 }

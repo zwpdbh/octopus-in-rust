@@ -135,7 +135,7 @@ Input and output buffers are UTF-8 JSON. The output is an array of actions:
 ]
 ```
 
-See `qqbot-plugins/summary` for a reference implementation.
+See `plugins/faf-units` for a reference implementation.
 
 ## License
 

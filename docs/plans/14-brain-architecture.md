@@ -166,19 +166,19 @@ Expected layout:
 
 ```text
 data/qqbot-data/plugins/
-├── summary.wasm
-├── summary.json          # optional Extism-style manifest
+├── faf_units_plugin.wasm
+├── faf_units_plugin.json   # optional Extism-style manifest
 └── ...
 ```
 
 Build-and-deploy flow for a plugin developer:
 
 ```bash
-cd qqbot-plugins/summary
+cd plugins/faf-units
 cargo build --target wasm32-unknown-unknown --release
-cp target/wasm32-unknown-unknown/release/summary.wasm \
+cp target/wasm32-unknown-unknown/release/faf_units_plugin.wasm \
    ../../data/qqbot-data/plugins/
-# optionally copy summary.json
+# optionally copy faf_units_plugin.json
 ```
 
 `qqbot-core` scans this directory at startup and on `SIGHUP`/`qqbot plugin reload`, loads each `.wasm` file, calls `register_tools`, and registers the returned tools with each group Brain.
@@ -340,7 +340,7 @@ token_file = "~/.kimi/credentials/kimi-code.json"
 5. Create a `GroupBrain` manager keyed by `group_id`.
 6. On `/summary` or any command, send the processing indicator, run the Brain turn, and post the final reply.
 7. Provide a QQ-safe toolset by default.
-8. Remove or demote the simple `LlmClient` summary plugin path.
+8. The legacy summary plugin has been removed; the default plugin is now `faf-units`.
 
 ### Phase 4 — Configuration and auth unification
 
