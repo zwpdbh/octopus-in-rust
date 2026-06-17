@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use faf_units::DataIndex;
 use rusqlite::Connection;
+use serde::Deserialize;
 use tracing::info;
 
 const DEFAULT_INDEX_URL: &str = "https://faforever.github.io/etfreeman-db/data/index.json";
+const DEFAULT_TRANSLATIONS_PATH: &str = "crates/faf-units/data/zh_cn_units.json";
 
 #[derive(Debug, Clone, ValueEnum)]
 enum OutputFormat {
@@ -32,6 +35,10 @@ struct Cli {
     /// Pretty-print JSON output.
     #[arg(long)]
     pretty: bool,
+
+    /// Path to a Simplified Chinese unit translation JSON file.
+    #[arg(long, default_value = DEFAULT_TRANSLATIONS_PATH)]
+    translations: PathBuf,
 }
 
 #[tokio::main]
@@ -43,7 +50,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     info!("Downloading FAF unit data from {}", cli.url);
-    let (index, raw_text) = download_index(&cli.url).await?;
+    let index = download_index(&cli.url).await?;
 
     info!(
         "Loaded {} units (FAF version {})",
@@ -51,8 +58,22 @@ async fn main() -> Result<()> {
         index.version
     );
 
+    let mut index = index;
+    match load_translations(&cli.translations) {
+        Ok(translations) => {
+            apply_translations(&mut index, &translations);
+            info!(
+                "Applied Chinese translations for {} units",
+                translations.len()
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load translations: {e}");
+        }
+    }
+
     match cli.format {
-        OutputFormat::Json => write_json(&raw_text, &cli.output, cli.pretty).await?,
+        OutputFormat::Json => write_json(&index, &cli.output, cli.pretty).await?,
         OutputFormat::Sqlite => write_sqlite(&index, &cli.output).await?,
     }
 
@@ -60,7 +81,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn download_index(url: &str) -> Result<(DataIndex, String)> {
+async fn download_index(url: &str) -> Result<DataIndex> {
     let response = reqwest::get(url)
         .await
         .with_context(|| format!("failed to GET {}", url))?;
@@ -75,17 +96,42 @@ async fn download_index(url: &str) -> Result<(DataIndex, String)> {
         .await
         .context("failed to read response body")?;
 
-    let index: DataIndex = serde_json::from_str(&text).context("failed to parse FAF unit index")?;
-    Ok((index, text))
+    serde_json::from_str(&text).context("failed to parse FAF unit index")
 }
 
-async fn write_json(raw_text: &str, path: &Path, pretty: bool) -> Result<()> {
+#[derive(Debug, Clone, Deserialize)]
+struct UnitTranslation {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    desc: String,
+}
+
+fn load_translations(path: &Path) -> Result<HashMap<String, UnitTranslation>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read translations from {}", path.display()))?;
+    serde_json::from_str(&text).context("failed to parse translations JSON")
+}
+
+fn apply_translations(index: &mut DataIndex, translations: &HashMap<String, UnitTranslation>) {
+    for unit in &mut index.units {
+        let key = unit.id.to_lowercase();
+        if let Some(translation) = translations.get(&key) {
+            if !translation.name.is_empty() {
+                unit.name_zh = Some(translation.name.clone());
+            }
+            if !translation.desc.is_empty() {
+                unit.description_zh = Some(translation.desc.clone());
+            }
+        }
+    }
+}
+
+async fn write_json(index: &DataIndex, path: &Path, pretty: bool) -> Result<()> {
     let output = if pretty {
-        let value: serde_json::Value =
-            serde_json::from_str(raw_text).context("failed to parse raw JSON for pretty-print")?;
-        serde_json::to_string_pretty(&value).context("failed to pretty-print JSON")?
+        serde_json::to_string_pretty(index).context("failed to serialize pretty JSON")?
     } else {
-        raw_text.to_string()
+        serde_json::to_string(index).context("failed to serialize JSON")?
     };
 
     tokio::fs::write(path, output)

@@ -20,6 +20,14 @@ pub struct Unit {
     #[serde(rename = "Description")]
     pub description: String,
 
+    /// Simplified Chinese unit name, when available.
+    #[serde(default, rename = "NameZh")]
+    pub name_zh: Option<String>,
+
+    /// Simplified Chinese description, when available.
+    #[serde(default, rename = "DescriptionZh")]
+    pub description_zh: Option<String>,
+
     /// Gameplay categories such as `UEF`, `TECH3`, `DIRECTFIRE`.
     #[serde(default)]
     pub categories: Vec<String>,
@@ -97,6 +105,16 @@ impl Unit {
     /// Convenience accessor for the unit name when available.
     pub fn name(&self) -> Option<&str> {
         self.general.as_ref()?.unit_name.as_deref()
+    }
+
+    /// Convenience accessor for the Simplified Chinese unit name when available.
+    pub fn name_zh(&self) -> Option<&str> {
+        self.name_zh.as_deref()
+    }
+
+    /// Convenience accessor for the Simplified Chinese description when available.
+    pub fn description_zh(&self) -> Option<&str> {
+        self.description_zh.as_deref()
     }
 
     /// Convenience accessor for the faction name when available.

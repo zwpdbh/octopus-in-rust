@@ -491,4 +491,38 @@ mod tests {
             "expected UEL0201 in search results: {output}"
         );
     }
+
+    #[tokio::test]
+    async fn test_faf_units_plugin_chinese_search() {
+        let dir = qqbot_plugins_dir();
+        let wasm_path = dir.join("faf_units_plugin.wasm");
+        if !wasm_path.exists() {
+            eprintln!("Skipping test: faf_units_plugin.wasm not found");
+            return;
+        }
+
+        let tools = discover_plugins(&dir);
+        let (_source, tool) = tools
+            .into_iter()
+            .find(|(_source, t)| t.name() == "faf_units_search")
+            .expect("faf_units plugin tool should be loaded");
+
+        // Chinese players often use generic type names like "中型坦克" (medium tank).
+        let args = serde_json::json!({
+            "query": "中型坦克",
+            "limit": 5
+        });
+
+        let result = tool.call_raw(args).await;
+        assert!(!result.is_error, "tool should succeed: {:?}", result);
+        let output = result.output.unwrap().as_str().unwrap().to_string();
+        assert!(
+            output.contains("UEL0201"),
+            "expected UEL0201 in Chinese search results: {output}"
+        );
+        assert!(
+            output.contains("MA12攻击者"),
+            "expected Chinese name in search results: {output}"
+        );
+    }
 }

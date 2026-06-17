@@ -41,7 +41,8 @@ impl DataIndex {
             .filter(move |u| categories.iter().all(|c| u.has_category(c)))
     }
 
-    /// Units whose name or id contains the query (case-insensitive).
+    /// Units whose name, id, description or Chinese translation contains the
+    /// query (case-insensitive).
     pub fn search<'a>(&'a self, query: &'a str) -> impl Iterator<Item = &'a Unit> + 'a {
         let query = query.to_lowercase();
         self.units.iter().filter(move |u| {
@@ -49,6 +50,12 @@ impl DataIndex {
                 || u.description.to_lowercase().contains(&query)
                 || u.name()
                     .map(|n| n.to_lowercase().contains(&query))
+                    .unwrap_or(false)
+                || u.name_zh()
+                    .map(|n| n.to_lowercase().contains(&query))
+                    .unwrap_or(false)
+                || u.description_zh()
+                    .map(|d| d.to_lowercase().contains(&query))
                     .unwrap_or(false)
         })
     }

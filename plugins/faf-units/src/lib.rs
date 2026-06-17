@@ -157,6 +157,12 @@ fn search(args: serde_json::Value) -> serde_json::Value {
                     || u.name()
                         .map(|n| n.to_lowercase().contains(term))
                         .unwrap_or(false)
+                    || u.name_zh()
+                        .map(|n| n.to_lowercase().contains(term))
+                        .unwrap_or(false)
+                    || u.description_zh()
+                        .map(|d| d.to_lowercase().contains(term))
+                        .unwrap_or(false)
                     || u.categories.iter().any(|c| c.to_lowercase().contains(term))
                     || u.faction()
                         .map(|f| f.to_lowercase().contains(term))
@@ -168,8 +174,10 @@ fn search(args: serde_json::Value) -> serde_json::Value {
             serde_json::json!({
                 "id": u.id,
                 "name": u.name(),
+                "name_zh": u.name_zh(),
                 "faction": u.faction(),
                 "description": u.description,
+                "description_zh": u.description_zh(),
                 "tech_level": u.tech_level(),
                 "categories": u.categories,
             })
@@ -253,6 +261,7 @@ fn unit_summary(u: &Unit) -> serde_json::Value {
     serde_json::json!({
         "id": u.id,
         "name": u.name(),
+        "name_zh": u.name_zh(),
         "faction": u.faction(),
         "tech_level": u.tech_level(),
         "health": health,
@@ -308,6 +317,7 @@ fn naive_dps(args: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "id": u.id,
         "name": u.name(),
+        "name_zh": u.name_zh(),
         "weapons": weapons,
         "total_naive_dps": total,
     })
