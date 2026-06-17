@@ -66,5 +66,7 @@ pub fn print_top_help() {
     println!("  cargo xtask qqbot start");
     println!("  cargo xtask qqbot status");
     println!("  cargo xtask qqbot logs core -n 50");
+    println!("  cargo xtask qqbot deploy");
+    println!("  cargo xtask qqbot remote-status");
     println!("  cargo xtask test");
 }

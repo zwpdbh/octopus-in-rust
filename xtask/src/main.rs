@@ -3,6 +3,7 @@ use anyhow::Result;
 mod apps;
 mod args;
 mod cargo;
+mod deploy;
 mod plugins;
 mod project;
 

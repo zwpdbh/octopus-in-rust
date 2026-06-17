@@ -66,7 +66,12 @@ enum Command {
         reset_webui_password: bool,
     },
     /// Start the bot service in the background.
-    Start,
+    Start {
+        /// Run the supervisor in the foreground instead of daemonizing.
+        /// Useful when running under systemd.
+        #[arg(long)]
+        no_daemon: bool,
+    },
     /// Stop the bot service.
     Stop,
     /// Restart the bot service.
@@ -187,8 +192,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let data_dir = cli
         .data_dir
-        .map(|p| paths::resolve(p))
-        .or_else(|| paths::read_default_data_dir())
+        .map(paths::resolve)
+        .or_else(paths::read_default_data_dir)
         .unwrap_or_else(|| paths::resolve("./data/qqbot-data"));
 
     match cli.command {
@@ -221,8 +226,8 @@ fn main() -> Result<()> {
             let _ = rt.block_on(service::run(&data_dir));
             std::process::exit(0);
         }
-        Command::Start => {
-            if daemon::is_alive(&data_dir) {
+        Command::Start { no_daemon } => {
+            if !no_daemon && daemon::is_alive(&data_dir) {
                 println!("qqbot daemon is already running");
                 return Ok(());
             }
@@ -234,8 +239,11 @@ fn main() -> Result<()> {
                 eprintln!("For full options: cargo run --bin qqbot -- init --help");
                 std::process::exit(1);
             }
-            // Daemonize. Parent exits, child continues.
-            daemon::start(&data_dir)?;
+
+            if !no_daemon {
+                // Daemonize. Parent exits, child continues.
+                daemon::start(&data_dir)?;
+            }
 
             // Child process: run the service loop.
             let rt = tokio::runtime::Runtime::new()?;

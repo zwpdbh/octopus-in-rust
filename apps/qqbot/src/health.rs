@@ -124,23 +124,25 @@ pub async fn check(
         .collect();
 
     let mut echo: Option<GroupEcho> = None;
-    if send_echo && online && bot_user_id.is_some() && group_membership.iter().any(|g| g.member) {
-        let group_id = group_membership
-            .iter()
-            .find(|g| g.member)
-            .map(|g| g.group_id)
-            .unwrap();
-        match check_group_echo(data_dir, config, group_id, bot_user_id.unwrap()).await {
-            Ok(e) => echo = Some(e),
-            Err(e) => {
-                warn!(error = %e, "group echo check failed");
-                echo = Some(GroupEcho {
-                    group_id,
-                    received: false,
-                    features,
-                    llm_provider: Some(config.llm.api_url().to_string()),
-                    llm_model: Some(config.llm.model.clone()),
-                });
+    if send_echo && online && group_membership.iter().any(|g| g.member) {
+        if let Some(bot_user_id) = bot_user_id {
+            let group_id = group_membership
+                .iter()
+                .find(|g| g.member)
+                .map(|g| g.group_id)
+                .unwrap();
+            match check_group_echo(data_dir, config, group_id, bot_user_id).await {
+                Ok(e) => echo = Some(e),
+                Err(e) => {
+                    warn!(error = %e, "group echo check failed");
+                    echo = Some(GroupEcho {
+                        group_id,
+                        received: false,
+                        features,
+                        llm_provider: Some(config.llm.api_url().to_string()),
+                        llm_model: Some(config.llm.model.clone()),
+                    });
+                }
             }
         }
     }

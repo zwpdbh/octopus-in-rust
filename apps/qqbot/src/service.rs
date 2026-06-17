@@ -1,4 +1,3 @@
-use crate::paths;
 use anyhow::{Context, Result};
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -88,21 +87,9 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         .context("failed to open core log")?;
     let run = run_dir(data_dir);
 
-    // Infer Cargo profile from the running qqbot binary path so `cargo run`
-    // picks the matching debug qqbot-core binary.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let profile = if exe.to_string_lossy().contains("/debug/") {
-        "debug"
-    } else {
-        "release"
-    };
-    let core_binary = paths::project_root().join(format!("target/{profile}/qqbot-core"));
-    if !core_binary.exists() {
-        anyhow::bail!(
-            "qqbot-core binary not found: {}. Build with `cargo build -p qqbot-core`.",
-            core_binary.display()
-        );
-    }
+    // Locate qqbot-core: use the development target layout when running from
+    // `cargo run`, otherwise expect it next to the qqbot binary (installed layout).
+    let core_binary = resolve_core_binary()?;
 
     let core_config = data_dir.join("config.toml");
     info!(binary = %core_binary.display(), config = %core_config.display(), "starting qqbot-core");
@@ -172,6 +159,36 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_core_binary() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("failed to determine qqbot executable path")?;
+    let exe_dir = exe
+        .parent()
+        .context("qqbot executable has no parent directory")?;
+
+    // Development layout: the binary is under target/{debug,release}/.
+    let profile_dir_name = exe_dir.file_name().and_then(|n| n.to_str());
+    if matches!(profile_dir_name, Some("debug") | Some("release")) {
+        if let Some(root) = exe_dir.parent().and_then(|p| p.parent()) {
+            let profile = profile_dir_name.unwrap();
+            let candidate = root.join(format!("target/{profile}/qqbot-core"));
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    // Installed layout: qqbot-core lives next to the qqbot binary.
+    let candidate = exe_dir.join("qqbot-core");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+
+    anyhow::bail!(
+        "qqbot-core binary not found next to {} and not under target/",
+        exe.display()
+    )
 }
 
 async fn spawn_core(

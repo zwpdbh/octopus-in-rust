@@ -1,0 +1,39 @@
+# systemd unit for the Octopus QQ bot service.
+# Installed to /etc/systemd/system/qqbot.service by `cargo xtask qqbot deploy`.
+
+[Unit]
+# Human-readable description shown by `systemctl status qqbot`.
+Description=Octopus QQ Bot
+
+# Wait for Docker and network before starting, because qqbot manages the
+# SnowLuma container and talks to remote APIs.
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+# Run qqbot in the foreground. The supervisor itself handles its child
+# processes (SnowLuma Docker container, qqbot-core, etc.). systemd will
+# restart the service if the supervisor exits.
+Type=simple
+
+# Run as the unprivileged service user created by qqbot-remote-setup.sh.
+User=qqbot
+Group=qqbot
+
+# Working directory for the installed qqbot layout.
+WorkingDirectory=/opt/qqbot
+
+# Start the supervisor in the foreground so systemd can track it.
+ExecStart=/opt/qqbot/bin/qqbot start --no-daemon -d /opt/qqbot/data/qqbot-data
+
+# Gracefully stop the supervisor and its managed children.
+ExecStop=/opt/qqbot/bin/qqbot stop -d /opt/qqbot/data/qqbot-data
+
+# Restart on unclean exit only. Use `Restart=always` only if qqbot should
+# stay up even after an intentional `systemctl stop` (not recommended).
+Restart=on-failure
+RestartSec=5
+
+[Install]
+# Start automatically on boot once the unit is enabled.
+WantedBy=multi-user.target

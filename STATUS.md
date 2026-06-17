@@ -10,11 +10,11 @@
 | Item | State |
 |------|-------|
 | **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` (Brain crate layered; `qqbot-core` integration complete) |
-| **Active Task** | Brain crate Phase 2 — migrate `octopus-cli` `KimiSoul` to consume `Brain` |
-| **Last Completed** | `brain` crate layered into core/tools/session/hooks with streaming + approval traits; `qqbot-core` updated to `ToolSource` API |
+| **Active Task** | Deploy qqbot to AliCloud ECS via `cargo xtask qqbot deploy` |
+| **Last Completed** | Added AliCloud ECS deployment and remote-management commands to xtask; systemd service + `--no-daemon` for qqbot |
 | **Compilation** | `cargo check --workspace` ✅ |
-| **Tests** | `cargo test -p octopus-cli` 23 passing |
-| **Blockers** | None |
+| **Tests** | `cargo test --workspace` passing |
+| **Blockers** | Local `snowluma` container stuck after foreground test; needs root to kill/restart Docker before local qqbot can be restarted. |
 
 ---
 
@@ -49,12 +49,16 @@ Legend: ✅ Complete · 🔄 Partial · ❌ Not Started
 
 ## Active Task
 
-No active task is currently assigned. The next session should:
+Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md) and [`docs/plans/15-qqbot-deployment.md`](./docs/plans/15-qqbot-deployment.md).
 
-1. Read `docs/tracking/index.md` for the overall rewrite map.
-2. Pick a track marked 🔄 or ❌.
-3. Create `tasks/<short-name>.md` from `tasks/_template.md` before coding.
-4. Update this file with the active task name and status.
+Current state:
+- [x] Deployment plan approved.
+- [x] xtask deploy module, AliCloud CLI wrappers, SSH helpers, provisioning, and remote install implemented.
+- [x] systemd service template and remote setup script added.
+- [x] `qqbot start --no-daemon` and installed-layout `qqbot-core` resolution added.
+- [x] `cargo check`, `cargo test`, and targeted `cargo clippy` pass.
+- [ ] Real ECS deployment test (requires configured `aliyun` CLI and AliCloud account).
+- [ ] Move task to `tasks/completed/` after verification.
 
 ---
 
