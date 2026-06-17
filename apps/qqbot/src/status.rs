@@ -135,6 +135,42 @@ pub async fn show(data_dir: &Path) -> Result<()> {
         )
     });
 
+    // Detect profile mismatch between CLI and running core.
+    if core_running {
+        if let Some(mismatch) = core_profile_mismatch(data_dir) {
+            global_checks.push(Check::warn(
+                format!("Core binary profile mismatch: {mismatch}"),
+                "Stop the daemon and restart from the same profile you are running. Example: `./target/release/qqbot stop && ./target/release/qqbot start` or `cargo run --bin qqbot -- start`.",
+            ));
+        }
+    }
+
+    // Available plugin binaries built in the workspace.
+    match plugins::available_plugins() {
+        Ok(available) => {
+            if available.is_empty() {
+                global_checks.push(Check::warn(
+                    "No plugin binaries built",
+                    "Build a plugin with `cargo build --target wasm32-unknown-unknown --release -p <plugin-name>` or run the project build script.",
+                ));
+            } else {
+                global_checks.push(
+                    Check::ok(format!(
+                        "Available plugins: {}",
+                        available.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ))
+                    .with_detail(format!("{} plugin(s)", available.len())),
+                );
+            }
+        }
+        Err(e) => {
+            global_checks.push(Check::warn(
+                format!("Could not list available plugins: {e}"),
+                "Check that the project was built for wasm32-unknown-unknown.",
+            ));
+        }
+    }
+
     // Registered / loaded plugin tools (global view).
     let runtime_tools_result = control::list_runtime_tools(data_dir).await;
     match &runtime_tools_result {
@@ -216,8 +252,19 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             "No allowed groups configured. Update bot.allowed_groups in config.toml.".to_string(),
         );
     } else if !core_running {
-        println!("{} qqbot-core is not running; group tool status unavailable", term.info("[info]"));
-        println!("       {} Configured groups: {}", term.dim("→"), allowed_groups.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(", "));
+        println!(
+            "{} qqbot-core is not running; group tool status unavailable",
+            term.info("[info]")
+        );
+        println!(
+            "       {} Configured groups: {}",
+            term.dim("→"),
+            allowed_groups
+                .iter()
+                .map(|g| g.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         global_hints.push(
             "Start qqbot-core to load Brains and tools for the configured groups.".to_string(),
         );
@@ -230,14 +277,29 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                 // Show configured groups with whatever info we can gather.
                 let is_old_core = e.to_string().contains("unknown variant");
                 if is_old_core {
-                    println!("{} Running qqbot-core does not support per-group status queries.", term.warn("[warn]"));
-                    println!("       {} The core binary is older than this CLI. Run `qqbot restart` to update it.", term.dim("→"));
+                    println!(
+                        "{} Running qqbot-core does not support per-group status queries.",
+                        term.warn("[warn]")
+                    );
+                    println!(
+                        "       {} The core binary is older than this CLI. Rebuild and restart it:",
+                        term.dim("→")
+                    );
+                    println!("          cargo build -p qqbot-core --release");
+                    println!("          ./target/release/qqbot restart");
+                    global_hints.push(
+                        "The running qqbot-core is outdated. Run `cargo build -p qqbot-core --release && ./target/release/qqbot restart`."
+                            .to_string(),
+                    );
                 } else {
-                    println!("{} Could not query runtime group status: {e}", term.warn("[warn]"));
+                    println!(
+                        "{} Could not query runtime group status: {e}",
+                        term.warn("[warn]")
+                    );
+                    global_hints.push(format!(
+                        "Could not query runtime group status from qqbot-core: {e}"
+                    ));
                 }
-                global_hints.push(format!(
-                    "Could not query runtime group status from qqbot-core: {e}"
-                ));
                 allowed_groups
                     .iter()
                     .map(|g| GroupRuntimeStatus {
@@ -279,7 +341,10 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    println!("{} Could not read config for health check: {e}", term.warn("[warn]"));
+                    println!(
+                        "{} Could not read config for health check: {e}",
+                        term.warn("[warn]")
+                    );
                     global_hints.push(
                         "Could not read qqbot-core config. Run `qqbot init` or check the data directory."
                             .to_string(),
@@ -314,7 +379,11 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             println!();
 
             if status.tools.is_empty() {
-                println!("       {} tools: {}", term.dim("→"), term.dim("none loaded"));
+                println!(
+                    "       {} tools: {}",
+                    term.dim("→"),
+                    term.dim("none loaded")
+                );
                 if status.brain_ready {
                     global_hints.push(format!(
                         "Group {} has a Brain but no plugin tools loaded. Install a plugin and reload.",
@@ -350,8 +419,14 @@ pub async fn show(data_dir: &Path) -> Result<()> {
             if report.online && report.bot_user_id.is_some() {
                 println!();
                 println!("{} Bot is online", term.ok("[ok]"));
-                if let (Some(uid), Some(nick)) = (report.bot_user_id, report.bot_nickname.as_ref()) {
-                    println!("       {} Logged in as {} ({})", term.dim("→"), term.bold(nick), uid);
+                if let (Some(uid), Some(nick)) = (report.bot_user_id, report.bot_nickname.as_ref())
+                {
+                    println!(
+                        "       {} Logged in as {} ({})",
+                        term.dim("→"),
+                        term.bold(nick),
+                        uid
+                    );
                 }
             } else if !report.online {
                 println!();
@@ -393,7 +468,11 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     }
 
     println!();
-    println!("{} {}", term.dim("Data directory:"), base_dir(data_dir).display());
+    println!(
+        "{} {}",
+        term.dim("Data directory:"),
+        base_dir(data_dir).display()
+    );
     println!(
         "{} {}",
         term.dim("WebUI:"),
@@ -446,6 +525,49 @@ async fn is_container_running() -> bool {
         Ok(output) => !output.stdout.is_empty(),
         Err(_) => false,
     }
+}
+
+/// Check whether the running qqbot-core binary was built with a different
+/// Cargo profile than the current qqbot CLI. This catches the common dev
+/// mistake of running `cargo run --bin qqbot -- status` while the daemon is
+/// still using a release (or stale debug) core binary.
+#[cfg(unix)]
+fn core_profile_mismatch(data_dir: &Path) -> Option<String> {
+    let run = crate::service::run_dir(data_dir);
+    let pid_file = run.join("qqbot-core.pid");
+    let pid = std::fs::read_to_string(&pid_file)
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+
+    let exe = std::env::current_exe().ok()?;
+    let my_profile = if exe.to_string_lossy().contains("/debug/") {
+        "debug"
+    } else {
+        "release"
+    };
+
+    let core_exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let core_profile = if core_exe.to_string_lossy().contains("/debug/") {
+        "debug"
+    } else {
+        "release"
+    };
+
+    if my_profile != core_profile {
+        Some(format!(
+            "CLI is {my_profile}, running core is {core_profile} ({})",
+            core_exe.display()
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn core_profile_mismatch(_data_dir: &Path) -> Option<String> {
+    None
 }
 
 async fn is_core_running() -> bool {

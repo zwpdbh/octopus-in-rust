@@ -10,5 +10,6 @@ members = [
     "apps/docref",
     "apps/qqbot",
     "apps/qqbot-core",
+    "xtask",
 ]
 resolver = "3"

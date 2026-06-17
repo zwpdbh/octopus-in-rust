@@ -319,9 +319,7 @@ pub fn load_tools_from_wasm(path: &Path) -> Result<Vec<Box<dyn CallableTool>>, S
     } else {
         // Prefer the Brain tool ABI; fall back to the older `tool_metadata` export.
         load_metadata_from_register_tools(&compiled, path)
-            .or_else(|_| {
-                load_metadata_from_plugin(&compiled, path).map(|meta| vec![meta])
-            })
+            .or_else(|_| load_metadata_from_plugin(&compiled, path).map(|meta| vec![meta]))
             .unwrap_or_else(|_| vec![fallback_metadata(path)])
     };
 
@@ -432,7 +430,12 @@ mod tests {
 
         let tools = discover_plugins(&dir);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        for expected in ["faf_units_search", "faf_units_get", "faf_units_compare", "faf_units_naive_dps"] {
+        for expected in [
+            "faf_units_search",
+            "faf_units_get",
+            "faf_units_compare",
+            "faf_units_naive_dps",
+        ] {
             assert!(
                 names.contains(&expected),
                 "expected {} plugin tool, got {:?}",

@@ -44,8 +44,12 @@ async fn send_request(data_dir: &Path, request: ControlRequest) -> Result<Contro
         .context("control response timed out")?
         .context("failed to read control response")?;
 
-    serde_json::from_slice::<ControlResponse>(&buf)
-        .with_context(|| format!("invalid control response: {}", String::from_utf8_lossy(&buf)))
+    serde_json::from_slice::<ControlResponse>(&buf).with_context(|| {
+        format!(
+            "invalid control response: {}",
+            String::from_utf8_lossy(&buf)
+        )
+    })
 }
 
 /// Ask the running core for the names of the tools it has loaded.

@@ -4,7 +4,17 @@ use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-const WASM_TARGET_DIR: &str = "target/wasm32-unknown-unknown/release";
+fn wasm_target_dir() -> PathBuf {
+    let profile = if std::env::current_exe()
+        .map(|e| e.to_string_lossy().contains("/debug/"))
+        .unwrap_or(false)
+    {
+        "debug"
+    } else {
+        "release"
+    };
+    paths::project_root().join(format!("target/wasm32-unknown-unknown/{profile}"))
+}
 
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -40,9 +50,7 @@ pub fn list(data_dir: &Path) -> Result<Vec<PluginInfo>> {
 }
 
 pub async fn enable(data_dir: &Path, name: &str) -> Result<()> {
-    let src = paths::project_root()
-        .join(WASM_TARGET_DIR)
-        .join(format!("{name}.wasm"));
+    let src = wasm_target_dir().join(format!("{name}.wasm"));
     if !src.exists() {
         anyhow::bail!(
             "plugin '{name}' is not available; expected {}\nBuild it with: cargo build --release -p {name} --target wasm32-unknown-unknown",
@@ -167,7 +175,7 @@ pub async fn reload(data_dir: &Path) -> Result<()> {
 }
 
 pub fn available_plugins() -> Result<BTreeSet<String>> {
-    let dir = paths::project_root().join(WASM_TARGET_DIR);
+    let dir = wasm_target_dir();
     if !dir.exists() {
         return Ok(BTreeSet::new());
     }

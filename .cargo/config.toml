@@ -1,0 +1,12 @@
+[alias]
+# Dev convenience aliases.
+#
+# `cargo qqbot <subcommand>` runs the qqbot CLI binary without needing to type
+# the full `cargo run --bin qqbot -- <subcommand>` incantation. This keeps the
+# CLI and the spawned qqbot-core in the same Cargo profile (debug by default),
+# avoiding profile-mismatch surprises.
+qqbot = "run --bin qqbot --"
+
+# `cargo xtask <command>` runs the xtask helper crate, which automates
+# multi-step dev tasks such as building the WASM plugin and starting the daemon.
+xtask = "run --package xtask --"
