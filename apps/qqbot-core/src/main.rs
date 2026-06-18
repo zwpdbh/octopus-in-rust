@@ -205,8 +205,16 @@ async fn handle_addressed_group_message(
         }
 
         info!(prompt = %prompt, "handling addressed prompt");
+        let at_targets = event.at_targets(config.bot.bot_qq);
         group_brains
-            .handle_prompt(group_id, user_id, event.message_id, prompt)
+            .handle_prompt(
+                group_id,
+                user_id,
+                event.message_id,
+                prompt,
+                event.sender.nickname.clone(),
+                at_targets,
+            )
             .await;
     }
     .instrument(span)

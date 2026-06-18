@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeZone};
 use extism::{CompiledPlugin, Manifest, Plugin, PluginBuilder, Wasm};
 use futures_util::StreamExt;
 use kosong::chat_provider::Part;
@@ -38,6 +38,8 @@ struct PartyState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Candidate {
     user_id: i64,
+    #[serde(default)]
+    nickname: String,
     start: DateTime<FixedOffset>,
     end: DateTime<FixedOffset>,
     joined_at: DateTime<FixedOffset>,
@@ -53,6 +55,7 @@ pub struct PartyStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartyCandidate {
     pub user_id: i64,
+    pub nickname: String,
     pub start: DateTime<FixedOffset>,
     pub end: DateTime<FixedOffset>,
 }
@@ -127,11 +130,29 @@ impl PartyStateStore {
                 .into_iter()
                 .map(|c| PartyCandidate {
                     user_id: c.user_id,
+                    nickname: if c.nickname.is_empty() {
+                        c.user_id.to_string()
+                    } else {
+                        c.nickname
+                    },
                     start: c.start,
                     end: c.end,
                 })
                 .collect(),
         })
+    }
+
+    /// Remove expired candidates and persist if anything changed.
+    pub async fn cleanup_expired(&self, group_id: i64, now: DateTime<FixedOffset>) -> Result<bool> {
+        let _guard = self.lock(group_id).await;
+        let mut state = self.load(group_id).await?;
+        let before = state.candidates.len();
+        state.candidates.retain(|c| c.end > now);
+        let changed = state.candidates.len() != before;
+        if changed {
+            self.save(group_id, &state).await?;
+        }
+        Ok(changed)
     }
 
     pub async fn clear(&self, group_id: i64) -> Result<()> {
@@ -192,6 +213,8 @@ impl kosong::tooling::CallableTool2 for FafPartyStatusTool {
 struct ParseIntentResult {
     intent: String,
     time_expression: Option<String>,
+    #[serde(default)]
+    nickname: Option<String>,
 }
 
 /// Result returned by the `faf_party_parse_time` plugin tool.
@@ -212,6 +235,8 @@ pub struct FafPartyHostService {
     active_notifications: Arc<Mutex<HashMap<i64, JoinHandle<()>>>>,
     plugin: Option<CompiledPlugin>,
     llm_config: LlmConfig,
+    /// Per-group nickname cache: group_id -> (user_id -> nickname).
+    nicknames: Arc<Mutex<HashMap<i64, HashMap<i64, String>>>>,
 }
 
 impl FafPartyHostService {
@@ -231,6 +256,7 @@ impl FafPartyHostService {
             active_notifications: Arc::new(Mutex::new(HashMap::new())),
             plugin,
             llm_config: config.llm.clone(),
+            nicknames: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -260,18 +286,27 @@ impl FafPartyHostService {
     ///
     /// This is called before the normal Brain turn starts so that notifications
     /// can be sent immediately when enough players overlap.
+    ///
+    /// Returns `true` if the message was handled as a party registration/leave
+    /// and the caller should skip the normal LLM turn.
     pub async fn process_message(
         &self,
         group_id: i64,
         user_id: i64,
         message: &str,
         now: DateTime<FixedOffset>,
-    ) {
-        if let Err(e) = self
-            .try_process_message(group_id, user_id, message, now)
+        sender_nickname: Option<String>,
+        at_targets: Vec<(i64, Option<String>)>,
+    ) -> bool {
+        match self
+            .try_process_message(group_id, user_id, message, now, sender_nickname, at_targets)
             .await
         {
-            error!(group_id, user_id, error = %e, "faf-party processing failed");
+            Ok(handled) => handled,
+            Err(e) => {
+                error!(group_id, user_id, error = %e, "faf-party processing failed");
+                false
+            }
         }
     }
 
@@ -281,54 +316,217 @@ impl FafPartyHostService {
         user_id: i64,
         message: &str,
         now: DateTime<FixedOffset>,
-    ) -> Result<()> {
-        // Call the plugin to parse intent.
-        let intent_parse = self.call_parse_intent(message).await?;
+        sender_nickname: Option<String>,
+        at_targets: Vec<(i64, Option<String>)>,
+    ) -> Result<bool> {
+        // Drop stale entries before acting on the current message.
+        self.store.cleanup_expired(group_id, now).await?;
 
-        // Serialize all file access for this group.
+        // Update nickname cache with everyone visible in this message.
+        self.remember_nickname(group_id, user_id, sender_nickname.clone())
+            .await;
+        for (target_id, target_nick) in &at_targets {
+            self.remember_nickname(group_id, *target_id, target_nick.clone())
+                .await;
+        }
+
+        let intent_parse = self.call_parse_intent(message).await?;
+        info!(
+            group_id,
+            user_id,
+            intent = %intent_parse.intent,
+            time_expression = ?intent_parse.time_expression,
+            nickname = ?intent_parse.nickname,
+            "faf-party parsed intent"
+        );
+
         let _guard = self.store.lock(group_id).await;
         let mut state = self.store.load(group_id).await?;
 
         match intent_parse.intent.as_str() {
             "leave" => {
-                let before = state.candidates.len();
-                state.candidates.retain(|c| c.user_id != user_id);
-                let removed = before - state.candidates.len();
-                if removed > 0 {
-                    self.store.save(group_id, &state).await?;
-                    info!(group_id, user_id, "removed user from faf-party candidates");
+                let target_ids: Vec<i64> = if at_targets.is_empty() {
+                    vec![user_id]
+                } else {
+                    at_targets.iter().map(|(id, _)| *id).collect()
+                };
+
+                let mut removed = Vec::new();
+                for id in target_ids {
+                    if let Some(idx) = state.candidates.iter().position(|c| c.user_id == id) {
+                        removed.push(state.candidates.remove(idx));
+                    }
                 }
+
+                if !removed.is_empty() {
+                    self.store.save(group_id, &state).await?;
+                    info!(
+                        group_id,
+                        user_id,
+                        count = removed.len(),
+                        "removed faf-party candidates"
+                    );
+                    self.send_confirmation(group_id, None, &state, now).await?;
+                }
+                Ok(!removed.is_empty())
             }
             "join" => {
-                let time_expression = intent_parse.time_expression.as_deref().unwrap_or(message);
-                let time_parse = self.parse_time_with_fallback(time_expression, now).await?;
+                // Resolve who is being registered.
+                let targets: Vec<(i64, String)> = if at_targets.is_empty() {
+                    let nick = intent_parse
+                        .nickname
+                        .clone()
+                        .or(sender_nickname.clone())
+                        .unwrap_or_else(|| user_id.to_string());
+                    vec![(user_id, nick)]
+                } else {
+                    at_targets
+                        .iter()
+                        .map(|(id, fallback)| {
+                            let nick = fallback
+                                .clone()
+                                .or_else(|| self.nickname_for(group_id, *id))
+                                .unwrap_or_else(|| id.to_string());
+                            (*id, nick)
+                        })
+                        .collect()
+                };
 
-                let start = DateTime::parse_from_rfc3339(&time_parse.start)
-                    .context("invalid availability start")?
-                    .with_timezone(&FixedOffset::east_opt(0).unwrap());
-                let end = DateTime::parse_from_rfc3339(&time_parse.end)
-                    .context("invalid availability end")?
-                    .with_timezone(&FixedOffset::east_opt(0).unwrap());
+                // Resolve the time window.
+                let (start, end) = if let Some(expr) = intent_parse.time_expression.as_deref() {
+                    let time_parse = self.parse_time_with_fallback(expr, now).await?;
+                    let start = DateTime::parse_from_rfc3339(&time_parse.start)
+                        .context("invalid availability start")?;
+                    let end = DateTime::parse_from_rfc3339(&time_parse.end)
+                        .context("invalid availability end")?;
+                    (start, end)
+                } else {
+                    self.default_availability(now)
+                };
 
-                // Remove stale entry for this user, then add the new one.
-                state.candidates.retain(|c| c.user_id != user_id);
-                state.candidates.push(Candidate {
-                    user_id,
-                    start,
-                    end,
-                    joined_at: now,
-                });
+                for (id, nick) in &targets {
+                    state.candidates.retain(|c| c.user_id != *id);
+                    state.candidates.push(Candidate {
+                        user_id: *id,
+                        nickname: nick.clone(),
+                        start,
+                        end,
+                        joined_at: now,
+                    });
+                }
+
                 self.store.save(group_id, &state).await?;
-                info!(group_id, user_id, start = %start, end = %end, "added faf-party candidate");
+                info!(
+                    group_id,
+                    user_id,
+                    targets = ?targets,
+                    start = %start,
+                    end = %end,
+                    "added faf-party candidates"
+                );
+
+                self.send_confirmation(group_id, Some(&targets), &state, now)
+                    .await?;
 
                 if let Some(window) = find_overlap_window(&state.candidates) {
                     self.schedule_notifications(group_id, state.candidates.clone(), window)
                         .await;
                 }
+
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
+        }
+    }
+
+    async fn remember_nickname(&self, group_id: i64, user_id: i64, nickname: Option<String>) {
+        if let Some(nick) = nickname {
+            let mut groups = self.nicknames.lock().await;
+            groups
+                .entry(group_id)
+                .or_insert_with(HashMap::new)
+                .insert(user_id, nick);
+        }
+    }
+
+    fn nickname_for(&self, group_id: i64, user_id: i64) -> Option<String> {
+        // Synchronous lookup into the cache. The cache is updated async, so a
+        // very recent nickname may not be visible yet; callers fall back to the
+        // user id in that case.
+        if let Ok(groups) = self.nicknames.try_lock() {
+            groups.get(&group_id).and_then(|m| m.get(&user_id)).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Default availability window when the user wants to join but gives no time.
+    ///
+    /// Starts now and ends at 22:00 on the same day (or tomorrow if already past
+    /// 22:00), in the group's local timezone.
+    fn default_availability(
+        &self,
+        now: DateTime<FixedOffset>,
+    ) -> (DateTime<FixedOffset>, DateTime<FixedOffset>) {
+        let tz = now.timezone();
+        let today = now.date_naive();
+        let end_time = chrono::NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+        let end = if let Some(dt) = tz.from_local_datetime(&today.and_time(end_time)).single() {
+            if dt > now {
+                dt
+            } else {
+                dt + chrono::Duration::days(1)
+            }
+        } else {
+            now + chrono::Duration::hours(4)
+        };
+        (now, end)
+    }
+
+    /// Send a deterministic confirmation message with the current candidate list.
+    async fn send_confirmation(
+        &self,
+        group_id: i64,
+        added: Option<&[(i64, String)]>,
+        state: &PartyState,
+        now: DateTime<FixedOffset>,
+    ) -> Result<()> {
+        let mut lines = Vec::new();
+
+        if let Some(targets) = added {
+            for (_id, nick) in targets {
+                lines.push(format!("已登记 {}。", nick));
+            }
+        } else {
+            lines.push("已移除。".to_string());
         }
 
+        lines.push(format!(
+            "当前 party 名单（共 {} 人）：",
+            state.candidates.len()
+        ));
+        if state.candidates.is_empty() {
+            lines.push("  暂无".to_string());
+        } else {
+            for (idx, c) in state.candidates.iter().enumerate() {
+                let display = if c.end > now {
+                    format!("{} - {}", format_time(c.start), format_time(c.end))
+                } else {
+                    "已过期".to_string()
+                };
+                let nick = if c.nickname.is_empty() {
+                    c.user_id.to_string()
+                } else {
+                    c.nickname.clone()
+                };
+                lines.push(format!("{}. {} — {}", idx + 1, nick, display));
+            }
+        }
+
+        let text = lines.join("\n");
+        let _ = self
+            .action_tx
+            .send(Action::send_group_msg(group_id, text, None));
         Ok(())
     }
 
@@ -634,6 +832,7 @@ mod tests {
     ) -> Candidate {
         Candidate {
             user_id,
+            nickname: format!("user{user_id}"),
             start,
             end,
             joined_at: start,

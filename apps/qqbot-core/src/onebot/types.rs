@@ -473,6 +473,40 @@ impl GroupMessageEvent {
         Addressing::None
     }
 
+    /// Return the user IDs of all `at` segments in the message (excluding the
+    /// bot itself). This is used when someone wants to register another member.
+    pub fn at_targets(&self, bot_qq: i64) -> Vec<(i64, Option<String>)> {
+        self.message
+            .segments()
+            .map(|segments| {
+                segments
+                    .iter()
+                    .filter_map(|seg| {
+                        if seg.seg_type != "at" {
+                            return None;
+                        }
+                        let qq = seg
+                            .data
+                            .get("qq")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<i64>().ok())?;
+                        // Ignore at-all (qq == 0) and self/bot.
+                        if qq == 0 || qq == bot_qq {
+                            return None;
+                        }
+                        // Some OneBot implementations also send a name field.
+                        let name = seg
+                            .data
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        Some((qq, name))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Extract the prompt text with the bot's mention removed.
     pub fn prompt_text(&self, bot_qq: i64, aliases: &[String]) -> String {
         match self.addressing(bot_qq, aliases) {

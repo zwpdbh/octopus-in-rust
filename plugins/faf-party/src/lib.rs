@@ -96,7 +96,7 @@ fn parse_intent_tool(args: serde_json::Value) -> serde_json::Value {
         Err(e) => return serde_json::json!({"error": format!("invalid arguments: {e}") }),
     };
 
-    let (intent, time_expression) = parse_intent(&args.message);
+    let (intent, time_expression, nickname) = parse_intent(&args.message);
     serde_json::json!({
         "intent": match intent {
             Intent::Join => "join",
@@ -104,6 +104,7 @@ fn parse_intent_tool(args: serde_json::Value) -> serde_json::Value {
             Intent::Unknown => "unknown",
         },
         "time_expression": time_expression,
+        "nickname": nickname,
     })
 }
 
@@ -112,7 +113,7 @@ struct ParseIntentArgs {
     message: String,
 }
 
-fn parse_intent(message: &str) -> (Intent, Option<String>) {
+fn parse_intent(message: &str) -> (Intent, Option<String>, Option<String>) {
     let normalized = message.to_lowercase();
 
     let leave_signals = [
@@ -124,9 +125,29 @@ fn parse_intent(message: &str) -> (Intent, Option<String>) {
         "不打了",
         "不来",
         "算了",
+        "unregister",
     ];
     if leave_signals.iter().any(|s| normalized.contains(s)) {
-        return (Intent::Leave, None);
+        return (Intent::Leave, None, None);
+    }
+
+    // Short commands that mean "sign me up" without an explicit time.
+    let context_join_signals = [
+        "登记我",
+        "sign me up",
+        "sign up",
+        "加我",
+        "加我一个",
+        "报名",
+        "算我一个",
+        "带我一个",
+        "我也可以",
+        "算我",
+        "拉我",
+        "登记",
+    ];
+    if context_join_signals.iter().any(|s| normalized.contains(s)) {
+        return (Intent::Join, None, extract_nickname(message));
     }
 
     let join_signals = [
@@ -134,12 +155,77 @@ fn parse_intent(message: &str) -> (Intent, Option<String>) {
     ];
     let looks_like_join = join_signals.iter().any(|s| normalized.contains(s));
     if !looks_like_join {
-        return (Intent::Unknown, None);
+        return (Intent::Unknown, None, None);
     }
 
-    // Extract the time-expression part. For now, return the whole message;
-    // the time parser will ignore non-time words.
-    (Intent::Join, Some(message.to_string()))
+    // Pass the full message to the time parser; it will ignore non-time words.
+    (
+        Intent::Join,
+        Some(message.to_string()),
+        extract_nickname(message),
+    )
+}
+
+/// Try to extract a leading game ID / nickname from the message.
+///
+/// We assume the first word that is not a time expression, pronoun, or join
+/// phrase is the user's nickname, e.g. "parton 晚上7点半之后可以玩".
+fn extract_nickname(message: &str) -> Option<String> {
+    let skip_words: std::collections::HashSet<&str> = [
+        "我",
+        "你",
+        "他",
+        "她",
+        "它",
+        "我们",
+        "你们",
+        "登记",
+        "登记我",
+        "sign",
+        "me",
+        "up",
+        "加我",
+        "加我一个",
+        "报名",
+        "算我一个",
+        "带我一个",
+        "我也可以",
+        "算我",
+        "拉我",
+        "可以",
+        "能玩",
+        "有空",
+        "行",
+        "好",
+        "ok",
+        "yes",
+        "玩",
+        "来",
+        "加",
+        "打faf",
+        "打",
+        "faf",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    for token in message.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric());
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Skip tokens that look like time expressions (contain digits).
+        if trimmed.chars().any(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        // Skip single-character pronouns / particles and common join words.
+        if trimmed.len() <= 1 || skip_words.contains(trimmed) {
+            continue;
+        }
+        return Some(trimmed.to_string());
+    }
+    None
 }
 
 fn parse_time_tool(args: serde_json::Value) -> serde_json::Value {
@@ -149,7 +235,7 @@ fn parse_time_tool(args: serde_json::Value) -> serde_json::Value {
     };
 
     let now = match chrono::DateTime::parse_from_rfc3339(&args.now) {
-        Ok(dt) => dt.with_timezone(&chrono::FixedOffset::east_opt(0).unwrap()),
+        Ok(dt) => dt,
         Err(e) => return serde_json::json!({"error": format!("invalid now: {e}") }),
     };
 

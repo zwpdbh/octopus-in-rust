@@ -250,6 +250,8 @@ impl GroupBrainManager {
         user_id: i64,
         message_id: Option<i32>,
         text: String,
+        sender_nickname: Option<String>,
+        at_targets: Vec<(i64, Option<String>)>,
     ) {
         let mut running = self.running.lock().await;
         if let Some(group) = running.get_mut(&group_id) {
@@ -270,11 +272,17 @@ impl GroupBrainManager {
         drop(running);
 
         // Check for FAF party scheduling intent before starting the LLM turn.
+        // If the host service handles the message (registration / leave), skip the
+        // LLM turn to avoid a duplicate confirmation.
         let tz = chrono::FixedOffset::east_opt(8 * 3600).expect("valid +08:00 offset");
         let now = chrono::Utc::now().with_timezone(&tz);
-        self.faf_party
-            .process_message(group_id, user_id, &text, now)
+        let handled = self
+            .faf_party
+            .process_message(group_id, user_id, &text, now, sender_nickname, at_targets)
             .await;
+        if handled {
+            return;
+        }
 
         let brain = match self.get_or_create_brain(group_id).await {
             Ok(brain) => brain,
