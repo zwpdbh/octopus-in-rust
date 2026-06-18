@@ -18,11 +18,15 @@ cargo build --release -p qqbot -p qqbot-core
 echo "Building faf-units plugin..."
 cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown
 
-echo "Copying binaries and plugin..."
+echo "Building faf-party plugin..."
+cargo build --release -p faf-party-plugin --target wasm32-unknown-unknown
+
+echo "Copying binaries and plugins..."
 cp "$ROOT/target/release/qqbot" "$RELEASE_DIR/"
 cp "$ROOT/target/release/qqbot-core" "$RELEASE_DIR/"
 mkdir -p "$RELEASE_DIR/plugins"
 cp "$ROOT/target/wasm32-unknown-unknown/release/faf_units_plugin.wasm" "$RELEASE_DIR/plugins/"
+cp "$ROOT/target/wasm32-unknown-unknown/release/faf_party_plugin.wasm" "$RELEASE_DIR/plugins/"
 
 echo "Creating tarball..."
 cd "$OUT_DIR"

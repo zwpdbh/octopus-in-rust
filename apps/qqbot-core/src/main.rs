@@ -1,5 +1,6 @@
 mod config;
 mod control;
+mod faf_party;
 mod group_brain;
 mod llm_provider;
 mod memory;

@@ -1315,6 +1315,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-party-plugin"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "extism-pdk",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "faf-units"
 version = "0.1.0"
 dependencies = [

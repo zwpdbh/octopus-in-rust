@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, info};
 
 use crate::config::Config;
+use crate::faf_party::FafPartyHostService;
 use crate::llm_provider::QqbotProviderFactory;
 use crate::memory::MemoryStore;
 use crate::onebot::types::Action;
@@ -96,6 +97,7 @@ pub struct GroupBrainManager {
     data_dir: PathBuf,
     action_tx: crate::onebot::ActionTx,
     max_steps_per_turn: usize,
+    faf_party: FafPartyHostService,
 }
 
 impl GroupBrainManager {
@@ -106,6 +108,7 @@ impl GroupBrainManager {
         data_dir: PathBuf,
         action_tx: crate::onebot::ActionTx,
     ) -> Self {
+        let faf_party = FafPartyHostService::new(data_dir.clone(), &config, action_tx.clone());
         Self {
             brains: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
@@ -115,6 +118,7 @@ impl GroupBrainManager {
             data_dir,
             action_tx,
             max_steps_per_turn: DEFAULT_MAX_STEPS_PER_TURN,
+            faf_party,
         }
     }
 
@@ -260,6 +264,13 @@ impl GroupBrainManager {
         }
         drop(running);
 
+        // Check for FAF party scheduling intent before starting the LLM turn.
+        let tz = chrono::FixedOffset::east_opt(8 * 3600).expect("valid +08:00 offset");
+        let now = chrono::Utc::now().with_timezone(&tz);
+        self.faf_party
+            .process_message(self, group_id, user_id, &text, now)
+            .await;
+
         let brain = match self.get_or_create_brain(group_id).await {
             Ok(brain) => brain,
             Err(e) => {
@@ -314,7 +325,7 @@ impl GroupBrainManager {
         }
     }
 
-    async fn get_or_create_brain(&self, group_id: i64) -> Result<Brain> {
+    pub async fn get_or_create_brain(&self, group_id: i64) -> Result<Brain> {
         let mut brains = self.brains.lock().await;
         if let std::collections::hash_map::Entry::Vacant(e) = brains.entry(group_id) {
             let brain = self
@@ -380,6 +391,12 @@ impl GroupBrainManager {
         brain.register_tool(
             Box::new(kosong::tooling::CallableTool2Adapter::new(
                 RecentMessagesTool::new(self.memory.clone(), group_id),
+            )),
+            "host",
+        );
+        brain.register_tool(
+            Box::new(kosong::tooling::CallableTool2Adapter::new(
+                crate::faf_party::FafPartyStatusTool::new(self.data_dir.clone(), group_id),
             )),
             "host",
         );

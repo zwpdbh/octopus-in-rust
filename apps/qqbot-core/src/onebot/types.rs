@@ -675,14 +675,35 @@ impl Action {
         text: impl Into<String>,
         echo: Option<String>,
     ) -> Self {
+        Self::send_group_msg_with_mentions(group_id, &[user_id], text, echo)
+    }
+
+    /// Send a group message that @-mentions multiple users, followed by text.
+    pub fn send_group_msg_with_mentions(
+        group_id: i64,
+        user_ids: &[i64],
+        text: impl Into<String>,
+        echo: Option<String>,
+    ) -> Self {
+        let mut message: Vec<serde_json::Value> = user_ids
+            .iter()
+            .map(|user_id| {
+                serde_json::json!({
+                    "type": "at",
+                    "data": {"qq": user_id.to_string()}
+                })
+            })
+            .collect();
+        message.push(serde_json::json!({
+            "type": "text",
+            "data": {"text": format!(" {}", text.into())}
+        }));
+
         Self {
             action: "send_group_msg".to_string(),
             params: serde_json::json!({
                 "group_id": group_id,
-                "message": [
-                    {"type": "at", "data": {"qq": user_id.to_string()}},
-                    {"type": "text", "data": {"text": format!(" {}", text.into())}},
-                ],
+                "message": message,
             }),
             echo,
         }

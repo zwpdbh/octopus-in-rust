@@ -17,13 +17,13 @@ The bot will:
 | Question | Decision |
 |---|---|
 | Where does parsing live? | In a WASM plugin `plugins/faf-party` for sandboxing and hot-reload. |
-| Where does state/scheduling live? | In `qqbot-core` host service, because plugins cannot run timers or send messages. |
+| Where does state/scheduling live? | In `qqbot-core` host service (`FafPartyHostService`), because plugins cannot run timers or send messages. |
 | Storage format | JSON file per group: `data/qqbot-data/faf-party-<group_id>.json`. |
 | Fixed daily end time | 22:00 (10 PM). Every availability range extends to 22:00 unless the user gives an explicit end. |
 | Past-time handling | If a parsed start time is already in the past, schedule it for the same wall-clock time **tomorrow**. |
 | Party size trigger | 6 candidates for a 3v3 match. |
 | Notification retries | 3 times: immediately, +30s, +60s. After the 3rd retry the candidate list is cleared. |
-| Leave detection | Phrases: "不玩了", "cancel", "退出", "leave", and command `/faf leave`. |
+| Leave detection | Phrases: "不玩了", "cancel", "退出", "leave", "不打了", "不来", "算了", and command `/faf leave`. |
 
 ## Current state
 
@@ -52,26 +52,29 @@ The bot will:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Plugin tools (`faf-party`)
+### Plugin tool (`faf-party`)
 
-1. **`faf_party_parse_availability`**
+1. **`faf_party_parse_message`**
    - Input: `{ "message": "我大约半个小时后可以玩", "now": "2026-06-18T13:00:00+08:00" }`
-   - Output: `{ "start": "...", "end": "...", "description": "半个小时后到晚上10点" }`
+   - Output: `{ "intent": "join|leave|unknown", "availability": { "start": "...", "end": "...", "description": "半个小时后到晚上10点" } }`
    - Pure computation, no side effects.
 
-2. **`faf_party_process_message`**
-   - Input: `{ "user_id": 123456, "message": "...", "now": "...", "group_id": 136430130 }`
-   - Output: `{ "intent": "join|leave|unknown", "availability": { "start": "...", "end": "..." }, "candidates": [...], "ready": false, "notification": null }`
-   - Reads/writes the group state file via `allowed_paths`.
+### Host tool (`qqbot-core`)
+
+1. **`faf_party_status`**
+   - Input: `{}`
+   - Output: `{ "count": 3, "candidates": [{ "user_id": 123, "start": "...", "end": "..." }] }`
+   - Registered directly with the Brain so the LLM can answer questions like "现在有多少人了？".
 
 ### Host service (`qqbot-core`)
 
 - `FafPartyHostService` is created once per `GroupBrainManager`.
-- After each addressed message, `group_brain` calls the plugin and then asks the host service to:
-  - Update candidate list
-  - Check for overlap among candidates
-  - Schedule notification retries when ready
+- After each addressed message, `group_brain` calls `faf_party_parse_message` and then the host service:
+  - Updates the candidate list in `data/qqbot-data/faf-party-<group_id>.json`
+  - Checks for overlap among candidates
+  - Schedules notification retries when ready
 - Background `tokio` tasks handle the +30s and +60s retries.
+- The first notification `@`-mentions every candidate; retries are plain group messages.
 
 ### State file format
 
@@ -107,24 +110,24 @@ The bot will:
    - End time defaults to 22:00.
    - Past times roll forward to tomorrow.
 
-3. **Implement plugin state management**
-   - Read/write `data/qqbot-data/faf-party-<group_id>.json` via `allowed_paths`.
-   - Handle `join`, `leave`, `unknown` intents.
+3. **Implement plugin parsing**
+   - Detect `join`, `leave`, `unknown` intents.
+   - Parse availability for Chinese expressions.
    - Detect leave phrases and `/faf leave`.
 
 4. **Add host service in `qqbot-core`**
    - New module `apps/qqbot-core/src/faf_party.rs`.
+   - Read/write `data/qqbot-data/faf-party-<group_id>.json`.
    - Schedule retry timers.
    - Send notifications via `action_tx`.
 
 5. **Wire into `group_brain`**
-   - Call `faf_party_process_message` for every addressed message.
-   - If `ready`, pass result to `FafPartyHostService` for notification scheduling.
+   - Call `faf_party_parse_message` for every addressed message before starting the LLM turn.
+   - If enough candidates overlap, schedule notifications.
 
 6. **Build and deploy integration**
    - Add plugin to `scripts/build-qqbot-release.sh`.
-   - Enable in group configs.
-   - Update system prompt to mention FAF party scheduling.
+   - Enable `faf_party_plugin` in group configs.
 
 ## Open questions
 

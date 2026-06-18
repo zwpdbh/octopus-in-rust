@@ -53,9 +53,10 @@ Create strategic plan for the `faf-party` plugin. See [`docs/plans/16-faf-party-
 
 Current state:
 - [x] Availability parsing semantics defined (Chinese expressions, 22:00 default end, past-time rollover).
-- [x] Plugin/host architecture sketched (WASM parser + host timer/notifications).
+- [x] Plugin/host architecture implemented (WASM parser + host timer/notifications).
 - [x] Implementation steps and success criteria documented.
-- [ ] Open questions answered before implementation starts.
+- [x] Plugin built and deployed to ECS.
+- [ ] Open questions answered before next iteration.
 
 ## Previous Task
 
@@ -83,6 +84,8 @@ State:
 | 2026-06-12 | Unify server and wire hooks under `Hook` trait | Single dispatch path; easier to add new hook backends later |
 | 2026-06-12 | Add `_template.md` root bootstrap template | Enables copying the enforced project structure into future projects without referencing octopus directly |
 | 2026-06-18 | Fix per-step progress timer reset in `group_brain.rs` | Progress heartbeat now spans the whole turn, preventing multiple “Still checking...” messages 30s apart when tools are unchanged |
+| 2026-06-18 | Implement `faf-party` plugin and host service | WASM parser extracts intent/availability; `FafPartyHostService` tracks candidates and notifies when 6 players overlap |
+| 2026-06-18 | Add `faf_party_status` host tool | LLM can now query the current candidate list, enabling responses to "现在有多少人了？" |
 
 ---
 
