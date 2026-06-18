@@ -13,6 +13,7 @@ For day-to-day operational status, see [`STATUS.md`](../../STATUS.md).
 | 14 | [`14-brain-architecture.md`](./14-brain-architecture.md) | Extract a reusable Brain crate for octopus-cli and qqbot-core |
 | 15 | [`15-qqbot-deployment.md`](./15-qqbot-deployment.md) | Deploy qqbot to AliCloud ECS via `cargo xtask` |
 | 15a | [`15a-qqbot-deployment-checklist.md`](./15a-qqbot-deployment-checklist.md) | Step-by-step operational checklist for AliCloud ECS deployment |
+| 16 | [`16-faf-party-plugin.md`](./16-faf-party-plugin.md) | FAF party scheduling plugin for QQ groups |
 
 ---
 

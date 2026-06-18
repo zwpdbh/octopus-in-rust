@@ -469,32 +469,26 @@ async fn turn_worker(
     let mut any_text_seen = false;
     let mut final_text = String::new();
 
-    for _step in 0..max_steps {
-        if *cancel_rx.borrow() {
-            cancelled = true;
-            break;
-        }
+    // Track tool names invoked across the whole turn for the periodic progress
+    // message. The timer is global to the turn, not per-step, so the heartbeat
+    // fires at most once every `progress_interval` regardless of how many
+    // reasoning steps occur.
+    let progress_tools: std::sync::Arc<std::sync::Mutex<HashSet<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+    let progress_done = std::sync::Arc::new(AtomicBool::new(false));
 
-        // Track tool names invoked this step for the periodic progress message.
-        let progress_tools: std::sync::Arc<std::sync::Mutex<HashSet<String>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
-
-        // Periodically post a progress message while the step is running.
-        // A message is sent when the tool set changes or when the interval
-        // elapses, whichever comes first. Duplicate messages for the same tool
-        // set are suppressed.
-        let done = std::sync::Arc::new(AtomicBool::new(false));
-        let progress_done = done.clone();
+    let progress_handle = {
+        let done = progress_done.clone();
         let progress_action_tx = action_tx.clone();
         let progress_tools_clone = progress_tools.clone();
-        let progress_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut last_sent_tools: Vec<String> = Vec::new();
             let mut last_sent_at = tokio::time::Instant::now();
             let poll_interval = Duration::from_secs(1);
 
             loop {
                 tokio::time::sleep(poll_interval).await;
-                if progress_done.load(Ordering::Relaxed) {
+                if done.load(Ordering::Relaxed) {
                     break;
                 }
 
@@ -516,7 +510,14 @@ async fn turn_worker(
                     last_sent_at = tokio::time::Instant::now();
                 }
             }
-        });
+        })
+    };
+
+    for _step in 0..max_steps {
+        if *cancel_rx.borrow() {
+            cancelled = true;
+            break;
+        }
 
         final_text.clear();
         let mut had_tool_results = false;
@@ -560,7 +561,7 @@ async fn turn_worker(
                 }
             }
             Err(e) => {
-                done.store(true, Ordering::Relaxed);
+                progress_done.store(true, Ordering::Relaxed);
                 progress_handle.abort();
                 send_reply(
                     &action_tx,
@@ -572,10 +573,9 @@ async fn turn_worker(
             }
         }
 
-        done.store(true, Ordering::Relaxed);
-        progress_handle.abort();
-
         if let Some(err) = step_error {
+            progress_done.store(true, Ordering::Relaxed);
+            progress_handle.abort();
             send_reply(
                 &action_tx,
                 group_id,
@@ -615,6 +615,9 @@ async fn turn_worker(
         send_reply(&action_tx, group_id, message_id, reply);
         break;
     }
+
+    progress_done.store(true, Ordering::Relaxed);
+    progress_handle.abort();
 
     if cancelled {
         send_reply(

@@ -10,8 +10,8 @@
 | Item | State |
 |------|-------|
 | **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` (Brain crate layered; `qqbot-core` integration complete) |
-| **Active Task** | Deploy qqbot to AliCloud ECS via `cargo xtask qqbot deploy` |
-| **Last Completed** | Verified AliCloud ECS deployment: instance reachable, WebUI/noVNC open, `remote-status`/`remote-doctor` clean; deploy code now opens service ports and rewrites remote config paths |
+| **Active Task** | Create strategic plan for the `faf-party` plugin |
+| **Last Completed** | Deployed qqbot to AliCloud ECS with group-specific health checks and periodic progress feedback |
 | **Compilation** | `cargo check --workspace` ✅ |
 | **Tests** | `cargo test --workspace` ✅ |
 | **Blockers** | Bot needs manual QQ login via SnowLuma WebUI/noVNC before OneBot WebSocket handshake will succeed. Current AliCloud cash balance is ~99.6 CNY; top up to at least 100 CNY before creating a new instance. |
@@ -49,9 +49,19 @@ Legend: ✅ Complete · 🔄 Partial · ❌ Not Started
 
 ## Active Task
 
-Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md) and [`docs/plans/15-qqbot-deployment.md`](./docs/plans/15-qqbot-deployment.md).
+Create strategic plan for the `faf-party` plugin. See [`docs/plans/16-faf-party-plugin.md`](./docs/plans/16-faf-party-plugin.md).
 
 Current state:
+- [x] Availability parsing semantics defined (Chinese expressions, 22:00 default end, past-time rollover).
+- [x] Plugin/host architecture sketched (WASM parser + host timer/notifications).
+- [x] Implementation steps and success criteria documented.
+- [ ] Open questions answered before implementation starts.
+
+## Previous Task
+
+Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md) and [`docs/plans/15-qqbot-deployment.md`](./docs/plans/15-qqbot-deployment.md).
+
+State:
 - [x] Deployment plan approved.
 - [x] xtask deploy module, AliCloud CLI wrappers, SSH helpers, provisioning, and remote install implemented.
 - [x] systemd service template and remote setup script added.
@@ -72,6 +82,7 @@ Current state:
 | 2026-06-12 | Split `HookEvent` into `HookEventKind` (registry key) + `HookEvent` (runtime payload) | Removed dual-role confusion; `trigger(event)` no longer needs a separate `matcher_value` |
 | 2026-06-12 | Unify server and wire hooks under `Hook` trait | Single dispatch path; easier to add new hook backends later |
 | 2026-06-12 | Add `_template.md` root bootstrap template | Enables copying the enforced project structure into future projects without referencing octopus directly |
+| 2026-06-18 | Fix per-step progress timer reset in `group_brain.rs` | Progress heartbeat now spans the whole turn, preventing multiple “Still checking...” messages 30s apart when tools are unchanged |
 
 ---
 
