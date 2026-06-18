@@ -10,6 +10,7 @@ This tutorial explains how the Octopus `qqbot` package works and how to run, man
 4. [WASM plugin system](05-plugins.md)
 5. [Health, status, and diagnostics](06-health-status.md)
 6. [Troubleshooting](07-troubleshooting.md)
+7. [Onboarding a new QQ group](08-new-group.md)
 
 ## Quick reference
 

@@ -28,7 +28,7 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
         "doctor" => run_qqbot(["doctor"].iter().map(|s| s.to_string()), project::profile()),
         "deploy" => run_deploy(rest),
         "remote-status" => deploy::remote_cmd("status"),
-        "remote-health" => deploy::remote_cmd("health"),
+        "remote-health" => deploy::remote_health(rest),
         "remote-logs" => deploy::remote_logs(rest),
         "remote-start" => deploy::remote_service_cmd("start"),
         "remote-stop" => deploy::remote_service_cmd("stop"),
@@ -72,7 +72,9 @@ fn print_help() -> Result<()> {
     println!("  deploy           Build release and deploy to AliCloud ECS");
     println!("  deploy --fresh [--yes]  Delete existing instance/key and deploy from scratch");
     println!("  remote-status    Show qqbot status on the remote host");
-    println!("  remote-health    Run health check on the remote host");
+    println!(
+        "  remote-health [args]  Run health check on the remote host (e.g. '--group 136430130')"
+    );
     println!("  remote-logs      Show remote qqbot logs");
     println!("  remote-start     Start the remote qqbot systemd service");
     println!("  remote-stop      Stop the remote qqbot systemd service");

@@ -14,7 +14,6 @@ use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::ToolReturnValue;
 use kosong::Toolset;
 use serde::Deserialize;
-use serde_json::Value;
 use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, info};
 
@@ -24,9 +23,6 @@ use crate::memory::MemoryStore;
 use crate::onebot::types::Action;
 
 const DEFAULT_MAX_STEPS_PER_TURN: usize = 16;
-const PROGRESS_UPDATE_AFTER: Duration = Duration::from_secs(10);
-const TOOL_ARGS_MAX_LEN: usize = 120;
-const TOOL_RESULT_MAX_LEN: usize = 240;
 
 /// Host-provided tool that fetches recent messages from the bot's memory.
 pub struct RecentMessagesTool {
@@ -278,6 +274,12 @@ impl GroupBrainManager {
             }
         };
 
+        let profile = qqbot_config::GroupProfile::load(&self.data_dir, group_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let progress_interval = Duration::from_secs(profile.progress_interval_secs());
+
         let (steer_tx, steer_rx) = mpsc::unbounded_channel();
         let (cancel_tx, cancel_rx) = watch::channel(false);
 
@@ -285,8 +287,16 @@ impl GroupBrainManager {
         let max_steps = self.max_steps_per_turn;
         let handle = tokio::spawn(async move {
             turn_worker(
-                brain, group_id, user_id, message_id, text, action_tx, steer_rx, cancel_rx,
+                brain,
+                group_id,
+                user_id,
+                message_id,
+                text,
+                action_tx,
+                steer_rx,
+                cancel_rx,
                 max_steps,
+                progress_interval,
             )
             .await;
         });
@@ -421,32 +431,13 @@ fn send_reply(
     }
 }
 
-/// Truncate text for display, adding an ellipsis if needed.
-fn truncate(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
-        text.to_string()
+/// Format the periodic progress message. Lists invoked tool names in brackets
+/// so users can clearly see whether tools are being used.
+fn format_progress_message(tools: &[String]) -> String {
+    if tools.is_empty() {
+        "Still checking... (tools: [])".to_string()
     } else {
-        format!(
-            "{}...",
-            &text[..text
-                .char_indices()
-                .nth(max_len)
-                .map(|(i, _)| i)
-                .unwrap_or(max_len)]
-        )
-    }
-}
-
-/// Format tool arguments for a status message.
-fn format_tool_args(arguments: &Value) -> String {
-    if arguments.is_null() || arguments.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-        return String::new();
-    }
-    let args = serde_json::to_string(arguments).unwrap_or_default();
-    if args.len() <= TOOL_ARGS_MAX_LEN {
-        format!(" with {}", args)
-    } else {
-        format!(" with {}", truncate(&args, TOOL_ARGS_MAX_LEN))
+        format!("Still checking... (tools: [{}])", tools.join(", "))
     }
 }
 
@@ -462,6 +453,7 @@ async fn turn_worker(
     mut steer_rx: mpsc::UnboundedReceiver<String>,
     cancel_rx: watch::Receiver<bool>,
     max_steps: usize,
+    progress_interval: Duration,
 ) {
     // Seed the initial user message.
     push_user_message(&brain, &initial_message).await;
@@ -483,24 +475,46 @@ async fn turn_worker(
             break;
         }
 
-        // If the step takes a while with no visible output, remind the user.
+        // Track tool names invoked this step for the periodic progress message.
+        let progress_tools: std::sync::Arc<std::sync::Mutex<HashSet<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+
+        // Periodically post a progress message while the step is running.
+        // A message is sent when the tool set changes or when the interval
+        // elapses, whichever comes first. Duplicate messages for the same tool
+        // set are suppressed.
         let done = std::sync::Arc::new(AtomicBool::new(false));
-        let had_output = std::sync::Arc::new(AtomicBool::new(false));
         let progress_done = done.clone();
-        let progress_had_output = had_output.clone();
         let progress_action_tx = action_tx.clone();
-        let progress_question = initial_message.clone();
+        let progress_tools_clone = progress_tools.clone();
         let progress_handle = tokio::spawn(async move {
-            tokio::time::sleep(PROGRESS_UPDATE_AFTER).await;
-            if !progress_done.load(Ordering::Relaxed)
-                && !progress_had_output.load(Ordering::Relaxed)
-            {
-                send_reply(
-                    &progress_action_tx,
-                    group_id,
-                    message_id,
-                    format!("Still working on it: \"{}\" ⏳", progress_question),
-                );
+            let mut last_sent_tools: Vec<String> = Vec::new();
+            let mut last_sent_at = tokio::time::Instant::now();
+            let poll_interval = Duration::from_secs(1);
+
+            loop {
+                tokio::time::sleep(poll_interval).await;
+                if progress_done.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let tools: Vec<String> = {
+                    let set = progress_tools_clone.lock().unwrap();
+                    let mut v: Vec<_> = set.iter().cloned().collect();
+                    v.sort();
+                    v
+                };
+
+                let tools_changed = tools != last_sent_tools;
+                let interval_elapsed =
+                    tokio::time::Instant::now().duration_since(last_sent_at) >= progress_interval;
+
+                if tools_changed || interval_elapsed {
+                    let msg = format_progress_message(&tools);
+                    send_reply(&progress_action_tx, group_id, message_id, msg);
+                    last_sent_tools = tools;
+                    last_sent_at = tokio::time::Instant::now();
+                }
             }
         });
 
@@ -515,43 +529,27 @@ async fn turn_worker(
                     match event {
                         BrainEvent::TextPart(text) => {
                             any_text_seen = true;
-                            had_output.store(true, Ordering::Relaxed);
                             final_text.push_str(&text);
                         }
                         BrainEvent::ToolCall {
                             id,
                             name,
-                            arguments,
+                            arguments: _,
                         } => {
-                            had_output.store(true, Ordering::Relaxed);
                             tool_names.insert(id, name.clone());
-                            let args = format_tool_args(&arguments);
-                            send_reply(
-                                &action_tx,
-                                group_id,
-                                message_id,
-                                format!("🔧 Using tool `{name}`{args}"),
-                            );
+                            progress_tools.lock().unwrap().insert(name);
                         }
                         BrainEvent::ToolResult {
                             id,
-                            output,
-                            is_error,
+                            output: _,
+                            is_error: _,
                         } => {
-                            had_output.store(true, Ordering::Relaxed);
                             had_tool_results = true;
-                            let name = tool_names
+                            let _name = tool_names
                                 .get(&id)
                                 .cloned()
                                 .unwrap_or_else(|| "tool".to_string());
-                            let status = if is_error { "❌" } else { "📥" };
-                            let summary = truncate(&output, TOOL_RESULT_MAX_LEN);
-                            send_reply(
-                                &action_tx,
-                                group_id,
-                                message_id,
-                                format!("{status} `{name}` result: {summary}"),
-                            );
+                            // Tool results are no longer posted to the group chat.
                         }
                         BrainEvent::Error(e) => {
                             step_error = Some(e);

@@ -37,12 +37,12 @@ pub struct GroupEcho {
     pub llm_model: Option<String>,
 }
 
-pub async fn run(data_dir: &Path) -> Result<()> {
+pub async fn run(data_dir: &Path, group_id: Option<i64>) -> Result<()> {
     let config = CoreConfigFile::from_file(data_dir.join("config.toml"))?;
 
     println!("=== qqbot health ===\n");
 
-    match check(data_dir, &config, true).await {
+    match check(data_dir, &config, true, group_id).await {
         Ok(report) => print_report(&report),
         Err(e) => {
             error!(error = %e, "health check failed");
@@ -57,6 +57,7 @@ pub async fn check(
     data_dir: &Path,
     config: &CoreConfigFile,
     send_echo: bool,
+    group_id: Option<i64>,
 ) -> Result<HealthReport> {
     let mut ws = connect(config).await?;
 
@@ -116,7 +117,7 @@ pub async fn check(
         }
     }
 
-    // 4. End-to-end echo: send a message to the first allowed group and
+    // 4. End-to-end echo: send a message to the selected allowed group and
     //    confirm it appears in group history.
     let features: Vec<String> = crate::plugins::enabled_plugins(data_dir)
         .unwrap_or_default()
@@ -126,11 +127,32 @@ pub async fn check(
     let mut echo: Option<GroupEcho> = None;
     if send_echo && online && group_membership.iter().any(|g| g.member) {
         if let Some(bot_user_id) = bot_user_id {
-            let group_id = group_membership
-                .iter()
-                .find(|g| g.member)
-                .map(|g| g.group_id)
-                .unwrap();
+            let group_id = match group_id {
+                Some(id) => {
+                    if !config.bot.allowed_groups.contains(&id) {
+                        anyhow::bail!(
+                            "group {id} is not in bot.allowed_groups; add it to config.toml first"
+                        );
+                    }
+                    let gm = group_membership
+                        .iter()
+                        .find(|g| g.group_id == id)
+                        .with_context(|| {
+                            format!("group {id} membership could not be determined")
+                        })?;
+                    if !gm.member {
+                        anyhow::bail!(
+                            "bot is not a member of group {id}; add the bot to this group first"
+                        );
+                    }
+                    id
+                }
+                None => group_membership
+                    .iter()
+                    .find(|g| g.member)
+                    .map(|g| g.group_id)
+                    .context("bot is not a member of any allowed group")?,
+            };
             match check_group_echo(data_dir, config, group_id, bot_user_id).await {
                 Ok(e) => echo = Some(e),
                 Err(e) => {

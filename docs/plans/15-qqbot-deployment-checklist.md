@@ -116,7 +116,7 @@ http://<server-ip>:6081   # noVNC (password: vncpasswd)
 Once QQ is online, `qqbot-core` will connect to the OneBot WebSocket and the group brain will become ready.
 
 - [ ] `remote-status` shows the supervisor is running.
-- [ ] `remote-health` reports healthy.
+- [ ] `remote-health` (or `remote-health --group <new_group_id>`) reports healthy.
 - [ ] `remote-doctor` reports no critical issues.
 
 ## 6. Day-to-day remote management

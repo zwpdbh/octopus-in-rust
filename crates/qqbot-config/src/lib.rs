@@ -21,6 +21,11 @@ pub struct GroupProfile {
     /// Plugin file stems that are always excluded for this group.
     #[serde(default)]
     pub disabled_plugins: Vec<String>,
+
+    /// Seconds between progress updates while the bot is working on a
+    /// long-running answer. Default: 10.
+    #[serde(default)]
+    pub progress_interval_secs: Option<u64>,
 }
 
 impl GroupProfile {
@@ -53,6 +58,11 @@ impl GroupProfile {
     /// Return the effective system prompt for the group.
     pub fn system_prompt_or<'a>(&'a self, global: &'a str) -> &'a str {
         self.system_prompt.as_deref().unwrap_or(global)
+    }
+
+    /// Return the effective progress interval in seconds.
+    pub fn progress_interval_secs(&self) -> u64 {
+        self.progress_interval_secs.unwrap_or(30)
     }
 
     /// Decide whether a plugin (by file stem) is allowed for this group.
@@ -149,6 +159,7 @@ mod tests {
             system_prompt: Some("Group-specific prompt.".to_string()),
             enabled_plugins: Some(vec!["summary".to_string()]),
             disabled_plugins: vec![],
+            ..Default::default()
         };
         GroupProfile::save(data_dir, 123456, &profile).unwrap();
         let loaded = GroupProfile::load(data_dir, 123456).unwrap().unwrap();

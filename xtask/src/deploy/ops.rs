@@ -99,6 +99,16 @@ pub fn remote_cmd(subcommand: &str) -> Result<()> {
     Ok(())
 }
 
+/// Run a health check on the remote host. Extra args are forwarded to `qqbot health`.
+pub fn remote_health(rest: &[String]) -> Result<()> {
+    let (config, instance) = load_config_and_instance()?;
+    let mut cmd = vec!["health".to_string()];
+    cmd.extend(rest.iter().cloned());
+    let output = remote::run_qqbot(&config, &instance, &cmd.join(" "))?;
+    print!("{output}");
+    Ok(())
+}
+
 /// Show remote logs. Extra args are forwarded to `qqbot logs`.
 pub fn remote_logs(rest: &[String]) -> Result<()> {
     let (config, instance) = load_config_and_instance()?;

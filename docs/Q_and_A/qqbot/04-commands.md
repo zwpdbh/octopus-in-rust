@@ -81,6 +81,12 @@ Perform an explicit end-to-end health check. This command queries the OneBot API
 cargo run --bin qqbot -- health
 ```
 
+When multiple groups are configured, use `--group <group_id>` to choose which group receives the test message. If omitted, the first allowed group where the bot is a member is used.
+
+```bash
+cargo run --bin qqbot -- health --group 136430130
+```
+
 ### `doctor`
 
 Run infrastructure diagnostics: Docker, SnowLuma image, binaries, configs, ports, and WebSocket handshake.

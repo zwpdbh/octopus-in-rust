@@ -19,3 +19,7 @@ enabled_plugins = ["faf_units_plugin"]
 
 # Plugins to explicitly disable for this group. Usually left empty.
 disabled_plugins = []
+
+# Optional seconds between progress updates while the bot is working on a
+# long-running answer. Default: 30.
+progress_interval_secs = 30

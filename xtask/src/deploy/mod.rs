@@ -6,6 +6,6 @@ pub mod remote;
 pub mod ssh;
 
 pub use ops::{
-    remote_cmd, remote_destroy, remote_logs, remote_service_cmd, remote_start_instance,
-    remote_stop_instance, run, run_fresh,
+    remote_cmd, remote_destroy, remote_health, remote_logs, remote_service_cmd,
+    remote_start_instance, remote_stop_instance, run, run_fresh,
 };

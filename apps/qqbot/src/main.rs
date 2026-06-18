@@ -89,7 +89,12 @@ enum Command {
     /// Run diagnostic checks.
     Doctor,
     /// Check whether the bot is ready to send/receive messages.
-    Health,
+    Health {
+        /// Group ID to use for the end-to-end echo check. If omitted, the first
+        /// allowed group where the bot is a member is used.
+        #[arg(long, short)]
+        group: Option<i64>,
+    },
     /// Manage hot-reloadable plugins.
     Plugin {
         #[command(subcommand)]
@@ -277,9 +282,9 @@ fn main() -> Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(doctor::run(&data_dir))?;
         }
-        Command::Health => {
+        Command::Health { group } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(health::run(&data_dir))?;
+            rt.block_on(health::run(&data_dir, group))?;
         }
         Command::Plugin { command } => match command {
             PluginCommand::List => {

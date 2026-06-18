@@ -102,6 +102,8 @@ cargo xtask qqbot remote-stop
 cargo xtask qqbot remote-start
 cargo xtask qqbot remote-doctor
 cargo xtask qqbot remote-health
+# When multiple groups are configured, target a specific group:
+cargo xtask qqbot remote-health --group 136430130
 ```
 
 ## Manual QQ Login (One-Time)

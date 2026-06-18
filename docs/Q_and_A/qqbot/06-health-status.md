@@ -29,8 +29,14 @@ Because it does not send messages, you can run it as often as you like.
 1. Connects to the OneBot WebSocket.
 2. Calls `get_login_info` and `get_status` to verify the QQ account is online.
 3. Calls `get_group_member_info` for each allowed group to verify membership.
-4. Sends a short, unique test message to the first allowed group.
+4. Sends a short, unique test message to the selected allowed group.
 5. Calls `get_group_msg_history` to confirm the message was delivered.
+
+By default the test message is sent to the first allowed group where the bot is a member. When there are multiple groups, use `--group <group_id>` to target a specific group:
+
+```bash
+cargo run --bin qqbot -- health --group 136430130
+```
 
 The test message posted to the group looks like:
 
@@ -45,7 +51,7 @@ Mention the bot with @<question> to chat.
 check id: <uuid>
 ```
 
-If `health` reports all checks green, the bot can both send and receive messages in the allowed group.
+If `health` reports all checks green, the bot can both send and receive messages in the checked group.
 
 ## 5.4 `doctor`
 

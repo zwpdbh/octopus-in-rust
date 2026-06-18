@@ -336,7 +336,7 @@ pub async fn show(data_dir: &Path) -> Result<()> {
                 Ok(cfg) => {
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(10),
-                        health::check(data_dir, cfg, false),
+                        health::check(data_dir, cfg, false, None),
                     )
                     .await
                     {
