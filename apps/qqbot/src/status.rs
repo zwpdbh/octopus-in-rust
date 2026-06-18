@@ -78,10 +78,12 @@ pub async fn show(data_dir: &Path) -> Result<()> {
     let mut global_checks: Vec<Check> = Vec::new();
 
     // Daemon.
-    let daemon_alive = daemon::is_alive(data_dir);
+    let daemon_alive = daemon::is_alive(data_dir) || systemd_service_active().await;
     if daemon_alive {
         if let Some(pid) = daemon::pid(data_dir) {
             global_checks.push(Check::ok(format!("qqbot daemon running (pid {pid})")));
+        } else if systemd_service_active().await {
+            global_checks.push(Check::ok("qqbot systemd service active".to_string()));
         } else {
             global_checks.push(Check::warn(
                 "qqbot daemon pid file unreadable",
@@ -559,6 +561,17 @@ async fn is_container_running() -> bool {
         .await
     {
         Ok(output) => !output.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+async fn systemd_service_active() -> bool {
+    match Command::new("systemctl")
+        .args(["is-active", "--quiet", "qqbot"])
+        .output()
+        .await
+    {
+        Ok(output) => output.status.success(),
         Err(_) => false,
     }
 }

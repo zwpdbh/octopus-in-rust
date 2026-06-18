@@ -10,8 +10,8 @@
 [aliyun]
 # AliCloud region and zone. Must match the region configured in your
 # `aliyun` CLI profile (run `aliyun configure list` to verify).
-region = "cn-hangzhou"
-zone = "cn-hangzhou-i"
+region = "cn-shanghai"
+zone = "cn-shanghai-m"
 
 # ECS instance type. For a minimal personal bot, "ecs.e-c1m1.large" is enough.
 # Make sure the type is available in the chosen zone.
@@ -35,6 +35,11 @@ key_pair_name = "qqbot-key"
 # IP/32, e.g. "203.0.113.42/32". Do NOT leave it as 0.0.0.0/0 except briefly
 # for testing. If your IP is dynamic, update this value before each session.
 allowed_ssh_cidr = "0.0.0.0/0"
+
+# CIDR allowed to reach SnowLuma WebUI (5099), noVNC (6081), and VNC (5900).
+# Set this to your current public IP/32. If you leave it as 0.0.0.0/0, anyone
+# can reach the WebUI/noVNC once the bot is logged in.
+allowed_service_cidr = "0.0.0.0/0"
 
 # AliCloud CLI profile to use. The profile must be configured with
 # `aliyun configure --profile <name>`.

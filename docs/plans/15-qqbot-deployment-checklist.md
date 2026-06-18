@@ -75,7 +75,7 @@ Wait until the command finishes and prints remote status / doctor output.
 
 ## 5. Verify the remote service
 
-Run these commands from your local machine:
+Run these commands from your local machine (replace `<server-ip>` with the public IP shown by the deployer):
 
 ```bash
 # Check service status
@@ -86,22 +86,34 @@ cargo xtask qqbot remote-health
 
 # Run remote doctor
 cargo xtask qqbot remote-doctor
+
+# Verify SnowLuma WebUI and noVNC are reachable
+http_code=$(curl -s -o /dev/null -w "%{http_code}" http://<server-ip>:5099)
+echo "WebUI HTTP status: $http_code"   # expect 200 or 302
+
+http_code=$(curl -s -o /dev/null -w "%{http_code}" http://<server-ip>:6081)
+echo "noVNC HTTP status: $http_code"   # expect 200 or 302
 ```
 
 - [ ] SnowLuma Docker image is present.
 - [ ] SnowLuma container is running.
-- [ ] SnowLuma WebUI/noVNC ports are reachable.
+- [ ] SnowLuma WebUI (port 5099) is reachable.
+- [ ] SnowLuma noVNC (port 6081) is reachable.
 
-## 5.1 Log in to QQ (manual)
+### 5.1 Log in to QQ (manual)
 
 SnowLuma requires a one-time QQ login. Open the WebUI or noVNC in a browser:
 
-```
+```text
 http://<server-ip>:5099   # SnowLuma WebUI
 http://<server-ip>:6081   # noVNC (password: vncpasswd)
 ```
 
-Scan the QQ login QR code. Once QQ is online, `qqbot-core` will connect to the OneBot WebSocket and the group brain will become ready.
+1. Follow the on-screen QQ login flow and scan the QR code.
+2. Wait until QQ shows as online inside SnowLuma.
+3. Run the verification commands above again.
+
+Once QQ is online, `qqbot-core` will connect to the OneBot WebSocket and the group brain will become ready.
 
 - [ ] `remote-status` shows the supervisor is running.
 - [ ] `remote-health` reports healthy.

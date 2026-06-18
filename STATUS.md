@@ -11,10 +11,10 @@
 |------|-------|
 | **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` (Brain crate layered; `qqbot-core` integration complete) |
 | **Active Task** | Deploy qqbot to AliCloud ECS via `cargo xtask qqbot deploy` |
-| **Last Completed** | Added AliCloud ECS deployment and remote-management commands to xtask; systemd service + `--no-daemon` for qqbot |
+| **Last Completed** | Verified AliCloud ECS deployment: instance reachable, WebUI/noVNC open, `remote-status`/`remote-doctor` clean; deploy code now opens service ports and rewrites remote config paths |
 | **Compilation** | `cargo check --workspace` ✅ |
-| **Tests** | `cargo test --workspace` passing |
-| **Blockers** | Local `snowluma` container stuck after foreground test; needs root to kill/restart Docker before local qqbot can be restarted. |
+| **Tests** | `cargo test --workspace` ✅ |
+| **Blockers** | Bot needs manual QQ login via SnowLuma WebUI/noVNC before OneBot WebSocket handshake will succeed. Current AliCloud cash balance is ~99.6 CNY; top up to at least 100 CNY before creating a new instance. |
 
 ---
 
@@ -57,7 +57,10 @@ Current state:
 - [x] systemd service template and remote setup script added.
 - [x] `qqbot start --no-daemon` and installed-layout `qqbot-core` resolution added.
 - [x] `cargo check`, `cargo test`, and targeted `cargo clippy` pass.
-- [ ] Real ECS deployment test (requires configured `aliyun` CLI and AliCloud account).
+- [x] Real ECS deployment test passed (instance reachable, service ports open, status/doctor clean).
+- [x] Deploy code now opens SnowLuma service ports from `allowed_service_cidr` and rewrites `config.toml` paths for the remote layout.
+- [x] Added `cargo xtask qqbot deploy --fresh` for clean redeploys from a new machine.
+- [ ] Bot needs manual QQ login via SnowLuma WebUI/noVNC.
 - [ ] Move task to `tasks/completed/` after verification.
 
 ---

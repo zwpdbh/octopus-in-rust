@@ -26,7 +26,7 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
             run_qqbot(cmd, project::profile())
         }
         "doctor" => run_qqbot(["doctor"].iter().map(|s| s.to_string()), project::profile()),
-        "deploy" => deploy::run(),
+        "deploy" => run_deploy(rest),
         "remote-status" => deploy::remote_cmd("status"),
         "remote-health" => deploy::remote_cmd("health"),
         "remote-logs" => deploy::remote_logs(rest),
@@ -39,6 +39,16 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
         "remote-destroy" => deploy::remote_destroy(),
         "help" => print_help(),
         _ => print_help(),
+    }
+}
+
+fn run_deploy(rest: &[String]) -> Result<()> {
+    let fresh = rest.iter().any(|s| s == "--fresh");
+    let yes = rest.iter().any(|s| s == "--yes");
+    if fresh {
+        deploy::run_fresh(yes)
+    } else {
+        deploy::run()
     }
 }
 
@@ -60,6 +70,7 @@ fn print_help() -> Result<()> {
     println!("  logs [args]      Show qqbot logs (e.g. 'cargo xtask qqbot logs core -n 50')");
     println!("  doctor           Run qqbot doctor");
     println!("  deploy           Build release and deploy to AliCloud ECS");
+    println!("  deploy --fresh [--yes]  Delete existing instance/key and deploy from scratch");
     println!("  remote-status    Show qqbot status on the remote host");
     println!("  remote-health    Run health check on the remote host");
     println!("  remote-logs      Show remote qqbot logs");

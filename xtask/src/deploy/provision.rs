@@ -21,6 +21,7 @@ pub fn ensure_resources(cli: &AliyunCli, config: &DeployConfig) -> Result<Instan
 
     let sg_id = ensure_security_group(cli, config, &vpc_id)?;
     println!("  SecurityGroup: {}", sg_id);
+    ensure_service_ports(cli, config, &sg_id)?;
 
     ensure_key_pair(cli, config)?;
     println!("  KeyPair: {}", aliyun.key_pair_name);
@@ -97,6 +98,37 @@ fn ensure_security_group(cli: &AliyunCli, config: &DeployConfig, vpc_id: &str) -
         &aliyun.allowed_ssh_cidr,
     )?;
     Ok(id)
+}
+
+/// Ensure SnowLuma management ports are reachable from the configured CIDR.
+fn ensure_service_ports(cli: &AliyunCli, config: &DeployConfig, sg_id: &str) -> Result<()> {
+    let aliyun = &config.aliyun;
+    let rules = cli.list_ingress_rules(&aliyun.region, sg_id)?;
+    let needed = [
+        ("tcp", "5099/5099"),
+        ("tcp", "6081/6081"),
+        ("tcp", "5900/5900"),
+    ];
+    for (protocol, port_range) in needed {
+        let already_open = rules.iter().any(|(p, r, c)| {
+            p.eq_ignore_ascii_case(protocol) && r == port_range && c == &aliyun.allowed_service_cidr
+        });
+        if already_open {
+            continue;
+        }
+        cli.authorize_ingress(
+            &aliyun.region,
+            sg_id,
+            protocol,
+            port_range,
+            &aliyun.allowed_service_cidr,
+        )?;
+        println!(
+            "  Opened {protocol} {port_range} from {}",
+            aliyun.allowed_service_cidr
+        );
+    }
+    Ok(())
 }
 
 fn ensure_key_pair(cli: &AliyunCli, config: &DeployConfig) -> Result<()> {

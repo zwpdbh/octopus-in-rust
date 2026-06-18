@@ -25,6 +25,8 @@ pub struct AliyunConfig {
     pub key_pair_name: String,
     #[serde(default = "default_allowed_ssh_cidr")]
     pub allowed_ssh_cidr: String,
+    #[serde(default = "default_allowed_service_cidr")]
+    pub allowed_service_cidr: String,
     #[serde(default)]
     pub aliyun_profile: Option<String>,
     #[serde(default = "default_name")]
@@ -70,6 +72,7 @@ impl Default for AliyunConfig {
             vswitch_cidr: default_vswitch_cidr(),
             key_pair_name: String::new(),
             allowed_ssh_cidr: default_allowed_ssh_cidr(),
+            allowed_service_cidr: default_allowed_service_cidr(),
             aliyun_profile: None,
             name: default_name(),
         }
@@ -95,6 +98,10 @@ fn default_vswitch_cidr() -> String {
 }
 
 fn default_allowed_ssh_cidr() -> String {
+    "0.0.0.0/0".to_string()
+}
+
+fn default_allowed_service_cidr() -> String {
     "0.0.0.0/0".to_string()
 }
 

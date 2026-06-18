@@ -209,6 +209,33 @@ impl AliyunCli {
         Ok(())
     }
 
+    /// List ingress rules as (protocol, port_range, source_cidr) tuples.
+    pub fn list_ingress_rules(
+        &self,
+        region: &str,
+        sg_id: &str,
+    ) -> Result<Vec<(String, String, String)>> {
+        let res = self.run(
+            "ecs",
+            "DescribeSecurityGroupAttribute",
+            &[
+                ("RegionId", region.to_string()),
+                ("SecurityGroupId", sg_id.to_string()),
+                ("Direction", "ingress".to_string()),
+            ],
+        )?;
+        let mut rules = Vec::new();
+        if let Some(arr) = res["Permissions"]["Permission"].as_array() {
+            for p in arr {
+                let proto = p["IpProtocol"].as_str().unwrap_or("").to_string();
+                let port_range = p["PortRange"].as_str().unwrap_or("").to_string();
+                let cidr = p["SourceCidrIp"].as_str().unwrap_or("").to_string();
+                rules.push((proto, port_range, cidr));
+            }
+        }
+        Ok(rules)
+    }
+
     // ------------------------------------------------------------------
     // Key Pair
     // ------------------------------------------------------------------
@@ -242,6 +269,31 @@ impl AliyunCli {
             .as_str()
             .map(String::from)
             .context("CreateKeyPair response missing PrivateKeyBody")
+    }
+
+    /// Delete a key pair. The key pair must not be attached to any instance.
+    pub fn delete_key_pair(&self, region: &str, name: &str) -> Result<()> {
+        self.run(
+            "ecs",
+            "DeleteKeyPairs",
+            &[
+                ("RegionId", region.to_string()),
+                ("KeyPairNames", format!("[\"{name}\"]")),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Query the account cash balance. AliCloud post-paid ECS creation usually
+    /// requires the available cash amount to be at least ~100 CNY.
+    pub fn available_balance(&self) -> Result<f64> {
+        let res = self.run("bssopenapi", "QueryAccountBalance", &[])?;
+        let amount = res["Data"]["AvailableCashAmount"]
+            .as_str()
+            .context("balance response missing AvailableCashAmount")?
+            .parse::<f64>()
+            .context("balance response amount is not a valid number")?;
+        Ok(amount)
     }
 
     // ------------------------------------------------------------------

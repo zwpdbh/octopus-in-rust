@@ -40,7 +40,8 @@ pub async fn run(data_dir: &Path) -> Result<()> {
 
     // Binaries.
     let profile = current_profile();
-    let core_binary = paths::project_root().join(format!("target/{profile}/qqbot-core"));
+    let binary_dir = binary_search_dir(profile);
+    let core_binary = binary_dir.join("qqbot-core");
     if core_binary.exists() {
         println!("[ok] qqbot-core binary found ({})", core_binary.display());
     } else {
@@ -48,8 +49,12 @@ pub async fn run(data_dir: &Path) -> Result<()> {
         issues += 1;
     }
 
-    let plugin =
-        paths::project_root().join("target/wasm32-unknown-unknown/release/faf_units_plugin.wasm");
+    let plugin = data_dir.join("plugins/faf_units_plugin.wasm");
+    let plugin = if plugin.exists() {
+        plugin
+    } else {
+        paths::project_root().join("target/wasm32-unknown-unknown/release/faf_units_plugin.wasm")
+    };
     if plugin.exists() {
         println!("[ok] faf-units plugin found ({})", plugin.display());
     } else {
@@ -73,9 +78,12 @@ pub async fn run(data_dir: &Path) -> Result<()> {
     }
 
     // Daemon.
-    if daemon::is_alive(data_dir) {
+    let daemon_alive = daemon::is_alive(data_dir) || systemd_service_active().await;
+    if daemon_alive {
         if let Some(pid) = daemon::pid(data_dir) {
             println!("[ok] qqbot daemon is running (pid {pid})");
+        } else if systemd_service_active().await {
+            println!("[ok] qqbot systemd service is active");
         } else {
             println!("[warn] daemon pid file is present but unreadable");
         }
@@ -146,6 +154,17 @@ async fn container_running() -> Result<bool> {
     Ok(!output.stdout.is_empty())
 }
 
+async fn systemd_service_active() -> bool {
+    match Command::new("systemctl")
+        .args(["is-active", "--quiet", "qqbot"])
+        .output()
+        .await
+    {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
 async fn ws_handshake() -> Result<bool> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -175,6 +194,24 @@ fn current_profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+/// Directory where we expect to find the qqbot-core binary.
+/// In the installed layout it lives next to the qqbot binary; in the dev
+/// layout it is under target/{profile}.
+fn binary_search_dir(profile: &str) -> std::path::PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    if let Some(dir) = exe.parent() {
+        let dir_name = dir.file_name().and_then(|n| n.to_str());
+        if matches!(dir_name, Some("debug") | Some("release")) {
+            if let Some(root) = dir.parent().and_then(|p| p.parent()) {
+                return root.join(format!("target/{profile}"));
+            }
+        }
+        // Installed layout: binary is next to qqbot.
+        return dir.to_path_buf();
+    }
+    paths::project_root().join(format!("target/{profile}"))
 }
 
 mod base64 {

@@ -29,6 +29,68 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Minimum account balance (CNY) that seems to be required to create a post-paid ECS instance.
+const MIN_BALANCE_CNY: f64 = 100.0;
+
+/// Fresh deploy: destroy the existing instance and key pair, then deploy from scratch.
+pub fn run_fresh(yes: bool) -> Result<()> {
+    let config = load_config()?;
+    let cli = AliyunCli::new(
+        config.aliyun.aliyun_profile.clone(),
+        config.aliyun.region.clone(),
+    );
+
+    let balance = cli.available_balance().unwrap_or(MIN_BALANCE_CNY);
+    if balance < MIN_BALANCE_CNY {
+        bail!(
+            "Account balance is {:.2} CNY, but AliCloud post-paid ECS creation usually requires at least {:.2} CNY. \
+             Please top up before running a fresh deploy.",
+            balance,
+            MIN_BALANCE_CNY
+        );
+    }
+
+    if let Some(info) = cli.find_instance(&config.aliyun.region, &config.aliyun.name)? {
+        if !yes {
+            print!(
+                "Fresh deploy: delete existing instance {} ({})? [y/N] ",
+                info.instance_id,
+                info.public_ip.as_deref().unwrap_or("<no ip>")
+            );
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            if !line.trim().eq_ignore_ascii_case("y") {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        }
+        provision::destroy_instance(&cli, &config)?;
+    }
+
+    if cli.key_pair_exists(&config.aliyun.region, &config.aliyun.key_pair_name)? {
+        println!("Deleting old key pair {} ...", config.aliyun.key_pair_name);
+        cli.delete_key_pair(&config.aliyun.region, &config.aliyun.key_pair_name)?;
+    }
+
+    let key_path = config.ssh_key_path();
+    if key_path.exists() {
+        let backup = format!(
+            "{}.bak.{}",
+            key_path.display(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        std::fs::rename(&key_path, &backup)
+            .with_context(|| format!("failed to back up {} to {}", key_path.display(), backup))?;
+        println!("Old private key backed up to {}", backup);
+    }
+
+    run()
+}
+
 /// Run a read-only `qqbot` subcommand on the remote host.
 pub fn remote_cmd(subcommand: &str) -> Result<()> {
     let (config, instance) = load_config_and_instance()?;

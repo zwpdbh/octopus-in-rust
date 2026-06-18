@@ -216,7 +216,11 @@ fn sync_data_dir(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
     let local_data = project::data_dir()?;
     let remote_base = format!("{}/data/qqbot-data", config.remote.install_dir);
 
-    println!("  Syncing data from {} to {} ...", local_data.display(), remote_base);
+    println!(
+        "  Syncing data from {} to {} ...",
+        local_data.display(),
+        remote_base
+    );
 
     ssh.run_stream(&format!(
         "mkdir -p {remote_base}/groups {remote_base}/plugins"
@@ -225,7 +229,7 @@ fn sync_data_dir(config: &DeployConfig, instance: &InstanceInfo) -> Result<()> {
     let config_local = local_data.join("config.toml");
     if config_local.exists() {
         println!("  Uploading config.toml ...");
-        ssh.upload(&config_local, format!("{remote_base}/config.toml"))?;
+        upload_rewritten_config(config, instance, &config_local, &remote_base, &ssh)?;
     } else {
         println!("  No local config.toml found; skipping.");
     }
@@ -287,4 +291,99 @@ fn install_systemd_service(
     ssh.run_stream(&restart)?;
 
     Ok(())
+}
+
+/// Rewrite local-only paths in `config.toml` for the remote install layout and upload it.
+fn upload_rewritten_config(
+    config: &DeployConfig,
+    _instance: &InstanceInfo,
+    config_local: &std::path::Path,
+    remote_base: &str,
+    ssh: &SshSession,
+) -> Result<()> {
+    let contents = std::fs::read_to_string(config_local)
+        .with_context(|| format!("failed to read {}", config_local.display()))?;
+    let mut table: toml::Table = toml::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", config_local.display()))?;
+
+    let remote_plugin_dir = format!("{remote_base}/plugins");
+    if let Some(toml::Value::String(_)) = table.get("bot").and_then(|b| b.get("plugin_dir")) {
+        table["bot"]["plugin_dir"] = toml::Value::String(remote_plugin_dir);
+    }
+
+    // Rewrite the LLM token_file path and sync the credential file if present locally.
+    if let Some(toml::Value::String(token_file)) =
+        table.get("llm").and_then(|l| l.get("token_file"))
+    {
+        let local_token = expand_local_path(token_file)?;
+        if local_token.exists() {
+            let remote_token = remote_home_path(config, token_file);
+            let remote_token_dir = std::path::Path::new(&remote_token)
+                .parent()
+                .context("token_file has no parent directory")?;
+            ssh.run_stream(&format!(
+                "mkdir -p {} && chown {user}:{user} {parent} || true",
+                remote_token_dir.display(),
+                parent = remote_token_dir.display(),
+                user = config.remote.user
+            ))?;
+            ssh.upload(&local_token, &remote_token)?;
+            ssh.run_stream(&format!(
+                "chown {user}:{user} {file} && chmod 600 {file}",
+                user = config.remote.user,
+                file = remote_token
+            ))?;
+            table["llm"]["token_file"] = toml::Value::String(remote_token);
+        }
+    }
+
+    let rewritten = toml::to_string_pretty(&table)
+        .context("failed to serialize rewritten remote config.toml")?;
+    let tmp = std::env::temp_dir().join("qqbot-remote-config.toml");
+    std::fs::write(&tmp, rewritten)
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    ssh.upload(&tmp, format!("{remote_base}/config.toml"))?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(())
+}
+
+fn expand_local_path(path: &str) -> Result<std::path::PathBuf> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .context("could not determine local home directory")?;
+        Ok(std::path::PathBuf::from(format!("{}/{}", home, rest)))
+    } else {
+        Ok(std::path::PathBuf::from(path))
+    }
+}
+
+fn remote_home_path(config: &DeployConfig, original: &str) -> String {
+    let home = format!("/home/{}", config.remote.user);
+    if let Some(rest) = original.strip_prefix("~/") {
+        return format!("{}/{}", home, rest);
+    }
+    let p = std::path::Path::new(original);
+    if p.is_absolute() {
+        // Map a local /home/<localuser>/... path to /home/<remoteuser>/...
+        if let Ok(rest) = p.strip_prefix("/home") {
+            let mut comps = rest.components().peekable();
+            // Drop the local username component if present.
+            if comps.peek().is_some() {
+                comps.next();
+            }
+            let tail: std::path::PathBuf = comps.collect();
+            return std::path::Path::new(&home)
+                .join(tail)
+                .to_string_lossy()
+                .to_string();
+        }
+        // Fallback: keep the filename and place it under the remote .kimi dir.
+        let file_name = p
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "credential.json".to_string());
+        return format!("{}/.kimi/credentials/{}", home, file_name);
+    }
+    format!("{}/{}", home, original)
 }

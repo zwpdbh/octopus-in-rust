@@ -7,5 +7,5 @@ pub mod ssh;
 
 pub use ops::{
     remote_cmd, remote_destroy, remote_logs, remote_service_cmd, remote_start_instance,
-    remote_stop_instance, run,
+    remote_stop_instance, run, run_fresh,
 };

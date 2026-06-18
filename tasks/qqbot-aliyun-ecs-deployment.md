@@ -31,14 +31,14 @@ The user confirmed AliCloud as the deployment target because its `aliyun` CLI pr
 
 ## Acceptance Criteria
 
-- [ ] `cargo xtask qqbot deploy` builds a release tarball and provisions an ECS instance idempotently.
-- [ ] `cargo xtask qqbot remote-status` shows the server's `qqbot status` output.
+- [x] `cargo xtask qqbot deploy` builds a release tarball and provisions an ECS instance idempotently.
+- [x] `cargo xtask qqbot remote-status` shows the server's `qqbot status` output.
 - [ ] `cargo xtask qqbot remote-restart` restarts the remote service.
 - [ ] `cargo xtask qqbot remote-destroy` deletes the ECS instance after confirmation.
-- [ ] `cargo run --bin qqbot -- start --no-daemon -d ./data/qqbot-data` runs the supervisor in the foreground.
-- [ ] `cargo check --workspace` passes.
-- [ ] `cargo test --workspace` passes.
-- [ ] Docs updated with deployment steps.
+- [x] `cargo run --bin qqbot -- start --no-daemon -d ./data/qqbot-data` runs the supervisor in the foreground.
+- [x] `cargo check --workspace` passes.
+- [x] `cargo test --workspace` passes.
+- [x] Docs updated with deployment steps.
 
 ## Implementation Notes
 
@@ -62,7 +62,10 @@ The user confirmed AliCloud as the deployment target because its `aliyun` CLI pr
 ## Notes / Blockers
 
 - The local `snowluma` Docker container entered a stuck/unrecoverable state during the foreground `--no-daemon` smoke test (QQ process crashed with a GPU error). It currently cannot be killed without root. Recover with `sudo kill -9 $(docker inspect -f '{{.State.Pid}}' snowluma)` or `sudo systemctl restart docker`, then run `cargo xtask qqbot start`.
-- A real AliCloud deployment test is still pending and requires a configured `aliyun` CLI profile.
+- Real AliCloud deployment verified on 2026-06-18. The remaining blocker for a fully operational bot is manual QQ login via the SnowLuma WebUI/noVNC.
+- The deployer now opens SnowLuma service ports (5099, 6081, 5900) from `aliyun.allowed_service_cidr` and rewrites local-only `config.toml` paths (`plugin_dir`, `token_file`) for the remote layout.
+- Added `cargo xtask qqbot deploy --fresh [--yes]` to destroy the existing ECS instance and SSH key pair and recreate them, making it easy to move to a new development machine.
+- The fresh-deploy path checks AliCloud cash balance (>= 100 CNY) before deleting the old instance to avoid ending up with no instance.
 
 ## Decisions Made
 
