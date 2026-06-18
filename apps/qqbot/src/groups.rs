@@ -18,13 +18,6 @@ pub fn enable_plugin(data_dir: &Path, group_id: i64, plugin_name: &str) -> Resul
     save_and_reload(data_dir, group_id, &profile)
 }
 
-/// Disable a plugin for a specific group.
-pub fn disable_plugin(data_dir: &Path, group_id: i64, plugin_name: &str) -> Result<()> {
-    let mut profile = load_or_default(data_dir, group_id);
-    profile.disable_plugin(plugin_name);
-    save_and_reload(data_dir, group_id, &profile)
-}
-
 /// Show a group's effective profile and which plugins it would load.
 pub fn show(data_dir: &Path, group_id: i64) -> Result<()> {
     let profile = load_or_default(data_dir, group_id);
@@ -40,23 +33,14 @@ pub fn show(data_dir: &Path, group_id: i64) -> Result<()> {
         println!("  (using global system prompt from config.toml)");
     }
     println!();
-    println!("Enabled plugins:");
+    println!("Enabled plugins (whitelist):");
     match &profile.enabled_plugins {
         Some(list) if !list.is_empty() => {
             for name in list {
                 println!("  {name}");
             }
         }
-        _ => println!("  (all installed plugins, except disabled ones)"),
-    }
-    println!();
-    println!("Disabled plugins:");
-    if profile.disabled_plugins.is_empty() {
-        println!("  (none)");
-    } else {
-        for name in &profile.disabled_plugins {
-            println!("  {name}");
-        }
+        _ => println!("  (none — no plugins will be loaded)"),
     }
     println!();
     println!("Plugins that would be loaded:");

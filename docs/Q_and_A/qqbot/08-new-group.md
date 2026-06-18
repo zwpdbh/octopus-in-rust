@@ -36,7 +36,6 @@ Create `data/qqbot-data/groups/136430130.toml`:
 # Per-group config for QQ group 136430130.
 system_prompt = "You are FatBot, a helpful assistant for this QQ group."
 enabled_plugins = ["faf_units_plugin"]
-disabled_plugins = []
 
 # Seconds between progress updates while the bot is working on a long answer.
 # The message format is fixed to "Still checking... (tools: [<tool names>])".

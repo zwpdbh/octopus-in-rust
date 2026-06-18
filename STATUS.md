@@ -86,6 +86,9 @@ State:
 | 2026-06-18 | Fix per-step progress timer reset in `group_brain.rs` | Progress heartbeat now spans the whole turn, preventing multiple “Still checking...” messages 30s apart when tools are unchanged |
 | 2026-06-18 | Implement `faf-party` plugin and host service | WASM parser extracts intent/availability; `FafPartyHostService` tracks candidates and notifies when 6 players overlap |
 | 2026-06-18 | Add `faf_party_status` host tool | LLM can now query the current candidate list, enabling responses to "现在有多少人了？" |
+| 2026-06-18 | Add per-group file locking to `faf-party` state | Prevents data races when concurrent messages or notification retries read/write `faf-party-<group_id>.json` |
+| 2026-06-18 | Load `faf-party` plugin privately in host service | Stops the LLM from redundantly calling the parser; host auto-registers users, LLM only queries via `faf_party_status` |
+| 2026-06-18 | Split `faf-party` plugin into `parse_intent` + `parse_time` | Dedicated time-transform tool; rule-based parser with LLM fallback using the same endpoint as the Brain |
 
 ---
 

@@ -418,7 +418,7 @@ Because each QQ group gets its own `Brain`, skills can be configured per group.
 A skill here is a combination of:
 
 - a group-specific **system prompt**;
-- an **enabled/disabled plugin list**.
+- a whitelist of **enabled plugins**.
 
 ### Profile storage
 
@@ -432,12 +432,11 @@ Example `data/qqbot-data/groups/925712027.toml`:
 
 ```toml
 system_prompt = "You are a concise assistant for this gaming group."
-disabled_plugins = ["example-http"]
+enabled_plugins = ["faf_units_plugin"]
 ```
 
-If `enabled_plugins` is set, only those plugin file stems are loaded for the
-group. If it is omitted, all installed plugins are loaded except those in
-`disabled_plugins`.
+`enabled_plugins` is a whitelist: only the listed plugin file stems are loaded
+for the group. If the list is omitted or empty, no plugins are loaded.
 
 ### CLI
 
@@ -448,9 +447,8 @@ cargo run --bin qqbot -- group 925712027 show
 # Set a group-specific system prompt
 cargo run --bin qqbot -- group 925712027 set-prompt "You are a concise assistant for this gaming group."
 
-# Enable/disable plugins for a group
+# Add a plugin to a group's whitelist
 cargo run --bin qqbot -- group 925712027 enable-plugin summary
-cargo run --bin qqbot -- group 925712027 disable-plugin example-http
 ```
 
 Changes write the TOML file and send `SIGHUP` to `qqbot-core`, so the group's
@@ -466,15 +464,11 @@ async fn create_brain(&self, group_id: i64) -> Result<Brain> {
         _ => qqbot_config::GroupProfile::default(),
     };
 
-    // Only load plugins allowed for this group.
+    // Only load plugins listed in the group's whitelist.
+    let installed = Self::installed_plugin_names(&self.plugin_dir);
+    let allowed = profile.filter_plugins(installed.iter().map(|s| s.as_str()));
     let tool_source: Arc<dyn brain::ToolSource> =
-        if profile.enabled_plugins.is_some() || !profile.disabled_plugins.is_empty() {
-            let installed = Self::installed_plugin_names(&self.plugin_dir);
-            let allowed = profile.filter_plugins(installed.iter().map(|s| s.as_str()));
-            Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed))
-        } else {
-            Arc::new(ExtismPluginSource::new(&self.plugin_dir))
-        };
+        Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed));
 
     let config = BrainConfig {
         system_prompt: profile

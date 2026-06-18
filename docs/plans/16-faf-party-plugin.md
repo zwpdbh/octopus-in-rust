@@ -52,19 +52,30 @@ The bot will:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Plugin tool (`faf-party`)
+### Plugin tools (`faf-party`)
 
-1. **`faf_party_parse_message`**
-   - Input: `{ "message": "我大约半个小时后可以玩", "now": "2026-06-18T13:00:00+08:00" }`
-   - Output: `{ "intent": "join|leave|unknown", "availability": { "start": "...", "end": "...", "description": "半个小时后到晚上10点" } }`
-   - Pure computation, no side effects.
+The plugin is loaded privately by the host service, not exposed to the LLM.
 
-### Host tool (`qqbot-core`)
+1. **`faf_party_parse_intent`**
+   - Input: `{ "message": "我大约半个小时后可以玩" }`
+   - Output: `{ "intent": "join|leave|unknown", "time_expression": "我大约半个小时后可以玩" }`
+   - Pure computation.
+
+2. **`faf_party_parse_time`**
+   - Input: `{ "expression": "半小时后", "now": "2026-06-18T13:00:00+08:00" }`
+   - Output: `{ "start": "...", "end": "...", "description": "半个小时后到晚上10点" }` or `{ "unknown": true }`
+   - Rule-based parser; returns `unknown` when no pattern matches.
+
+### Host tools (`qqbot-core`)
 
 1. **`faf_party_status`**
    - Input: `{}`
    - Output: `{ "count": 3, "candidates": [{ "user_id": 123, "start": "...", "end": "..." }] }`
    - Registered directly with the Brain so the LLM can answer questions like "现在有多少人了？".
+
+### LLM fallback
+
+When `faf_party_parse_time` returns `unknown`, the host service calls the configured LLM endpoint (same one the Brain uses) with a small parsing prompt. The LLM returns `start`/`end` in RFC3339, and the host service uses that result to update the candidate list.
 
 ### Host service (`qqbot-core`)
 
@@ -84,11 +95,15 @@ The bot will:
 {
   "candidates": [
     { "user_id": 123456, "start": "2026-06-18T13:30:00+08:00", "end": "2026-06-18T22:00:00+08:00", "joined_at": "2026-06-18T13:00:00+08:00" }
-  ],
-  "notification_count": 0,
-  "last_notification_at": null
+  ]
 }
 ```
+
+### Concurrency
+
+All reads and writes to `faf-party-<group_id>.json` go through a per-group `tokio::sync::Mutex` inside `PartyStateStore`. This prevents data races when:
+- two group members send join/leave messages at the same time;
+- the final notification retry tries to clear the file while a new message is updating it.
 
 ## Implementation steps
 
@@ -111,15 +126,16 @@ The bot will:
    - Past times roll forward to tomorrow.
 
 3. **Implement plugin parsing**
-   - Detect `join`, `leave`, `unknown` intents.
-   - Parse availability for Chinese expressions.
+   - `faf_party_parse_intent`: detect `join`, `leave`, `unknown` intents.
+   - `faf_party_parse_time`: parse availability for Chinese expressions; return `unknown` when no rule matches.
    - Detect leave phrases and `/faf leave`.
 
 4. **Add host service in `qqbot-core`**
    - New module `apps/qqbot-core/src/faf_party.rs`.
+   - Load `faf_party_plugin.wasm` directly via Extism.
+   - Call `parse_intent`, then `parse_time` with LLM fallback.
    - Read/write `data/qqbot-data/faf-party-<group_id>.json`.
-   - Schedule retry timers.
-   - Send notifications via `action_tx`.
+   - Schedule retry timers and send notifications via `action_tx`.
 
 5. **Wire into `group_brain`**
    - Call `faf_party_parse_message` for every addressed message before starting the LLM turn.
@@ -127,7 +143,8 @@ The bot will:
 
 6. **Build and deploy integration**
    - Add plugin to `scripts/build-qqbot-release.sh`.
-   - Enable `faf_party_plugin` in group configs.
+   - Copy `faf_party_plugin.wasm` to `data/qqbot-data/plugins/`.
+   - Keep `faf_party_plugin` out of `enabled_plugins` so the LLM does not call it directly; the host service loads it privately via Extism.
 
 ## Open questions
 

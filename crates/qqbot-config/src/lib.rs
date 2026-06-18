@@ -4,23 +4,19 @@ use serde::{Deserialize, Serialize};
 
 /// Per-group settings that override the global `Config` when a `Brain` is created.
 ///
-/// Each allowed QQ group can have its own system prompt and its own set of
-/// enabled/disabled plugins. If a group's profile does not exist, the global
-/// defaults are used.
+/// Each allowed QQ group can have its own system prompt and its own whitelist of
+/// plugins. Only plugins listed in `enabled_plugins` are loaded for the group.
+/// If the list is missing or empty, no plugins are loaded.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GroupProfile {
     /// Optional system prompt that replaces the global one for this group.
     #[serde(default)]
     pub system_prompt: Option<String>,
 
-    /// If set, only these plugin file stems are loaded for the group.
-    /// If `None`, all installed plugins are loaded (minus `disabled_plugins`).
+    /// Plugin file stems that are allowed for this group.
+    /// Only these plugins are loaded. If `None` or empty, no plugins are loaded.
     #[serde(default)]
     pub enabled_plugins: Option<Vec<String>>,
-
-    /// Plugin file stems that are always excluded for this group.
-    #[serde(default)]
-    pub disabled_plugins: Vec<String>,
 
     /// Seconds between progress updates while the bot is working on a
     /// long-running answer. Default: 10.
@@ -67,12 +63,9 @@ impl GroupProfile {
 
     /// Decide whether a plugin (by file stem) is allowed for this group.
     pub fn is_plugin_allowed(&self, plugin_name: &str) -> bool {
-        if self.disabled_plugins.iter().any(|n| n == plugin_name) {
-            return false;
-        }
         match &self.enabled_plugins {
             Some(allowed) => allowed.iter().any(|n| n == plugin_name),
-            None => true,
+            None => false,
         }
     }
 
@@ -83,16 +76,12 @@ impl GroupProfile {
             plugins.push(plugin_name.to_string());
         }
         self.enabled_plugins = Some(plugins);
-        self.disabled_plugins.retain(|n| n != plugin_name);
     }
 
-    /// Convenience: add a plugin to `disabled_plugins` and remove from enabled.
-    pub fn disable_plugin(&mut self, plugin_name: &str) {
+    /// Convenience: remove a plugin from `enabled_plugins`.
+    pub fn remove_plugin(&mut self, plugin_name: &str) {
         if let Some(plugins) = self.enabled_plugins.as_mut() {
             plugins.retain(|n| n != plugin_name);
-        }
-        if !self.disabled_plugins.iter().any(|n| n == plugin_name) {
-            self.disabled_plugins.push(plugin_name.to_string());
         }
     }
 
@@ -123,12 +112,13 @@ mod tests {
     fn test_is_plugin_allowed() {
         let profile = GroupProfile {
             enabled_plugins: Some(vec!["summary".to_string()]),
-            disabled_plugins: vec!["bad".to_string()],
             ..Default::default()
         };
         assert!(profile.is_plugin_allowed("summary"));
-        assert!(!profile.is_plugin_allowed("bad"));
         assert!(!profile.is_plugin_allowed("other"));
+
+        let empty = GroupProfile::default();
+        assert!(!empty.is_plugin_allowed("summary"));
     }
 
     #[test]
@@ -137,17 +127,17 @@ mod tests {
         let names = vec!["summary", "example-http"];
         assert_eq!(
             profile.filter_plugins(names.into_iter()),
-            vec!["summary".to_string(), "example-http".to_string()]
+            Vec::<String>::new()
         );
     }
 
     #[test]
-    fn test_enable_and_disable_plugin() {
+    fn test_enable_and_remove_plugin() {
         let mut profile = GroupProfile::default();
         profile.enable_plugin("summary");
         assert!(profile.is_plugin_allowed("summary"));
 
-        profile.disable_plugin("summary");
+        profile.remove_plugin("summary");
         assert!(!profile.is_plugin_allowed("summary"));
     }
 
@@ -158,7 +148,6 @@ mod tests {
         let profile = GroupProfile {
             system_prompt: Some("Group-specific prompt.".to_string()),
             enabled_plugins: Some(vec!["summary".to_string()]),
-            disabled_plugins: vec![],
             ..Default::default()
         };
         GroupProfile::save(data_dir, 123456, &profile).unwrap();

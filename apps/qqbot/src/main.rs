@@ -156,10 +156,8 @@ enum LlmCommand {
 enum GroupCommand {
     /// Set the system prompt for this group.
     SetPrompt { prompt: Vec<String> },
-    /// Enable a plugin for this group.
+    /// Add a plugin to this group's whitelist.
     EnablePlugin { plugin: String },
-    /// Disable a plugin for this group.
-    DisablePlugin { plugin: String },
     /// Show the group's effective profile.
     Show,
 }
@@ -321,9 +319,6 @@ fn main() -> Result<()> {
             }
             GroupCommand::EnablePlugin { plugin } => {
                 groups::enable_plugin(&data_dir, group_id, &plugin)?;
-            }
-            GroupCommand::DisablePlugin { plugin } => {
-                groups::disable_plugin(&data_dir, group_id, &plugin)?;
             }
             GroupCommand::Show => {
                 groups::show(&data_dir, group_id)?;

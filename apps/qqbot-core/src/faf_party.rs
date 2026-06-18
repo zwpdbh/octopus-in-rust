@@ -1,21 +1,26 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset};
+use extism::{CompiledPlugin, Manifest, Plugin, PluginBuilder, Wasm};
+use futures_util::StreamExt;
+use kosong::chat_provider::Part;
+use kosong::message::{ContentPart, Message, Role};
 use kosong::tooling::ToolReturnValue;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
-use crate::group_brain::GroupBrainManager;
-use crate::onebot::ActionTx;
+use crate::config::{Config, LlmConfig};
+use crate::llm_provider::QqbotProviderFactory;
 use crate::onebot::types::Action;
+use crate::onebot::ActionTx;
+use brain::ProviderFactory;
 
 /// Minimum number of overlapping candidates needed to trigger a 3v3 match.
 const PARTY_SIZE: usize = 6;
@@ -52,42 +57,98 @@ pub struct PartyCandidate {
     pub end: DateTime<FixedOffset>,
 }
 
-/// Read the current party status for a group without modifying it.
-pub async fn read_party_status(data_dir: &Path, group_id: i64) -> Result<PartyStatus> {
-    let path = data_dir.join(format!("faf-party-{group_id}.json"));
-    if !path.exists() {
-        return Ok(PartyStatus {
-            count: 0,
-            candidates: Vec::new(),
-        });
+/// Serialized access to the per-group JSON state file.
+///
+/// All reads and writes go through a per-group `tokio::sync::Mutex` so that
+/// concurrent messages (or a notification retry clearing the file) cannot
+/// interleave and corrupt the state.
+#[derive(Clone)]
+pub struct PartyStateStore {
+    data_dir: PathBuf,
+    locks: Arc<Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>,
+}
+
+impl PartyStateStore {
+    pub fn new(data_dir: PathBuf) -> Self {
+        Self {
+            data_dir,
+            locks: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
-    let text = tokio::fs::read_to_string(&path)
-        .await
-        .context("failed to read party state file")?;
-    let state: PartyState = serde_json::from_str(&text).context("invalid party state JSON")?;
-    Ok(PartyStatus {
-        count: state.candidates.len(),
-        candidates: state
-            .candidates
-            .into_iter()
-            .map(|c| PartyCandidate {
-                user_id: c.user_id,
-                start: c.start,
-                end: c.end,
-            })
-            .collect(),
-    })
+
+    fn state_path(&self, group_id: i64) -> PathBuf {
+        self.data_dir.join(format!("faf-party-{group_id}.json"))
+    }
+
+    async fn lock(&self, group_id: i64) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.locks.lock().await;
+            locks
+                .entry(group_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
+    }
+
+    async fn load(&self, group_id: i64) -> Result<PartyState> {
+        let path = self.state_path(group_id);
+        if !path.exists() {
+            return Ok(PartyState::default());
+        }
+        let text = tokio::fs::read_to_string(&path)
+            .await
+            .context("failed to read party state file")?;
+        serde_json::from_str(&text).context("invalid party state JSON")
+    }
+
+    async fn save(&self, group_id: i64, state: &PartyState) -> Result<()> {
+        let path = self.state_path(group_id);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context("failed to create party state directory")?;
+        }
+        let text =
+            serde_json::to_string_pretty(state).context("failed to serialize party state")?;
+        tokio::fs::write(&path, text)
+            .await
+            .context("failed to write party state file")?;
+        Ok(())
+    }
+
+    pub async fn read_status(&self, group_id: i64) -> Result<PartyStatus> {
+        let _guard = self.lock(group_id).await;
+        let state = self.load(group_id).await?;
+        Ok(PartyStatus {
+            count: state.candidates.len(),
+            candidates: state
+                .candidates
+                .into_iter()
+                .map(|c| PartyCandidate {
+                    user_id: c.user_id,
+                    start: c.start,
+                    end: c.end,
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn clear(&self, group_id: i64) -> Result<()> {
+        let _guard = self.lock(group_id).await;
+        self.save(group_id, &PartyState::default()).await
+    }
 }
 
 /// Host-provided tool that lets the LLM query the current FAF party candidate list.
 pub struct FafPartyStatusTool {
-    data_dir: PathBuf,
+    store: PartyStateStore,
     group_id: i64,
 }
 
 impl FafPartyStatusTool {
-    pub fn new(data_dir: PathBuf, group_id: i64) -> Self {
-        Self { data_dir, group_id }
+    pub fn new(store: PartyStateStore, group_id: i64) -> Self {
+        Self { store, group_id }
     }
 }
 
@@ -115,7 +176,7 @@ impl kosong::tooling::CallableTool2 for FafPartyStatusTool {
     }
 
     async fn call_typed(&self, _params: FafPartyStatusParams) -> ToolReturnValue {
-        match read_party_status(&self.data_dir, self.group_id).await {
+        match self.store.read_status(self.group_id).await {
             Ok(status) => {
                 let text = serde_json::to_string(&status)
                     .unwrap_or_else(|_| "{\"count\":0,\"candidates\":[]}".to_string());
@@ -126,34 +187,73 @@ impl kosong::tooling::CallableTool2 for FafPartyStatusTool {
     }
 }
 
-/// Result returned by the `faf_party_parse_message` plugin tool.
+/// Result returned by the `faf_party_parse_intent` plugin tool.
 #[derive(Debug, Clone, Deserialize)]
-struct ParseResult {
+struct ParseIntentResult {
     intent: String,
-    availability: Option<AvailabilityJson>,
+    time_expression: Option<String>,
 }
 
+/// Result returned by the `faf_party_parse_time` plugin tool.
 #[derive(Debug, Clone, Deserialize)]
-struct AvailabilityJson {
+struct ParseTimeResult {
+    unknown: bool,
+    #[serde(default)]
     start: String,
+    #[serde(default)]
     end: String,
 }
 
 /// Host-side service that owns FAF party scheduling state and timers.
 #[derive(Clone)]
 pub struct FafPartyHostService {
-    data_dir: PathBuf,
+    store: PartyStateStore,
     action_tx: ActionTx,
     active_notifications: Arc<Mutex<HashMap<i64, JoinHandle<()>>>>,
+    plugin: Option<CompiledPlugin>,
+    llm_config: LlmConfig,
 }
 
 impl FafPartyHostService {
-    pub fn new(data_dir: PathBuf, _config: &Config, action_tx: ActionTx) -> Self {
+    pub fn new(
+        plugin_dir: PathBuf,
+        data_dir: PathBuf,
+        config: &Config,
+        action_tx: ActionTx,
+    ) -> Self {
+        let plugin = Self::load_plugin(&plugin_dir);
+        if plugin.is_none() {
+            warn!(plugin_dir = %plugin_dir.display(), "faf-party plugin not loaded; party scheduling disabled");
+        }
         Self {
-            data_dir,
+            store: PartyStateStore::new(data_dir),
             action_tx,
             active_notifications: Arc::new(Mutex::new(HashMap::new())),
+            plugin,
+            llm_config: config.llm.clone(),
         }
+    }
+
+    fn load_plugin(plugin_dir: &PathBuf) -> Option<CompiledPlugin> {
+        let path = plugin_dir.join("faf_party_plugin.wasm");
+        let wasm_bytes = std::fs::read(&path)
+            .map_err(|e| {
+                warn!(path = %path.display(), error = %e, "failed to read faf-party plugin wasm");
+            })
+            .ok()?;
+
+        let manifest = Manifest::new([Wasm::data(wasm_bytes)]);
+        PluginBuilder::new(manifest)
+            .with_wasi(true)
+            .compile()
+            .map_err(|e| {
+                warn!(error = %e, "failed to compile faf-party plugin");
+            })
+            .ok()
+    }
+
+    pub fn state_store(&self) -> PartyStateStore {
+        self.store.clone()
     }
 
     /// Process an addressed message for party scheduling intent.
@@ -162,48 +262,51 @@ impl FafPartyHostService {
     /// can be sent immediately when enough players overlap.
     pub async fn process_message(
         &self,
-        manager: &GroupBrainManager,
         group_id: i64,
         user_id: i64,
         message: &str,
         now: DateTime<FixedOffset>,
     ) {
-        if let Err(e) = self.try_process_message(manager, group_id, user_id, message, now).await {
+        if let Err(e) = self
+            .try_process_message(group_id, user_id, message, now)
+            .await
+        {
             error!(group_id, user_id, error = %e, "faf-party processing failed");
         }
     }
 
     async fn try_process_message(
         &self,
-        manager: &GroupBrainManager,
         group_id: i64,
         user_id: i64,
         message: &str,
         now: DateTime<FixedOffset>,
     ) -> Result<()> {
-        // Call the plugin to parse intent and availability.
-        let parse = self.call_parse_message(manager, group_id, message, now).await?;
+        // Call the plugin to parse intent.
+        let intent_parse = self.call_parse_intent(message).await?;
 
-        let mut state = self.load_state(group_id).await?;
+        // Serialize all file access for this group.
+        let _guard = self.store.lock(group_id).await;
+        let mut state = self.store.load(group_id).await?;
 
-        match parse.intent.as_str() {
+        match intent_parse.intent.as_str() {
             "leave" => {
                 let before = state.candidates.len();
                 state.candidates.retain(|c| c.user_id != user_id);
                 let removed = before - state.candidates.len();
                 if removed > 0 {
-                    self.save_state(group_id, &state).await?;
+                    self.store.save(group_id, &state).await?;
                     info!(group_id, user_id, "removed user from faf-party candidates");
                 }
             }
             "join" => {
-                let Some(avail) = parse.availability else {
-                    return Ok(());
-                };
-                let start = DateTime::parse_from_rfc3339(&avail.start)
+                let time_expression = intent_parse.time_expression.as_deref().unwrap_or(message);
+                let time_parse = self.parse_time_with_fallback(time_expression, now).await?;
+
+                let start = DateTime::parse_from_rfc3339(&time_parse.start)
                     .context("invalid availability start")?
                     .with_timezone(&FixedOffset::east_opt(0).unwrap());
-                let end = DateTime::parse_from_rfc3339(&avail.end)
+                let end = DateTime::parse_from_rfc3339(&time_parse.end)
                     .context("invalid availability end")?
                     .with_timezone(&FixedOffset::east_opt(0).unwrap());
 
@@ -215,7 +318,7 @@ impl FafPartyHostService {
                     end,
                     joined_at: now,
                 });
-                self.save_state(group_id, &state).await?;
+                self.store.save(group_id, &state).await?;
                 info!(group_id, user_id, start = %start, end = %end, "added faf-party candidate");
 
                 if let Some(window) = find_overlap_window(&state.candidates) {
@@ -229,70 +332,158 @@ impl FafPartyHostService {
         Ok(())
     }
 
-    async fn call_parse_message(
+    async fn parse_time_with_fallback(
         &self,
-        manager: &GroupBrainManager,
-        group_id: i64,
-        message: &str,
+        expression: &str,
         now: DateTime<FixedOffset>,
-    ) -> Result<ParseResult> {
-        let brain = manager
-            .get_or_create_brain(group_id)
-            .await
-            .context("failed to get group brain")?;
-        let tool = brain
-            .registry()
-            .find("faf_party_parse_message")
-            .context("faf_party_parse_message tool not found")?;
-
-        let args = serde_json::json!({
-            "message": message,
-            "now": now.to_rfc3339(),
-        });
-
-        let result = tool.call_raw(args).await;
-        if result.is_error {
-            return Err(anyhow::anyhow!(
-                "plugin error: {}",
-                result.message.unwrap_or_default()
-            ));
+    ) -> Result<ParseTimeResult> {
+        // First try the rule-based plugin parser.
+        let rule_result = self.call_parse_time(expression, now).await?;
+        if !rule_result.unknown {
+            return Ok(rule_result);
         }
 
-        let output_str = result
-            .output
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .context("plugin returned no output")?;
+        // Rule-based failed; ask the LLM to parse it.
+        info!(
+            expression,
+            "rule-based time parse failed; falling back to LLM"
+        );
+        self.llm_parse_time(expression, now).await
+    }
+
+    async fn call_parse_intent(&self, message: &str) -> Result<ParseIntentResult> {
+        self.call_plugin(
+            "faf_party_parse_intent",
+            serde_json::json!({"message": message}),
+        )
+        .await
+    }
+
+    async fn call_parse_time(
+        &self,
+        expression: &str,
+        now: DateTime<FixedOffset>,
+    ) -> Result<ParseTimeResult> {
+        self.call_plugin(
+            "faf_party_parse_time",
+            serde_json::json!({
+                "expression": expression,
+                "now": now.to_rfc3339(),
+            }),
+        )
+        .await
+    }
+
+    async fn call_plugin<T: serde::de::DeserializeOwned>(
+        &self,
+        tool: &str,
+        arguments: serde_json::Value,
+    ) -> Result<T> {
+        let compiled = self
+            .plugin
+            .as_ref()
+            .context("faf-party plugin not loaded")?;
+
+        let input = serde_json::json!({
+            "tool": tool,
+            "arguments": arguments,
+        })
+        .to_string();
+
+        let output_str = tokio::task::spawn_blocking({
+            let compiled = compiled.clone();
+            let input = input.clone();
+            move || {
+                let mut plugin = Plugin::new_from_compiled(&compiled)
+                    .map_err(|e| anyhow::anyhow!("failed to instantiate plugin: {e}"))?;
+                plugin
+                    .call::<&str, &str>("execute", &input)
+                    .map_err(|e| anyhow::anyhow!("plugin execute error: {e}"))
+                    .map(|s| s.to_string())
+            }
+        })
+        .await
+        .context("plugin task panicked")?
+        .context("plugin execution failed")?;
 
         serde_json::from_str(&output_str).context("failed to parse plugin output")
     }
 
-    async fn load_state(&self, group_id: i64) -> Result<PartyState> {
-        let path = self.state_path(group_id);
-        if !path.exists() {
-            return Ok(PartyState::default());
-        }
-        let text = tokio::fs::read_to_string(&path)
+    async fn llm_parse_time(
+        &self,
+        expression: &str,
+        now: DateTime<FixedOffset>,
+    ) -> Result<ParseTimeResult> {
+        let factory = QqbotProviderFactory::new(self.llm_config.provider.clone());
+        let brain_config = brain::BrainConfig {
+            model: self.llm_config.model.clone(),
+            system_prompt: self.llm_config.system_prompt.clone(),
+            ..Default::default()
+        };
+        let provider = factory
+            .create(&brain_config)
             .await
-            .context("failed to read party state file")?;
-        serde_json::from_str(&text).context("invalid party state JSON")
-    }
+            .context("failed to create LLM provider for time parsing fallback")?;
 
-    async fn save_state(&self, group_id: i64, state: &PartyState) -> Result<()> {
-        let path = self.state_path(group_id);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .context("failed to create party state directory")?;
-        }
-        let text = serde_json::to_string_pretty(state).context("failed to serialize party state")?;
-        tokio::fs::write(&path, text)
+        let system = "You are a precise time parser. Given a Chinese time expression and the current time, return a JSON object with 'start' and 'end' keys in RFC3339 format. Use +08:00 timezone. If the expression does not contain an end time, default to 22:00 on the same day. If you cannot parse the expression, return JSON with only \"unknown\": true. Return ONLY the JSON object, no markdown, no explanation.";
+        let user = format!(
+            "Expression: \"{}\"\nNow: {}\nReturn JSON:",
+            expression,
+            now.to_rfc3339()
+        );
+
+        let messages = vec![
+            Message {
+                role: Role::System,
+                name: None,
+                content: vec![ContentPart::Text {
+                    text: system.to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: None,
+                partial: None,
+            },
+            Message {
+                role: Role::User,
+                name: None,
+                content: vec![ContentPart::Text { text: user }],
+                tool_calls: None,
+                tool_call_id: None,
+                partial: None,
+            },
+        ];
+
+        let response = provider
+            .generate(system, &[], &messages)
             .await
-            .context("failed to write party state file")?;
-        Ok(())
-    }
+            .context("LLM fallback generate failed")?;
 
-    fn state_path(&self, group_id: i64) -> PathBuf {
-        self.data_dir.join(format!("faf-party-{group_id}.json"))
+        let mut text = String::new();
+        let mut stream = response.stream;
+        while let Some(part) = stream.next().await {
+            if let Part::Content(ContentPart::Text { text: t }) = part {
+                text.push_str(&t);
+            }
+        }
+
+        let cleaned = text.trim();
+        // Remove possible markdown code fences.
+        let cleaned = cleaned
+            .strip_prefix("```json")
+            .or_else(|| cleaned.strip_prefix("```"))
+            .unwrap_or(cleaned)
+            .trim();
+        let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned).trim();
+
+        let result: ParseTimeResult =
+            serde_json::from_str(cleaned).context("failed to parse LLM fallback JSON")?;
+        if result.unknown || result.start.is_empty() || result.end.is_empty() {
+            anyhow::bail!(
+                "LLM fallback could not parse time expression: {}",
+                expression
+            );
+        }
+        Ok(result)
     }
 
     async fn schedule_notifications(
@@ -310,7 +501,7 @@ impl FafPartyHostService {
         }
 
         let action_tx = self.action_tx.clone();
-        let data_dir = self.data_dir.clone();
+        let store = self.store.clone();
         let active_notifications = self.active_notifications.clone();
 
         let handle = tokio::spawn(async move {
@@ -335,8 +526,7 @@ impl FafPartyHostService {
             }
 
             // After the final retry, clear the candidate list.
-            let state_path = data_dir.join(format!("faf-party-{group_id}.json"));
-            if let Err(e) = tokio::fs::write(&state_path, b"{\"candidates\":[]}").await {
+            if let Err(e) = store.clear(group_id).await {
                 warn!(group_id, error = %e, "failed to clear party state after retries");
             }
 
@@ -425,11 +615,6 @@ fn find_overlap_window(
     best
 }
 
-#[allow(dead_code)]
-fn _state_path_for_group(data_dir: &Path, group_id: i64) -> PathBuf {
-    data_dir.join(format!("faf-party-{group_id}.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,7 +627,11 @@ mod tests {
             .unwrap()
     }
 
-    fn candidate(user_id: i64, start: DateTime<FixedOffset>, end: DateTime<FixedOffset>) -> Candidate {
+    fn candidate(
+        user_id: i64,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Candidate {
         Candidate {
             user_id,
             start,

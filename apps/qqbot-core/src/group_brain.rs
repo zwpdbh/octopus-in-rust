@@ -108,7 +108,12 @@ impl GroupBrainManager {
         data_dir: PathBuf,
         action_tx: crate::onebot::ActionTx,
     ) -> Self {
-        let faf_party = FafPartyHostService::new(data_dir.clone(), &config, action_tx.clone());
+        let faf_party = FafPartyHostService::new(
+            plugin_dir.clone(),
+            data_dir.clone(),
+            &config,
+            action_tx.clone(),
+        );
         Self {
             brains: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
@@ -268,7 +273,7 @@ impl GroupBrainManager {
         let tz = chrono::FixedOffset::east_opt(8 * 3600).expect("valid +08:00 offset");
         let now = chrono::Utc::now().with_timezone(&tz);
         self.faf_party
-            .process_message(self, group_id, user_id, &text, now)
+            .process_message(group_id, user_id, &text, now)
             .await;
 
         let brain = match self.get_or_create_brain(group_id).await {
@@ -352,17 +357,14 @@ impl GroupBrainManager {
         };
 
         // Determine which plugin file stems are allowed for this group.
+        // `enabled_plugins` is a whitelist: only listed plugins are loaded.
+        let installed = Self::installed_plugin_names(&self.plugin_dir);
+        let allowed: HashSet<String> = profile
+            .filter_plugins(installed.iter().map(|s| s.as_str()))
+            .into_iter()
+            .collect();
         let tool_source: std::sync::Arc<dyn brain::ToolSource> =
-            if profile.enabled_plugins.is_some() || !profile.disabled_plugins.is_empty() {
-                let installed = Self::installed_plugin_names(&self.plugin_dir);
-                let allowed: HashSet<String> = profile
-                    .filter_plugins(installed.iter().map(|s| s.as_str()))
-                    .into_iter()
-                    .collect();
-                std::sync::Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed))
-            } else {
-                std::sync::Arc::new(ExtismPluginSource::new(&self.plugin_dir))
-            };
+            std::sync::Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed));
 
         let tool_sources: Vec<std::sync::Arc<dyn brain::ToolSource>> = vec![tool_source];
 
@@ -396,7 +398,7 @@ impl GroupBrainManager {
         );
         brain.register_tool(
             Box::new(kosong::tooling::CallableTool2Adapter::new(
-                crate::faf_party::FafPartyStatusTool::new(self.data_dir.clone(), group_id),
+                crate::faf_party::FafPartyStatusTool::new(self.faf_party.state_store(), group_id),
             )),
             "host",
         );

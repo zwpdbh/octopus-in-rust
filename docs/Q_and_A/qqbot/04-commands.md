@@ -140,5 +140,4 @@ Manage per-group skills (system prompt and plugin set). See [Per-group skills](0
 cargo run --bin qqbot -- group 925712027 show
 cargo run --bin qqbot -- group 925712027 set-prompt "You are a concise assistant for this gaming group."
 cargo run --bin qqbot -- group 925712027 enable-plugin summary
-cargo run --bin qqbot -- group 925712027 disable-plugin example-http
 ```

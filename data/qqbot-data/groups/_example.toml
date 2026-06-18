@@ -12,13 +12,11 @@
 # personality or behavior for the group.
 system_prompt = "You are a concise assistant for this group."
 
-# List of plugin WASM names (without the .wasm extension) that should be
-# enabled for this group. Plugins must be built and placed in the plugins/
-# directory (e.g., by running the build-qqbot-release script).
+# Whitelist of plugin WASM names (without the .wasm extension) that should be
+# loaded for this group. Only these plugins are loaded. Plugins must be built
+# and placed in the plugins/ directory (e.g., by running the build-qqbot-release
+# script).
 enabled_plugins = ["faf_units_plugin"]
-
-# Plugins to explicitly disable for this group. Usually left empty.
-disabled_plugins = []
 
 # Optional seconds between progress updates while the bot is working on a
 # long-running answer. Default: 30.
