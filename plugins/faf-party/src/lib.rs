@@ -331,7 +331,8 @@ fn current_time_tool(args: serde_json::Value) -> serde_json::Value {
 
 fn fetch_worldtime(url: &str) -> Result<WorldTimeApiResponse, String> {
     let req = HttpRequest::new(url).with_method("GET");
-    let res = http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
+    let res =
+        http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
 
     let body_bytes = res.body();
     let body = String::from_utf8_lossy(&body_bytes);
@@ -341,12 +342,13 @@ fn fetch_worldtime(url: &str) -> Result<WorldTimeApiResponse, String> {
 fn fetch_taobao_time() -> Result<chrono::DateTime<chrono::FixedOffset>, String> {
     let url = "http://api.m.taobao.com/rest/api3.do?api=mtop.common.getTimestamp";
     let req = HttpRequest::new(url).with_method("GET");
-    let res = http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
+    let res =
+        http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
 
     let body_bytes = res.body();
     let body = String::from_utf8_lossy(&body_bytes);
-    let parsed: TaobaoTimestampResponse =
-        serde_json::from_str(&body).map_err(|e| format!("failed to parse response: {e}; body: {body}"))?;
+    let parsed: TaobaoTimestampResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("failed to parse response: {e}; body: {body}"))?;
 
     let millis: i64 = parsed
         .data
