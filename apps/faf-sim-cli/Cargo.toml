@@ -1,0 +1,17 @@
+[package]
+name = "faf-sim-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Research CLI for FAF build-order simulation and optimization."
+license = "MIT"
+
+[[bin]]
+name = "faf-sim"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+faf-sim = { path = "../../crates/faf-sim" }
+faf-units = { path = "../../crates/faf-units" }
+serde_json = "1"

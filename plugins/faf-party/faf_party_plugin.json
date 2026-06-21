@@ -6,6 +6,11 @@
     "type": "object",
     "properties": {}
   },
+  "allowed_hosts": [
+    "worldtimeapi.org",
+    "*.worldtimeapi.org",
+    "api.m.taobao.com"
+  ],
   "timeout_ms": 30000,
   "max_memory_pages": 256
 }

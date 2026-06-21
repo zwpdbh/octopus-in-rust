@@ -1326,6 +1326,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-sim"
+version = "0.1.0"
+dependencies = [
+ "faf-units",
+ "serde_json",
+]
+
+[[package]]
+name = "faf-sim-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "faf-sim",
+ "faf-units",
+ "serde_json",
+]
+
+[[package]]
 name = "faf-units"
 version = "0.1.0"
 dependencies = [
