@@ -1,0 +1,17 @@
+use anyhow::Result;
+
+mod apps;
+mod args;
+mod cargo;
+mod deploy;
+mod plugins;
+mod project;
+
+fn main() -> Result<()> {
+    match args::Task::parse()? {
+        args::Task::App { app, command, rest } => match app {
+            args::App::Qqbot => apps::qqbot::run(&command, &rest),
+        },
+        args::Task::Global(args::GlobalCommand::Test) => cargo::test_workspace(),
+    }
+}

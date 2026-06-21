@@ -1,3 +1,18 @@
 [workspace]
-members = ["octopus-cli", "kosong", "plugins/example-http", "docref"]
+members = [
+    "apps/octopus-cli",
+    "crates/kosong",
+    "crates/brain",
+    "crates/faf-units",
+    "crates/faf-sim",
+    "crates/faf-downloader",
+    "plugins/example-http",
+    "plugins/faf-units",
+    "plugins/faf-party",
+    "apps/docref",
+    "apps/faf-sim-cli",
+    "apps/qqbot",
+    "apps/qqbot-core",
+    "xtask",
+]
 resolver = "3"

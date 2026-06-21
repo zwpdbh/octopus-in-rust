@@ -1,0 +1,16 @@
+{
+  "name": "FafParty",
+  "description": "Parse player availability for FAF (Forged Alliance Forever) party scheduling.",
+  "prompt_fragment": "When a user mentions they can play FAF or want to join/leave a party, use faf_party_parse_message to determine their intent and availability window.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "allowed_hosts": [
+    "worldtimeapi.org",
+    "*.worldtimeapi.org",
+    "api.m.taobao.com"
+  ],
+  "timeout_ms": 30000,
+  "max_memory_pages": 256
+}

@@ -1,0 +1,15 @@
+[package]
+name = "qqbot-config"
+version = "0.1.0"
+edition = "2021"
+authors = ["qqbot contributors"]
+description = "Shared configuration types for qqbot-core and the qqbot CLI."
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

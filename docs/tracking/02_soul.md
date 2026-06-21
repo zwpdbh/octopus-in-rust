@@ -27,24 +27,27 @@
 
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
-| `octopus-cli/src/soul/mod.rs` | `KimiSoul`, agent loop, status | ~486 | 🔄 Core loop done; missing notifications, hooks, steers |
+| `octopus-cli/src/soul/mod.rs` | Module declarations and re-exports | ~60 | ✅ Module tree stable |
+| `octopus-cli/src/soul/kimisoul.rs` | `KimiSoul`, thin outer turn loop, wire event mapping, MCP loading | ~600 | 🔄 Outer loop done; per-step logic delegated to `brain` |
+| `octopus-cli/src/soul/brain_bridge.rs` | CLI-specific Brain policy bridges | ~650 | ✅ `CliStepPolicy`, `CliCheckpointPolicy`, `CliInjectionPolicy`, etc. |
 | `octopus-cli/src/soul/slash.rs` | Soul-level slash commands | ~1,118 | ✅ All major commands ported with mirror comments |
 | `octopus-cli/src/soul/agent.rs` | Agent struct, system prompt | ~162 | 🔄 Basic agent exists |
 | `octopus-cli/src/soul/approval.rs` | Approval state | ~234 | ✅ `ApprovalState` with `ApprovalMode` enum |
 | `octopus-cli/src/soul/compaction.rs` | Context compaction | ~151 | 🔄 Simple compaction only |
 | `octopus-cli/src/soul/context.rs` | Context file backend | ~385 | 🔄 File-based context with checkpoints |
 | `octopus-cli/src/soul/message.rs` | Message helpers | ~98 | 🔄 Basic message formatting |
-| `octopus-cli/src/soul/toolset.rs` | Tool registration | ~109 | 🔄 Tool dispatch works |
+| `octopus-cli/src/soul/toolset.rs` | Tool registration/dispatch/approval/dedup | ~780 | ✅ Core dispatch + approval + cross-step dedup |
 
 ## Detailed Mapping
 
 | Python | Rust | Status | Notes |
 |--------|------|--------|-------|
 | `Soul` protocol | `KimiSoul` struct | 🔄 | Direct struct instead of trait |
-| `run_soul()` | `KimiSoul::run()` | 🔄 | Missing notification pump, cancel event |
+| `run_soul()` | `KimiSoul::run()` | 🔄 | Notification pump present; cancel event not yet ported |
 | `Soul.run()` | `KimiSoul::run()` | 🔄 | Missing `skip_user_prompt_hook` |
-| `_agent_loop()` | `KimiSoul::_agent_loop()` | 🔄 | Missing steer consumption |
-| `_step()` | `KimiSoul::_step()` | 🔄 | Missing tool rejection handling |
+| `_agent_loop()` | `KimiSoul::agent_loop()` | 🔄 | Steer consumption present; delegates each step to `Brain::run_step` |
+| `_step()` | `Brain::run_step` via `CliStepPolicy` | ✅ | Tool rejection, D-Mail rewind, notification delivery, dynamic injection, and checkpointing now live in Brain policies |
+| `_pump_notifications_to_wire()` | `KimiSoul::start_notification_pump()` | ✅ | Pumps pending notifications to the wire channel |
 | `SoulSlashCmdFunc` | `SoulSlashCmdFunc` type alias | ✅ | Fully commented mirror |
 | `@registry.command` | `registry.register()` | ✅ | Imperative instead of decorator |
 | `/clear` | `build_default_slash_commands()` | ✅ | Including alias `/reset` |
@@ -77,11 +80,14 @@
 
 ## What's Missing
 
-- [ ] Notification pump (`_pump_notifications_to_wire`)
+- [x] Notification pump (`_pump_notifications_to_wire`)
 - [ ] Cancel event handling (`asyncio.Event` equivalent)
-- [x] Dynamic system prompt injection (`dynamic_injection.py`)
+- [x] Dynamic system prompt injection (`dynamic_injection.py`) — moved into `CliInjectionPolicy`
 - [x] AFK disabled reminder injection
 - [x] Plan mode dynamic injection
+- [x] Tool rejection handling — moved into `CliStepPolicy`
+- [x] Steer consumption — kept in `KimiSoul::agent_loop` and `consume_pending_steers`
+- [x] Checkpoint/D-Mail rewind — moved into `CliCheckpointPolicy` and `CliStepPolicy`
 - [ ] `/btw` side-question modal
 - [x] `/model` alias-based switching
 - [ ] Shell-level slash commands (`ui/shell/slash.py`) — some exist as soul-level stubs

@@ -1,0 +1,60 @@
+# Template: data/qqbot-data/deploy.toml
+#
+# Deployment configuration for `cargo xtask qqbot deploy`. Copy this template
+# to `deploy.toml` and fill in your own values. Do NOT commit `deploy.toml`
+# to Git -- it contains account-specific settings like your SSH CIDR.
+#
+# All AliCloud IDs and CIDRs must match your account and the region/zone you
+# choose. Image IDs are region-specific.
+
+[aliyun]
+# AliCloud region and zone. Must match the region configured in your
+# `aliyun` CLI profile (run `aliyun configure list` to verify).
+region = "cn-shanghai"
+zone = "cn-shanghai-m"
+
+# ECS instance type. For a minimal personal bot, "ecs.e-c1m1.large" is enough.
+# Make sure the type is available in the chosen zone.
+instance_type = "ecs.e-c1m1.large"
+
+# OS image ID. The image's glibc version must be compatible with the machine
+# where you build the release binary. Ubuntu 24.04 is a safe default for recent
+# Ubuntu/Debian build hosts.
+image_id = "ubuntu_24_04_x64_20G_alibase_20260522.vhd"
+
+# VPC and VSwitch CIDR blocks. These can be left as-is unless they conflict
+# with an existing VPC in your account.
+vpc_cidr = "192.168.0.0/16"
+vswitch_cidr = "192.168.0.0/24"
+
+# Name of the AliCloud SSH key pair to create or reuse. The private key will
+# be saved to the path configured in [remote].ssh_private_key.
+key_pair_name = "qqbot-key"
+
+# CIDR allowed to connect to SSH (port 22). Set this to your current public
+# IP/32, e.g. "203.0.113.42/32". Do NOT leave it as 0.0.0.0/0 except briefly
+# for testing. If your IP is dynamic, update this value before each session.
+allowed_ssh_cidr = "0.0.0.0/0"
+
+# CIDR allowed to reach SnowLuma WebUI (5099), noVNC (6081), and VNC (5900).
+# Set this to your current public IP/32. If you leave it as 0.0.0.0/0, anyone
+# can reach the WebUI/noVNC once the bot is logged in.
+allowed_service_cidr = "0.0.0.0/0"
+
+# AliCloud CLI profile to use. The profile must be configured with
+# `aliyun configure --profile <name>`.
+aliyun_profile = "default"
+
+# Base name used for all provisioned resources (VPC, VSwitch, security group,
+# key pair, ECS instance).
+name = "octopus-qqbot"
+
+[remote]
+# Unprivileged user created on the server to run the qqbot service.
+user = "qqbot"
+
+# Installation directory on the remote host.
+install_dir = "/opt/qqbot"
+
+# Local path where the generated SSH private key is saved.
+ssh_private_key = "~/.ssh/qqbot-key.pem"

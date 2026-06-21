@@ -9,12 +9,12 @@
 
 | Item | State |
 |------|-------|
-| **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` |
-| **Active Task** | *TBD — pending next priority* |
-| **Last Completed** | Hook system refactor: split `HookEventKind`/`HookEvent`, unify server/wire hooks via `Hook` trait |
+| **Phase** | Phase 1 — 1:1 Rust rewrite of `kimi-cli` (Brain crate layered; `qqbot-core` integration complete) |
+| **Active Task** | Create strategic plan for the `faf-party` plugin |
+| **Last Completed** | Deployed qqbot to AliCloud ECS with group-specific health checks and periodic progress feedback |
 | **Compilation** | `cargo check --workspace` ✅ |
-| **Tests** | `cargo test -p octopus-cli` 23 passing |
-| **Blockers** | None |
+| **Tests** | `cargo test --workspace` ✅ |
+| **Blockers** | Bot needs manual QQ login via SnowLuma WebUI/noVNC before OneBot WebSocket handshake will succeed. Current AliCloud cash balance is ~99.6 CNY; top up to at least 100 CNY before creating a new instance. |
 
 ---
 
@@ -49,12 +49,30 @@ Legend: ✅ Complete · 🔄 Partial · ❌ Not Started
 
 ## Active Task
 
-No active task is currently assigned. The next session should:
+Create strategic plan for the `faf-party` plugin. See [`docs/plans/16-faf-party-plugin.md`](./docs/plans/16-faf-party-plugin.md).
 
-1. Read `docs/tracking/index.md` for the overall rewrite map.
-2. Pick a track marked 🔄 or ❌.
-3. Create `tasks/<short-name>.md` from `tasks/_template.md` before coding.
-4. Update this file with the active task name and status.
+Current state:
+- [x] Availability parsing semantics defined (Chinese expressions, 22:00 default end, past-time rollover).
+- [x] Plugin/host architecture implemented (WASM parser + host timer/notifications).
+- [x] Implementation steps and success criteria documented.
+- [x] Plugin built and deployed to ECS.
+- [ ] Open questions answered before next iteration.
+
+## Previous Task
+
+Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md) and [`docs/plans/15-qqbot-deployment.md`](./docs/plans/15-qqbot-deployment.md).
+
+State:
+- [x] Deployment plan approved.
+- [x] xtask deploy module, AliCloud CLI wrappers, SSH helpers, provisioning, and remote install implemented.
+- [x] systemd service template and remote setup script added.
+- [x] `qqbot start --no-daemon` and installed-layout `qqbot-core` resolution added.
+- [x] `cargo check`, `cargo test`, and targeted `cargo clippy` pass.
+- [x] Real ECS deployment test passed (instance reachable, service ports open, status/doctor clean).
+- [x] Deploy code now opens SnowLuma service ports from `allowed_service_cidr` and rewrites `config.toml` paths for the remote layout.
+- [x] Added `cargo xtask qqbot deploy --fresh` for clean redeploys from a new machine.
+- [ ] Bot needs manual QQ login via SnowLuma WebUI/noVNC.
+- [ ] Move task to `tasks/completed/` after verification.
 
 ---
 
@@ -65,6 +83,12 @@ No active task is currently assigned. The next session should:
 | 2026-06-12 | Split `HookEvent` into `HookEventKind` (registry key) + `HookEvent` (runtime payload) | Removed dual-role confusion; `trigger(event)` no longer needs a separate `matcher_value` |
 | 2026-06-12 | Unify server and wire hooks under `Hook` trait | Single dispatch path; easier to add new hook backends later |
 | 2026-06-12 | Add `_template.md` root bootstrap template | Enables copying the enforced project structure into future projects without referencing octopus directly |
+| 2026-06-18 | Fix per-step progress timer reset in `group_brain.rs` | Progress heartbeat now spans the whole turn, preventing multiple “Still checking...” messages 30s apart when tools are unchanged |
+| 2026-06-18 | Implement `faf-party` plugin and host service | WASM parser extracts intent/availability; `FafPartyHostService` tracks candidates and notifies when 6 players overlap |
+| 2026-06-18 | Add `faf_party_status` host tool | LLM can now query the current candidate list, enabling responses to "现在有多少人了？" |
+| 2026-06-18 | Add per-group file locking to `faf-party` state | Prevents data races when concurrent messages or notification retries read/write `faf-party-<group_id>.json` |
+| 2026-06-18 | Load `faf-party` plugin privately in host service | Stops the LLM from redundantly calling the parser; host auto-registers users, LLM only queries via `faf_party_status` |
+| 2026-06-18 | Split `faf-party` plugin into `parse_intent` + `parse_time` | Dedicated time-transform tool; rule-based parser with LLM fallback using the same endpoint as the Brain |
 
 ---
 

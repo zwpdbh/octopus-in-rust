@@ -1,3 +1,16 @@
 tmp
 target
 .docref.db
+.qqbot
+# Ignore runtime data directories, but keep _*.toml templates as documentation.
+data/*
+!data/qqbot-data/
+data/qqbot-data/*
+!data/qqbot-data/_*.toml
+!data/qqbot-data/groups/
+data/qqbot-data/groups/*
+!data/qqbot-data/groups/_*.toml
+!data/snowluma-data/
+data/snowluma-data/*
+snowluma-data
+dist

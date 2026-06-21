@@ -45,18 +45,16 @@
 | `octopus-cli/src/notifications/manager.rs` | Claim/ack/deliver/recover | ~176 | ✅ |
 | `octopus-cli/src/notifications/llm.rs` | `build_notification_message()` | ~64 | ✅ |
 
-### What's Done
-
 - [x] Notification models (Event, Delivery, View, SinkState)
 - [x] Persistent store (file-based JSON)
-- [x] Delivery to LLM context in `_step()`
+- [x] Delivery to LLM context via `CliStepPolicy::before_step`
 - [x] `build_notification_message()` with XML format
 - [x] Ack on context restore
 - [x] Dedupe key support
+- [x] Delivery to wire via `KimiSoul::start_notification_pump()`
 
 ### What's Missing
 
-- [ ] Delivery to wire (pump loop)
 - [ ] LLM-generated notification summaries
 - [ ] Background task output tailing in notification messages
 
@@ -71,7 +69,7 @@
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
 | `octopus-cli/src/plugin/mod.rs` | Plugin manifest, `WasmPluginTool`, `discover_plugins()` | ~180 | ✅ |
-| `plugins/example-http/` | Example HTTP plugin built with `extism-pdk` | ~80 | ✅ |
+| `qqbot-plugins/example-http/` | Example HTTP plugin built with `extism-pdk` | ~80 | ✅ |
 
 ### What's Done
 
@@ -80,7 +78,7 @@
 - [x] Security manifest — `allowed_hosts` (deny-by-default), `allowed_paths`, `timeout_ms`, `max_memory_pages`
 - [x] `build_extism_manifest()` — converts JSON manifest to `extism::Manifest` with `disallow_all_hosts()` default
 - [x] Both `load_agent()` and `Agent::new_basic()` discover and register plugins
-- [x] Example plugin (`plugins/example-http`) tested against httpbin.org
+- [x] Example plugin (`qqbot-plugins/example-http`) tested against httpbin.org
 
 ### What's Missing
 

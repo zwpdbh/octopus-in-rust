@@ -14,7 +14,7 @@
 |----------|----------|---------------------|
 | `kimi-cli` (core runtime) | Python | `octopus-cli` (Tokio + clap) |
 | `kimi-cli` LLM/model layer | Python | `kosong` (standalone LLM crate) |
-| `kimi-cli` plugin loader | Python | `plugins/example-http` + discovery in `octopus-cli` |
+| `kimi-cli` plugin loader | Python | `qqbot-plugins/example-http` + discovery in `octopus-cli` |
 | Documentation cross-reference | Manual | `docref` (docref tool) |
 
 **Strategy**: 1:1 port first, refactor later.
@@ -120,7 +120,7 @@ For full operational status, read [`STATUS.md`](./STATUS.md).
 | Async runtime | Tokio | Used throughout `octopus-cli` and `kosong` |
 | CLI framework | clap | Standard Rust CLI parsing |
 | LLM crate | `kosong` | Standalone crate decoupled from CLI specifics |
-| Plugin model | WASM-compatible dynamic crates | `plugins/example-http` is the reference implementation |
+| Plugin model | WASM-compatible dynamic crates | `qqbot-plugins/example-http` is the reference implementation |
 | Config format | TOML | Matches `kimi-cli` and Rust ecosystem conventions |
 | Wire protocol | JSON-RPC over stdio | Matches `kimi-cli` wire protocol |
 | Rewrite strategy | 1:1 structure first | Port faithfully, then refactor |
@@ -155,9 +155,13 @@ octopus/
 │
 ├── octopus-cli/           ← Main CLI runtime
 ├── kosong/                ← Standalone LLM / model crate
-├── plugins/example-http/  ← Reference plugin implementation
+├── qqbot-plugins/         ← Plugin crates
+│   ├── example-http/      ← Reference plugin implementation
+│   └── summary/           ← Default qqbot plugin: conversation summary
 ├── docref/                ← Documentation cross-reference tool
-│
+├── qqbot/                 ← QQ bot supervisor (SnowLuma + Wasm plugins)
+└── qqbot-core/            ← QQ bot runtime with Wasm plugin host
+
 ├── tasks/                 ← Active task specs
 │   ├── _template.md
 │   └── completed/         ← Finished tasks

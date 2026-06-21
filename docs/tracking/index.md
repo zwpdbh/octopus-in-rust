@@ -63,6 +63,12 @@ This directory tracks the progress of rewriting `kimi-cli` (Python) into `octopu
 | `kimi_cli/ui/shell/slash.py` | `octopus-cli/src/soul/slash.rs` (soul-level) | [02_soul.md](02_soul.md) |
 | `kimi_cli/ui/shell/*.py` | `octopus-cli/src/ui/shell/mod.rs` | [09_ui_shell.md](09_ui_shell.md) |
 
+## Cross-Cutting Initiatives
+
+| Initiative | Tracker | Status |
+|------------|---------|--------|
+| Brain crate extraction & QQ integration | [`brain/index.md`](brain/index.md) | ✅ Phase 2 (octopus-cli consumer) and Phase 3 (qqbot-core integration) complete; Phase 4 (config/auth unification) next |
+
 ## How to Update This Tracker
 
 1. After porting a module, update the corresponding `XX_*.md` file.

@@ -1,0 +1,54 @@
+# Template: data/qqbot-data/config.toml
+#
+# This is the main qqbot configuration file. Copy this template to
+# `config.toml` and fill in your own values. Do NOT commit `config.toml`
+# to Git -- it contains credentials and account-specific settings.
+#
+# The deployed copy lives at `/opt/qqbot/data/qqbot-data/config.toml` on the
+# remote ECS instance.
+
+[onebot]
+# OneBot 11 WebSocket URL exposed by SnowLuma. Keep the default when running
+# SnowLuma on the same host.
+ws_url = "ws://127.0.0.1:3001"
+
+# Optional access token for OneBot authentication. Leave empty if SnowLuma is
+# not configured to require one.
+access_token = ""
+
+[bot]
+# QQ group IDs the bot is allowed to join and respond in.
+allowed_groups = [123456789]
+
+# Command prefix for group chat commands (e.g., "/help").
+command_prefix = "/"
+
+# Directory containing plugin WASM files. For local development this is the
+# project's data/qqbot-data/plugins directory. For a deployed server it should
+# be /opt/qqbot/data/qqbot-data/plugins.
+plugin_dir = "/path/to/project/data/qqbot-data/plugins"
+
+# The QQ number of the bot account managed by SnowLuma.
+bot_qq = 1234567890
+
+# Aliases the bot responds to in group chats.
+bot_aliases = ["botname"]
+
+[llm]
+# LLM provider type. The project currently supports "kimi_code".
+provider_type = "kimi_code"
+
+# Model name to use. For Kimi code: "kimi-for-coding".
+model = "kimi-for-coding"
+
+# Provider API endpoint.
+api_url = "https://api.kimi.com/coding/v1"
+
+# Path to the credential file. For Kimi this is typically:
+#   ~/.kimi/credentials/kimi-code.json
+# The file should contain a JSON object with an access token, e.g.:
+#   {"access_token": "your-token-here"}
+token_file = "/home/YOUR_USERNAME/.kimi/credentials/kimi-code.json"
+
+# Default system prompt used when no group-specific prompt overrides it.
+system_prompt = "You are a helpful assistant summarizing a QQ group conversation. List key topics, decisions, and action items concisely in the user's language."
