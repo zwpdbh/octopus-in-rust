@@ -1,0 +1,71 @@
+# 09 — Known Limitations and Roadmap
+
+`faf-sim` is a research simulator, not a full game engine. This document lists
+the simplifications it makes and maps a path from the current baseline to a more
+complete optimizer.
+
+---
+
+## 1. Current simplifications
+
+- **Travel time** — engineers and factories are assumed to be in place.
+- **Reclaim** — no map reclaim is modeled.
+- **Combat, scouting, and map control** — purely economic simulation.
+- **Unit upgrades / enhancements** — ACU T2/T3 engineering upgrades are not
+  modeled as separate prerequisites (yet).
+- **Concurrent projects** — the simple simulator builds one thing at a time.
+  `HeuristicSimulator` adds concurrency but still ticks projects sequentially.
+- **Engineer production for assist** — early versions did not build extra
+  engineers to speed up the target. `HeuristicSimulator` and
+  `GreedyNoStallPolicy` now do.
+- **Power/mass infrastructure beyond prerequisites** — no optional mass
+  extractors or power generators are built unless the policy explicitly requests
+  them.
+
+## 2. What is already modeled
+
+- Continuous-drain economy with mass and energy stalls.
+- Build power, build time, and remaining-work tracking.
+- Builder prerequisites via faction-scoped category matching.
+- A concurrent simulator with pluggable policies.
+- A greedy no-stall heuristic policy.
+
+## 3. Near-term roadmap
+
+1. **Better economy infrastructure policy** — choose when to build mass
+   extractors and power generators based on ROI.
+2. **Reclaim model** — add a simple reclaim income source.
+3. **ACU enhancements** — model engineering upgrades as build-power and economy
+   modifiers.
+4. **Travel time** — add time for engineers to reach a project and for factories
+   to be placed.
+5. **Search-based planner** — implement beam search or A* over build orders.
+6. **RL environment** — expose the simulator as a Gym-like environment.
+
+## 4. Validation principle
+
+Every new feature should make the predicted completion time closer to a real
+replay, or make the optimizer find a schedule that a human player would recognize
+as good. If a feature complicates the model without improving either metric, it
+should stay optional.
+
+## 5. Study questions
+
+1. Which simplification has the largest impact on predicted Monkeylord timing?
+2. How would you validate a new planner against real games?
+3. Should travel time be added before or after a search-based planner? Why?
+
+## 6. Closing experiment
+
+Run the full `faf-sim` test suite to confirm the current mechanics are stable:
+
+```bash
+cargo test -p faf-sim
+```
+
+Then open the source files referenced throughout this series and trace how a
+single tick updates `EconomyState`.
+
+---
+
+End of the series. Start over at [01-ground-facts.md](./01-ground-facts.md).
