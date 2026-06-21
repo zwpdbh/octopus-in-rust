@@ -3,12 +3,24 @@
 //! This crate sits on top of `faf-units` and provides:
 //!
 //! - `build_graph` — pure unit dependency graph (who can build whom).
-//! - (future) `sim` — economy and build-time simulation.
-//! - (future) `planner` — optimization for ASAP build orders.
+//! - `economy` — continuous-drain resource model.
+//! - `sim` — economy and build-time simulation.
+//! - `heuristic` — greedy build-order planner that grows BP while avoiding stalls.
 
 pub mod build_graph;
+pub mod economy;
+pub mod heuristic;
+pub mod sim;
 
 pub use build_graph::{BuildGraph, BuilderKind, UnknownUnitError};
+pub use economy::{
+    apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EconomyState,
+    EffectiveBuildPower, RequestedBuildPower, TickOutcome, TickResult,
+};
+pub use heuristic::{
+    BuildPolicy, GreedyNoStallPolicy, HeuristicSimulator, ProjectPriority, ProjectRequest,
+};
+pub use sim::{derive_economy, BuildEvent, SimpleSimulator};
 
 #[cfg(test)]
 mod tests {

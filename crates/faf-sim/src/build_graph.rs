@@ -119,6 +119,11 @@ impl<'a> BuildGraph<'a> {
         self.index.find_unit(id)
     }
 
+    /// Access the underlying unit index.
+    pub fn index(&self) -> &'a DataIndex {
+        self.index
+    }
+
     /// Return the builder kinds required to build a unit.
     pub fn builder_kinds_for(&self, id: &str) -> &[BuilderKind] {
         static EMPTY: &[BuilderKind] = &[];

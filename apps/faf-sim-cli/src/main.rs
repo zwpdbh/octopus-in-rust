@@ -10,8 +10,8 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use faf_sim::BuildGraph;
-use faf_units::DataIndex;
+use faf_sim::{BuildGraph, SimpleSimulator};
+use faf_units::{DataIndex, Unit};
 
 mod target;
 use target::{Faction, ResearchTarget, UnitKind};
@@ -111,7 +111,7 @@ fn main() {
             order,
         } => {
             let target = resolve_target(faction, unit);
-            run_simulate(target, order.as_deref());
+            run_simulate(&graph, &index, target, order.as_deref());
         }
         Commands::Plan {
             faction,
@@ -206,14 +206,64 @@ fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(target: ResearchTarget, order: Option<&str>) {
+/// Standard land-tech prerequisite chain for a faction.
+///
+/// This is a hand-curated path: ACU → T1 land factory → T2 land factory →
+/// T3 land factory → T3 engineer. It avoids the noise of campaign/special
+/// units in the dependency graph.
+fn standard_tech_chain<'a>(index: &'a DataIndex, faction: Faction) -> Vec<&'a Unit> {
+    let ids = match faction {
+        Faction::Uef => ["UEL0001", "UEB0101", "UEB0201", "UEB0301", "UEL0309"],
+        Faction::Cybran => ["URL0001", "URB0101", "URB0201", "URB0301", "URL0309"],
+        Faction::Aeon => ["UAL0001", "UAB0101", "UAB0201", "UAB0301", "UAL0309"],
+        Faction::Seraphim => ["XSL0001", "XSB0101", "XSB0201", "XSB0301", "XSL0309"],
+    };
+
+    ids.iter().filter_map(|id| index.find_unit(id)).collect()
+}
+
+fn run_simulate(
+    graph: &BuildGraph,
+    index: &DataIndex,
+    target: ResearchTarget,
+    order: Option<&str>,
+) {
+    let blueprint_id = target.blueprint_id();
+    let target_unit = graph
+        .unit(blueprint_id)
+        .expect("target blueprint must exist in index");
+
     println!("Simulate target: {}", target.display_name());
-    if let Some(path) = order {
+
+    let sequence: Vec<&Unit> = if let Some(path) = order {
         println!("Build order file: {}", path);
+        println!("(Custom build order files are not yet supported.)");
+        return;
     } else {
-        println!("No build order file provided; using placeholder.");
+        // Default: standard land-tech chain, then the target.
+        let mut chain = standard_tech_chain(index, target.faction);
+        chain.push(target_unit);
+        chain
+    };
+
+    // The chain starts with the ACU, which we already own.
+    let starting_unit = sequence.first().copied().expect("chain includes ACU");
+    let build_sequence = &sequence[1..];
+
+    let mut sim = SimpleSimulator::new(index, vec![starting_unit], 1.0);
+    let events = sim.simulate_sequence(build_sequence);
+
+    println!("\nTimeline:");
+    println!("{:>10}  {}", "Time (s)", "Unit");
+    println!("{:>10}  {}", "--------", "----");
+    for event in events {
+        println!(
+            "{:>10.1}  {} ({})",
+            event.time,
+            event.unit_name.as_deref().unwrap_or("?"),
+            event.unit_id
+        );
     }
-    println!("(Simulator not yet implemented.)");
 }
 
 fn run_plan(target: ResearchTarget, strategy: &str) {
