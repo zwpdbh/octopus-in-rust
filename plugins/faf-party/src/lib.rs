@@ -38,6 +38,18 @@ pub fn register_tools(_input: String) -> FnResult<String> {
                 "required": ["expression", "now"]
             }),
         },
+        ToolDef {
+            name: "faf_party_current_time".to_string(),
+            description: "Fetch the current time from an online time service. Use this when the user asks what time it is or when you need an authoritative clock.".to_string(),
+            prompt_fragment: None,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "timezone": { "type": "string", "description": "Optional IANA timezone, e.g. 'Asia/Shanghai' or 'UTC'. Uses the host's public timezone if omitted." }
+                },
+                "required": []
+            }),
+        },
     ];
 
     Ok(serde_json::to_string(&tools)?)
@@ -69,6 +81,7 @@ pub fn execute(input: String) -> FnResult<String> {
     let result = match parsed.tool.as_str() {
         "faf_party_parse_intent" => parse_intent_tool(parsed.arguments),
         "faf_party_parse_time" => parse_time_tool(parsed.arguments),
+        "faf_party_current_time" => current_time_tool(parsed.arguments),
         _ => serde_json::json!({"error": format!("Unknown tool: {}", parsed.tool) }),
     };
 
@@ -254,6 +267,97 @@ fn parse_time_tool(args: serde_json::Value) -> serde_json::Value {
 struct ParseTimeArgs {
     expression: String,
     now: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CurrentTimeArgs {
+    #[serde(default)]
+    timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorldTimeApiResponse {
+    datetime: String,
+    timezone: String,
+    utc_offset: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TaobaoTimestampResponse {
+    data: TaobaoTimestampData,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TaobaoTimestampData {
+    t: String,
+}
+
+fn current_time_tool(args: serde_json::Value) -> serde_json::Value {
+    let args: CurrentTimeArgs = match serde_json::from_value(args) {
+        Ok(a) => a,
+        Err(e) => return serde_json::json!({"error": format!("invalid arguments: {e}") }),
+    };
+
+    // Primary source: World Time API (works well globally).
+    let worldtime_url = match &args.timezone {
+        Some(tz) => format!("https://worldtimeapi.org/api/timezone/{}", tz),
+        None => "https://worldtimeapi.org/api/ip".to_string(),
+    };
+
+    match fetch_worldtime(&worldtime_url) {
+        Ok(r) => serde_json::json!({
+            "datetime": r.datetime,
+            "timezone": r.timezone,
+            "utc_offset": r.utc_offset,
+            "source": "worldtimeapi.org",
+        }),
+        Err(primary_err) => {
+            // Fallback: Taobao's timestamp API (more reliable from mainland China).
+            match fetch_taobao_time() {
+                Ok(dt) => serde_json::json!({
+                    "datetime": dt.to_rfc3339(),
+                    "timezone": args.timezone.unwrap_or_else(|| "Asia/Shanghai".to_string()),
+                    "utc_offset": "+08:00",
+                    "source": "api.m.taobao.com",
+                    "fallback_reason": primary_err,
+                }),
+                Err(fallback_err) => serde_json::json!({
+                    "error": format!("failed to fetch time from both services: {} ; {}", primary_err, fallback_err),
+                }),
+            }
+        }
+    }
+}
+
+fn fetch_worldtime(url: &str) -> Result<WorldTimeApiResponse, String> {
+    let req = HttpRequest::new(url).with_method("GET");
+    let res = http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let body_bytes = res.body();
+    let body = String::from_utf8_lossy(&body_bytes);
+    serde_json::from_str(&body).map_err(|e| format!("failed to parse response: {e}; body: {body}"))
+}
+
+fn fetch_taobao_time() -> Result<chrono::DateTime<chrono::FixedOffset>, String> {
+    let url = "http://api.m.taobao.com/rest/api3.do?api=mtop.common.getTimestamp";
+    let req = HttpRequest::new(url).with_method("GET");
+    let res = http::request::<String>(&req, None).map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let body_bytes = res.body();
+    let body = String::from_utf8_lossy(&body_bytes);
+    let parsed: TaobaoTimestampResponse =
+        serde_json::from_str(&body).map_err(|e| format!("failed to parse response: {e}; body: {body}"))?;
+
+    let millis: i64 = parsed
+        .data
+        .t
+        .parse()
+        .map_err(|e| format!("invalid timestamp: {e}"))?;
+    let secs = millis / 1000;
+    let dt_utc = chrono::DateTime::from_timestamp(secs, 0)
+        .ok_or_else(|| "timestamp out of range".to_string())?;
+    let offset = chrono::FixedOffset::east_opt(8 * 3600).ok_or("invalid offset".to_string())?;
+    Ok(dt_utc.with_timezone(&offset))
 }
 
 /// Parse a Chinese availability expression into a start/end window.
