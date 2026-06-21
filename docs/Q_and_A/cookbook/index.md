@@ -14,3 +14,4 @@ Practical Rust patterns used across the Octopus codebase.
 | 08 | Contribute to open source via fork + PR | [08-open-source-contribution-workflow.md](./08-open-source-contribution-workflow.md) |
 | 09 | Run a forked Python CLI alongside the official install | [09-run-forked-python-cli-alongside-official.md](./09-run-forked-python-cli-alongside-official.md) |
 | 10 | Switch LLM providers with a config-driven factory | [10-switch-llm-providers-with-config-driven-factory.md](./10-switch-llm-providers-with-config-driven-factory.md) |
+| 11 | Allow unresolved symbols in a macOS `cdylib` build script | [11-allow-unresolved-symbols-in-plugin-build.rs.md](./11-allow-unresolved-symbols-in-plugin-build.rs.md) |
