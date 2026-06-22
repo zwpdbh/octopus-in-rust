@@ -9,8 +9,10 @@
 //! faf-sim deps -s arty
 //! ```
 
+use std::str::FromStr;
+
 use clap::{Parser, Subcommand};
-use faf_sim::{Capability, HeuristicSimulator, StateMachinePolicy, TechGraph};
+use faf_sim::{build_planner, Capability, Strategy, TechGraph};
 use faf_units::DataIndex;
 
 mod target;
@@ -75,6 +77,9 @@ enum Commands {
         faction: FactionArgs,
         /// Unit name, e.g. `fatboy`.
         unit: UnitKind,
+        /// Planner strategy.
+        #[arg(long, default_value = "greedy")]
+        strategy: String,
         /// Path to a JSON build-order file.
         #[arg(short, long)]
         order: Option<String>,
@@ -108,10 +113,12 @@ fn main() {
         Commands::Simulate {
             faction,
             unit,
+            strategy,
             order,
         } => {
             let target = resolve_target(faction, unit);
-            run_simulate(&index, target, order.as_deref());
+            let strategy = parse_strategy(&strategy);
+            run_simulate(&index, &graph, target, order.as_deref(), strategy);
         }
         Commands::Plan {
             faction,
@@ -119,7 +126,8 @@ fn main() {
             strategy,
         } => {
             let target = resolve_target(faction, unit);
-            run_plan(&index, target, &strategy);
+            let strategy = parse_strategy(&strategy);
+            run_plan(&index, &graph, target, strategy);
         }
     }
 }
@@ -139,6 +147,16 @@ fn resolve_target(faction: FactionArgs, unit: UnitKind) -> ResearchTarget {
         std::process::exit(1);
     }
     target
+}
+
+fn parse_strategy(raw: &str) -> Strategy {
+    match Strategy::from_str(raw) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
@@ -210,12 +228,19 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(index: &DataIndex, target: ResearchTarget, order: Option<&str>) {
+fn run_simulate(
+    index: &DataIndex,
+    graph: &TechGraph,
+    target: ResearchTarget,
+    order: Option<&str>,
+    strategy: Strategy,
+) {
     let blueprint_id = target.blueprint_id();
     let target_unit = index
         .find_unit(blueprint_id)
         .expect("target blueprint must exist in index");
 
+    println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
 
     if let Some(path) = order {
@@ -233,24 +258,30 @@ fn run_simulate(index: &DataIndex, target: ResearchTarget, order: Option<&str>) 
         })
         .expect("ACU exists in index");
 
-    let mut sim = HeuristicSimulator::new(
-        index,
-        vec![starting_unit],
-        target_unit,
-        StateMachinePolicy::default(),
-        1.0,
-    );
-    let goal_event = sim.run().expect("simulation should finish");
+    let planner = match build_planner(strategy) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let result = planner
+        .plan(index, graph, &[starting_unit], target_unit)
+        .unwrap_or_else(|e| {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        });
 
     println!(
         "\nGoal completed at {} ({:.1}m)",
-        format_time(goal_event.time),
-        goal_event.time / 60.0
+        format_time(result.completion_time),
+        result.completion_time / 60.0
     );
     println!("\nTimeline:");
     println!("{:>12}  {}", "Time", "Unit");
     println!("{:>12}  {}", "------------", "----");
-    for event in &sim.events {
+    for event in &result.events {
         println!(
             "{:>12}  {} ({})",
             format_time(event.time),
@@ -267,17 +298,21 @@ fn format_time(seconds: f64) -> String {
     format!("{:.0}m {:.1}s", minutes, secs)
 }
 
-fn run_plan(index: &DataIndex, target: ResearchTarget, strategy: &str) {
+fn run_plan(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strategy: Strategy) {
     println!(
         "Plan target: {} strategy: {}",
         target.display_name(),
         strategy
     );
 
-    let tech_graph = TechGraph::new(index);
+    if let Err(e) = build_planner(strategy) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+
     let blueprint_id = target.blueprint_id();
 
-    match tech_graph.prerequisite_chain(blueprint_id, Capability::ACU) {
+    match graph.prerequisite_chain(blueprint_id, Capability::ACU) {
         Ok(chain) => {
             println!("\nSymbolic tech chain:");
             for (i, (cap, unit_id)) in chain.iter().enumerate() {
@@ -293,6 +328,4 @@ fn run_plan(index: &DataIndex, target: ResearchTarget, strategy: &str) {
             std::process::exit(1);
         }
     }
-
-    let _ = strategy; // reserved for future planner selection
 }

@@ -5,22 +5,27 @@
 //! - `tech_graph` — symbolic capability dependency graph (who can build whom).
 //! - `economy` — continuous-drain resource model.
 //! - `sim` — economy and build-time simulation.
-//! - `heuristic` — greedy build-order planner that grows BP while avoiding stalls.
+//! - `simulator` — discrete-time build-order simulator (generic over any policy).
+//! - `greedy` — the greedy state-machine policy used by `Strategy::Greedy`.
+//! - `planner` — planner trait and strategy registry.
 
 pub mod economy;
-pub mod heuristic;
+pub mod greedy;
+pub mod planner;
 pub mod sim;
+pub mod simulator;
 pub mod tech_graph;
 
 pub use economy::{
     apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EcoFlow, EconomyState,
     EffectiveBuildPower, RequestedBuildPower, ResourceProducer, TickOutcome, TickResult,
 };
-pub use heuristic::{
-    BuildPolicy, HeuristicSimulator, ProductionFocus, ProjectPriority, ProjectRequest,
-    StateMachinePolicy,
-};
+pub use greedy::{ProductionFocus, StateMachinePolicy};
+pub use planner::{build_planner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy};
 pub use sim::{derive_economy, BuildEvent};
+pub use simulator::{
+    ActiveProject, BuildPolicy, HeuristicSimulator, ProjectPriority, ProjectRequest,
+};
 pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
 
 #[cfg(test)]
