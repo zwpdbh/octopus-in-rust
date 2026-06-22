@@ -124,20 +124,16 @@ For most land experimentals the shortest prerequisite chain is:
 ACU → T1 land factory → T2 land factory → T3 land factory → T3 engineer → target
 ```
 
-The CLI encodes this chain by faction:
+The default chain by faction is:
 
 ```rust
-// apps/faf-sim-cli/src/main.rs ~line 214 — standard_tech_chain
-fn standard_tech_chain<'a>(index: &'a DataIndex, faction: Faction) -> Vec<&'a Unit> {
-    let ids = match faction {
-        Faction::Uef => ["UEL0001", "UEB0101", "UEB0201", "UEB0301", "UEL0309"],
-        Faction::Cybran => ["URL0001", "URB0101", "URB0201", "URB0301", "URL0309"],
-        Faction::Aeon => ["UAL0001", "UAB0101", "UAB0201", "UAB0301", "UAL0309"],
-        Faction::Seraphim => ["XSL0001", "XSB0101", "XSB0201", "XSB0301", "XSL0309"],
-    };
-
-    ids.iter().filter_map(|id| index.find_unit(id)).collect()
-}
+// docref: example
+let ids = match faction {
+    Faction::Uef => ["UEL0001", "UEB0101", "UEB0201", "UEB0301", "UEL0309"],
+    Faction::Cybran => ["URL0001", "URB0101", "URB0201", "URB0301", "URL0309"],
+    Faction::Aeon => ["UAL0001", "UAB0101", "UAB0201", "UAB0301", "UAL0309"],
+    Faction::Seraphim => ["XSL0001", "XSB0101", "XSB0201", "XSB0301", "XSL0309"],
+};
 ```
 
 ## 4. Example: Monkeylord prerequisites

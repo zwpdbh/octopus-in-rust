@@ -74,7 +74,7 @@ Doubling the build power halves the completion time but doubles the drain per
 second. The **total** resources consumed stay the same.
 
 ```rust
-// crates/faf-sim/src/economy.rs ~line 99 — drain calculation inside compute_drain
+// crates/faf-sim/src/economy.rs ~line 104 — drain calculation inside compute_drain
 let mass_per_second = progress_per_second * total_mass;
 let energy_per_second = progress_per_second * total_energy;
 ```

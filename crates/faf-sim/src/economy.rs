@@ -11,7 +11,7 @@
 //! factors. It does not simulate queues, concurrent projects, or economy
 //! growth — that belongs in the simulator layer.
 
-use faf_units::Unit;
+use faf_units::{BuildTargetStats, Unit};
 
 /// Build power requested for a project, before any stall adjustment.
 ///
@@ -76,14 +76,16 @@ pub struct BuildDrain {
     pub assigned_build_power: RequestedBuildPower,
 }
 
-/// Compute drain rates for building a unit with a given amount of build power.
+/// Compute drain rates for building a target with a given amount of build power.
 ///
-/// Returns `None` if the unit is missing economy data or build time is zero.
-pub fn compute_drain(unit: &Unit, assigned_build_power: RequestedBuildPower) -> Option<BuildDrain> {
-    let economy = unit.economy.as_ref()?;
-    let build_time = economy.build_time?;
-    let total_mass = economy.build_cost_mass?;
-    let total_energy = economy.build_cost_energy?;
+/// Returns `None` if the target's build time is zero.
+pub fn compute_drain(
+    target: &BuildTargetStats,
+    assigned_build_power: RequestedBuildPower,
+) -> Option<BuildDrain> {
+    let build_time = target.build_time;
+    let total_mass = target.build_cost_mass;
+    let total_energy = target.build_cost_energy;
 
     if build_time <= 0.0 {
         return None;
@@ -113,16 +115,125 @@ pub fn compute_drain(unit: &Unit, assigned_build_power: RequestedBuildPower) -> 
     })
 }
 
-/// Sum the build power of a collection of builders.
+/// Sum the build power of real builders: commanders, engineers, and factories.
 ///
-/// Units without a build rate contribute nothing.
+/// Units such as mass extractors may carry a `BuildRate` value for upgrades or
+/// reclaim, but they cannot build other units, so they are excluded.
 pub fn total_build_power(builders: &[&Unit]) -> RequestedBuildPower {
     RequestedBuildPower(
         builders
             .iter()
-            .filter_map(|u| u.economy.as_ref()?.build_rate)
+            .filter(|u| {
+                u.has_category("COMMANDER")
+                    || u.has_category("ENGINEER")
+                    || u.has_category("FACTORY")
+            })
+            .filter_map(|u| u.builder_capability())
+            .map(|cap| cap.build_rate)
             .sum(),
     )
+}
+
+/// A directed flow of mass and energy per second.
+///
+/// Positive values represent resources entering the economy; negative values
+/// represent resources leaving it. This matches what a player observes in the
+/// in-game economy overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EcoFlow {
+    pub mass_per_second: f64,
+    pub energy_per_second: f64,
+}
+
+impl EcoFlow {
+    /// Zero flow.
+    pub const ZERO: Self = Self {
+        mass_per_second: 0.0,
+        energy_per_second: 0.0,
+    };
+
+    /// Net flow: production minus consumption.
+    pub fn net(production: &Self, consumption: &Self) -> Self {
+        Self {
+            mass_per_second: production.mass_per_second - consumption.mass_per_second,
+            energy_per_second: production.energy_per_second - consumption.energy_per_second,
+        }
+    }
+}
+
+impl std::ops::Add for EcoFlow {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            mass_per_second: self.mass_per_second + rhs.mass_per_second,
+            energy_per_second: self.energy_per_second + rhs.energy_per_second,
+        }
+    }
+}
+
+impl std::ops::Sub for EcoFlow {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            mass_per_second: self.mass_per_second - rhs.mass_per_second,
+            energy_per_second: self.energy_per_second - rhs.energy_per_second,
+        }
+    }
+}
+
+impl std::iter::Sum for EcoFlow {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, |a, b| a + b)
+    }
+}
+
+/// Something that adds mass and/or energy to the economy each second.
+pub trait EcoProducer {
+    fn production(&self) -> EcoFlow;
+}
+
+/// Something that removes mass and/or energy from the economy each second.
+pub trait EcoConsumer {
+    fn consumption(&self) -> EcoFlow;
+}
+
+impl EcoProducer for Unit {
+    fn production(&self) -> EcoFlow {
+        self.economy.as_ref().map_or(EcoFlow::ZERO, |e| EcoFlow {
+            mass_per_second: e.production_per_second_mass.unwrap_or(0.0),
+            energy_per_second: e.production_per_second_energy.unwrap_or(0.0),
+        })
+    }
+}
+
+impl EcoConsumer for Unit {
+    fn consumption(&self) -> EcoFlow {
+        self.economy.as_ref().map_or(EcoFlow::ZERO, |e| EcoFlow {
+            mass_per_second: 0.0,
+            energy_per_second: e.maintenance_consumption_per_second_energy.unwrap_or(0.0),
+        })
+    }
+}
+
+impl EcoConsumer for BuildProject {
+    fn consumption(&self) -> EcoFlow {
+        compute_drain(&self.target, self.assigned_build_power).map_or(EcoFlow::ZERO, |d| EcoFlow {
+            mass_per_second: d.mass_per_second,
+            energy_per_second: d.energy_per_second,
+        })
+    }
+}
+
+/// Summarize the net mass and energy flow for a collection of owned units and
+/// active construction projects.
+///
+/// The returned flow can be negative when consumption exceeds production, just
+/// like the in-game economy display during heavy construction.
+pub fn summarize_economy(owned_units: &[&Unit], active_projects: &[&BuildProject]) -> EcoFlow {
+    let production: EcoFlow = owned_units.iter().map(|u| u.production()).sum();
+    let maintenance: EcoFlow = owned_units.iter().map(|u| u.consumption()).sum();
+    let construction: EcoFlow = active_projects.iter().map(|p| p.consumption()).sum();
+    production - maintenance - construction
 }
 
 /// Current economy state at a point in time.
@@ -221,13 +332,13 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
 
 /// A single project being built.
 ///
-/// Progress is tracked as **remaining work** measured in the unit's
+/// Progress is tracked as **remaining work** measured in the target's
 /// `BuildTime` units. This is more robust than tracking a percentage because
 /// assigned build power can change every tick.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuildProject {
-    /// Unit being built.
-    pub target: Unit,
+    /// Static stats of the unit being built.
+    pub target: BuildTargetStats,
     /// Total build power currently assigned to this project.
     pub assigned_build_power: RequestedBuildPower,
     /// Remaining work in `BuildTime` units. Starts at `BuildTime`, reaches 0
@@ -284,22 +395,22 @@ impl TickOutcome {
 impl BuildProject {
     /// Create a new project for the given unit.
     ///
-    /// Returns `None` if the unit has no economy data or zero build time.
+    /// Returns `None` if the unit has no build target stats or zero build time.
     pub fn new(target: &Unit) -> Option<Self> {
-        let build_time = target.economy.as_ref()?.build_time?;
-        if build_time <= 0.0 {
+        let stats = target.build_target_stats()?;
+        if stats.build_time <= 0.0 {
             return None;
         }
         Some(Self {
-            target: target.clone(),
+            target: stats,
             assigned_build_power: RequestedBuildPower(0.0),
-            remaining_work: build_time,
+            remaining_work: stats.build_time,
         })
     }
 
     /// Current completion progress as a fraction between 0.0 and 1.0.
     pub fn progress(&self) -> f64 {
-        let total = self.target.economy.as_ref().unwrap().build_time.unwrap();
+        let total = self.target.build_time;
         let done = (total - self.remaining_work).max(0.0);
         done / total
     }
@@ -363,7 +474,11 @@ mod tests {
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
 
         // Base build time means build power = 1.0 (the implicit reference rate).
-        let drain = compute_drain(monkeylord, RequestedBuildPower(1.0)).expect("valid economy");
+        let drain = compute_drain(
+            &monkeylord.build_target_stats().expect("valid target stats"),
+            RequestedBuildPower(1.0),
+        )
+        .expect("valid drain");
 
         assert_eq!(drain.total_mass, 20000.0);
         assert_eq!(drain.total_energy, 260000.0);
@@ -379,9 +494,13 @@ mod tests {
         let index = load_index();
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
         let t3_eng = index.find_unit("URL0309").expect("T3 engineer exists");
-        let build_power = RequestedBuildPower(t3_eng.economy.as_ref().unwrap().build_rate.unwrap());
+        let build_power = RequestedBuildPower(t3_eng.builder_capability().unwrap().build_rate);
 
-        let drain = compute_drain(monkeylord, build_power).expect("valid economy");
+        let drain = compute_drain(
+            &monkeylord.build_target_stats().expect("valid target stats"),
+            build_power,
+        )
+        .expect("valid drain");
 
         assert_eq!(drain.assigned_build_power, build_power);
         assert!((drain.completion_time_seconds - 27500.0 / build_power.0).abs() < 1e-9);
@@ -400,9 +519,9 @@ mod tests {
         let builders = vec![acu, t1_eng, t3_eng];
         let total = total_build_power(&builders);
 
-        let expected = acu.economy.as_ref().unwrap().build_rate.unwrap()
-            + t1_eng.economy.as_ref().unwrap().build_rate.unwrap()
-            + t3_eng.economy.as_ref().unwrap().build_rate.unwrap();
+        let expected = acu.builder_capability().unwrap().build_rate
+            + t1_eng.builder_capability().unwrap().build_rate
+            + t3_eng.builder_capability().unwrap().build_rate;
 
         assert!((total.0 - expected).abs() < 1e-9);
     }
@@ -411,7 +530,11 @@ mod tests {
     fn tick_with_plenty_resources_runs_full_power() {
         let index = load_index();
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
-        let drain = compute_drain(monkeylord, RequestedBuildPower(10.0)).expect("valid economy");
+        let drain = compute_drain(
+            &monkeylord.build_target_stats().expect("valid target stats"),
+            RequestedBuildPower(10.0),
+        )
+        .expect("valid drain");
 
         let state = EconomyState {
             net_mass_income: 1000.0,
@@ -432,7 +555,11 @@ mod tests {
     fn tick_stalls_when_energy_insufficient() {
         let index = load_index();
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
-        let drain = compute_drain(monkeylord, RequestedBuildPower(10.0)).expect("valid economy");
+        let drain = compute_drain(
+            &monkeylord.build_target_stats().expect("valid target stats"),
+            RequestedBuildPower(10.0),
+        )
+        .expect("valid drain");
 
         // Very little energy income and storage, plenty of mass.
         let state = EconomyState {
@@ -455,7 +582,7 @@ mod tests {
     fn build_project_completes_with_constant_power() {
         let index = load_index();
         let t1_eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let build_power = RequestedBuildPower(t1_eng.economy.as_ref().unwrap().build_rate.unwrap());
+        let build_power = RequestedBuildPower(t1_eng.builder_capability().unwrap().build_rate);
 
         // Build a T1 engineer with another T1 engineer.
         let mut project = BuildProject::new(t1_eng).expect("valid unit");
@@ -482,8 +609,8 @@ mod tests {
     fn build_project_progress_tracks_remaining_work() {
         let index = load_index();
         let t1_eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let build_power = RequestedBuildPower(t1_eng.economy.as_ref().unwrap().build_rate.unwrap());
-        let build_time = t1_eng.economy.as_ref().unwrap().build_time.unwrap();
+        let build_power = RequestedBuildPower(t1_eng.builder_capability().unwrap().build_rate);
+        let build_time = t1_eng.build_target_stats().unwrap().build_time;
 
         let mut project = BuildProject::new(t1_eng).expect("valid unit");
         project.assigned_build_power = build_power;
@@ -514,8 +641,8 @@ mod tests {
     fn build_project_stalls_and_takes_longer() {
         let index = load_index();
         let t1_eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let build_power = RequestedBuildPower(t1_eng.economy.as_ref().unwrap().build_rate.unwrap());
-        let build_time = t1_eng.economy.as_ref().unwrap().build_time.unwrap();
+        let build_power = RequestedBuildPower(t1_eng.builder_capability().unwrap().build_rate);
+        let build_time = t1_eng.build_target_stats().unwrap().build_time;
 
         let mut project = BuildProject::new(t1_eng).expect("valid unit");
         project.assigned_build_power = build_power;
@@ -548,7 +675,11 @@ mod tests {
     fn storage_overflow_wastes_income() {
         let index = load_index();
         let t1_eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let drain = compute_drain(t1_eng, RequestedBuildPower(1.0)).expect("valid economy");
+        let drain = compute_drain(
+            &t1_eng.build_target_stats().expect("valid target stats"),
+            RequestedBuildPower(1.0),
+        )
+        .expect("valid drain");
 
         let mut state = EconomyState {
             net_mass_income: 1000.0,
@@ -577,14 +708,15 @@ mod tests {
     fn storage_buffers_during_zero_income() {
         let index = load_index();
         let t1_eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let build_power = RequestedBuildPower(t1_eng.economy.as_ref().unwrap().build_rate.unwrap());
-        let build_time = t1_eng.economy.as_ref().unwrap().build_time.unwrap();
+        let build_power = RequestedBuildPower(t1_eng.builder_capability().unwrap().build_rate);
+        let build_time = t1_eng.build_target_stats().unwrap().build_time;
 
         let mut project = BuildProject::new(t1_eng).expect("valid unit");
         project.assigned_build_power = build_power;
 
-        let total_mass = t1_eng.economy.as_ref().unwrap().build_cost_mass.unwrap();
-        let total_energy = t1_eng.economy.as_ref().unwrap().build_cost_energy.unwrap();
+        let stats = t1_eng.build_target_stats().unwrap();
+        let total_mass = stats.build_cost_mass;
+        let total_energy = stats.build_cost_energy;
 
         // No income, but enough storage to pay the full cost.
         let mut state = EconomyState {
@@ -601,5 +733,34 @@ mod tests {
         assert!(outcome.is_completed());
         assert!(state.mass_storage.abs() < 1e-6);
         assert!(state.energy_storage.abs() < 1e-6);
+    }
+
+    #[test]
+    fn summarize_economy_computes_net_flow() {
+        let index = load_index();
+        let acu = index.find_unit("URL0001").expect("ACU exists");
+        let t1_mex = index.find_unit("URB1103").expect("T1 mex exists");
+        let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
+
+        // ACU alone: produces 1 mass/s and 20 energy/s, no maintenance.
+        let net = summarize_economy(&[acu], &[]);
+        assert!((net.mass_per_second - 1.0).abs() < 1e-9);
+        assert!((net.energy_per_second - 20.0).abs() < 1e-9);
+
+        // ACU + T1 mex: mex adds 2 mass/s but consumes 2 energy/s maintenance.
+        let net = summarize_economy(&[acu, t1_mex], &[]);
+        assert!((net.mass_per_second - 3.0).abs() < 1e-9);
+        assert!((net.energy_per_second - 18.0).abs() < 1e-9);
+
+        // ACU building Monkeylord with all its BP: construction drain can make
+        // net energy strongly negative.
+        let mut project = BuildProject::new(monkeylord).expect("valid target");
+        project.assigned_build_power =
+            RequestedBuildPower(acu.builder_capability().unwrap().build_rate);
+        let net = summarize_economy(&[acu], &[&project]);
+        assert!(
+            net.energy_per_second < 0.0,
+            "building Monkeylord should make net energy negative"
+        );
     }
 }

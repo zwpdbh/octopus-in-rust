@@ -56,32 +56,24 @@ trade-off is purely about finishing the current goal sooner.
 
 If a project takes much longer than the time needed to build an engineer, and the
 economy is not the bottleneck, building at least one engineer is usually
-profitable. The `GreedyNoStallPolicy` uses a dynamic version of this rule:
+profitable. The `StateMachinePolicy` switches to build power when mass income
+exceeds what the current build power can consume:
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 123 — sustainable_bp
-fn sustainable_bp(&self, state: &EconomyState, reference_unit: &Unit) -> RequestedBuildPower {
-    let Some(drain) = compute_drain(reference_unit, RequestedBuildPower(1.0)) else {
-        return RequestedBuildPower(f64::INFINITY);
-    };
+// crates/faf-sim/src/heuristic.rs ~line 199 — ProductionFocus::BuildPower transition
+let mass_drain_at_full_bp = bp * drain.mass_per_second;
+let mass_income_high = state.net_mass_income
+    > mass_drain_at_full_bp * self.mass_income_headroom;
+let mass_storage_high = state.mass_storage_cap > 0.0
+    && state.mass_storage > state.mass_storage_cap * self.mass_storage_high;
 
-    let mass_limit = if drain.mass_per_second > 0.0 {
-        state.net_mass_income / drain.mass_per_second
-    } else {
-        f64::INFINITY
-    };
-    let energy_limit = if drain.energy_per_second > 0.0 {
-        state.net_energy_income / drain.energy_per_second
-    } else {
-        f64::INFINITY
-    };
-
-    RequestedBuildPower(mass_limit.min(energy_limit))
+if mass_income_high || mass_storage_high {
+    return ProductionFocus::BuildPower;
 }
 ```
 
-This estimates how much build power the current income can sustain without
-stalling.
+In other words: more build power is only useful when you already have more mass
+than you can spend.
 
 ## 5. Study questions
 
@@ -91,8 +83,8 @@ stalling.
 
 ## 6. Experiment
 
-The default `simulate` command does not add engineers. Later tutorials will show
-how to compare assisted vs. unassisted timelines. For now, think about the
+The default `simulate` command now runs the state-machine heuristic, which adds
+engineers only when mass income justifies it. For now, think about the
 following: how many T1 engineers would an ACU need to assist before energy stalls
 on a Monkeylord?
 

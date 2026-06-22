@@ -8,12 +8,11 @@ assist, and the ACU builds infrastructure. This document explains how
 
 ## 1. From one project to many
 
-`SimpleSimulator` (covered in [03-sequential-baseline.md](./03-sequential-baseline.md))
-builds one unit at a time. `HeuristicSimulator` instead maintains a set of active
-projects and allocates build power among them each tick.
+`HeuristicSimulator` maintains a set of active projects and allocates build
+power among them each tick.
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 331 — HeuristicSimulator
+// crates/faf-sim/src/heuristic.rs ~line 392 — HeuristicSimulator
 pub struct HeuristicSimulator<'a, P: BuildPolicy> {
     pub index: &'a DataIndex,
     pub graph: BuildGraph<'a>,
@@ -34,7 +33,7 @@ Each active project tracks its target, requested BP, remaining work, and why it
 was started:
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 27 — ActiveProject
+// crates/faf-sim/src/heuristic.rs ~line 28 — ActiveProject
 pub struct ActiveProject {
     pub target_id: String,
     pub requested_bp: RequestedBuildPower,
@@ -59,7 +58,7 @@ pub enum ProjectPriority {
 Available BP is split proportionally to each project's requested BP:
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 449 — allocation in tick
+// crates/faf-sim/src/heuristic.rs ~line 498 — allocation in tick
 let total_available = self.available_bp().0;
 let total_requested: f64 = self.active_projects.iter().map(|p| p.requested_bp.0).sum();
 let allocation_factor = if total_requested > 0.0 {
@@ -83,7 +82,7 @@ The simulator ticks projects one after another, each updating the shared economy
 state:
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 466 — tick active projects
+// crates/faf-sim/src/heuristic.rs ~line 512 — tick active projects
 for i in 0..self.active_projects.len() {
     self.active_projects[i]
         .project
@@ -103,43 +102,34 @@ simultaneously. The error is small for typical `dt` values and goes to zero as
 
 ## 6. Experiment
 
-Look at the existing test that compares heuristic vs. baseline for the
-Monkeylord:
+Look at the test that verifies the heuristic finishes the Monkeylord:
 
 ```rust
-// crates/faf-sim/src/heuristic.rs ~line 521 — heuristic_faster_than_acu_alone_for_monkeylord
+// crates/faf-sim/src/heuristic.rs ~line 566 — heuristic_finishes_monkeylord
 #[test]
-fn heuristic_faster_than_acu_alone_for_monkeylord() {
+fn heuristic_finishes_monkeylord() {
     let index = load_index();
     let acu = index.find_unit("URL0001").expect("ACU exists");
     let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
-
-    let mut baseline = crate::sim::SimpleSimulator::new(&index, vec![acu], 1.0);
-    let baseline_events = baseline.simulate_sequence(&[monkeylord]);
-    let baseline_time = baseline_events[0].time;
 
     let mut heuristic = HeuristicSimulator::new(
         &index,
         vec![acu],
         monkeylord,
-        GreedyNoStallPolicy::default(),
+        StateMachinePolicy::default(),
         1.0,
     );
     let goal_event = heuristic.run().expect("heuristic should finish");
 
-    assert!(
-        goal_event.time < baseline_time,
-        "heuristic ({}) should beat ACU-alone baseline ({})",
-        goal_event.time,
-        baseline_time
-    );
+    assert_eq!(goal_event.unit_id, "URL0402");
+    assert!(goal_event.time > 0.0);
 }
 ```
 
 Run it with:
 
 ```bash
-cargo test -p faf-sim heuristic_faster_than_acu_alone_for_monkeylord -- --nocapture
+cargo test -p faf-sim heuristic_finishes_monkeylord -- --nocapture
 ```
 
-Next: [07-greedy-planner.md](./07-greedy-planner.md)
+Next: [07-state-machine-planner.md](./07-state-machine-planner.md)

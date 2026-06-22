@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::sections::Enhancement;
 use crate::sections::{
-    Air, Defense, Display, Economy, General, Intel, Physics, Transport, Wreckage,
+    Air, BuildTargetStats, BuilderCapability, Defense, Display, Economy, General, Intel, Physics,
+    Transport, Wreckage,
 };
 use crate::weapon::Weapon;
 
@@ -142,5 +143,16 @@ impl Unit {
             "TECH1" | "TECH2" | "TECH3" | "TECH4" | "EXPERIMENTAL" => Some(c.as_str()),
             _ => None,
         })
+    }
+
+    /// Convenience accessor for the stats that describe this unit as a build
+    /// target.
+    pub fn build_target_stats(&self) -> Option<BuildTargetStats> {
+        self.economy.as_ref()?.target_stats()
+    }
+
+    /// Convenience accessor for this unit's capability to build other units.
+    pub fn builder_capability(&self) -> Option<BuilderCapability> {
+        self.economy.as_ref()?.builder_capability()
     }
 }

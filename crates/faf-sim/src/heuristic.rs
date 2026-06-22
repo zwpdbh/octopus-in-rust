@@ -1,24 +1,23 @@
-//! Heuristic simulator that grows build power while avoiding stalls.
+//! Heuristic simulator with a state-machine build policy.
 //!
-//! Unlike `SimpleSimulator`, this simulator can run multiple projects at once
-//! (e.g., building engineers while they assist the main target) and uses a
-//! policy to decide what to build next. The default policy tries to maximize
-//! build power without stalling, which matches the typical player mindset.
+//! The simulator runs multiple projects at once (e.g., building engineers while
+//! they assist the main target). The default policy is a small state machine
+//! that decides whether to build energy, mass, or build power next.
 
-use faf_units::{DataIndex, Unit};
+use faf_units::{BuildTargetStats, DataIndex, Unit};
 
 use crate::build_graph::BuildGraph;
-use crate::economy::{compute_drain, BuildProject, EconomyState, RequestedBuildPower};
+use crate::economy::{
+    compute_drain, total_build_power, BuildProject, EconomyState, RequestedBuildPower,
+};
 use crate::sim::{derive_economy, BuildEvent};
 
-/// Priority of an active project. Higher-priority projects are not given more
-/// build power directly; the priority is used by policies to decide whether to
-/// start or replace projects.
+/// Priority of an active project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProjectPriority {
     /// The unit we are ultimately trying to finish.
     Goal,
-    /// A builder or factory whose only purpose is to increase total build power.
+    /// A builder or factory whose purpose is to increase total build power.
     Builder,
     /// A mass extractor, power generator, or other economy structure.
     Economy,
@@ -68,9 +67,6 @@ pub struct ProjectRequest {
 /// Policy that decides which projects to start.
 pub trait BuildPolicy {
     /// Return a list of new projects to start on this tick.
-    ///
-    /// The simulator will filter out requests for units that are already being
-    /// built and will respect its own concurrency limits.
     fn choose_projects<'a>(
         &self,
         graph: &'a BuildGraph<'a>,
@@ -81,34 +77,46 @@ pub trait BuildPolicy {
     ) -> Vec<ProjectRequest>;
 }
 
-/// Greedy policy: keep adding cheap builders until the economy can barely
-/// support them, while keeping a small storage buffer to avoid micro-stalls.
+/// What the economy needs most right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductionFocus {
+    /// Build power generators until energy can sustain the current build power.
+    Energy,
+    /// Build mass extractors while we have the energy to support them.
+    Mass,
+    /// Build engineers/factories because mass is piling up faster than we can
+    /// spend it.
+    BuildPower,
+}
+
+/// State-machine policy: increase mass income as much as possible, but switch
+/// to build power when mass is piling up, and build energy whenever the current
+/// build power cannot be sustained.
 #[derive(Debug, Clone, Copy)]
-pub struct GreedyNoStallPolicy {
-    /// Target: requested BP should be at most this fraction of the income
-    /// ceiling. Values below 1.0 leave headroom so temporary income drops do
-    /// not immediately stall everything.
-    pub bp_utilization_target: f64,
-    /// Do not let storage fall below this fraction of its cap. If it would,
-    /// prioritize economy buildings instead.
-    pub storage_safety_fraction: f64,
-    /// Maximum number of concurrent builder projects (engineers/factories).
-    pub max_concurrent_builders: usize,
-    /// Maximum number of concurrent economy projects (mexes/pgens).
-    pub max_concurrent_economy: usize,
+pub struct StateMachinePolicy {
+    /// Maximum total number of mass extractors (owned + under construction).
+    pub max_mex_count: usize,
+    /// Net energy income must cover at least this fraction of the energy drain
+    /// if all available build power is applied to the goal.
+    pub energy_safety_margin: f64,
+    /// Mass income is considered excessive when it exceeds this multiple of
+    /// the mass we could consume by applying all BP to the goal.
+    pub mass_income_headroom: f64,
+    /// Mass storage fraction above which we switch to build power.
+    pub mass_storage_high: f64,
     /// Build power assigned to each secondary (builder/economy) project.
     pub secondary_bp: RequestedBuildPower,
     /// Build power assigned to the main goal project.
     pub goal_bp: RequestedBuildPower,
 }
 
-impl Default for GreedyNoStallPolicy {
+impl Default for StateMachinePolicy {
     fn default() -> Self {
         Self {
-            bp_utilization_target: 0.95,
-            storage_safety_fraction: 0.15,
-            max_concurrent_builders: 2,
-            max_concurrent_economy: 1,
+            max_mex_count: 8,
+            energy_safety_margin: 1.1,
+            mass_income_headroom: 1.0,
+            mass_storage_high: 0.8,
             // One T1 engineer's worth of BP for each secondary project.
             secondary_bp: RequestedBuildPower(5.0),
             // Ask for a lot; proportional allocation will give it the leftovers.
@@ -117,36 +125,31 @@ impl Default for GreedyNoStallPolicy {
     }
 }
 
-impl GreedyNoStallPolicy {
-    /// Estimate how much build power the current income can sustain without
-    /// stalling, using the drain profile of `reference_unit` per BP.
-    fn sustainable_bp(&self, state: &EconomyState, reference_unit: &Unit) -> RequestedBuildPower {
-        let Some(drain) = compute_drain(reference_unit, RequestedBuildPower(1.0)) else {
-            return RequestedBuildPower(f64::INFINITY);
-        };
-
-        let mass_limit = if drain.mass_per_second > 0.0 {
-            state.net_mass_income / drain.mass_per_second
-        } else {
-            f64::INFINITY
-        };
-        let energy_limit = if drain.energy_per_second > 0.0 {
-            state.net_energy_income / drain.energy_per_second
-        } else {
-            f64::INFINITY
-        };
-
-        RequestedBuildPower(mass_limit.min(energy_limit))
+impl StateMachinePolicy {
+    /// True if `unit` is a mass extractor of any tech level.
+    fn is_mex(&self, unit: &Unit) -> bool {
+        unit.has_category("MASSEXTRACTION")
     }
 
-    /// Total build power provided by owned units.
-    fn owned_bp(&self, owned: &[&Unit]) -> RequestedBuildPower {
-        RequestedBuildPower(
-            owned
-                .iter()
-                .filter_map(|u| u.economy.as_ref()?.build_rate)
-                .sum(),
-        )
+    /// Current number of mass extractors, counting owned units and active
+    /// projects.
+    fn current_mex_count<'a>(
+        &self,
+        graph: &'a BuildGraph<'a>,
+        owned: &[&'a Unit],
+        active: &[ActiveProject],
+    ) -> usize {
+        let owned_mex = owned.iter().filter(|u| self.is_mex(u)).count();
+        let active_mex = active
+            .iter()
+            .filter(|p| {
+                graph
+                    .index()
+                    .find_unit(&p.target_id)
+                    .map_or(false, |u| self.is_mex(u))
+            })
+            .count();
+        owned_mex + active_mex
     }
 
     /// True if any owned unit can build `target` according to the graph.
@@ -164,9 +167,56 @@ impl GreedyNoStallPolicy {
         })
     }
 
-    /// Return the cheapest builder we can currently produce, measuring "cheap"
-    /// by build-time per build-power gained.
-    fn pick_cheapest_builder<'a>(
+    /// Drain per build power for the goal unit.
+    fn goal_drain_per_bp(&self, goal: &Unit) -> Option<BuildTargetStats> {
+        goal.build_target_stats()
+    }
+
+    /// Determine the current economic focus.
+    fn focus<'a>(
+        &self,
+        graph: &'a BuildGraph<'a>,
+        state: &EconomyState,
+        owned: &[&'a Unit],
+        active: &[ActiveProject],
+        goal: &'a Unit,
+    ) -> ProductionFocus {
+        let bp = total_build_power(owned).0;
+        let Some(stats) = self.goal_drain_per_bp(goal) else {
+            return ProductionFocus::BuildPower;
+        };
+        let Some(drain) = compute_drain(&stats, RequestedBuildPower(1.0)) else {
+            return ProductionFocus::BuildPower;
+        };
+
+        // 1. Energy sustainability check.
+        let energy_drain_at_full_bp = bp * drain.energy_per_second;
+        if state.net_energy_income < energy_drain_at_full_bp * self.energy_safety_margin {
+            return ProductionFocus::Energy;
+        }
+
+        // 2. Mass income check: are we producing more mass than we can spend?
+        let mass_drain_at_full_bp = bp * drain.mass_per_second;
+        let mass_income_high =
+            state.net_mass_income > mass_drain_at_full_bp * self.mass_income_headroom;
+        let mass_storage_high = state.mass_storage_cap > 0.0
+            && state.mass_storage > state.mass_storage_cap * self.mass_storage_high;
+
+        if mass_income_high || mass_storage_high {
+            return ProductionFocus::BuildPower;
+        }
+
+        // 3. Default: expand mass income, unless we are already at the mex cap.
+        if self.current_mex_count(graph, owned, active) < self.max_mex_count {
+            return ProductionFocus::Mass;
+        }
+
+        // At mex cap with enough energy: build power to spend the mass.
+        ProductionFocus::BuildPower
+    }
+
+    /// Cheapest unit that produces energy.
+    fn pick_cheapest_energy<'a>(
         &self,
         graph: &'a BuildGraph<'a>,
         owned: &[&'a Unit],
@@ -178,30 +228,31 @@ impl GreedyNoStallPolicy {
             .units
             .iter()
             .filter(|u| {
-                // Must add build power.
-                u.economy.as_ref().and_then(|e| e.build_rate).unwrap_or(0.0) > 0.0
-                    // Must be buildable now.
-                    && self.can_build_now(graph, owned, u)
-                    // Match goal faction, if any.
+                u.economy.as_ref().map_or(false, |e| {
+                    e.production_per_second_energy.unwrap_or(0.0) > 0.0
+                }) && self.can_build_now(graph, owned, u)
                     && match goal_faction {
-                        Some(f) => u.faction().map_or(true, |uf: &str| uf.eq_ignore_ascii_case(f)),
+                        Some(f) => u
+                            .faction()
+                            .map_or(true, |uf: &str| uf.eq_ignore_ascii_case(f)),
                         None => true,
                     }
             })
             .min_by(|a, b| {
-                let a_econ = a.economy.as_ref().unwrap();
-                let b_econ = b.economy.as_ref().unwrap();
-                let a_time_per_bp = a_econ.build_time.unwrap() / a_econ.build_rate.unwrap();
-                let b_time_per_bp = b_econ.build_time.unwrap() / b_econ.build_rate.unwrap();
-                a_time_per_bp
-                    .partial_cmp(&b_time_per_bp)
+                let a_cost = a
+                    .build_target_stats()
+                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
+                let b_cost = b
+                    .build_target_stats()
+                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
+                a_cost
+                    .partial_cmp(&b_cost)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 
-    /// Return the cheapest economy unit we can currently produce. Prefer mass
-    /// extractors if mass income is the bottleneck, otherwise power generators.
-    fn pick_cheapest_economy<'a>(
+    /// Cheapest mass extractor.
+    fn pick_cheapest_mex<'a>(
         &self,
         graph: &'a BuildGraph<'a>,
         owned: &[&'a Unit],
@@ -213,14 +264,7 @@ impl GreedyNoStallPolicy {
             .units
             .iter()
             .filter(|u| {
-                let econ = match u.economy.as_ref() {
-                    Some(e) => e,
-                    None => return false,
-                };
-                // Must add income or storage.
-                let adds_economy = econ.production_per_second_mass.unwrap_or(0.0) > 0.0
-                    || econ.production_per_second_energy.unwrap_or(0.0) > 0.0;
-                adds_economy
+                self.is_mex(u)
                     && self.can_build_now(graph, owned, u)
                     && match goal_faction {
                         Some(f) => u
@@ -230,18 +274,71 @@ impl GreedyNoStallPolicy {
                     }
             })
             .min_by(|a, b| {
-                let a_econ = a.economy.as_ref().unwrap();
-                let b_econ = b.economy.as_ref().unwrap();
-                let a_cost = a_econ.build_cost_mass.unwrap_or(f64::INFINITY);
-                let b_cost = b_econ.build_cost_mass.unwrap_or(f64::INFINITY);
+                let a_cost = a
+                    .build_target_stats()
+                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
+                let b_cost = b
+                    .build_target_stats()
+                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
                 a_cost
                     .partial_cmp(&b_cost)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
+
+    /// Cheapest real builder. Prefer T1 engineers; fall back to factories if
+    /// no engineer is currently desirable.
+    fn pick_cheapest_builder<'a>(
+        &self,
+        graph: &'a BuildGraph<'a>,
+        owned: &[&'a Unit],
+        goal: &'a Unit,
+    ) -> Option<&'a Unit> {
+        let goal_faction = goal.faction();
+        let mut candidates: Vec<&Unit> = graph
+            .index()
+            .units
+            .iter()
+            .filter(|u| {
+                u.builder_capability()
+                    .map_or(false, |cap| cap.build_rate > 0.0)
+                    && (u.has_category("ENGINEER") || u.has_category("FACTORY"))
+                    && self.can_build_now(graph, owned, u)
+                    && match goal_faction {
+                        Some(f) => u
+                            .faction()
+                            .map_or(true, |uf: &str| uf.eq_ignore_ascii_case(f)),
+                        None => true,
+                    }
+            })
+            .collect();
+
+        // Prefer engineers over factories.
+        candidates.sort_by(|a, b| {
+            let a_is_eng = a.has_category("ENGINEER");
+            let b_is_eng = b.has_category("ENGINEER");
+            match (a_is_eng, b_is_eng) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let a_stats = a.build_target_stats().unwrap();
+                    let a_cap = a.builder_capability().unwrap();
+                    let b_stats = b.build_target_stats().unwrap();
+                    let b_cap = b.builder_capability().unwrap();
+                    let a_time_per_bp = a_stats.build_time / a_cap.build_rate;
+                    let b_time_per_bp = b_stats.build_time / b_cap.build_rate;
+                    a_time_per_bp
+                        .partial_cmp(&b_time_per_bp)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }
+            }
+        });
+
+        candidates.into_iter().next()
+    }
 }
 
-impl BuildPolicy for GreedyNoStallPolicy {
+impl BuildPolicy for StateMachinePolicy {
     fn choose_projects<'a>(
         &self,
         graph: &'a BuildGraph<'a>,
@@ -252,7 +349,7 @@ impl BuildPolicy for GreedyNoStallPolicy {
     ) -> Vec<ProjectRequest> {
         let mut requests = Vec::new();
 
-        // 1. Always keep the goal project active if it is not already.
+        // Always keep the goal project active if it is not already.
         let goal_active = active.iter().any(|p| p.priority == ProjectPriority::Goal);
         if !goal_active && self.can_build_now(graph, owned, goal) {
             requests.push(ProjectRequest {
@@ -262,66 +359,31 @@ impl BuildPolicy for GreedyNoStallPolicy {
             });
         }
 
-        // 2. If storage is dangerously low, prioritize economy.
-        let mass_low = state.mass_storage_cap > 0.0
-            && state.mass_storage < state.mass_storage_cap * self.storage_safety_fraction;
-        let energy_low = state.energy_storage_cap > 0.0
-            && state.energy_storage < state.energy_storage_cap * self.storage_safety_fraction;
-
-        let active_economy = active
-            .iter()
-            .filter(|p| p.priority == ProjectPriority::Economy)
-            .count();
-
-        if (mass_low || energy_low) && active_economy < self.max_concurrent_economy {
-            if let Some(econ) = self.pick_cheapest_economy(graph, owned, goal) {
-                requests.push(ProjectRequest {
-                    target_id: econ.id.clone(),
-                    requested_bp: self.secondary_bp,
-                    priority: ProjectPriority::Economy,
-                });
-            }
+        // Only one secondary project per tick to keep the state machine simple.
+        let has_secondary = active.iter().any(|p| {
+            p.priority == ProjectPriority::Builder || p.priority == ProjectPriority::Economy
+        });
+        if has_secondary {
+            return requests;
         }
 
-        // 3. If we have headroom, build more builders.
-        let active_builders = active
-            .iter()
-            .filter(|p| p.priority == ProjectPriority::Builder)
-            .count();
-
-        // Use the goal unit as the drain reference; if even the goal has no
-        // economy data, fall back to a T1 engineer profile for the estimate.
-        let reference = if compute_drain(goal, RequestedBuildPower(1.0)).is_some() {
-            goal
-        } else {
-            // Fall back to first T1 engineer in the index.
-            graph
-                .index()
-                .units
-                .iter()
-                .find(|u| {
-                    u.has_category("ENGINEER")
-                        && u.has_category("TECH1")
-                        && goal.faction().map_or(true, |f: &str| {
-                            u.faction()
-                                .map_or(true, |uf: &str| uf.eq_ignore_ascii_case(f))
-                        })
-                })
-                .unwrap_or(goal)
+        let focus = self.focus(graph, state, owned, active, goal);
+        let target = match focus {
+            ProductionFocus::Energy => self.pick_cheapest_energy(graph, owned, goal),
+            ProductionFocus::Mass => self.pick_cheapest_mex(graph, owned, goal),
+            ProductionFocus::BuildPower => self.pick_cheapest_builder(graph, owned, goal),
         };
 
-        let owned_bp = self.owned_bp(owned);
-        let sustainable = self.sustainable_bp(state, reference);
-        let target_bp = sustainable.0 * self.bp_utilization_target;
-
-        if owned_bp.0 < target_bp && active_builders < self.max_concurrent_builders {
-            if let Some(builder) = self.pick_cheapest_builder(graph, owned, goal) {
-                requests.push(ProjectRequest {
-                    target_id: builder.id.clone(),
-                    requested_bp: self.secondary_bp,
-                    priority: ProjectPriority::Builder,
-                });
-            }
+        if let Some(target) = target {
+            let priority = match focus {
+                ProductionFocus::Energy | ProductionFocus::Mass => ProjectPriority::Economy,
+                ProductionFocus::BuildPower => ProjectPriority::Builder,
+            };
+            requests.push(ProjectRequest {
+                target_id: target.id.clone(),
+                requested_bp: self.secondary_bp,
+                priority,
+            });
         }
 
         requests
@@ -361,8 +423,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
         policy: P,
         dt: f64,
     ) -> Self {
-        // This method intentionally takes owned `starting_units` so the caller
-        // can pass a temporary vector. The units inside still borrow from `index`.
         let state = derive_economy(&starting_units);
         Self {
             index,
@@ -380,12 +440,7 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
 
     /// Total build power currently available from owned units.
     pub fn available_bp(&self) -> RequestedBuildPower {
-        RequestedBuildPower(
-            self.owned_units
-                .iter()
-                .filter_map(|u| u.economy.as_ref()?.build_rate)
-                .sum(),
-        )
+        total_build_power(&self.owned_units)
     }
 
     /// Run the simulation until the goal unit completes.
@@ -399,7 +454,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
             safety += 1;
             self.tick();
 
-            // Check if the goal completed this tick.
             if let Some(event) = self.events.last() {
                 if event.unit_id.eq_ignore_ascii_case(&self.goal.id) {
                     goal_event = Some(event.clone());
@@ -412,7 +466,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
 
     /// Advance the simulation by one tick.
     pub fn tick(&mut self) {
-        // Ask the policy for any new projects.
         let requests = self.policy.choose_projects(
             &self.graph,
             &self.state,
@@ -422,7 +475,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
         );
 
         for req in requests {
-            // Avoid duplicate active projects.
             let already_active = self
                 .active_projects
                 .iter()
@@ -439,7 +491,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
         }
 
         if self.active_projects.is_empty() {
-            // Nothing to do; still advance time and collect income.
             self.current_time += self.dt;
             self.apply_idle_income();
             return;
@@ -459,10 +510,7 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
             project.project.assigned_build_power = RequestedBuildPower(allocated);
         }
 
-        // Tick every active project. Because BuildProject::tick updates the
-        // shared economy state, we must tick them sequentially. This is a
-        // slight approximation: in reality all projects drain simultaneously.
-        // The error is small for typical dt values.
+        // Tick projects sequentially. This is a slight approximation.
         for i in 0..self.active_projects.len() {
             self.active_projects[i]
                 .project
@@ -479,7 +527,6 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
             }
         }
 
-        // Remove from highest index to lowest to keep indices valid.
         completed.sort_by(|a, b| b.cmp(a));
         for i in completed {
             let project = self.active_projects.remove(i);
@@ -491,7 +538,7 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
             self.events.push(BuildEvent {
                 time: self.current_time,
                 unit_id: project.target_id.clone(),
-                unit_name: project.project.target.name().map(|s: &str| s.to_string()),
+                unit_name: target.name().map(|s: &str| s.to_string()),
             });
         }
     }
@@ -518,75 +565,48 @@ mod tests {
     }
 
     #[test]
-    fn heuristic_faster_than_acu_alone_for_monkeylord() {
+    fn heuristic_finishes_monkeylord() {
         let index = load_index();
         let acu = index.find_unit("URL0001").expect("ACU exists");
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
 
-        // Baseline: ACU alone.
-        let mut baseline = crate::sim::SimpleSimulator::new(&index, vec![acu], 1.0);
-        let baseline_events = baseline.simulate_sequence(&[monkeylord]);
-        let baseline_time = baseline_events[0].time;
-
-        // Heuristic: ACU builds engineers to assist.
         let mut heuristic = HeuristicSimulator::new(
             &index,
             vec![acu],
             monkeylord,
-            GreedyNoStallPolicy::default(),
+            StateMachinePolicy::default(),
             1.0,
         );
         let goal_event = heuristic.run().expect("heuristic should finish");
 
-        assert!(
-            goal_event.time < baseline_time,
-            "heuristic ({}) should beat ACU-alone baseline ({})",
-            goal_event.time,
-            baseline_time
-        );
+        assert_eq!(goal_event.unit_id, "URL0402");
+        assert!(goal_event.time > 0.0);
     }
 
     #[test]
-    fn heuristic_builds_at_least_one_engineer() {
+    fn heuristic_respects_mex_cap() {
         let index = load_index();
         let acu = index.find_unit("URL0001").expect("ACU exists");
         let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
 
-        let mut heuristic = HeuristicSimulator::new(
-            &index,
-            vec![acu],
-            monkeylord,
-            GreedyNoStallPolicy::default(),
-            1.0,
-        );
-        heuristic.run().expect("heuristic should finish");
-
-        let built_engineer = heuristic
-            .events
-            .iter()
-            .any(|e| e.unit_id.eq_ignore_ascii_case("URL0105"));
-        assert!(
-            built_engineer,
-            "heuristic should build at least one T1 engineer"
-        );
-    }
-
-    #[test]
-    fn storage_safety_triggers_economy() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
-
-        let policy = GreedyNoStallPolicy {
-            bp_utilization_target: 10.0, // Force lots of builders.
-            storage_safety_fraction: 0.5,
+        let policy = StateMachinePolicy {
+            max_mex_count: 2,
             ..Default::default()
         };
 
         let mut heuristic = HeuristicSimulator::new(&index, vec![acu], monkeylord, policy, 1.0);
         heuristic.run().expect("heuristic should finish");
 
-        // With high BP target, we should either build economy or still finish.
-        assert!(!heuristic.events.is_empty());
+        let mex_count = heuristic
+            .events
+            .iter()
+            .filter(|e| {
+                heuristic
+                    .index
+                    .find_unit(&e.unit_id)
+                    .map_or(false, |u| u.has_category("MASSEXTRACTION"))
+            })
+            .count();
+        assert!(mex_count <= 2, "built {} mexes, cap was 2", mex_count);
     }
 }

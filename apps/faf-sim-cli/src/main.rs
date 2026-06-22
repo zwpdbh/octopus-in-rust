@@ -10,8 +10,8 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use faf_sim::{BuildGraph, SimpleSimulator};
-use faf_units::{DataIndex, Unit};
+use faf_sim::{BuildGraph, HeuristicSimulator, StateMachinePolicy};
+use faf_units::DataIndex;
 
 mod target;
 use target::{Faction, ResearchTarget, UnitKind};
@@ -206,22 +206,6 @@ fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-/// Standard land-tech prerequisite chain for a faction.
-///
-/// This is a hand-curated path: ACU → T1 land factory → T2 land factory →
-/// T3 land factory → T3 engineer. It avoids the noise of campaign/special
-/// units in the dependency graph.
-fn standard_tech_chain<'a>(index: &'a DataIndex, faction: Faction) -> Vec<&'a Unit> {
-    let ids = match faction {
-        Faction::Uef => ["UEL0001", "UEB0101", "UEB0201", "UEB0301", "UEL0309"],
-        Faction::Cybran => ["URL0001", "URB0101", "URB0201", "URB0301", "URL0309"],
-        Faction::Aeon => ["UAL0001", "UAB0101", "UAB0201", "UAB0301", "UAL0309"],
-        Faction::Seraphim => ["XSL0001", "XSB0101", "XSB0201", "XSB0301", "XSL0309"],
-    };
-
-    ids.iter().filter_map(|id| index.find_unit(id)).collect()
-}
-
 fn run_simulate(
     graph: &BuildGraph,
     index: &DataIndex,
@@ -235,35 +219,53 @@ fn run_simulate(
 
     println!("Simulate target: {}", target.display_name());
 
-    let sequence: Vec<&Unit> = if let Some(path) = order {
+    if let Some(path) = order {
         println!("Build order file: {}", path);
         println!("(Custom build order files are not yet supported.)");
         return;
-    } else {
-        // Default: standard land-tech chain, then the target.
-        let mut chain = standard_tech_chain(index, target.faction);
-        chain.push(target_unit);
-        chain
-    };
+    }
 
-    // The chain starts with the ACU, which we already own.
-    let starting_unit = sequence.first().copied().expect("chain includes ACU");
-    let build_sequence = &sequence[1..];
+    let starting_unit = index
+        .find_unit(match target.faction {
+            Faction::Uef => "UEL0001",
+            Faction::Cybran => "URL0001",
+            Faction::Aeon => "UAL0001",
+            Faction::Seraphim => "XSL0001",
+        })
+        .expect("ACU exists in index");
 
-    let mut sim = SimpleSimulator::new(index, vec![starting_unit], 1.0);
-    let events = sim.simulate_sequence(build_sequence);
+    let mut sim = HeuristicSimulator::new(
+        index,
+        vec![starting_unit],
+        target_unit,
+        StateMachinePolicy::default(),
+        1.0,
+    );
+    let goal_event = sim.run().expect("simulation should finish");
 
+    println!(
+        "\nGoal completed at {} ({:.1}m)",
+        format_time(goal_event.time),
+        goal_event.time / 60.0
+    );
     println!("\nTimeline:");
-    println!("{:>10}  {}", "Time (s)", "Unit");
-    println!("{:>10}  {}", "--------", "----");
-    for event in events {
+    println!("{:>12}  {}", "Time", "Unit");
+    println!("{:>12}  {}", "------------", "----");
+    for event in &sim.events {
         println!(
-            "{:>10.1}  {} ({})",
-            event.time,
+            "{:>12}  {} ({})",
+            format_time(event.time),
             event.unit_name.as_deref().unwrap_or("?"),
             event.unit_id
         );
     }
+}
+
+/// Format seconds as "Mm Ss" with one decimal place on seconds.
+fn format_time(seconds: f64) -> String {
+    let minutes = (seconds / 60.0).floor();
+    let secs = seconds - minutes * 60.0;
+    format!("{:.0}m {:.1}s", minutes, secs)
 }
 
 fn run_plan(target: ResearchTarget, strategy: &str) {

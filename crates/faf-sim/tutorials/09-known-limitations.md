@@ -13,14 +13,13 @@ complete optimizer.
 - **Combat, scouting, and map control** — purely economic simulation.
 - **Unit upgrades / enhancements** — ACU T2/T3 engineering upgrades are not
   modeled as separate prerequisites (yet).
-- **Concurrent projects** — the simple simulator builds one thing at a time.
-  `HeuristicSimulator` adds concurrency but still ticks projects sequentially.
-- **Engineer production for assist** — early versions did not build extra
-  engineers to speed up the target. `HeuristicSimulator` and
-  `GreedyNoStallPolicy` now do.
-- **Power/mass infrastructure beyond prerequisites** — no optional mass
-  extractors or power generators are built unless the policy explicitly requests
-  them.
+- **Concurrent projects** — `HeuristicSimulator` ticks projects sequentially,
+  which is an approximation of true simultaneous drain.
+- **Engineer production for assist** — the `StateMachinePolicy` builds engineers
+  or factories when mass income exceeds current spendable capacity.
+- **Power/mass infrastructure beyond prerequisites** — the policy now builds
+  optional mass extractors and power generators, but with a simple cap/margin
+  rule rather than a full ROI model.
 
 ## 2. What is already modeled
 
@@ -28,12 +27,12 @@ complete optimizer.
 - Build power, build time, and remaining-work tracking.
 - Builder prerequisites via faction-scoped category matching.
 - A concurrent simulator with pluggable policies.
-- A greedy no-stall heuristic policy.
+- A state-machine heuristic policy with energy / mass / build-power focus.
 
 ## 3. Near-term roadmap
 
-1. **Better economy infrastructure policy** — choose when to build mass
-   extractors and power generators based on ROI.
+1. **Better economy infrastructure policy** — replace the mex cap and energy
+   margin with a proper ROI model for mass extractors and power generators.
 2. **Reclaim model** — add a simple reclaim income source.
 3. **ACU enhancements** — model engineering upgrades as build-power and economy
    modifiers.

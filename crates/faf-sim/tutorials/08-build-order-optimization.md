@@ -1,7 +1,7 @@
 # 08 — Build-Order Optimization as Search
 
-So far we have a simulator and a greedy heuristic. This document frames the full
-optimization problem and sketches algorithms that could solve it.
+So far we have a simulator and a state-machine heuristic. This document frames
+the full optimization problem and sketches algorithms that could solve it.
 
 ---
 
@@ -52,9 +52,9 @@ the maximum of these bounds.
 
 ## 4. Algorithm families
 
-### 4.1 Greedy heuristics
+### 4.1 State-machine heuristics
 
-Start with what we already have: `GreedyNoStallPolicy`. Fast, no search, but not
+Start with what we already have: `StateMachinePolicy`. Fast, no search, but not
 optimal.
 
 ### 4.2 Beam search
@@ -86,9 +86,10 @@ time, with a large bonus for completing the goal.
 Whatever algorithm you choose, compare against:
 
 - **ACU-alone baseline**: build the goal directly with the starting ACU.
-- **Sequential tech-chain baseline**: build the standard land chain, then the goal
+- **Observed-economy baseline**: derive the economy from the starting units and
+  compute the resource-limited completion time
   (see [03-sequential-baseline.md](./03-sequential-baseline.md)).
-- **Greedy heuristic**: the default `GreedyNoStallPolicy`.
+- **State-machine heuristic**: the default `StateMachinePolicy`.
 
 Only improvements over all three are meaningful.
 
@@ -104,7 +105,7 @@ model?
 The `plan` subcommand is a placeholder:
 
 ```rust
-// apps/faf-sim-cli/src/main.rs ~line 269 — run_plan
+// apps/faf-sim-cli/src/main.rs ~line 260 — run_plan
 fn run_plan(target: ResearchTarget, strategy: &str) {
     println!(
         "Plan target: {} strategy: {}",

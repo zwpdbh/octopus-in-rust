@@ -18,9 +18,10 @@ pub use economy::{
     EffectiveBuildPower, RequestedBuildPower, TickOutcome, TickResult,
 };
 pub use heuristic::{
-    BuildPolicy, GreedyNoStallPolicy, HeuristicSimulator, ProjectPriority, ProjectRequest,
+    BuildPolicy, HeuristicSimulator, ProductionFocus, ProjectPriority, ProjectRequest,
+    StateMachinePolicy,
 };
-pub use sim::{derive_economy, BuildEvent, SimpleSimulator};
+pub use sim::{derive_economy, BuildEvent};
 
 #[cfg(test)]
 mod tests {

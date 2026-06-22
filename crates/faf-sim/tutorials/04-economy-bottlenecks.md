@@ -10,7 +10,7 @@ how `faf-sim` models income, storage, stalls, and overflow.
 The simulator tracks a small state vector:
 
 ```rust
-// crates/faf-sim/src/economy.rs ~line 128 — EconomyState
+// crates/faf-sim/src/economy.rs ~line 241 — EconomyState
 pub struct EconomyState {
     pub net_mass_income: f64,
     pub net_energy_income: f64,
@@ -25,7 +25,7 @@ Income is produced continuously by economic units. The starting economy is
 derived by summing the production and storage of the starting units:
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 111 — derive_economy
+// crates/faf-sim/src/sim.rs ~line 26 — derive_economy
 pub fn derive_economy(units: &[&Unit]) -> EconomyState {
     let mut net_mass_income = 0.0;
     let mut net_energy_income = 0.0;
@@ -72,7 +72,7 @@ B_effective = B_requested * stall_factor
 The implementation is in `apply_tick`:
 
 ```rust
-// crates/faf-sim/src/economy.rs ~line 170 — apply_tick
+// crates/faf-sim/src/economy.rs ~line 281 — apply_tick
 pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> TickResult {
     let mass_income = state.net_mass_income * dt;
     let energy_income = state.net_energy_income * dt;
@@ -127,7 +127,7 @@ If storage is full, further income is wasted. `faf-sim` clamps new storage to th
 cap:
 
 ```rust
-// crates/faf-sim/src/economy.rs ~line 205 — storage clamping in apply_tick
+// crates/faf-sim/src/economy.rs ~line 316 — storage clamping in apply_tick
 let new_mass_storage = (state.mass_storage + mass_income - mass_consumed)
     .min(state.mass_storage_cap)
     .max(0.0);

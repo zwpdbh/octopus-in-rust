@@ -1,129 +1,123 @@
-# 03 — Sequential Baseline with `SimpleSimulator`
+# 03 — Observing the Economy: From Units to Net Flow
 
-The simplest way to simulate a build order is to build one unit after another,
-assigning all available build power to the current project. This gives us a
-baseline completion time we can compare against later, smarter planners.
+The simulator no longer uses a hard-coded sequential baseline. Instead, it
+starts from the same observation a player has: a collection of owned units.
+From those units it derives the current economy state — income, storage, and
+net flow.
 
 ---
 
-## 1. What `SimpleSimulator` does
+## 1. Owned units are economic actors
 
-`SimpleSimulator` owns the starting units, derives the economy from them, and
-steps through a sequence of targets. Each completed unit becomes available for
-subsequent projects.
+Every unit can play one or more economic roles:
+
+- **Producer** — adds mass or energy each second (ACU, mex, pgen).
+- **Consumer** — removes resources through maintenance (mex, radar, shields).
+- **Builder** — provides build power to spend resources faster (ACU, engineers,
+  factories).
+- **Storage** — contributes mass/energy capacity (ACU, storage buildings).
+
+These roles are modeled as traits:
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 23 — SimpleSimulator
-#[derive(Debug, Clone)]
-pub struct SimpleSimulator<'a> {
-    pub owned_units: Vec<&'a Unit>,
-    pub state: EconomyState,
-    pub current_time: f64,
-    pub dt: f64,
+// crates/faf-sim/src/economy.rs ~line 191 — EcoProducer / EcoConsumer
+trait EcoProducer {
+    fn production(&self) -> EcoFlow;
+}
+
+trait EcoConsumer {
+    fn consumption(&self) -> EcoFlow;
 }
 ```
 
-The entry point is `simulate_sequence`:
+## 2. `EcoFlow`: the atomic observation
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 55 — simulate_sequence
-pub fn simulate_sequence(&mut self, sequence: &[&'a Unit]) -> Vec<BuildEvent> {
-    let mut events = Vec::with_capacity(sequence.len());
-    for target in sequence {
-        let event = self.build_unit(target);
-        self.owned_units.push(target);
-        self.state = derive_economy(&self.owned_units);
-        events.push(event);
-    }
-    events
+// crates/faf-sim/src/economy.rs ~line 143 — EcoFlow
+pub struct EcoFlow {
+    pub mass_per_second: f64,
+    pub energy_per_second: f64,
 }
 ```
 
-## 2. Building a single unit
+Positive values mean resources enter the economy; negative values mean they
+leave it. The in-game economy overlay is exactly this: production minus
+consumption.
 
-Each unit is built tick-by-tick. The assigned build power is the sum of all
-owned builders, and the economy state is updated every tick.
+## 3. Deriving the economy state
+
+`derive_economy` sums storage from all owned units and computes net flow from
+production minus maintenance consumption:
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 68 — build_unit
-fn build_unit(&mut self, target: &'a Unit) -> BuildEvent {
-    let mut project = BuildProject::new(target).expect("unit must have economy data");
-    project.assigned_build_power = self.available_build_power();
+// crates/faf-sim/src/sim.rs ~line 26 — derive_economy
+pub fn derive_economy(units: &[&Unit]) -> EconomyState {
+    let mut mass_storage = 0.0;
+    let mut energy_storage = 0.0;
 
-    loop {
-        let outcome = project.tick(&mut self.state, self.dt);
-        self.current_time += self.dt;
-
-        if outcome.is_completed() {
-            break;
-        }
-
-        if self.current_time > 1_000_000.0 {
-            panic!("simulation exceeded time limit while building {}", target.id);
+    for unit in units {
+        if let Some(econ) = &unit.economy {
+            mass_storage += econ.storage_mass.unwrap_or(0.0);
+            energy_storage += econ.storage_energy.unwrap_or(0.0);
         }
     }
 
-    BuildEvent {
-        time: self.current_time,
-        unit_id: target.id.clone(),
-        unit_name: target.name().map(|s| s.to_string()),
+    let net = summarize_economy(units, &[]);
+
+    EconomyState {
+        net_mass_income: net.mass_per_second,
+        net_energy_income: net.energy_per_second,
+        mass_storage,
+        energy_storage,
+        mass_storage_cap: mass_storage,
+        energy_storage_cap: energy_storage,
     }
 }
 ```
 
-## 3. Example: default chain to Monkeylord
+`summarize_economy` is the key merge step:
 
-The CLI uses the standard land-tech chain plus the target:
+```rust
+// crates/faf-sim/src/economy.rs ~line 232 — summarize_economy
+pub fn summarize_economy(owned_units: &[&Unit], active_projects: &[&BuildProject]) -> EcoFlow {
+    let production: EcoFlow = owned_units.iter().map(|u| u.production()).sum();
+    let maintenance: EcoFlow = owned_units.iter().map(|u| u.consumption()).sum();
+    let construction: EcoFlow = active_projects.iter().map(|p| p.consumption()).sum();
+    production - maintenance - construction
+}
+```
+
+## 4. Example: ACU alone vs. ACU + T1 mex
 
 ```bash
-$ cargo run --bin faf-sim -- simulate -c monkeylord
-Simulate target: Cybran Monkeylord (URL0402)
-
-Timeline:
-  Time (s)  Unit
-  --------  ----
-     300.0  T1 Land Factory (URB0101)
-    2750.0  T2 Land Factory HQ (URB0201)
-   15000.0  T3 Land Factory HQ (URB0301)
-   16560.0  T3 Engineer (URL0309)
-   44392.3  Monkeylord (URL0402)
+$ cargo test -p faf-sim derive_economy_subtracts_maintenance -- --nocapture
 ```
 
-The exact numbers depend on the current data and whether the build stalls. The
-key observation: the baseline is dominated by the expensive T3 factory and the
-Monkeylord itself, because we are building them sequentially with the ACU alone
-until each prerequisite is done.
+The test verifies:
 
-## 4. Limitations of the baseline
+- ACU alone: `+1 mass/s`, `+20 energy/s`.
+- ACU + T1 mex: `+3 mass/s`, `+18 energy/s` (the mex adds `+2 mass/s` but costs
+  `-2 energy/s` maintenance).
 
-- **No concurrent building.** We cannot build engineers while the T3 factory is
-  being built to speed up later steps.
-- **No economy buildings.** Mass extractors and power generators are ignored.
-- **All BP on one project.** Even if we own multiple engineers, they all work on
-  the same thing in sequence.
-
-These limitations are intentional: they isolate the economy math before we add
-planning complexity.
+This is why a player can look at the economy overlay and see negative energy
+income: maintenance is real.
 
 ## 5. Study questions
 
-1. Why is the T3 factory completion time roughly `12000 / 10 = 1200` seconds but
-may be longer in practice?
-2. The T3 engineer is built by the T3 factory (`BuildRate = 90`). Why does it
-not finish in `1560 / 90 ≈ 17.3` seconds in the baseline?
-3. What is the first project in the chain that is likely to stall? Which
-resource runs out first?
+1. Why is it important that `derive_economy` subtracts maintenance consumption?
+2. If you own 8 T1 mexes and one ACU, what is your net mass income? Net energy
+   income?
+3. Where does construction consumption appear in `derive_economy`? Why is it
+   passed as an empty slice there?
 
 ## 6. Experiment
 
-Simulate different factions and targets:
+Inspect the economy state for different starting unit mixes:
 
-```bash
-cargo run --bin faf-sim -- simulate -u fatboy
-cargo run --bin faf-sim -- simulate -a galacticcolossus
+```rust
+// crates/faf-sim/src/sim.rs ~line 42 — derive_economy_subtracts_maintenance
+let state = derive_economy(&[acu, t1_mex, t1_mex]);
+println!("mass {} energy {}", state.net_mass_income, state.net_energy_income);
 ```
-
-Try editing the `standard_tech_chain` in `apps/faf-sim-cli/src/main.rs` to skip
-or reorder prerequisites and observe the failure mode.
 
 Next: [04-economy-bottlenecks.md](./04-economy-bottlenecks.md)

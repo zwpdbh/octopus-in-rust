@@ -247,9 +247,10 @@ fn compare(args: serde_json::Value) -> serde_json::Value {
 fn unit_summary(u: &Unit) -> serde_json::Value {
     let health = u.defense.as_ref().and_then(|d| d.health);
     let regen = u.defense.as_ref().and_then(|d| d.regen_rate);
-    let mass_cost = u.economy.as_ref().and_then(|e| e.build_cost_mass);
-    let energy_cost = u.economy.as_ref().and_then(|e| e.build_cost_energy);
-    let build_time = u.economy.as_ref().and_then(|e| e.build_time);
+    let target_stats = u.build_target_stats();
+    let mass_cost = target_stats.map(|s| s.build_cost_mass);
+    let energy_cost = target_stats.map(|s| s.build_cost_energy);
+    let build_time = target_stats.map(|s| s.build_time);
     let speed = u
         .physics
         .as_ref()
