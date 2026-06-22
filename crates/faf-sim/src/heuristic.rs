@@ -6,11 +6,12 @@
 
 use faf_units::{BuildTargetStats, DataIndex, Unit};
 
-use crate::build_graph::BuildGraph;
 use crate::economy::{
     compute_drain, total_build_power, BuildProject, EconomyState, RequestedBuildPower,
+    ResourceProducer,
 };
 use crate::sim::{derive_economy, BuildEvent};
+use crate::tech_graph::TechGraph;
 
 /// Priority of an active project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,7 +70,7 @@ pub trait BuildPolicy {
     /// Return a list of new projects to start on this tick.
     fn choose_projects<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         state: &EconomyState,
         owned: &[&'a Unit],
         active: &[ActiveProject],
@@ -135,7 +136,7 @@ impl StateMachinePolicy {
     /// projects.
     fn current_mex_count<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         owned: &[&'a Unit],
         active: &[ActiveProject],
     ) -> usize {
@@ -152,14 +153,17 @@ impl StateMachinePolicy {
         owned_mex + active_mex
     }
 
-    /// True if any owned unit can build `target` according to the graph.
+    /// True if any owned unit can build `target` according to the capability
+    /// graph.
     fn can_build_now<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         owned: &[&'a Unit],
         target: &'a Unit,
     ) -> bool {
-        let builders = graph.builders_for(&target.id);
+        let Ok(builders) = graph.builders_for(&target.id) else {
+            return false;
+        };
         owned.iter().any(|owned| {
             builders
                 .iter()
@@ -175,7 +179,7 @@ impl StateMachinePolicy {
     /// Determine the current economic focus.
     fn focus<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         state: &EconomyState,
         owned: &[&'a Unit],
         active: &[ActiveProject],
@@ -215,48 +219,24 @@ impl StateMachinePolicy {
         ProductionFocus::BuildPower
     }
 
-    /// Cheapest unit that produces energy.
-    fn pick_cheapest_energy<'a>(
-        &self,
-        graph: &'a BuildGraph<'a>,
-        owned: &[&'a Unit],
-        goal: &'a Unit,
-    ) -> Option<&'a Unit> {
-        let goal_faction = goal.faction();
-        graph
-            .index()
-            .units
-            .iter()
-            .filter(|u| {
-                u.economy.as_ref().map_or(false, |e| {
-                    e.production_per_second_energy.unwrap_or(0.0) > 0.0
-                }) && self.can_build_now(graph, owned, u)
-                    && match goal_faction {
-                        Some(f) => u
-                            .faction()
-                            .map_or(true, |uf: &str| uf.eq_ignore_ascii_case(f)),
-                        None => true,
-                    }
-            })
-            .min_by(|a, b| {
-                let a_cost = a
-                    .build_target_stats()
-                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
-                let b_cost = b
-                    .build_target_stats()
-                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
-                a_cost
-                    .partial_cmp(&b_cost)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+    /// True if `unit` produces energy.
+    fn is_energy_producer(&self, unit: &Unit) -> bool {
+        unit.has_category("ENERGYPRODUCTION")
     }
 
-    /// Cheapest mass extractor.
-    fn pick_cheapest_mex<'a>(
+    /// Best producer matching `predicate` according to `metric`.
+    ///
+    /// This treats mass extractors, power generators, and their upgrades as a
+    /// single family of resource producers: they all expose build stats,
+    /// production, and maintenance, so the planner can pick by efficiency
+    /// instead of special-casing each category.
+    fn pick_best_producer<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         owned: &[&'a Unit],
         goal: &'a Unit,
+        predicate: impl Fn(&Unit) -> bool,
+        metric: impl Fn(&ResourceProducer) -> f64,
     ) -> Option<&'a Unit> {
         let goal_faction = goal.faction();
         graph
@@ -264,7 +244,7 @@ impl StateMachinePolicy {
             .units
             .iter()
             .filter(|u| {
-                self.is_mex(u)
+                predicate(u)
                     && self.can_build_now(graph, owned, u)
                     && match goal_faction {
                         Some(f) => u
@@ -273,24 +253,52 @@ impl StateMachinePolicy {
                         None => true,
                     }
             })
-            .min_by(|a, b| {
-                let a_cost = a
-                    .build_target_stats()
-                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
-                let b_cost = b
-                    .build_target_stats()
-                    .map_or(f64::INFINITY, |s| s.build_cost_mass);
-                a_cost
-                    .partial_cmp(&b_cost)
+            .filter_map(|u| ResourceProducer::new(u))
+            .max_by(|a, b| {
+                metric(a)
+                    .partial_cmp(&metric(b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
+            .map(|p| p.unit())
+    }
+
+    /// Most efficient buildable energy producer (energy income per mass cost).
+    fn pick_best_energy<'a>(
+        &self,
+        graph: &'a TechGraph<'a>,
+        owned: &[&'a Unit],
+        goal: &'a Unit,
+    ) -> Option<&'a Unit> {
+        self.pick_best_producer(
+            graph,
+            owned,
+            goal,
+            |u| self.is_energy_producer(u),
+            |p| p.energy_efficiency(),
+        )
+    }
+
+    /// Most efficient buildable mass extractor (mass income per mass cost).
+    fn pick_best_mex<'a>(
+        &self,
+        graph: &'a TechGraph<'a>,
+        owned: &[&'a Unit],
+        goal: &'a Unit,
+    ) -> Option<&'a Unit> {
+        self.pick_best_producer(
+            graph,
+            owned,
+            goal,
+            |u| self.is_mex(u),
+            |p| p.mass_efficiency(),
+        )
     }
 
     /// Cheapest real builder. Prefer T1 engineers; fall back to factories if
     /// no engineer is currently desirable.
     fn pick_cheapest_builder<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         owned: &[&'a Unit],
         goal: &'a Unit,
     ) -> Option<&'a Unit> {
@@ -341,7 +349,7 @@ impl StateMachinePolicy {
 impl BuildPolicy for StateMachinePolicy {
     fn choose_projects<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         state: &EconomyState,
         owned: &[&'a Unit],
         active: &[ActiveProject],
@@ -349,9 +357,12 @@ impl BuildPolicy for StateMachinePolicy {
     ) -> Vec<ProjectRequest> {
         let mut requests = Vec::new();
 
-        // Always keep the goal project active if it is not already.
+        // Always keep the goal project active if it is not already. The goal is
+        // treated as always buildable so that the simulator can start on it
+        // immediately with the starting ACU, matching the current demo behavior.
+        // A real planner would instead require the proper tech chain first.
         let goal_active = active.iter().any(|p| p.priority == ProjectPriority::Goal);
-        if !goal_active && self.can_build_now(graph, owned, goal) {
+        if !goal_active {
             requests.push(ProjectRequest {
                 target_id: goal.id.clone(),
                 requested_bp: self.goal_bp,
@@ -369,8 +380,8 @@ impl BuildPolicy for StateMachinePolicy {
 
         let focus = self.focus(graph, state, owned, active, goal);
         let target = match focus {
-            ProductionFocus::Energy => self.pick_cheapest_energy(graph, owned, goal),
-            ProductionFocus::Mass => self.pick_cheapest_mex(graph, owned, goal),
+            ProductionFocus::Energy => self.pick_best_energy(graph, owned, goal),
+            ProductionFocus::Mass => self.pick_best_mex(graph, owned, goal),
             ProductionFocus::BuildPower => self.pick_cheapest_builder(graph, owned, goal),
         };
 
@@ -395,7 +406,7 @@ pub struct HeuristicSimulator<'a, P: BuildPolicy> {
     /// Unit database.
     pub index: &'a DataIndex,
     /// Dependency graph.
-    pub graph: BuildGraph<'a>,
+    pub graph: TechGraph<'a>,
     /// Units currently owned.
     pub owned_units: Vec<&'a Unit>,
     /// Current economy state.
@@ -426,7 +437,7 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
         let state = derive_economy(&starting_units);
         Self {
             index,
-            graph: BuildGraph::new(index),
+            graph: TechGraph::new(index),
             owned_units: starting_units,
             state,
             current_time: 0.0,
@@ -538,7 +549,7 @@ impl<'a, P: BuildPolicy> HeuristicSimulator<'a, P> {
             self.events.push(BuildEvent {
                 time: self.current_time,
                 unit_id: project.target_id.clone(),
-                unit_name: target.name().map(|s: &str| s.to_string()),
+                unit_name: target.display_name(),
             });
         }
     }
@@ -608,5 +619,39 @@ mod tests {
             })
             .count();
         assert!(mex_count <= 2, "built {} mexes, cap was 2", mex_count);
+    }
+
+    #[test]
+    fn base_acu_cannot_build_t3_pgen_as_economy() {
+        let index = load_index();
+        let acu = index.find_unit("URL0001").expect("ACU exists");
+        let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
+
+        let policy = StateMachinePolicy::default();
+        let graph = TechGraph::new(&index);
+        let target = policy.pick_best_energy(&graph, &[acu], monkeylord);
+
+        assert_eq!(
+            target.map(|u| u.id.as_str()),
+            Some("URB1101"),
+            "base ACU should only build T1 pgen, not T3"
+        );
+    }
+
+    #[test]
+    fn t3_engineer_prefers_t3_pgen_by_efficiency() {
+        let index = load_index();
+        let t3_eng = index.find_unit("URL0309").expect("T3 engineer exists");
+        let monkeylord = index.find_unit("URL0402").expect("Monkeylord exists");
+
+        let policy = StateMachinePolicy::default();
+        let graph = TechGraph::new(&index);
+        let target = policy.pick_best_energy(&graph, &[t3_eng], monkeylord);
+
+        assert_eq!(
+            target.map(|u| u.id.as_str()),
+            Some("URB1301"),
+            "T3 engineer should prefer T3 pgen by energy-per-mass efficiency"
+        );
     }
 }

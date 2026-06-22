@@ -15,7 +15,7 @@ power among them each tick.
 // crates/faf-sim/src/heuristic.rs ~line 392 — HeuristicSimulator
 pub struct HeuristicSimulator<'a, P: BuildPolicy> {
     pub index: &'a DataIndex,
-    pub graph: BuildGraph<'a>,
+    pub graph: TechGraph<'a>,
     pub owned_units: Vec<&'a Unit>,
     pub state: EconomyState,
     pub current_time: f64,

@@ -118,6 +118,29 @@ impl Unit {
         self.description_zh.as_deref()
     }
 
+    /// Human-readable description, e.g. "Power Generator".
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Best-effort display name for this unit.
+    ///
+    /// Prefers the explicit unit name, falls back to the description, and
+    /// finally to the blueprint id if neither is present.
+    pub fn display_name(&self) -> String {
+        self.name()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                let desc = self.description().trim();
+                if desc.is_empty() {
+                    None
+                } else {
+                    Some(desc.to_string())
+                }
+            })
+            .unwrap_or_else(|| self.id.clone())
+    }
+
     /// Convenience accessor for the faction name when available.
     pub fn faction(&self) -> Option<&str> {
         self.general.as_ref()?.faction_name.as_deref()

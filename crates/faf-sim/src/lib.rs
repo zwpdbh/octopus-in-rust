@@ -2,26 +2,26 @@
 //!
 //! This crate sits on top of `faf-units` and provides:
 //!
-//! - `build_graph` — pure unit dependency graph (who can build whom).
+//! - `tech_graph` — symbolic capability dependency graph (who can build whom).
 //! - `economy` — continuous-drain resource model.
 //! - `sim` — economy and build-time simulation.
 //! - `heuristic` — greedy build-order planner that grows BP while avoiding stalls.
 
-pub mod build_graph;
 pub mod economy;
 pub mod heuristic;
 pub mod sim;
+pub mod tech_graph;
 
-pub use build_graph::{BuildGraph, BuilderKind, UnknownUnitError};
 pub use economy::{
-    apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EconomyState,
-    EffectiveBuildPower, RequestedBuildPower, TickOutcome, TickResult,
+    apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EcoFlow, EconomyState,
+    EffectiveBuildPower, RequestedBuildPower, ResourceProducer, TickOutcome, TickResult,
 };
 pub use heuristic::{
     BuildPolicy, HeuristicSimulator, ProductionFocus, ProjectPriority, ProjectRequest,
     StateMachinePolicy,
 };
 pub use sim::{derive_economy, BuildEvent};
+pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
 
 #[cfg(test)]
 mod tests {
@@ -34,33 +34,35 @@ mod tests {
     }
 
     #[test]
-    fn monkeylord_has_t3_engineer_and_commander_prerequisites() {
+    fn monkeylord_requires_t3_engineer_or_t3_acu() {
         let index = load_index();
-        let graph = BuildGraph::new(&index);
+        let graph = TechGraph::new(&index);
 
         let builders: Vec<String> = graph
             .builders_for("URL0402")
+            .expect("URL0402 exists")
             .into_iter()
             .map(|u| u.id.clone())
             .collect();
 
         assert!(
-            builders.contains(&"URL0001".to_string()),
-            "Monkeylord should be buildable by the Cybran ACU (COMMAND)"
-        );
-        assert!(
             builders.contains(&"URL0309".to_string()),
             "Monkeylord should be buildable by the Cybran T3 engineer"
+        );
+        assert!(
+            !builders.contains(&"URL0001".to_string()),
+            "base ACU should not build Monkeylord in the capability model"
         );
     }
 
     #[test]
     fn t1_factory_is_built_by_commander_and_t1_engineer() {
         let index = load_index();
-        let graph = BuildGraph::new(&index);
+        let graph = TechGraph::new(&index);
 
         let builders: Vec<String> = graph
             .builders_for("URB0101")
+            .expect("URB0101 exists")
             .into_iter()
             .map(|u| u.id.clone())
             .collect();
@@ -72,7 +74,7 @@ mod tests {
     #[test]
     fn all_prerequisites_for_monkeylord_via_engineer_path() {
         let index = load_index();
-        let graph = BuildGraph::new(&index);
+        let graph = TechGraph::new(&index);
 
         let prereqs: Vec<String> = graph
             .all_prerequisites_default("URL0402")
@@ -94,10 +96,11 @@ mod tests {
     #[test]
     fn uef_fatboy_prerequisites_contain_factory_and_engineer_chains() {
         let index = load_index();
-        let graph = BuildGraph::new(&index);
+        let graph = TechGraph::new(&index);
 
         let direct: Vec<String> = graph
             .builders_for("UEL0401")
+            .expect("UEL0401 exists")
             .into_iter()
             .map(|u| u.id.clone())
             .collect();
@@ -106,8 +109,8 @@ mod tests {
             "Fatboy should be buildable by UEF T3 engineer"
         );
         assert!(
-            direct.contains(&"UEL0001".to_string()),
-            "Fatboy should be buildable by UEF ACU"
+            !direct.contains(&"UEL0001".to_string()),
+            "base ACU should not build Fatboy in the capability model"
         );
         // Only UEF builders.
         assert!(
@@ -159,7 +162,7 @@ mod tests {
     #[test]
     fn unknown_unit_returns_error() {
         let index = load_index();
-        let graph = BuildGraph::new(&index);
+        let graph = TechGraph::new(&index);
         assert!(graph.all_prerequisites_default("NOT_A_UNIT").is_err());
     }
 }

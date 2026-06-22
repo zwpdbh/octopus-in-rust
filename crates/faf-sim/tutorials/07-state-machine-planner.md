@@ -14,7 +14,7 @@ A policy observes the current state and returns a list of new project requests:
 pub trait BuildPolicy {
     fn choose_projects<'a>(
         &self,
-        graph: &'a BuildGraph<'a>,
+        graph: &'a TechGraph<'a>,
         state: &EconomyState,
         owned: &[&'a Unit],
         active: &[ActiveProject],
@@ -52,7 +52,7 @@ Each tick the policy decides the focus by checking conditions in order:
 // crates/faf-sim/src/heuristic.rs ~line 176 — StateMachinePolicy::focus
 fn focus<'a>(
     &self,
-    graph: &'a BuildGraph<'a>,
+    graph: &'a TechGraph<'a>,
     state: &EconomyState,
     owned: &[&'a Unit],
     active: &[ActiveProject],

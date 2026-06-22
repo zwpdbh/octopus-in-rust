@@ -224,6 +224,72 @@ impl EcoConsumer for BuildProject {
     }
 }
 
+/// A unified view of any unit that produces mass or energy.
+///
+/// Mass extractors, power generators, and their upgrades all expose the same
+/// economic metrics (build cost, build time, production, maintenance). This
+/// view lets the planner treat them uniformly when making efficiency-aware
+/// decisions.
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceProducer<'a> {
+    unit: &'a Unit,
+}
+
+impl<'a> ResourceProducer<'a> {
+    /// Create a producer view for `unit`.
+    ///
+    /// Returns `None` if the unit has no build stats, zero mass cost, or no
+    /// resource production.
+    pub fn new(unit: &'a Unit) -> Option<Self> {
+        let stats = unit.build_target_stats()?;
+        if stats.build_cost_mass <= 0.0 {
+            return None;
+        }
+        let prod = unit.production();
+        if prod.mass_per_second <= 0.0 && prod.energy_per_second <= 0.0 {
+            return None;
+        }
+        Some(Self { unit })
+    }
+
+    /// Underlying unit blueprint.
+    pub fn unit(&self) -> &'a Unit {
+        self.unit
+    }
+
+    /// Build stats of this producer.
+    pub fn stats(&self) -> BuildTargetStats {
+        self.unit
+            .build_target_stats()
+            .expect("validated in constructor")
+    }
+
+    /// Gross production flow.
+    pub fn production(&self) -> EcoFlow {
+        self.unit.production()
+    }
+
+    /// Maintenance consumption flow.
+    pub fn maintenance(&self) -> EcoFlow {
+        self.unit.consumption()
+    }
+
+    /// Net production after maintenance.
+    pub fn net_production(&self) -> EcoFlow {
+        self.production() - self.maintenance()
+    }
+
+    /// Mass income per mass invested.
+    pub fn mass_efficiency(&self) -> f64 {
+        self.production().mass_per_second / self.stats().build_cost_mass
+    }
+
+    /// Energy income per mass invested.
+    pub fn energy_efficiency(&self) -> f64 {
+        self.production().energy_per_second / self.stats().build_cost_mass
+    }
+}
+
 /// Summarize the net mass and energy flow for a collection of owned units and
 /// active construction projects.
 ///
@@ -762,5 +828,65 @@ mod tests {
             net.energy_per_second < 0.0,
             "building Monkeylord should make net energy negative"
         );
+    }
+
+    #[test]
+    fn resource_producers_share_uniform_metrics() {
+        let index = load_index();
+        let mut checked = 0;
+
+        for unit in &index.units {
+            let is_mex = unit.has_category("MASSEXTRACTION");
+            let is_pgen = unit.has_category("ENERGYPRODUCTION");
+            if !is_mex && !is_pgen {
+                continue;
+            }
+
+            // Special units such as the Aeon Paragon carry the production
+            // categories but have no fixed production values. Only enforce the
+            // common metric shape on units that actually produce something.
+            let prod = unit.production();
+            let produces_mass = prod.mass_per_second > 0.0;
+            let produces_energy = prod.energy_per_second > 0.0;
+            if !produces_mass && !produces_energy {
+                continue;
+            }
+
+            checked += 1;
+            let stats = unit
+                .build_target_stats()
+                .unwrap_or_else(|| panic!("{} must have build target stats", unit.id));
+            assert!(stats.build_cost_mass > 0.0, "{} has no mass cost", unit.id);
+            assert!(
+                stats.build_cost_energy > 0.0,
+                "{} has no energy cost",
+                unit.id
+            );
+            assert!(stats.build_time > 0.0, "{} has no build time", unit.id);
+
+            if is_mex {
+                assert!(
+                    produces_mass,
+                    "{} is a mex with no mass production",
+                    unit.id
+                );
+            }
+            if is_pgen {
+                assert!(
+                    produces_energy,
+                    "{} is a pgen with no energy production",
+                    unit.id
+                );
+            }
+
+            // All resource producers should be representable as a ResourceProducer.
+            assert!(
+                ResourceProducer::new(unit).is_some(),
+                "{} should be a valid ResourceProducer",
+                unit.id
+            );
+        }
+
+        assert!(checked > 0, "no resource producers found in index");
     }
 }

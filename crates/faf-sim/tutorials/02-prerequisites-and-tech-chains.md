@@ -12,69 +12,76 @@ Monkeylord.
 Units can only be built by specific builder categories. The game encodes this
 with `BUILTBY*` categories on the unit being built:
 
-| Category | Builder required |
+| Category | Capability required |
 |---|---|
-| `BUILTBYCOMMANDER` | Any ACU |
-| `BUILTBYTIER1ENGINEER` | T1 engineer |
-| `BUILTBYTIER2ENGINEER` | T2 engineer |
-| `BUILTBYTIER3ENGINEER` | T3 engineer |
-| `BUILTBYTIER1FACTORY` | T1 factory |
-| `BUILTBYTIER2FACTORY` | T2 factory |
-| `BUILTBYTIER3FACTORY` | T3 factory |
+| `BUILTBYCOMMANDER` | `ACU` |
+| `BUILTBYTIER1ENGINEER` | `T1Engineer` |
+| `BUILTBYTIER2ENGINEER` | `T2Engineer` |
+| `BUILTBYTIER3ENGINEER` | `T3Engineer` |
+| `BUILTBYTIER1FACTORY` | `T1Factory` |
+| `BUILTBYTIER2FACTORY` | `T2Factory` |
+| `BUILTBYTIER3FACTORY` | `T3Factory` |
 
-`faf-sim` derives this mapping from categories.
+`faf-sim` collapses these concrete categories into abstract capabilities in
+`TechGraph`:
 
 ```rust
-// crates/faf-sim/src/build_graph.rs ~line 20 — BuilderKind
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BuilderKind {
-    Commander,
-    Tier1Commander,
-    Tier2Commander,
-    Tier3Commander,
-    Tier1Engineer,
-    Tier2Engineer,
-    Tier3Engineer,
-    Tier4Engineer,
-    Tier1Factory,
-    Tier2Factory,
-    Tier3Factory,
-    Tier4Factory,
+// crates/faf-sim/src/tech_graph.rs ~line 27 — Capability
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Capability {
+    ACU,
+    T2ACU,
+    T3ACU,
+    T1Factory,
+    T2Factory,
+    T3Factory,
+    T1Engineer,
+    T2Engineer,
+    T3Engineer,
     QuantumGate,
 }
 ```
 
 ## 2. Direct and transitive prerequisites
 
-`BuildGraph` answers two questions:
+`TechGraph` answers prerequisite questions as a bipartite directed graph:
 
-- `builders_for(target_id)`: who can build this unit directly?
-- `all_prerequisites_default(target_id)`: what must exist before that builder can
-  exist, recursively, stopping at commanders by default?
+```text
+Capability(required) -> Unit -> Capability(provided)
+```
+
+- `builders_for(target_id)`: which concrete units can build this unit directly?
+- `all_prerequisites_default(target_id)`: what concrete units must exist before
+  that builder can exist, recursively, stopping at commanders by default?
+- `prerequisite_chain(target_id, ACU)`: the shortest symbolic tech chain.
 
 ```rust
-// crates/faf-sim/src/build_graph.rs ~line 141 — builders_for
-pub fn builders_for(&self, target_id: &str) -> Vec<&Unit> {
-    let target = self.index.find_unit(target_id);
-    let target_faction = target.and_then(|u| u.faction());
-    let kinds = self.builder_kinds_for(target_id);
-    if kinds.is_empty() {
-        return Vec::new();
-    }
-    self.index
+// crates/faf-sim/src/tech_graph.rs ~line 380 — builders_for
+pub fn builders_for(&self, target_id: &str) -> Result<Vec<&Unit>, TechGraphError> {
+    let target = self
+        .index
+        .find_unit(target_id)
+        .ok_or_else(|| TechGraphError::UnknownUnit(target_id.to_string()))?;
+    let required = required_capabilities(target);
+    let target_faction = target.faction();
+
+    Ok(self
+        .index
         .units
         .iter()
         .filter(|u| {
-            let kind_matches = kinds.iter().any(|k| k.matches_unit(u));
-            if !kind_matches {
-                return false;
+            if let Some(f) = target_faction {
+                if u.faction().map_or(true, |uf| !uf.eq_ignore_ascii_case(f)) {
+                    return false;
+                }
             }
-            match target_faction {
-                Some(f) => u.faction().map_or(true, |uf| uf.eq_ignore_ascii_case(f)),
-                None => true,
+            if let Some(provided) = provided_capability(u) {
+                required.contains(&provided)
+            } else {
+                false
             }
         })
-        .collect()
+        .collect())
 }
 ```
 
@@ -82,15 +89,16 @@ The transitive expansion uses a breadth-first search with a stop set to avoid
 cycles such as factory ↔ engineer:
 
 ```rust
-// crates/faf-sim/src/build_graph.rs ~line 187 — all_prerequisites
+// crates/faf-sim/src/tech_graph.rs ~line 460 — all_prerequisites
 pub fn all_prerequisites<'b>(
     &self,
     target_id: &str,
     stop_at: &'b [&'b str],
-) -> Result<Vec<&Unit>, UnknownUnitError> {
-    let Some(start) = self.index.find_unit(target_id) else {
-        return Err(UnknownUnitError(target_id.to_string()));
-    };
+) -> Result<Vec<&Unit>, TechGraphError> {
+    let start = self
+        .index
+        .find_unit(target_id)
+        .ok_or_else(|| TechGraphError::UnknownUnit(target_id.to_string()))?;
 
     let stop_set: HashSet<String> = stop_at.iter().map(|s| s.to_ascii_uppercase()).collect();
     let mut visited: HashSet<String> = HashSet::new();
@@ -101,7 +109,7 @@ pub fn all_prerequisites<'b>(
     queue.push_back(start);
 
     while let Some(current) = queue.pop_front() {
-        for prereq in self.direct_prerequisites(current.id.as_str()) {
+        for prereq in self.direct_prerequisites(current.id.as_str())? {
             let key = prereq.id.to_ascii_uppercase();
             if visited.contains(&key) || stop_set.contains(&key) {
                 continue;
@@ -143,7 +151,6 @@ $ cargo run --bin faf-sim -- deps -c monkeylord
 Target: Cybran Monkeylord (URL0402) — Monkeylord / 猴王 [EXPERIMENTAL]
 
 Direct builders:
-  URL0001 — Cybran Armored Command Unit / 赛布兰装甲指挥单元 [COMMAND]
   URL0309 — T3 Engineer / T3工程师 [ENGINEER]
 
 Transitive prerequisites:
@@ -153,14 +160,29 @@ Transitive prerequisites:
   URB0101 — T1 Land Factory / T1陆地工厂 [FACTORY]
 ```
 
-Notice that the ACU (`URL0001`) is a direct builder but does **not** appear in the
-transitive prerequisites because commanders are the default stopping point.
+In the capability model, the base ACU (`URL0001`) is **not** a direct builder of
+the Monkeylord because the Monkeylord requires a `T3Engineer` or `T3ACU`
+capability. The ACU only provides the `ACU` capability. This is more accurate
+than the old unit-level graph, which simplified all commander tiers into the
+same node.
+
+The `plan` subcommand shows the symbolic chain:
+
+```bash
+$ cargo run --bin faf-sim -- plan -c monkeylord
+Symbolic tech chain:
+ 1. ACU → build URB0101 (T1 Land Factory)
+ 2. T1Factory → build URB0201 (T2 Land Factory)
+ 3. T2Factory → build URB0301 (T3 Land Factory)
+ 4. T3Factory → build URL0309 (T3 Engineer)
+ 5. T3Engineer → build Monkeylord (URL0402)
+```
 
 ## 5. Study questions
 
 1. Why does the default prerequisite search stop at commanders?
-2. The Monkeylord can be built by either the ACU or a T3 engineer. Which path is
-likely to be faster in a real game? Why?
+2. The Monkeylord can be built by a T3 engineer. What capabilities must you
+   acquire before you can build that engineer?
 3. What would happen if `all_prerequisites` did not have a `stop_at` set?
 
 ## 6. Experiment

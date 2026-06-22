@@ -1330,6 +1330,7 @@ name = "faf-sim"
 version = "0.1.0"
 dependencies = [
  "faf-units",
+ "petgraph",
  "serde_json",
 ]
 

@@ -14,8 +14,8 @@ pub struct BuildEvent {
     pub time: f64,
     /// Blueprint id of the completed unit.
     pub unit_id: String,
-    /// English unit name, if available.
-    pub unit_name: Option<String>,
+    /// Display name for the completed unit.
+    pub unit_name: String,
 }
 
 /// Derive an economy state by summing production, consumption, and storage

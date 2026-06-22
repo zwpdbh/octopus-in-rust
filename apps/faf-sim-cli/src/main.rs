@@ -10,7 +10,7 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use faf_sim::{BuildGraph, HeuristicSimulator, StateMachinePolicy};
+use faf_sim::{Capability, HeuristicSimulator, StateMachinePolicy, TechGraph};
 use faf_units::DataIndex;
 
 mod target;
@@ -86,7 +86,7 @@ enum Commands {
         /// Unit name, e.g. `fatboy`.
         unit: UnitKind,
         /// Planner strategy.
-        #[arg(short, long, default_value = "greedy")]
+        #[arg(long, default_value = "greedy")]
         strategy: String,
     },
 }
@@ -94,7 +94,7 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let index = load_index();
-    let graph = BuildGraph::new(&index);
+    let graph = TechGraph::new(&index);
 
     match cli.command {
         Commands::Deps {
@@ -111,7 +111,7 @@ fn main() {
             order,
         } => {
             let target = resolve_target(faction, unit);
-            run_simulate(&graph, &index, target, order.as_deref());
+            run_simulate(&index, target, order.as_deref());
         }
         Commands::Plan {
             faction,
@@ -119,7 +119,7 @@ fn main() {
             strategy,
         } => {
             let target = resolve_target(faction, unit);
-            run_plan(target, &strategy);
+            run_plan(&index, target, &strategy);
         }
     }
 }
@@ -141,9 +141,9 @@ fn resolve_target(faction: FactionArgs, unit: UnitKind) -> ResearchTarget {
     target
 }
 
-fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
+fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     let blueprint_id = target.blueprint_id();
-    let unit = match graph.unit(blueprint_id) {
+    let unit = match graph.index().find_unit(blueprint_id) {
         Some(u) => u,
         None => {
             eprintln!("Blueprint id not found in index: {}", blueprint_id);
@@ -154,24 +154,28 @@ fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
     println!(
         "Target: {} — {} / {} [{}]",
         target.display_name(),
-        unit.name().unwrap_or("?"),
+        unit.display_name(),
         unit.name_zh().unwrap_or("?"),
         unit.tech_level().unwrap_or("?")
     );
 
     println!("\nDirect builders:");
-    let builders = graph.builders_for(blueprint_id);
-    if builders.is_empty() {
-        println!("  (none)");
-    } else {
-        for b in builders {
-            println!(
-                "  {} — {} / {} [{}]",
-                b.id,
-                b.name().unwrap_or("?"),
-                b.name_zh().unwrap_or("?"),
-                b.tech_level().unwrap_or("?")
-            );
+    match graph.builders_for(blueprint_id) {
+        Ok(builders) if builders.is_empty() => println!("  (none)"),
+        Ok(builders) => {
+            for b in builders {
+                println!(
+                    "  {} — {} / {} [{}]",
+                    b.id,
+                    b.display_name(),
+                    b.name_zh().unwrap_or("?"),
+                    b.tech_level().unwrap_or("?")
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
     }
 
@@ -192,7 +196,7 @@ fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
                     println!(
                         "  {} — {} / {} [{}]",
                         p.id,
-                        p.name().unwrap_or("?"),
+                        p.display_name(),
                         p.name_zh().unwrap_or("?"),
                         p.tech_level().unwrap_or("?")
                     );
@@ -206,15 +210,10 @@ fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(
-    graph: &BuildGraph,
-    index: &DataIndex,
-    target: ResearchTarget,
-    order: Option<&str>,
-) {
+fn run_simulate(index: &DataIndex, target: ResearchTarget, order: Option<&str>) {
     let blueprint_id = target.blueprint_id();
-    let target_unit = graph
-        .unit(blueprint_id)
+    let target_unit = index
+        .find_unit(blueprint_id)
         .expect("target blueprint must exist in index");
 
     println!("Simulate target: {}", target.display_name());
@@ -255,7 +254,7 @@ fn run_simulate(
         println!(
             "{:>12}  {} ({})",
             format_time(event.time),
-            event.unit_name.as_deref().unwrap_or("?"),
+            event.unit_name,
             event.unit_id
         );
     }
@@ -268,11 +267,32 @@ fn format_time(seconds: f64) -> String {
     format!("{:.0}m {:.1}s", minutes, secs)
 }
 
-fn run_plan(target: ResearchTarget, strategy: &str) {
+fn run_plan(index: &DataIndex, target: ResearchTarget, strategy: &str) {
     println!(
         "Plan target: {} strategy: {}",
         target.display_name(),
         strategy
     );
-    println!("(Planner not yet implemented.)");
+
+    let tech_graph = TechGraph::new(index);
+    let blueprint_id = target.blueprint_id();
+
+    match tech_graph.prerequisite_chain(blueprint_id, Capability::ACU) {
+        Ok(chain) => {
+            println!("\nSymbolic tech chain:");
+            for (i, (cap, unit_id)) in chain.iter().enumerate() {
+                let name = index
+                    .find_unit(unit_id)
+                    .map(|u| u.display_name())
+                    .unwrap_or_else(|| unit_id.clone());
+                println!("{:>2}. {} → build {} ({})", i + 1, cap, name, unit_id);
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    let _ = strategy; // reserved for future planner selection
 }
