@@ -10,11 +10,12 @@ use std::str::FromStr;
 
 use faf_units::{DataIndex, Unit};
 
+use crate::beam_search::BeamSearchPlanner;
 use crate::economy::EconomyState;
 use crate::greedy::StateMachinePolicy;
 use crate::sim::BuildEvent;
 use crate::simulator::HeuristicSimulator;
-use crate::tech_graph::TechGraph;
+use crate::tech_graph::{TechGraph, TechGraphError};
 
 /// Result of running a planner to completion.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,10 @@ pub enum PlannerError {
     UnsupportedStrategy(String),
     /// The simulation did not reach the goal unit.
     SimulationFailed,
+    /// The search ran out of states before reaching the goal.
+    SearchExhausted,
+    /// Dependency/capability graph query failed.
+    TechGraph(TechGraphError),
 }
 
 impl fmt::Display for PlannerError {
@@ -45,17 +50,29 @@ impl fmt::Display for PlannerError {
             PlannerError::SimulationFailed => {
                 write!(f, "simulation failed to reach the goal unit")
             }
+            PlannerError::SearchExhausted => {
+                write!(f, "search exhausted without reaching the goal")
+            }
+            PlannerError::TechGraph(e) => write!(f, "tech graph error: {}", e),
         }
     }
 }
 
 impl Error for PlannerError {}
 
+impl From<TechGraphError> for PlannerError {
+    fn from(e: TechGraphError) -> Self {
+        PlannerError::TechGraph(e)
+    }
+}
+
 /// Selectable planning algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// Greedy state-machine policy (default).
     Greedy,
+    /// Beam-search planner.
+    Beam,
 }
 
 impl Strategy {
@@ -63,6 +80,7 @@ impl Strategy {
     pub fn display_name(&self) -> &'static str {
         match self {
             Strategy::Greedy => "greedy",
+            Strategy::Beam => "beam",
         }
     }
 }
@@ -73,6 +91,7 @@ impl FromStr for Strategy {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "greedy" => Ok(Strategy::Greedy),
+            "beam" => Ok(Strategy::Beam),
             other => Err(PlannerError::UnsupportedStrategy(other.to_string())),
         }
     }
@@ -88,6 +107,7 @@ impl fmt::Display for Strategy {
 pub fn build_planner(strategy: Strategy) -> Result<Box<dyn Planner>, PlannerError> {
     match strategy {
         Strategy::Greedy => Ok(Box::new(GreedyPlanner::default())),
+        Strategy::Beam => Ok(Box::new(BeamSearchPlanner::default())),
     }
 }
 
@@ -192,7 +212,7 @@ mod tests {
     #[test]
     fn unknown_strategy_errors() {
         assert!(matches!(
-            Strategy::from_str("beam"),
+            Strategy::from_str("astar"),
             Err(PlannerError::UnsupportedStrategy(_))
         ));
     }

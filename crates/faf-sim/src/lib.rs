@@ -9,6 +9,7 @@
 //! - `greedy` — the greedy state-machine policy used by `Strategy::Greedy`.
 //! - `planner` — planner trait and strategy registry.
 
+pub mod beam_search;
 pub mod economy;
 pub mod greedy;
 pub mod planner;
@@ -21,6 +22,7 @@ pub use economy::{
     EffectiveBuildPower, RequestedBuildPower, ResourceProducer, TickOutcome, TickResult,
 };
 pub use greedy::{ProductionFocus, StateMachinePolicy};
+pub use beam_search::BeamSearchPlanner;
 pub use planner::{build_planner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy};
 pub use sim::{derive_economy, BuildEvent};
 pub use simulator::{
