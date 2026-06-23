@@ -9,9 +9,7 @@ use std::collections::HashSet;
 
 use faf_units::{BuildTargetStats, DataIndex, Unit};
 
-use crate::economy::{
-    summarize_economy, total_build_power, EcoProducer, EconomyState,
-};
+use crate::economy::{summarize_economy, total_build_power, EcoProducer, EconomyState};
 use crate::planner::{PlanResult, Planner, PlannerError};
 use crate::sim::BuildEvent;
 use crate::tech_graph::{Capability, TechGraph};
@@ -97,8 +95,7 @@ impl BeamSearchPlanner {
         let net_flow = summarize_economy(&new_owned_refs, &[]);
         let (mass_cap, energy_cap) = storage_caps(&new_owned_refs);
 
-        let mut mass_storage = (state.economy.mass_storage
-            + state.economy.net_mass_income * dt
+        let mut mass_storage = (state.economy.mass_storage + state.economy.net_mass_income * dt
             - stats.build_cost_mass)
             .min(state.economy.mass_storage_cap)
             .max(0.0);
@@ -228,8 +225,14 @@ impl BeamSearchPlanner {
             .iter()
             .filter_map(|id| index.find_unit(id))
             .collect();
-        let mex_count = owned_refs.iter().filter(|u| u.has_category("MASSEXTRACTION")).count();
-        let pgen_count = owned_refs.iter().filter(|u| u.has_category("ENERGYPRODUCTION")).count();
+        let mex_count = owned_refs
+            .iter()
+            .filter(|u| u.has_category("MASSEXTRACTION"))
+            .count();
+        let pgen_count = owned_refs
+            .iter()
+            .filter(|u| u.has_category("ENERGYPRODUCTION"))
+            .count();
 
         let next_chain_id = chain_unit_ids
             .iter()
@@ -239,8 +242,7 @@ impl BeamSearchPlanner {
         let mut successors = Vec::new();
 
         for unit in candidates {
-            let is_next_chain = next_chain_id
-                .map_or(false, |id| unit.id.eq_ignore_ascii_case(id));
+            let is_next_chain = next_chain_id.map_or(false, |id| unit.id.eq_ignore_ascii_case(id));
             let is_economy = is_economy_unit(unit);
             if is_economy {
                 if unit.has_category("MASSEXTRACTION") && mex_count >= self.max_mex_count {
@@ -342,7 +344,13 @@ impl Planner for BeamSearchPlanner {
                 if !visited.insert(state.owned.clone()) {
                     continue;
                 }
-                candidates_next.extend(self.successors(index, graph, &state, &candidates, &chain_unit_ids));
+                candidates_next.extend(self.successors(
+                    index,
+                    graph,
+                    &state,
+                    &candidates,
+                    &chain_unit_ids,
+                ));
             }
 
             candidates_next.sort_by(|a, b| {
@@ -434,7 +442,10 @@ mod tests {
         let result = planner.plan(&index, &graph, &[acu], goal).unwrap();
 
         assert!(
-            result.events.iter().any(|e| e.unit_id.eq_ignore_ascii_case("URB1101")),
+            result
+                .events
+                .iter()
+                .any(|e| e.unit_id.eq_ignore_ascii_case("URB1101")),
             "plan should build the goal pgen"
         );
         assert!(result.completion_time > 0.0);
@@ -455,7 +466,10 @@ mod tests {
         let result = planner.plan(&index, &graph, &[acu], goal).unwrap();
 
         assert!(
-            result.events.iter().any(|e| e.unit_id.eq_ignore_ascii_case("URL0402")),
+            result
+                .events
+                .iter()
+                .any(|e| e.unit_id.eq_ignore_ascii_case("URL0402")),
             "plan should reach the Monkeylord"
         );
         assert!(result.completion_time > 0.0);

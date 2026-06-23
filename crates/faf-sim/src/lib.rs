@@ -17,12 +17,12 @@ pub mod sim;
 pub mod simulator;
 pub mod tech_graph;
 
+pub use beam_search::BeamSearchPlanner;
 pub use economy::{
     apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EcoFlow, EconomyState,
     EffectiveBuildPower, RequestedBuildPower, ResourceProducer, TickOutcome, TickResult,
 };
 pub use greedy::{ProductionFocus, StateMachinePolicy};
-pub use beam_search::BeamSearchPlanner;
 pub use planner::{build_planner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy};
 pub use sim::{derive_economy, BuildEvent};
 pub use simulator::{
