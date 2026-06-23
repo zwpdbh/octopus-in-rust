@@ -55,9 +55,6 @@ pub struct SimulateArgs {
     /// Planner strategy.
     #[arg(short = 's', long, default_value = "greedy", global = true)]
     pub strategy: StrategyArg,
-    /// Path to a JSON build-order file.
-    #[arg(short, long, global = true)]
-    pub order: Option<String>,
     /// Faction and unit to simulate.
     #[command(subcommand)]
     pub target: FactionTarget,

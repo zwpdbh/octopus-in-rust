@@ -38,7 +38,7 @@ fn main() {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
             let strategy = Strategy::from(args.strategy);
-            run_simulate(&index, &graph, target, args.order.as_deref(), strategy);
+            run_simulate(&index, &graph, target, strategy);
         }
         Command::Plan(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
@@ -142,13 +142,7 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(
-    index: &DataIndex,
-    graph: &TechGraph,
-    target: ResearchTarget,
-    order: Option<&str>,
-    strategy: Strategy,
-) {
+fn run_simulate(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strategy: Strategy) {
     let blueprint_id = target.blueprint_id();
     let target_unit = index
         .find_unit(blueprint_id)
@@ -157,12 +151,6 @@ fn run_simulate(
     println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
 
-    if let Some(path) = order {
-        println!("Build order file: {}", path);
-        println!("(Custom build order files are not yet supported.)");
-        return;
-    }
-
     let starting_unit = index
         .find_unit(match target.faction {
             Faction::Uef => "UEL0001",
@@ -170,7 +158,7 @@ fn run_simulate(
             Faction::Aeon => "UAL0001",
             Faction::Seraphim => "XSL0001",
         })
-        .expect("ACU exists in index");
+        .expect("ACU should exists in index");
 
     let planner = match build_planner(strategy) {
         Ok(p) => p,
