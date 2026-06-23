@@ -119,6 +119,8 @@ pub enum StrategyArg {
     Greedy,
     /// Beam-search planner.
     Beam,
+    /// Graph-growth planner.
+    Graph,
 }
 
 impl From<StrategyArg> for faf_sim::Strategy {
@@ -126,6 +128,7 @@ impl From<StrategyArg> for faf_sim::Strategy {
         match arg {
             StrategyArg::Greedy => faf_sim::Strategy::Greedy,
             StrategyArg::Beam => faf_sim::Strategy::Beam,
+            StrategyArg::Graph => faf_sim::Strategy::Graph,
         }
     }
 }

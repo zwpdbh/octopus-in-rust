@@ -11,6 +11,8 @@
 
 pub mod beam_search;
 pub mod economy;
+pub mod graph_planner;
+pub mod graph_sim;
 pub mod greedy;
 pub mod planner;
 pub mod sim;
@@ -19,9 +21,12 @@ pub mod tech_graph;
 
 pub use beam_search::BeamSearchPlanner;
 pub use economy::{
-    apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EcoFlow, EconomyState,
-    EffectiveBuildPower, RequestedBuildPower, ResourceProducer, TickOutcome, TickResult,
+    apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
+    EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
+    ResourceProducer, TickOutcome, TickResult,
 };
+pub use graph_planner::GraphPlanner;
+pub use graph_sim::{BuildGraph, GraphProject, GraphSimError, GraphState, NodeId, UnitNode};
 pub use greedy::{ProductionFocus, StateMachinePolicy};
 pub use planner::{build_planner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy};
 pub use sim::{derive_economy, BuildEvent};

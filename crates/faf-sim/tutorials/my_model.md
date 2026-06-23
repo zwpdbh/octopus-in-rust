@@ -19,7 +19,8 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 
 - A directed edge `A -> B` means: unit `A` contributed build power to construct unit `B`.
 - Multiple edges `A1 -> B, A2 -> B, ...` represent assistance. The total build power assigned to `B` is the sum of the build power of all source nodes.
-- An edge `A -> B` is allowed only if `unit_type(A)` can build `unit_type(B)` according to the static tech/capability graph.
+- To **start** a new project for `B`, at least one assigned builder must be able to build `unit_type(B)` according to the static tech/capability graph.
+- Additional builders may **assist** an already-started project even if they cannot build the target themselves, as long as they are real builders (commanders, engineers, or factories).
 
 ### Builder constraints
 

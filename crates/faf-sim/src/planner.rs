@@ -12,6 +12,7 @@ use faf_units::{DataIndex, Unit};
 
 use crate::beam_search::BeamSearchPlanner;
 use crate::economy::EconomyState;
+use crate::graph_planner::GraphPlanner;
 use crate::greedy::StateMachinePolicy;
 use crate::sim::BuildEvent;
 use crate::simulator::HeuristicSimulator;
@@ -73,6 +74,8 @@ pub enum Strategy {
     Greedy,
     /// Beam-search planner.
     Beam,
+    /// Graph-growth planner with indivisible builders and concurrent projects.
+    Graph,
 }
 
 impl Strategy {
@@ -81,6 +84,7 @@ impl Strategy {
         match self {
             Strategy::Greedy => "greedy",
             Strategy::Beam => "beam",
+            Strategy::Graph => "graph",
         }
     }
 }
@@ -92,6 +96,7 @@ impl FromStr for Strategy {
         match s.to_ascii_lowercase().as_str() {
             "greedy" => Ok(Strategy::Greedy),
             "beam" => Ok(Strategy::Beam),
+            "graph" => Ok(Strategy::Graph),
             other => Err(PlannerError::UnsupportedStrategy(other.to_string())),
         }
     }
@@ -108,6 +113,7 @@ pub fn build_planner(strategy: Strategy) -> Result<Box<dyn Planner>, PlannerErro
     match strategy {
         Strategy::Greedy => Ok(Box::new(GreedyPlanner::default())),
         Strategy::Beam => Ok(Box::new(BeamSearchPlanner::default())),
+        Strategy::Graph => Ok(Box::new(GraphPlanner::default())),
     }
 }
 

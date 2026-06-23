@@ -396,6 +396,105 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
     }
 }
 
+/// Result of applying a *global* drain to an economy state for one tick.
+///
+/// Unlike [`TickResult`], this models the combined drain of all active
+/// projects and includes the graph-model assumption that energy stall also
+/// scales mass income.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GraphTickResult {
+    /// Global stall factor applied to every active project.
+    pub effective_factor: f64,
+    /// Mass actually consumed across all projects.
+    pub mass_consumed: f64,
+    /// Energy actually consumed across all projects.
+    pub energy_consumed: f64,
+    /// New mass storage after the tick.
+    pub new_mass_storage: f64,
+    /// New energy storage after the tick.
+    pub new_energy_storage: f64,
+    /// True if energy was the limiting resource.
+    pub energy_stalled: bool,
+    /// True if mass was the limiting resource.
+    pub mass_stalled: bool,
+    /// Net mass income after applying the energy-stall scaling.
+    pub scaled_net_mass_income: f64,
+}
+
+/// Compute the effective global stall factor for the combined drain of all
+/// active projects in the graph model.
+///
+/// The graph model assumes that when energy is the limiting resource, mass
+/// production is scaled down by the same energy factor. This can in turn make
+/// mass the limiting resource, so the factor is recomputed once after scaling.
+pub fn apply_tick_graph(
+    total_mass_drain: f64,
+    total_energy_drain: f64,
+    state: &EconomyState,
+    dt: f64,
+) -> GraphTickResult {
+    let mass_income = state.net_mass_income * dt;
+    let energy_income = state.net_energy_income * dt;
+
+    let requested_mass = total_mass_drain * dt;
+    let requested_energy = total_energy_drain * dt;
+
+    // Energy factor without mass-income scaling.
+    let energy_factor = if requested_energy <= 0.0 {
+        1.0
+    } else {
+        let available = (state.energy_storage + energy_income).max(0.0);
+        (available / requested_energy).min(1.0)
+    };
+
+    // Mass factor before considering energy-driven mass-income reduction.
+    let mass_factor_unscaled = if requested_mass <= 0.0 {
+        1.0
+    } else {
+        let available = (state.mass_storage + mass_income).max(0.0);
+        (available / requested_mass).min(1.0)
+    };
+
+    // If energy is the binding constraint, mass income scales with it.
+    let scaled_net_mass_income = if energy_factor <= mass_factor_unscaled {
+        state.net_mass_income * energy_factor
+    } else {
+        state.net_mass_income
+    };
+    let scaled_mass_income = scaled_net_mass_income * dt;
+
+    // Recompute mass factor with the possibly reduced mass income.
+    let mass_factor = if requested_mass <= 0.0 {
+        1.0
+    } else {
+        let available = (state.mass_storage + scaled_mass_income).max(0.0);
+        (available / requested_mass).min(1.0)
+    };
+
+    let effective_factor = mass_factor.min(energy_factor);
+
+    let mass_consumed = requested_mass * effective_factor;
+    let energy_consumed = requested_energy * effective_factor;
+
+    let new_mass_storage = (state.mass_storage + scaled_mass_income - mass_consumed)
+        .min(state.mass_storage_cap)
+        .max(0.0);
+    let new_energy_storage = (state.energy_storage + energy_income - energy_consumed)
+        .min(state.energy_storage_cap)
+        .max(0.0);
+
+    GraphTickResult {
+        effective_factor,
+        mass_consumed,
+        energy_consumed,
+        new_mass_storage,
+        new_energy_storage,
+        energy_stalled: effective_factor < 1.0 && energy_factor <= mass_factor,
+        mass_stalled: effective_factor < 1.0 && mass_factor <= energy_factor,
+        scaled_net_mass_income,
+    }
+}
+
 /// A single project being built.
 ///
 /// Progress is tracked as **remaining work** measured in the target's

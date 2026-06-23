@@ -45,7 +45,7 @@ const TARGETS: &[Target] = &[
     },
 ];
 
-const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam];
+const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam, Strategy::Graph];
 
 fn load_index() -> DataIndex {
     let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
@@ -110,7 +110,7 @@ fn main() {
         println!();
     }
 
-    // Sanity check: the beam planner should beat the greedy baseline on the
+    // Sanity check: the graph planner should beat the greedy baseline on the
     // targets used in the existing unit tests.
     let acu = index.find_unit("URL0001").expect("ACU exists");
     let goal = index.find_unit("URL0402").expect("Monkeylord exists");
@@ -123,14 +123,19 @@ fn main() {
         .unwrap()
         .plan(&index, &graph, &[acu], goal)
         .unwrap();
+    let graph = build_planner(Strategy::Graph)
+        .unwrap()
+        .plan(&index, &graph, &[acu], goal)
+        .unwrap();
 
     println!(
-        "Sanity check: beam ({}) beats greedy ({}) for Monkeylord",
+        "Sanity check: graph ({}) / beam ({}) / greedy ({}) for Monkeylord",
+        format_time(graph.completion_time),
         format_time(beam.completion_time),
         format_time(greedy.completion_time)
     );
     assert!(
-        beam.completion_time < greedy.completion_time,
-        "beam should beat greedy on Monkeylord"
+        graph.completion_time < greedy.completion_time,
+        "graph should beat greedy on Monkeylord"
     );
 }
