@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sections::Enhancement;
-use crate::sections::{
+use crate::unit_extra::Enhancement;
+use crate::unit_extra::{
     Air, BuildTargetStats, BuilderCapability, Defense, Display, Economy, General, Intel, Physics,
     Transport, Wreckage,
 };

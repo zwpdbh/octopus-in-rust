@@ -1,100 +1,27 @@
 //! Research CLI for FAF build-order simulation and optimization.
 //!
-//! Targets are specified as a faction flag plus a unit name:
+//! Targets are specified as a command, then a faction subcommand, then a unit:
 //!
 //! ```text
-//! faf-sim deps -u fatboy
-//! faf-sim deps -c monkeylord
-//! faf-sim deps -a nuke
-//! faf-sim deps -s arty
+//! faf-sim deps uef fatboy
+//! faf-sim deps cybran monkeylord
+//! faf-sim deps aeon nuke
+//! faf-sim simulate cybran monkeylord -s beam
 //! ```
+//!
+//! Faction is a subcommand and each faction exposes only its own valid units as
+//! a `ValueEnum`, so a typo like `faf-sim deps cybran monkeyloard` produces a
+//! faction-scoped list of possible values.
 
-use std::str::FromStr;
-
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use faf_sim::{build_planner, Capability, Strategy, TechGraph};
 use faf_units::DataIndex;
 
+mod cmdline;
 mod target;
+
+use cmdline::{Cli, Command, FactionTarget};
 use target::{Faction, ResearchTarget, UnitKind};
-
-#[derive(Parser)]
-#[command(name = "faf-sim")]
-#[command(about = "Research CLI for FAF build-order simulation and optimization")]
-#[command(after_help = ResearchTarget::help_text())]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Parser)]
-#[group(required = true, multiple = false)]
-struct FactionArgs {
-    /// UEF faction.
-    #[arg(short = 'u', long)]
-    uef: bool,
-    /// Cybran faction.
-    #[arg(short = 'c', long)]
-    cybran: bool,
-    /// Aeon faction.
-    #[arg(short = 'a', long)]
-    aeon: bool,
-    /// Seraphim faction.
-    #[arg(short = 's', long)]
-    seraphim: bool,
-}
-
-impl FactionArgs {
-    fn to_faction(&self) -> Faction {
-        // Clap's group guarantees exactly one is true.
-        if self.uef {
-            Faction::Uef
-        } else if self.cybran {
-            Faction::Cybran
-        } else if self.aeon {
-            Faction::Aeon
-        } else {
-            Faction::Seraphim
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Show the dependency graph for a target unit.
-    Deps {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`, `monkeylord`, `nuke`, `arty`.
-        unit: UnitKind,
-        /// Stop expanding prerequisites at these unit ids (default: commanders).
-        #[arg(long, value_delimiter = ',')]
-        stop_at: Vec<String>,
-    },
-    /// Simulate a build order and print timing/resource trace.
-    Simulate {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`.
-        unit: UnitKind,
-        /// Planner strategy.
-        #[arg(long, default_value = "greedy")]
-        strategy: String,
-        /// Path to a JSON build-order file.
-        #[arg(short, long)]
-        order: Option<String>,
-    },
-    /// Generate a build order for a target unit.
-    Plan {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`.
-        unit: UnitKind,
-        /// Planner strategy.
-        #[arg(long, default_value = "greedy")]
-        strategy: String,
-    },
-}
 
 fn main() {
     let cli = Cli::parse();
@@ -102,31 +29,21 @@ fn main() {
     let graph = TechGraph::new(&index);
 
     match cli.command {
-        Commands::Deps {
-            faction,
-            unit,
-            stop_at,
-        } => {
+        Command::Deps(args) => {
+            let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_deps(&graph, target, &stop_at);
+            run_deps(&graph, target, &args.stop_at);
         }
-        Commands::Simulate {
-            faction,
-            unit,
-            strategy,
-            order,
-        } => {
+        Command::Simulate(args) => {
+            let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            let strategy = parse_strategy(&strategy);
-            run_simulate(&index, &graph, target, order.as_deref(), strategy);
+            let strategy = Strategy::from(args.strategy);
+            run_simulate(&index, &graph, target, args.order.as_deref(), strategy);
         }
-        Commands::Plan {
-            faction,
-            unit,
-            strategy,
-        } => {
+        Command::Plan(args) => {
+            let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            let strategy = parse_strategy(&strategy);
+            let strategy = Strategy::from(args.strategy);
             run_plan(&index, &graph, target, strategy);
         }
     }
@@ -137,26 +54,23 @@ fn load_index() -> DataIndex {
     serde_json::from_str(json).expect("embedded FAF unit index should parse")
 }
 
-fn resolve_target(faction: FactionArgs, unit: UnitKind) -> ResearchTarget {
-    let target = ResearchTarget {
-        faction: faction.to_faction(),
-        unit,
-    };
+/// Convert a faction subcommand into the internal `(Faction, UnitKind)` pair.
+fn resolve_faction_target(target: FactionTarget) -> (Faction, UnitKind) {
+    match target {
+        FactionTarget::Uef(args) => (Faction::Uef, args.unit.into()),
+        FactionTarget::Cybran(args) => (Faction::Cybran, args.unit.into()),
+        FactionTarget::Aeon(args) => (Faction::Aeon, args.unit.into()),
+        FactionTarget::Seraphim(args) => (Faction::Seraphim, args.unit.into()),
+    }
+}
+
+fn resolve_target(faction: Faction, unit: UnitKind) -> ResearchTarget {
+    let target = ResearchTarget { faction, unit };
     if let Err(e) = target.validate() {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
     target
-}
-
-fn parse_strategy(raw: &str) -> Strategy {
-    match Strategy::from_str(raw) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    }
 }
 
 fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
