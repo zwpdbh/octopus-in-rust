@@ -3,7 +3,7 @@
 > **Note:** This tutorial describes the old `StateMachinePolicy`, which has been
 > removed. The current architecture unifies all strategies on the graph-growth
 > model (`GraphState` / `BuildGraph`) via `GreedyPlanner` and `BeamPlanner` in
-> `graph_planner.rs`.
+> the `planner` module (`planner/beam.rs` and `planner/greedy.rs`).
 
 The old greedy policy has been replaced by a small state machine. This document
 explains how `StateMachinePolicy` decides what to build next.

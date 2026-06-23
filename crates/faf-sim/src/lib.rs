@@ -4,15 +4,11 @@
 //!
 //! - `tech_graph` — symbolic capability dependency graph (who can build whom).
 //! - `economy` — continuous-drain resource model.
-//! - `sim` — economy and build-time simulation.
-//! - `graph_sim` — graph-growth build model (nodes are built units, edges are
-//!   builder assignments).
-//! - `graph_planner` — planners that search the graph-growth model.
-//! - `planner` — planner trait and strategy registry.
+//! - `sim` — economy derivation and graph-growth simulator.
+//! - `planner` — planner trait, strategy registry, and concrete planner
+//!   implementations.
 
 pub mod economy;
-pub mod graph_planner;
-pub mod graph_sim;
 pub mod planner;
 pub mod sim;
 pub mod tech_graph;
@@ -22,12 +18,14 @@ pub use economy::{
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
-pub use graph_planner::{BeamPlanner, GreedyPlanner};
-pub use graph_sim::{
-    BuildEdge, BuildGraph, GraphSimError, GraphState, NodeId, OngoingBuild, UnitNode,
+pub use planner::{
+    build_planner, BeamPlanner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy,
 };
-pub use planner::{build_planner, PlanResult, Planner, PlannerError, Strategy};
-pub use sim::{derive_economy, BuildEvent};
+pub use sim::{
+    derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
+    OngoingBuild, UnitNode,
+};
+
 pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
 
 #[cfg(test)]

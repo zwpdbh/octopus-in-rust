@@ -2,7 +2,7 @@
 //!
 //! A `Planner` turns an initial [`GraphState`] into a [`PlanResult`]
 //! (timeline + completion time). All planners in this crate operate on the
-//! graph-growth model implemented in [`crate::graph_sim`]; they differ only in
+//! graph-growth model implemented in [`crate::sim`]; they differ only in
 //! how they search the space of possible build schedules.
 
 use std::error::Error;
@@ -12,9 +12,8 @@ use std::str::FromStr;
 use faf_units::{DataIndex, Unit};
 
 use crate::economy::EconomyState;
-use crate::graph_planner::{BeamPlanner, GreedyPlanner};
-use crate::graph_sim::GraphState;
-use crate::sim::BuildEvent;
+use crate::planner::{BeamPlanner, GreedyPlanner};
+use crate::sim::{BuildEvent, GraphState};
 use crate::tech_graph::TechGraphError;
 
 /// Result of running a planner to completion.
@@ -68,7 +67,7 @@ impl From<TechGraphError> for PlannerError {
 
 /// Selectable planning algorithm.
 ///
-/// Both variants use the graph-growth model from [`crate::graph_sim`]. The
+/// Both variants use the graph-growth model from [`crate::sim`]. The
 /// difference is the search algorithm applied to that model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
@@ -131,10 +130,10 @@ pub trait Planner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_sim::GraphState;
+    use crate::sim::GraphState;
 
     fn load_index() -> DataIndex {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
+        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
         serde_json::from_str(json).expect("embedded index should parse")
     }
 

@@ -2,7 +2,7 @@
 
 > **Note:** This tutorial describes the old `HeuristicSimulator` implementation,
 > which has been removed. Concurrent building is now modeled directly by the
-> graph-growth simulator in `graph_sim.rs`, where `OngoingBuild` records active
+> graph-growth simulator in `sim.rs`, where `OngoingBuild` records active
 > projects and `BuildGraph` records builder assignments.
 
 Real FAF games run multiple projects at once: factories build units, engineers
