@@ -5,34 +5,29 @@
 //! - `tech_graph` — symbolic capability dependency graph (who can build whom).
 //! - `economy` — continuous-drain resource model.
 //! - `sim` — economy and build-time simulation.
-//! - `simulator` — discrete-time build-order simulator (generic over any policy).
-//! - `greedy` — the greedy state-machine policy used by `Strategy::Greedy`.
+//! - `graph_sim` — graph-growth build model (nodes are built units, edges are
+//!   builder assignments).
+//! - `graph_planner` — planners that search the graph-growth model.
 //! - `planner` — planner trait and strategy registry.
 
-pub mod beam_search;
 pub mod economy;
 pub mod graph_planner;
 pub mod graph_sim;
-pub mod greedy;
 pub mod planner;
 pub mod sim;
-pub mod simulator;
 pub mod tech_graph;
 
-pub use beam_search::BeamSearchPlanner;
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
-pub use graph_planner::GraphPlanner;
-pub use graph_sim::{BuildGraph, GraphProject, GraphSimError, GraphState, NodeId, UnitNode};
-pub use greedy::{ProductionFocus, StateMachinePolicy};
-pub use planner::{build_planner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy};
-pub use sim::{derive_economy, BuildEvent};
-pub use simulator::{
-    ActiveProject, BuildPolicy, HeuristicSimulator, ProjectPriority, ProjectRequest,
+pub use graph_planner::{BeamPlanner, GreedyPlanner};
+pub use graph_sim::{
+    BuildEdge, BuildGraph, GraphSimError, GraphState, NodeId, OngoingBuild, UnitNode,
 };
+pub use planner::{build_planner, PlanResult, Planner, PlannerError, Strategy};
+pub use sim::{derive_economy, BuildEvent};
 pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
 
 #[cfg(test)]

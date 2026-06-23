@@ -1,5 +1,10 @@
 # 05 — Build-Power Investment
 
+> **Note:** This tutorial predates the refactor that unified all planning
+> strategies on the graph-growth model (`GraphState` / `BuildGraph`). The
+> concrete `StateMachinePolicy` references below are outdated, but the build-power
+> trade-off analysis still applies.
+
 Adding engineers increases total build power, but engineers cost time and
 resources to produce. This document analyzes when the investment pays off.
 

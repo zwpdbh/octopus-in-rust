@@ -14,7 +14,7 @@
 //! faction-scoped list of possible values.
 
 use clap::Parser;
-use faf_sim::{build_planner, Capability, Strategy, TechGraph};
+use faf_sim::{build_planner, Capability, GraphState, Strategy, TechGraph};
 use faf_units::DataIndex;
 
 mod cmdline;
@@ -38,7 +38,7 @@ fn main() {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
             let strategy = Strategy::from(args.strategy);
-            run_simulate(&index, &graph, target, strategy);
+            run_simulate(&index, target, strategy);
         }
         Command::Plan(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
@@ -142,7 +142,7 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strategy: Strategy) {
+fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strategy) {
     let blueprint_id = target.blueprint_id();
     let target_unit = index
         .find_unit(blueprint_id)
@@ -168,8 +168,9 @@ fn run_simulate(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, st
         }
     };
 
+    let initial = GraphState::new(&[starting_unit]);
     let result = planner
-        .plan(index, graph, &[starting_unit], target_unit)
+        .plan(index, initial, target_unit)
         .unwrap_or_else(|e| {
             eprintln!("Error: {}", e);
             std::process::exit(1);

@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use faf_sim::{build_planner, Strategy, TechGraph};
+use faf_sim::{build_planner, GraphState, Strategy};
 use faf_units::DataIndex;
 
 #[derive(Debug, Clone, Copy)]
@@ -45,7 +45,7 @@ const TARGETS: &[Target] = &[
     },
 ];
 
-const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam, Strategy::Graph];
+const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam];
 
 fn load_index() -> DataIndex {
     let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
@@ -60,7 +60,6 @@ fn format_time(seconds: f64) -> String {
 
 fn main() {
     let index = load_index();
-    let graph = TechGraph::new(&index);
 
     println!(
         "{:<24} {:<12} {:>14} {:>14}",
@@ -80,7 +79,8 @@ fn main() {
             let planner = build_planner(*strategy).expect("valid strategy");
 
             let start = Instant::now();
-            let result = planner.plan(&index, &graph, &[acu], goal);
+            let initial = GraphState::new(&[acu]);
+            let result = planner.plan(&index, initial, goal);
             let elapsed = start.elapsed();
 
             match result {
@@ -110,32 +110,27 @@ fn main() {
         println!();
     }
 
-    // Sanity check: the graph planner should beat the greedy baseline on the
+    // Sanity check: beam search should beat the greedy baseline on the
     // targets used in the existing unit tests.
     let acu = index.find_unit("URL0001").expect("ACU exists");
     let goal = index.find_unit("URL0402").expect("Monkeylord exists");
 
     let greedy = build_planner(Strategy::Greedy)
         .unwrap()
-        .plan(&index, &graph, &[acu], goal)
+        .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();
     let beam = build_planner(Strategy::Beam)
         .unwrap()
-        .plan(&index, &graph, &[acu], goal)
-        .unwrap();
-    let graph = build_planner(Strategy::Graph)
-        .unwrap()
-        .plan(&index, &graph, &[acu], goal)
+        .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();
 
     println!(
-        "Sanity check: graph ({}) / beam ({}) / greedy ({}) for Monkeylord",
-        format_time(graph.completion_time),
+        "Sanity check: beam ({}) / greedy ({}) for Monkeylord",
         format_time(beam.completion_time),
         format_time(greedy.completion_time)
     );
     assert!(
-        graph.completion_time < greedy.completion_time,
-        "graph should beat greedy on Monkeylord"
+        beam.completion_time < greedy.completion_time,
+        "beam should beat greedy on Monkeylord"
     );
 }

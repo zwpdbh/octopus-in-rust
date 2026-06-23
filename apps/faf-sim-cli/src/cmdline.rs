@@ -115,12 +115,10 @@ pub struct SeraphimTargetArgs {
 /// need to depend on clap.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum StrategyArg {
-    /// Greedy state-machine policy.
+    /// Greedy graph-growth planner.
     Greedy,
-    /// Beam-search planner.
+    /// Beam-search graph-growth planner.
     Beam,
-    /// Graph-growth planner.
-    Graph,
 }
 
 impl From<StrategyArg> for faf_sim::Strategy {
@@ -128,7 +126,6 @@ impl From<StrategyArg> for faf_sim::Strategy {
         match arg {
             StrategyArg::Greedy => faf_sim::Strategy::Greedy,
             StrategyArg::Beam => faf_sim::Strategy::Beam,
-            StrategyArg::Graph => faf_sim::Strategy::Graph,
         }
     }
 }

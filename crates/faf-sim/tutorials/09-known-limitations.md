@@ -1,5 +1,10 @@
 # 09 — Known Limitations and Roadmap
 
+> **Note:** This tutorial references the old `HeuristicSimulator` and
+> `StateMachinePolicy`, which have been removed. The current implementation uses
+> `GreedyPlanner` and `BeamPlanner` over the graph-growth model (`GraphState` /
+> `BuildGraph`). The listed limitations still apply unless noted otherwise.
+
 `faf-sim` is a research simulator, not a full game engine. This document lists
 the simplifications it makes and maps a path from the current baseline to a more
 complete optimizer.

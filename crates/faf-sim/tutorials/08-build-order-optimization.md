@@ -1,5 +1,11 @@
 # 08 — Build-Order Optimization as Search
 
+> **Note:** This tutorial predates the refactor that replaced the
+> `HeuristicSimulator` / `StateMachinePolicy` pair with graph-growth planners
+> (`GreedyPlanner` and `BeamPlanner`) operating on `GraphState` / `BuildGraph`.
+> The optimization framing is still valid, but the implementation sketch is
+> outdated.
+
 So far we have a simulator and a state-machine heuristic. This document frames
 the full optimization problem and sketches algorithms that could solve it.
 
