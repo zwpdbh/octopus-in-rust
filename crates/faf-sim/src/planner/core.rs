@@ -12,6 +12,7 @@ use std::str::FromStr;
 use faf_units::{DataIndex, Unit};
 
 use crate::economy::EconomyState;
+use crate::planner::search::SearchAction;
 use crate::planner::{BeamPlanner, GreedyPlanner};
 use crate::sim::{BuildEvent, GraphState};
 use crate::tech_graph::TechGraphError;
@@ -25,6 +26,9 @@ pub struct PlanResult {
     pub completion_time: f64,
     /// Economy state at the end of the plan.
     pub final_economy: EconomyState,
+    /// First action of the best path. Useful for reactive planners that only
+    /// commit to the immediate next step.
+    pub first_action: Option<SearchAction>,
 }
 
 /// Planner error type.

@@ -7,8 +7,8 @@
 pub mod beam;
 pub mod core;
 pub mod greedy;
-mod heuristic;
-mod search;
+pub(crate) mod heuristic;
+pub(crate) mod search;
 
 pub use beam::BeamPlanner;
 pub use core::{build_planner, PlanResult, Planner, PlannerError, Strategy};

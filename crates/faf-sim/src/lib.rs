@@ -9,8 +9,11 @@
 //!   implementations.
 
 pub mod economy;
+pub mod message;
 pub mod planner;
+pub mod planner_actor;
 pub mod sim;
+pub mod sim_actor;
 pub mod tech_graph;
 
 pub use economy::{
@@ -18,13 +21,16 @@ pub use economy::{
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
+pub use message::{Command, Observation};
 pub use planner::{
     build_planner, BeamPlanner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy,
 };
+pub use planner_actor::{reactive::ReactivePlanner, Planner as ReactivePlannerTrait, PlannerActor};
 pub use sim::{
     derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
     OngoingBuild, UnitNode,
 };
+pub use sim_actor::SimActor;
 
 pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
 

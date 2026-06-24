@@ -9,6 +9,27 @@ use crate::planner::heuristic::candidate_units;
 use crate::sim::{builder_power, GraphSimError, GraphState, NodeId};
 use crate::tech_graph::{Capability, TechGraph};
 
+/// Action that produced a successor state during search.
+///
+/// This is the planner-side analogue of a player command. Keeping it alongside
+/// the successor lets a reactive planner emit the concrete command that led to
+/// the best ranked state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SearchAction {
+    /// Build a unit with the given builders.
+    Build {
+        unit_id: String,
+        builders: Vec<NodeId>,
+    },
+    /// Assist an active project with additional builders.
+    Assist {
+        project_node: NodeId,
+        builders: Vec<NodeId>,
+    },
+    /// Advance time without issuing a command.
+    Wait,
+}
+
 /// Shared configuration and successor generation for graph-growth search.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SearchConfig {
@@ -21,7 +42,8 @@ pub(crate) struct SearchConfig {
 }
 
 impl SearchConfig {
-    /// Generate all successor states reachable from `state` in one search step.
+    /// Generate all successor states reachable from `state` in one search step,
+    /// together with the action that produced each state.
     pub fn successors(
         self,
         index: &DataIndex,
@@ -29,12 +51,12 @@ impl SearchConfig {
         state: &GraphState,
         goals: &[&Unit],
         goal_chains: &[Vec<(Capability, String)>],
-    ) -> Vec<GraphState> {
+    ) -> Vec<(GraphState, SearchAction)> {
         let idle_builders = state.idle_builders(index);
         if idle_builders.is_empty() {
             let mut next = state.clone();
             next.tick(index, self.dt);
-            return vec![next];
+            return vec![(next, SearchAction::Wait)];
         }
 
         let active_targets: HashSet<String> = state
@@ -59,7 +81,7 @@ impl SearchConfig {
             .filter(|u| u.has_category("ENERGYPRODUCTION"))
             .count();
 
-        let mut successors: Vec<GraphState> = Vec::new();
+        let mut successors: Vec<(GraphState, SearchAction)> = Vec::new();
         let candidates = candidate_units(index, state, goals, goal_chains);
 
         for unit in candidates {
@@ -76,38 +98,59 @@ impl SearchConfig {
                 continue;
             }
 
+            let unit_id = unit.id.clone();
+
             // Start with all idle builders.
-            if let Some(next) =
+            if let Some((next, builders)) =
                 try_start_project(state, unit, &idle_builders, tech_graph, index, self.dt)
             {
-                successors.push(next);
+                successors.push((
+                    next,
+                    SearchAction::Build {
+                        unit_id: unit_id.clone(),
+                        builders,
+                    },
+                ));
             }
 
             // Start with the single fastest idle builder that can build it.
             if let Some(builder) =
                 fastest_idle_builder(&idle_builders, state, unit, tech_graph, index)
             {
-                if let Some(next) =
+                if let Some((next, _)) =
                     try_start_project(state, unit, &[builder], tech_graph, index, self.dt)
                 {
-                    successors.push(next);
+                    successors.push((
+                        next,
+                        SearchAction::Build {
+                            unit_id: unit_id.clone(),
+                            builders: vec![builder],
+                        },
+                    ));
                 }
             }
         }
 
         // Assist each active project with all currently idle builders.
         for i in 0..state.active_projects.len() {
-            if let Some(next) =
+            let project_node = state.active_projects[i].target_node;
+            if let Some((next, builders)) =
                 try_assist_project(state, i, &idle_builders, tech_graph, index, self.dt)
             {
-                successors.push(next);
+                successors.push((
+                    next,
+                    SearchAction::Assist {
+                        project_node,
+                        builders,
+                    },
+                ));
             }
         }
 
         // Wait one tick.
         let mut wait = state.clone();
         wait.tick(index, self.dt);
-        successors.push(wait);
+        successors.push((wait, SearchAction::Wait));
 
         successors
     }
@@ -159,15 +202,16 @@ pub(crate) fn try_start_project(
     graph: &TechGraph,
     index: &DataIndex,
     dt: f64,
-) -> Option<GraphState> {
+) -> Option<(GraphState, Vec<NodeId>)> {
     if builders.is_empty() {
         return None;
     }
     let mut next = state.clone();
+    let used_builders = builders.to_vec();
     match next.start_project(target, builders, graph) {
         Ok(_) => {
             next.tick(index, dt);
-            Some(next)
+            Some((next, used_builders))
         }
         Err(GraphSimError::BuilderBusy(_))
         | Err(GraphSimError::NoBuilders)
@@ -184,15 +228,16 @@ pub(crate) fn try_assist_project(
     graph: &TechGraph,
     index: &DataIndex,
     dt: f64,
-) -> Option<GraphState> {
+) -> Option<(GraphState, Vec<NodeId>)> {
     if builders.is_empty() {
         return None;
     }
     let mut next = state.clone();
+    let used_builders = builders.to_vec();
     match next.assist_project(project_index, builders, graph) {
         Ok(_) => {
             next.tick(index, dt);
-            Some(next)
+            Some((next, used_builders))
         }
         Err(GraphSimError::BuilderBusy(_))
         | Err(GraphSimError::NoBuilders)
@@ -223,10 +268,11 @@ pub(crate) fn fastest_idle_builder(
         .copied()
 }
 
-pub(crate) fn to_plan_result(state: GraphState) -> PlanResult {
+pub(crate) fn to_plan_result(state: GraphState, first_action: Option<SearchAction>) -> PlanResult {
     PlanResult {
         completion_time: state.time,
         final_economy: state.economy,
         events: state.events,
+        first_action,
     }
 }

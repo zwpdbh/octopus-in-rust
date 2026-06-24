@@ -16,33 +16,40 @@
 //! a `ValueEnum`, so a typo like `faf-sim deps cybran monkeyloard` produces a
 //! faction-scoped list of possible values.
 
+use std::time::Duration;
+
 use clap::Parser;
-use faf_sim::{build_planner, Capability, GraphState, Strategy, TechGraph};
+use faf_sim::{
+    BeamPlanner, Capability, Command, GreedyPlanner, Observation, PlannerActor, ReactivePlanner,
+    SimActor, Strategy, TechGraph,
+};
 use faf_units::DataIndex;
+use tokio::sync::mpsc;
 
 mod cmdline;
 mod target;
 
-use cmdline::{Cli, Command, FactionTarget};
+use cmdline::{Cli, Command as CliCommand, FactionTarget};
 use target::{Faction, ResearchTarget, UnitKind};
 
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     let cli = Cli::parse();
     let index = load_index();
     let graph = TechGraph::new(&index);
 
     match cli.command {
-        Command::Deps(args) => {
+        CliCommand::Deps(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
             run_deps(&graph, target, &args.stop_at);
         }
-        Command::Simulate(args) => {
+        CliCommand::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_simulate(&index, target, args.strategy);
+            run_simulate(&index, target, args.strategy).await;
         }
-        Command::Plan(args) => {
+        CliCommand::Plan(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
             run_plan(&index, &graph, target, args.strategy);
@@ -143,7 +150,7 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strategy) {
+async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strategy) {
     let blueprint_id = target.blueprint_id();
     let target_unit = index
         .find_unit(blueprint_id)
@@ -161,37 +168,118 @@ fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strategy) {
         })
         .expect("ACU should exists in index");
 
-    let planner = match build_planner(strategy) {
-        Ok(p) => p,
+    // Pause tokio's clock so the actor loop can be driven forward
+    // deterministically without waiting for real wall-clock time.
+    tokio::time::pause();
+
+    let sim_dt = 10.0;
+    let max_sim_time = 8.0 * 60.0 * 60.0; // 8 hours of in-game time
+    let max_ticks = (max_sim_time / sim_dt) as usize + 1;
+
+    let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+
+    let sim = SimActor::new(
+        &[starting_unit],
+        index.clone(),
+        Some(target_unit),
+        sim_dt,
+        obs_tx,
+        cmd_rx,
+    );
+    let sim_handle = tokio::spawn(sim.run());
+
+    let planner = build_reactive_planner(index.clone(), target_unit.clone(), strategy);
+    let planner_actor = PlannerActor::new(planner, obs_rx, cmd_tx);
+    let planner_handle = tokio::spawn(planner_actor.run());
+
+    // Drive the simulation timer forward until the goal is reached or we hit
+    // the safety cap.
+    let tick = Duration::from_secs_f64(sim_dt);
+    let mut ticks = 0;
+    while !sim_handle.is_finished() {
+        if ticks >= max_ticks {
+            sim_handle.abort();
+            planner_handle.abort();
+            eprintln!(
+                "Simulation did not reach the goal within {:.1} hours of in-game time.",
+                max_sim_time / 3600.0
+            );
+            std::process::exit(1);
+        }
+        tokio::time::advance(tick).await;
+        ticks += 1;
+    }
+
+    let final_state = match sim_handle.await {
+        Ok(Ok(state)) => state,
+        Ok(Err(e)) => {
+            eprintln!("Simulation error: {}", e);
+            std::process::exit(1);
+        }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Simulation task panicked: {}", e);
             std::process::exit(1);
         }
     };
 
-    let initial = GraphState::new(&[starting_unit]);
-    let result = planner
-        .plan(index, initial, target_unit)
-        .unwrap_or_else(|e| {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        });
+    // The planner actor exits once the observation channel is closed.
+    let _ = planner_handle.await;
+
+    if final_state.time > max_sim_time {
+        eprintln!(
+            "Simulation did not reach the goal within {:.1} hours of in-game time.",
+            max_sim_time / 3600.0
+        );
+        std::process::exit(1);
+    }
 
     println!(
         "\nGoal completed at {} ({:.1}m)",
-        format_time(result.completion_time),
-        result.completion_time / 60.0
+        format_time(final_state.time),
+        final_state.time / 60.0
     );
     println!("\nTimeline:");
     println!("{:>12}  {}", "Time", "Unit");
     println!("{:>12}  {}", "------------", "----");
-    for event in &result.events {
+    for event in &final_state.events {
         println!(
             "{:>12}  {} ({})",
             format_time(event.time),
             event.unit_name,
             event.unit_id
         );
+    }
+}
+
+/// Build a reactive planner for the actor loop from the CLI strategy.
+fn build_reactive_planner(
+    index: DataIndex,
+    goal: faf_units::Unit,
+    strategy: Strategy,
+) -> Box<dyn faf_sim::ReactivePlannerTrait> {
+    match strategy {
+        Strategy::Greedy => {
+            // Use a narrow, fine-grained beam search. The actor replans every
+            // tick, so it does not need the very deep lookahead used by the
+            // one-shot synchronous planner.
+            let sync_planner = GreedyPlanner {
+                max_steps: 400,
+                ..GreedyPlanner::default()
+            };
+            Box::new(ReactivePlanner::new(sync_planner, index, goal))
+        }
+        Strategy::Beam { beam_width } => {
+            // A coarser search dt lets the beam look further ahead cheaply,
+            // which is appropriate for long-horizon targets.
+            let sync_planner = BeamPlanner {
+                beam_width,
+                max_depth: 400,
+                dt: 10.0,
+                ..BeamPlanner::default()
+            };
+            Box::new(ReactivePlanner::new(sync_planner, index, goal))
+        }
     }
 }
 
@@ -209,9 +297,11 @@ fn run_plan(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strate
         strategy
     );
 
-    if let Err(e) = build_planner(strategy) {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
+    match strategy {
+        Strategy::Greedy => {}
+        Strategy::Beam { beam_width } => {
+            println!("Beam width: {}", beam_width);
+        }
     }
 
     let blueprint_id = target.blueprint_id();
