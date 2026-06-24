@@ -74,7 +74,10 @@ pub enum Strategy {
     /// Greedy: pick the single best successor state at each step.
     Greedy,
     /// Beam search: keep the top-K most promising states each layer.
-    Beam,
+    Beam {
+        /// Number of states kept after each search layer.
+        beam_width: usize,
+    },
 }
 
 impl Strategy {
@@ -82,7 +85,7 @@ impl Strategy {
     pub fn display_name(&self) -> &'static str {
         match self {
             Strategy::Greedy => "greedy",
-            Strategy::Beam => "beam",
+            Strategy::Beam { .. } => "beam",
         }
     }
 }
@@ -91,17 +94,28 @@ impl FromStr for Strategy {
     type Err = PlannerError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "greedy" => Ok(Strategy::Greedy),
-            "beam" => Ok(Strategy::Beam),
-            other => Err(PlannerError::UnsupportedStrategy(other.to_string())),
+        let lower = s.to_ascii_lowercase();
+        if lower == "greedy" {
+            return Ok(Strategy::Greedy);
         }
+        if lower == "beam" {
+            return Ok(Strategy::Beam { beam_width: 50 });
+        }
+        if let Some(rest) = lower.strip_prefix("beam:") {
+            if let Ok(width) = rest.parse::<usize>() {
+                return Ok(Strategy::Beam { beam_width: width });
+            }
+        }
+        Err(PlannerError::UnsupportedStrategy(s.to_string()))
     }
 }
 
 impl fmt::Display for Strategy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.display_name())
+        match self {
+            Strategy::Greedy => write!(f, "greedy"),
+            Strategy::Beam { beam_width } => write!(f, "beam:{}", beam_width),
+        }
     }
 }
 
@@ -109,7 +123,10 @@ impl fmt::Display for Strategy {
 pub fn build_planner(strategy: Strategy) -> Result<Box<dyn Planner>, PlannerError> {
     match strategy {
         Strategy::Greedy => Ok(Box::new(GreedyPlanner::default())),
-        Strategy::Beam => Ok(Box::new(BeamPlanner::default())),
+        Strategy::Beam { beam_width } => Ok(Box::new(BeamPlanner {
+            beam_width,
+            ..BeamPlanner::default()
+        })),
     }
 }
 
@@ -194,8 +211,32 @@ mod tests {
 
     #[test]
     fn strategy_parses_beam() {
-        assert_eq!(Strategy::from_str("beam").unwrap(), Strategy::Beam);
-        assert_eq!(Strategy::from_str("Beam").unwrap(), Strategy::Beam);
+        assert_eq!(
+            Strategy::from_str("beam").unwrap(),
+            Strategy::Beam { beam_width: 50 }
+        );
+        assert_eq!(
+            Strategy::from_str("Beam").unwrap(),
+            Strategy::Beam { beam_width: 50 }
+        );
+    }
+
+    #[test]
+    fn strategy_parses_beam_with_width() {
+        assert_eq!(
+            Strategy::from_str("beam:20").unwrap(),
+            Strategy::Beam { beam_width: 20 }
+        );
+        assert_eq!(
+            Strategy::from_str("Beam:100").unwrap(),
+            Strategy::Beam { beam_width: 100 }
+        );
+    }
+
+    #[test]
+    fn strategy_display_includes_beam_width() {
+        assert_eq!(Strategy::Greedy.to_string(), "greedy");
+        assert_eq!(Strategy::Beam { beam_width: 20 }.to_string(), "beam:20");
     }
 
     #[test]
@@ -206,6 +247,10 @@ mod tests {
         ));
         assert!(matches!(
             Strategy::from_str("graph"),
+            Err(PlannerError::UnsupportedStrategy(_))
+        ));
+        assert!(matches!(
+            Strategy::from_str("beam:abc"),
             Err(PlannerError::UnsupportedStrategy(_))
         ));
     }

@@ -7,13 +7,15 @@
 //! Command structure:
 //!
 //! ```text
-//! faf-sim <command> <faction> <unit> [options]
+//! faf-sim <command> [strategy-options] <faction> <unit>
 //! ```
 //!
-//! Faction is a subcommand; each faction exposes only its own valid units as a
-//! `ValueEnum`, so clap constrains `<UNIT>` to faction-legal values.
+//! For `plan` and `simulate`, the target faction/unit is a subcommand so clap
+//! can constrain `<UNIT>` to faction-legal values. The planner strategy is a
+//! single typed argument that carries any strategy-specific configuration
+//! (e.g. `beam:20`) inside its value.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 use crate::target::{AeonUnit, CybranUnit, SeraphimUnit, UefUnit};
 
@@ -52,10 +54,10 @@ pub struct DepsArgs {
 /// Arguments for the `simulate` subcommand.
 #[derive(Parser)]
 pub struct SimulateArgs {
-    /// Planner strategy.
-    #[arg(short = 's', long, default_value = "greedy", global = true)]
-    pub strategy: StrategyArg,
-    /// Faction and unit to simulate.
+    /// Planner strategy (`greedy`, `beam`, or `beam:<width>`).
+    #[arg(short = 's', long, default_value = "greedy")]
+    pub strategy: faf_sim::Strategy,
+    /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,
 }
@@ -63,17 +65,17 @@ pub struct SimulateArgs {
 /// Arguments for the `plan` subcommand.
 #[derive(Parser)]
 pub struct PlanArgs {
-    /// Planner strategy.
-    #[arg(short = 's', long, default_value = "greedy", global = true)]
-    pub strategy: StrategyArg,
-    /// Faction and unit to plan for.
+    /// Planner strategy (`greedy`, `beam`, or `beam:<width>`).
+    #[arg(short = 's', long, default_value = "greedy")]
+    pub strategy: faf_sim::Strategy,
+    /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,
 }
 
 /// Faction subcommand. Each variant carries a faction-specific unit enum so
 /// that clap can list only the units valid for that faction.
-#[derive(Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum FactionTarget {
     /// United Earth Federation.
     Uef(UefTargetArgs),
@@ -85,47 +87,26 @@ pub enum FactionTarget {
     Seraphim(SeraphimTargetArgs),
 }
 
-#[derive(Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct UefTargetArgs {
     /// Unit to target.
     pub unit: UefUnit,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct CybranTargetArgs {
     /// Unit to target.
     pub unit: CybranUnit,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct AeonTargetArgs {
     /// Unit to target.
     pub unit: AeonUnit,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Clone, Parser)]
 pub struct SeraphimTargetArgs {
     /// Unit to target.
     pub unit: SeraphimUnit,
-}
-
-/// Selectable planner strategy.
-///
-/// This is a local clap-facing enum so that the library `Strategy` type does not
-/// need to depend on clap.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum StrategyArg {
-    /// Greedy graph-growth planner.
-    Greedy,
-    /// Beam-search graph-growth planner.
-    Beam,
-}
-
-impl From<StrategyArg> for faf_sim::Strategy {
-    fn from(arg: StrategyArg) -> Self {
-        match arg {
-            StrategyArg::Greedy => faf_sim::Strategy::Greedy,
-            StrategyArg::Beam => faf_sim::Strategy::Beam,
-        }
-    }
 }

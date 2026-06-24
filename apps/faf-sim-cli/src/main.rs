@@ -1,12 +1,15 @@
 //! Research CLI for FAF build-order simulation and optimization.
 //!
-//! Targets are specified as a command, then a faction subcommand, then a unit:
+//! Targets are specified as a command, then optional strategy options, then a
+//! faction subcommand, then a unit:
 //!
 //! ```text
 //! faf-sim deps uef fatboy
 //! faf-sim deps cybran monkeylord
 //! faf-sim deps aeon nuke
-//! faf-sim simulate cybran monkeylord -s beam
+//! faf-sim simulate cybran monkeylord
+//! faf-sim simulate -s beam:20 cybran monkeylord
+//! faf-sim plan -s greedy cybran monkeylord
 //! ```
 //!
 //! Faction is a subcommand and each faction exposes only its own valid units as
@@ -37,14 +40,12 @@ fn main() {
         Command::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            let strategy = Strategy::from(args.strategy);
-            run_simulate(&index, target, strategy);
+            run_simulate(&index, target, args.strategy);
         }
         Command::Plan(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            let strategy = Strategy::from(args.strategy);
-            run_plan(&index, &graph, target, strategy);
+            run_plan(&index, &graph, target, args.strategy);
         }
     }
 }

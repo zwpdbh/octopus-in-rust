@@ -45,7 +45,7 @@ const TARGETS: &[Target] = &[
     },
 ];
 
-const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam];
+const STRATEGIES: &[Strategy] = &[Strategy::Greedy, Strategy::Beam { beam_width: 50 }];
 
 fn load_index() -> DataIndex {
     let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
@@ -119,7 +119,7 @@ fn main() {
         .unwrap()
         .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();
-    let beam = build_planner(Strategy::Beam)
+    let beam = build_planner(Strategy::Beam { beam_width: 50 })
         .unwrap()
         .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();

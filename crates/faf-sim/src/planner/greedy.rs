@@ -48,8 +48,8 @@ impl Planner for GreedyPlanner {
     ) -> Result<PlanResult, PlannerError> {
         // Greedy planning is hard in this domain because long prerequisite
         // chains require committing to expensive investments before any progress
-        // is visible. We implement it as beam search with a very narrow beam:
-        // this keeps the "fast, greedy" character while retaining just enough
+        // is visible. We implement it as beam search with a narrow beam: this
+        // keeps the "fast, greedy" character while retaining just enough
         // lookahead to navigate factory/engineer chains.
         let inner = BeamPlanner {
             beam_width: 3,
