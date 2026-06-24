@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use faf_units::{DataIndex, Unit};
 
 use crate::planner::core::PlanResult;
+use crate::planner::heuristic::candidate_units;
 use crate::sim::{builder_power, GraphSimError, GraphState, NodeId};
 use crate::tech_graph::{Capability, TechGraph};
 
@@ -58,7 +59,7 @@ impl SearchConfig {
             .count();
 
         let mut successors: Vec<GraphState> = Vec::new();
-        let candidates = self.candidate_units(index, state, goals, goal_chains);
+        let candidates = candidate_units(index, state, goals, goal_chains);
 
         for unit in candidates {
             if has_completed_unit(state, &unit.id) {
@@ -111,61 +112,6 @@ impl SearchConfig {
         successors.push(wait);
 
         successors
-    }
-
-    /// Candidate units to consider building next.
-    fn candidate_units<'a>(
-        self,
-        index: &'a DataIndex,
-        state: &'a GraphState,
-        goals: &[&Unit],
-        goal_chains: &[Vec<(Capability, String)>],
-    ) -> Vec<&'a Unit> {
-        let mut ids: HashSet<String> = HashSet::new();
-
-        // Next unbuilt unit in each prerequisite chain, plus the goal itself.
-        for chain in goal_chains {
-            for (_, id) in chain {
-                if !has_completed_unit(state, id) {
-                    ids.insert(id.clone());
-                    break;
-                }
-            }
-        }
-        for goal in goals {
-            ids.insert(goal.id.clone());
-        }
-
-        let goal_faction = goals.first().and_then(|g| g.faction());
-        let faction_units: Vec<&Unit> = index
-            .units
-            .iter()
-            .filter(|u| match goal_faction {
-                Some(f) => u.is_faction(f),
-                None => true,
-            })
-            .collect();
-
-        // Economy and builder candidates by tier.
-        for tech in ["TECH1", "TECH2", "TECH3"] {
-            if let Some(u) = pick_cheapest(&faction_units, "MASSEXTRACTION", Some(tech)) {
-                ids.insert(u.id.clone());
-            }
-            if let Some(u) = pick_cheapest(&faction_units, "ENERGYPRODUCTION", Some(tech)) {
-                ids.insert(u.id.clone());
-            }
-            if let Some(u) = pick_cheapest(&faction_units, "ENGINEER", Some(tech)) {
-                ids.insert(u.id.clone());
-            }
-            if let Some(u) = pick_cheapest(&faction_units, "FACTORY", Some(tech)) {
-                ids.insert(u.id.clone());
-            }
-        }
-
-        ids.iter()
-            .filter_map(|id| index.find_unit(id))
-            .filter(|u| u.build_target_stats().is_some())
-            .collect()
     }
 }
 
@@ -279,99 +225,10 @@ pub(crate) fn fastest_idle_builder(
         .copied()
 }
 
-pub(crate) fn pick_cheapest<'a>(
-    units: &[&'a Unit],
-    category: &str,
-    tech: Option<&str>,
-) -> Option<&'a Unit> {
-    units
-        .iter()
-        .filter(|u| u.has_category(category))
-        .filter(|u| tech.is_none_or(|t| u.has_category(t)))
-        .filter(|u| u.build_target_stats().is_some())
-        .min_by(|a, b| {
-            let ca = a.build_target_stats().unwrap().build_cost_mass;
-            let cb = b.build_target_stats().unwrap().build_cost_mass;
-            ca.total_cmp(&cb)
-        })
-        .copied()
-}
-
-pub(crate) fn score(
-    state: &GraphState,
-    goals: &[&Unit],
-    chain_unit_ids: &[String],
-    index: &DataIndex,
-) -> f64 {
-    let mut total_mass = 0.0;
-    let mut total_energy = 0.0;
-    let mut total_build_time = 0.0;
-
-    for id in chain_unit_ids {
-        if has_completed_unit(state, id) {
-            continue;
-        }
-        if let Some(unit) = index.find_unit(id) {
-            if let Some(stats) = unit.build_target_stats() {
-                total_mass += stats.build_cost_mass;
-                total_energy += stats.build_cost_energy;
-                total_build_time += stats.build_time;
-            }
-        }
-    }
-
-    for goal in goals {
-        if has_completed_unit(state, &goal.id) {
-            continue;
-        }
-        if let Some(stats) = goal.build_target_stats() {
-            total_mass += stats.build_cost_mass;
-            total_energy += stats.build_cost_energy;
-            total_build_time += stats.build_time;
-        }
-    }
-
-    let mass_time = optimistic_time(
-        total_mass,
-        state.economy.mass_storage,
-        state.economy.net_mass_income,
-    );
-    let energy_time = optimistic_time(
-        total_energy,
-        state.economy.energy_storage,
-        state.economy.net_energy_income,
-    );
-
-    let total_bp: f64 = state
-        .idle_builders
-        .iter()
-        .chain(state.active_projects.iter().flat_map(|p| p.builders.iter()))
-        .map(|&b| builder_power(b, &state.graph, index))
-        .sum();
-    let build_time = if total_bp > 0.0 {
-        total_build_time / total_bp
-    } else {
-        f64::INFINITY
-    };
-
-    mass_time.max(energy_time).max(build_time)
-}
-
 pub(crate) fn to_plan_result(state: GraphState) -> PlanResult {
     PlanResult {
         completion_time: state.time,
         final_economy: state.economy,
         events: state.events,
-    }
-}
-
-/// Optimistic time needed to afford `cost` given current `storage` and `income`.
-pub(crate) fn optimistic_time(cost: f64, storage: f64, income: f64) -> f64 {
-    if cost <= storage {
-        0.0
-    } else if income > 0.0 {
-        (cost - storage) / income
-    } else {
-        f64::INFINITY
     }
 }

@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use faf_units::{DataIndex, Unit};
 
 use crate::planner::core::{PlanResult, Planner, PlannerError};
+use crate::planner::heuristic::score;
 use crate::planner::search::{
-    goals_reached, score, to_plan_result, visited_key, SearchConfig, VisitedKey,
+    goals_reached, to_plan_result, visited_key, SearchConfig, VisitedKey,
 };
 use crate::sim::GraphState;
 use crate::tech_graph::{Capability, TechGraph};

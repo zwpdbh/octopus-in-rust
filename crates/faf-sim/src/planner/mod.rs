@@ -7,6 +7,7 @@
 pub mod beam;
 pub mod core;
 pub mod greedy;
+mod heuristic;
 mod search;
 
 pub use beam::BeamPlanner;
