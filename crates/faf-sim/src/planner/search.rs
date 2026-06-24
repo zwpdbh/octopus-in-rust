@@ -30,7 +30,8 @@ impl SearchConfig {
         goals: &[&Unit],
         goal_chains: &[Vec<(Capability, String)>],
     ) -> Vec<GraphState> {
-        if state.idle_builders.is_empty() {
+        let idle_builders = state.idle_builders(index);
+        if idle_builders.is_empty() {
             let mut next = state.clone();
             next.tick(index, self.dt);
             return vec![next];
@@ -76,19 +77,16 @@ impl SearchConfig {
             }
 
             // Start with all idle builders.
-            if let Some(next) = try_start_project(
-                state,
-                unit,
-                &state.idle_builders,
-                tech_graph,
-                index,
-                self.dt,
-            ) {
+            if let Some(next) =
+                try_start_project(state, unit, &idle_builders, tech_graph, index, self.dt)
+            {
                 successors.push(next);
             }
 
             // Start with the single fastest idle builder that can build it.
-            if let Some(builder) = fastest_idle_builder(state, unit, tech_graph, index) {
+            if let Some(builder) =
+                fastest_idle_builder(&idle_builders, state, unit, tech_graph, index)
+            {
                 if let Some(next) =
                     try_start_project(state, unit, &[builder], tech_graph, index, self.dt)
                 {
@@ -100,7 +98,7 @@ impl SearchConfig {
         // Assist each active project with all currently idle builders.
         for i in 0..state.active_projects.len() {
             if let Some(next) =
-                try_assist_project(state, i, &state.idle_builders, tech_graph, index, self.dt)
+                try_assist_project(state, i, &idle_builders, tech_graph, index, self.dt)
             {
                 successors.push(next);
             }
@@ -205,13 +203,13 @@ pub(crate) fn try_assist_project(
 }
 
 pub(crate) fn fastest_idle_builder(
+    idle_builders: &[NodeId],
     state: &GraphState,
     target: &Unit,
     graph: &TechGraph,
     index: &DataIndex,
 ) -> Option<NodeId> {
-    state
-        .idle_builders
+    idle_builders
         .iter()
         .filter(|&&b| {
             let builder_id = &state.graph[b].unit_id;

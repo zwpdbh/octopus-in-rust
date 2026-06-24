@@ -9,6 +9,8 @@
 //!    indivisible (one target at a time). Multiple projects may run concurrently
 //!    as long as they use disjoint builder sets.
 
+use std::collections::HashSet;
+
 use faf_units::{DataIndex, Unit};
 use petgraph::graph::{DiGraph, NodeIndex};
 
@@ -207,8 +209,6 @@ pub struct GraphState {
     pub graph: BuildGraph,
     /// Current economy state.
     pub economy: EconomyState,
-    /// Builder nodes that are currently idle and available for new work.
-    pub idle_builders: Vec<NodeId>,
     /// Builds currently under construction.
     pub active_projects: Vec<OngoingBuild>,
     /// Completed build events in chronological order.
@@ -254,7 +254,6 @@ impl GraphState {
     /// builders among them are added to `idle_builders`.
     pub fn new(starting_units: &[&Unit]) -> Self {
         let mut graph = BuildGraph::default();
-        let mut idle_builders = Vec::new();
 
         for (i, unit) in starting_units.iter().enumerate() {
             let node_id = NodeId::new(i);
@@ -266,9 +265,6 @@ impl GraphState {
                 replaces: None,
                 replaced_by: None,
             });
-            if is_builder(unit) {
-                idle_builders.push(node_id);
-            }
         }
 
         let economy = derive_economy(starting_units);
@@ -277,10 +273,33 @@ impl GraphState {
             time: 0.0,
             graph,
             economy,
-            idle_builders,
             active_projects: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    /// Return the builder nodes that are currently idle and available for new
+    /// work.
+    ///
+    /// This is derived from `graph` (active builder nodes) and `active_projects`
+    /// (builders currently assigned to a project). It is computed on demand so
+    /// there is only one source of truth for builder availability.
+    pub fn idle_builders(&self, index: &DataIndex) -> Vec<NodeId> {
+        let busy: HashSet<NodeId> = self
+            .active_projects
+            .iter()
+            .flat_map(|p| p.builders.iter())
+            .copied()
+            .collect();
+
+        self.graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active())
+            .filter(|n| is_builder_node(n.id, &self.graph, index))
+            .map(|n| n.id)
+            .filter(|id| !busy.contains(id))
+            .collect()
     }
 
     /// Return the ids of all completed (built) units, including units that were
@@ -322,11 +341,6 @@ impl GraphState {
             .is_some_and(|n| n.is_active())
     }
 
-    /// True if `builder` is currently idle.
-    fn is_idle(&self, builder: NodeId) -> bool {
-        self.idle_builders.contains(&builder)
-    }
-
     /// Validate that every builder in `builders` is idle and is a real builder.
     fn validate_builders(
         &self,
@@ -336,8 +350,16 @@ impl GraphState {
         if builders.is_empty() {
             return Err(GraphSimError::NoBuilders);
         }
+
+        let busy: HashSet<NodeId> = self
+            .active_projects
+            .iter()
+            .flat_map(|p| p.builders.iter())
+            .copied()
+            .collect();
+
         for &builder in builders {
-            if !self.is_idle(builder) {
+            if busy.contains(&builder) {
                 return Err(GraphSimError::BuilderBusy(builder));
             }
             if !is_builder_node(builder, &self.graph, index) {
@@ -412,7 +434,6 @@ impl GraphState {
             replaces: None,
         });
 
-        self.idle_builders.retain(|&b| !builders.contains(&b));
         Ok(node_id)
     }
 
@@ -440,12 +461,11 @@ impl GraphState {
     }
 
     /// Mark `old_node` as replaced by `new_node`. The old node becomes inactive
-    /// and is removed from the idle builder pool. The economy is re-derived from
-    /// the remaining active units.
+    /// and no longer contributes to the economy or build power. The economy is
+    /// re-derived from the remaining active units.
     pub fn replace_node(&mut self, index: &DataIndex, old_node: NodeId, new_node: NodeId) {
         self.graph[old_node].replaced_by = Some(new_node);
         self.graph[new_node].replaces = Some(old_node);
-        self.idle_builders.retain(|&b| b != old_node);
 
         let owned_units: Vec<&Unit> = self
             .graph
@@ -488,7 +508,6 @@ impl GraphState {
         self.active_projects[project_index]
             .builders
             .extend(builders.iter().copied());
-        self.idle_builders.retain(|&b| !builders.contains(&b));
         Ok(())
     }
 
@@ -587,18 +606,6 @@ impl GraphState {
         for i in completed_indices {
             let project = self.active_projects.remove(i);
             let unit_id = self.graph[project.target_node].unit_id.clone();
-
-            // Return builders to the idle pool.
-            for &builder in &project.builders {
-                self.idle_builders.push(builder);
-            }
-
-            // The completed unit itself becomes available as a builder.
-            if let Some(unit) = index.find_unit(&unit_id) {
-                if is_builder(unit) {
-                    self.idle_builders.push(project.target_node);
-                }
-            }
 
             // If this was an upgrade, disable the node it replaces.
             if let Some(old_node) = project.replaces {
@@ -703,7 +710,7 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(state.graph[completed[0]].unit_id, "URB1101");
         assert!(state.time > 0.0);
-        assert!(state.idle_builders.contains(&acu_node));
+        assert!(state.idle_builders(&index).contains(&acu_node));
     }
 
     #[test]
@@ -811,7 +818,7 @@ mod tests {
 
         assert_eq!(state.active_projects.len(), 2);
         assert!(
-            state.idle_builders.is_empty(),
+            state.idle_builders(&index).is_empty(),
             "all builders should be assigned"
         );
 

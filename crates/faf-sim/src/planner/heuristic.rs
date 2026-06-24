@@ -1,26 +1,31 @@
 //! Heuristic functions for ranking and pruning graph-growth search states.
 //!
-//! The functions in this module are **optimistic simplifications** used to guide
-//! the beam search. They do **not** model FAF's continuous-drain economy
-//! accurately; that behavior is implemented in [`crate::economy`] and
-//! [`crate::sim`]. Instead, these heuristics compute cheap lower-bound estimates
-//! so the search can rank candidate states without running a full simulation at
-//! every step.
+//! The functions in this module are **simplifications** used to guide the beam
+//! search. They do not model FAF's discrete-project economy accurately; that
+//! behavior is implemented in [`crate::economy`] and [`crate::sim`]. Instead,
+//! these heuristics compute cheap completion-time estimates so the search can
+//! rank candidate states without running a full simulation at every step.
 //!
-//! Key assumptions that make these estimates optimistic:
+//! The main estimate, [`estimate_remaining_time`], treats the remaining work as
+//! a continuous process with constant income and build power. At each "tick"
+//! (bottleneck event) it determines the effective build rate: full build power
+//! when storage can cover the drain, or the income-limited sustainable rate
+//! when a resource storage is empty. This captures the interaction between
+//! resource accumulation, storage burn, and build progress more accurately than
+//! taking the maximum of independent estimates.
 //!
-//! 1. All future income can be directed at the remaining goals.
-//! 2. There are no competing drains from other projects.
-//! 3. Build power can be freely allocated to the remaining work.
+//! Key assumptions:
 //!
-//! Because the estimates are lower bounds, a state with a lower score is at
-//! least as promising in the best case. The beam search explores the most
-//! promising states first.
+//! 1. Mass and energy income stay constant.
+//! 2. Total build power stays constant.
+//! 3. Remaining resource costs are spread proportionally over remaining work.
+//! 4. Resources already in storage can be spent immediately.
 
 use std::collections::HashSet;
 
-use faf_units::{DataIndex, Unit};
+use faf_units::{BuildTargetStats, DataIndex, Unit};
 
+use crate::economy::EconomyState;
 use crate::planner::search::has_completed_unit;
 use crate::sim::{builder_power, GraphState};
 use crate::tech_graph::Capability;
@@ -103,25 +108,121 @@ pub(crate) fn candidate_units<'a>(
         .collect()
 }
 
+/// Estimate remaining completion time under constant income and build power.
+///
+/// Unlike taking the max of independent mass/energy/build estimates, this
+/// models the interaction between them: resources drain continuously while
+/// building, so a resource shortage can force build power to throttle even
+/// before storage is empty.
+///
+/// Assumptions:
+/// - Mass and energy income stay constant.
+/// - Total build power stays constant.
+/// - Remaining resource costs are distributed proportionally over remaining
+///   build work (a continuous / fluid approximation).
+/// - Resources already in storage can be spent immediately.
+///
+/// The result is exact under those assumptions. In the real planner, income and
+/// build power can change, so it remains a heuristic estimate.
+pub(crate) fn estimate_remaining_time(
+    economy: &EconomyState,
+    cost: BuildTargetStats,
+    build_power: f64,
+) -> f64 {
+    if cost.build_time <= 0.0 {
+        return 0.0;
+    }
+    if build_power <= 0.0 {
+        return f64::INFINITY;
+    }
+
+    let mut remaining_mass = cost.build_cost_mass;
+    let mut remaining_energy = cost.build_cost_energy;
+    let mut remaining_work = cost.build_time;
+    let mut mass_storage = economy.mass_storage;
+    let mut energy_storage = economy.energy_storage;
+    let mass_income = economy.net_mass_income;
+    let energy_income = economy.net_energy_income;
+    let mut elapsed = 0.0;
+
+    while remaining_work > 1e-9 {
+        // Cost intensity of the remaining work (fluid approximation).
+        let mass_per_work = remaining_mass / remaining_work;
+        let energy_per_work = remaining_energy / remaining_work;
+
+        // Sustainable build rate for each resource (income == drain).
+        let mass_sustainable_bp = if mass_per_work > 0.0 {
+            mass_income / mass_per_work
+        } else {
+            f64::INFINITY
+        };
+        let energy_sustainable_bp = if energy_per_work > 0.0 {
+            energy_income / energy_per_work
+        } else {
+            f64::INFINITY
+        };
+
+        // Effective BP is limited by resources whose storage is already empty:
+        // we cannot drain them faster than income allows.
+        let mut effective_bp = build_power;
+        if mass_storage <= 1e-9 {
+            effective_bp = effective_bp.min(mass_sustainable_bp);
+        }
+        if energy_storage <= 1e-9 {
+            effective_bp = effective_bp.min(energy_sustainable_bp);
+        }
+
+        if effective_bp <= 1e-9 {
+            return f64::INFINITY;
+        }
+
+        // Build at effective_bp. How long until a resource with positive storage
+        // depletes?
+        let mass_drain_rate = effective_bp * mass_per_work;
+        let energy_drain_rate = effective_bp * energy_per_work;
+        let net_mass = mass_income - mass_drain_rate;
+        let net_energy = energy_income - energy_drain_rate;
+
+        let time_to_finish = remaining_work / effective_bp;
+        let mut dt = time_to_finish;
+        if mass_storage > 1e-9 && net_mass < -1e-9 {
+            dt = dt.min(-mass_storage / net_mass);
+        }
+        if energy_storage > 1e-9 && net_energy < -1e-9 {
+            dt = dt.min(-energy_storage / net_energy);
+        }
+
+        if dt <= 1e-9 {
+            // Cannot make progress; prevent an infinite loop.
+            return f64::INFINITY;
+        }
+
+        elapsed += dt;
+        mass_storage += net_mass * dt;
+        energy_storage += net_energy * dt;
+        remaining_work -= effective_bp * dt;
+        remaining_mass -= mass_drain_rate * dt;
+        remaining_energy -= energy_drain_rate * dt;
+    }
+
+    elapsed
+}
+
 /// Score a search state for beam ranking.
 ///
-/// Returns an optimistic estimate of the remaining time until all `goals` are
-/// completed. Lower is better.
+/// Returns an estimate of the remaining time until all `goals` are completed.
+/// Lower is better.
 ///
-/// The estimate is the maximum of three optimistic lower bounds:
+/// The estimate aggregates remaining mass cost, energy cost, and build work,
+/// then uses [`estimate_remaining_time`] to model how resource income, storage,
+/// and build power interact while building. This is more accurate than taking
+/// the max of independent estimates because it captures the case where a
+/// resource shortage throttles build progress before storage is exhausted.
 ///
-/// 1. **Mass time** — time to accumulate remaining mass costs at current mass
-///    income.
-/// 2. **Energy time** — time to accumulate remaining energy costs at current
-///    energy income.
-/// 3. **Build time** — time to complete remaining build work at current total
-///    build power.
-///
-/// This is **not** how FAF's economy works in-game. In the real game, projects
-/// drain resources continuously and progress is scaled by the most-constrained
-/// resource. This function instead asks: "if all income and build power could
-/// be dedicated to the remaining goals, how long would it take?" That gives an
-/// admissible lower bound useful for ranking states.
+/// This is **not** how FAF's economy works in-game. In the real game, income
+/// and build power change as new units are built, and projects are discrete.
+/// This function instead asks: "if current income and build power stay fixed
+/// and the remaining work is a continuous process, how long would it take?"
 pub(crate) fn score(
     state: &GraphState,
     goals: &[&Unit],
@@ -130,7 +231,7 @@ pub(crate) fn score(
 ) -> f64 {
     let mut total_mass = 0.0;
     let mut total_energy = 0.0;
-    let mut total_build_time = 0.0;
+    let mut total_work = 0.0;
 
     for id in chain_unit_ids {
         if has_completed_unit(state, id) {
@@ -140,7 +241,7 @@ pub(crate) fn score(
             if let Some(stats) = unit.build_target_stats() {
                 total_mass += stats.build_cost_mass;
                 total_energy += stats.build_cost_energy;
-                total_build_time += stats.build_time;
+                total_work += stats.build_time;
             }
         }
     }
@@ -152,34 +253,26 @@ pub(crate) fn score(
         if let Some(stats) = goal.build_target_stats() {
             total_mass += stats.build_cost_mass;
             total_energy += stats.build_cost_energy;
-            total_build_time += stats.build_time;
+            total_work += stats.build_time;
         }
     }
 
-    let mass_time = optimistic_time(
-        total_mass,
-        state.economy.mass_storage,
-        state.economy.net_mass_income,
-    );
-    let energy_time = optimistic_time(
-        total_energy,
-        state.economy.energy_storage,
-        state.economy.net_energy_income,
-    );
-
     let total_bp: f64 = state
-        .idle_builders
+        .idle_builders(index)
         .iter()
         .chain(state.active_projects.iter().flat_map(|p| p.builders.iter()))
         .map(|&b| builder_power(b, &state.graph, index))
         .sum();
-    let build_time = if total_bp > 0.0 {
-        total_build_time / total_bp
-    } else {
-        f64::INFINITY
-    };
 
-    mass_time.max(energy_time).max(build_time)
+    estimate_remaining_time(
+        &state.economy,
+        BuildTargetStats {
+            build_cost_mass: total_mass,
+            build_cost_energy: total_energy,
+            build_time: total_work,
+        },
+        total_bp,
+    )
 }
 
 /// Pick the most efficient buildable unit matching a category and optional tech tier.
@@ -240,27 +333,6 @@ fn efficiency(unit: &Unit, category: &str) -> Option<f64> {
     }
 }
 
-/// Optimistic time needed to afford `cost` given current `storage` and `income`.
-///
-/// This is a **lower bound**, not a realistic FAF forecast. In the real game
-/// you can start projects before having the full cost; progress is scaled by
-/// the most-constrained resource. This function instead asks: "if all income
-/// went toward this cost, how long until storage covers it?"
-///
-/// Returns:
-/// - `0.0` if `cost <= storage` (already affordable).
-/// - `(cost - storage) / income` if `income > 0.0`.
-/// - `f64::INFINITY` otherwise (unaffordable with non-positive income).
-pub(crate) fn optimistic_time(cost: f64, storage: f64, income: f64) -> f64 {
-    if cost <= storage {
-        0.0
-    } else if income > 0.0 {
-        (cost - storage) / income
-    } else {
-        f64::INFINITY
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +341,82 @@ mod tests {
     fn load_index() -> DataIndex {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
         serde_json::from_str(json).expect("embedded index should parse")
+    }
+
+    fn test_economy(
+        mass_storage: f64,
+        energy_storage: f64,
+        mass_income: f64,
+        energy_income: f64,
+    ) -> EconomyState {
+        EconomyState {
+            net_mass_income: mass_income,
+            net_energy_income: energy_income,
+            mass_storage,
+            energy_storage,
+            mass_storage_cap: 0.0,
+            energy_storage_cap: 0.0,
+        }
+    }
+
+    #[test]
+    fn estimate_build_power_bottleneck() {
+        // Resources and income are abundant; only build power limits progress.
+        let economy = test_economy(1000.0, 1000.0, 100.0, 100.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 100.0,
+        };
+        let t = estimate_remaining_time(&economy, cost, 10.0);
+        assert!((t - 10.0).abs() < 1e-9, "expected 10s, got {t}");
+    }
+
+    #[test]
+    fn estimate_resource_bottleneck_with_storage_burn() {
+        // BP is high, income is low, and storage covers some initial work.
+        // Total cost: 200 mass + 200 energy, work: 200, BP: 10.
+        // Storage: 100 mass + 100 energy.
+        // Income: 1 mass/s + 1 energy/s.
+        // Cost intensity: 1 mass/work, 1 energy/work.
+        // Sustainable BP = min(10, 1/1, 1/1) = 1.
+        // Burn at BP 10: drain excess = 9 each. Storage lasts 100/9 ≈ 11.11s.
+        // Work done in burn: 111.11. Remaining work: 88.89.
+        // Sustainable phase: 88.89 / 1 = 88.89s.
+        // Total: 100s.
+        let economy = test_economy(100.0, 100.0, 1.0, 1.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 200.0,
+            build_cost_energy: 200.0,
+            build_time: 200.0,
+        };
+        let t = estimate_remaining_time(&economy, cost, 10.0);
+        assert!((t - 100.0).abs() < 1e-6, "expected ~100s, got {t}");
+    }
+
+    #[test]
+    fn estimate_no_progress_when_unaffordable() {
+        // No income and no storage means we cannot finish any work.
+        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 100.0,
+        };
+        let t = estimate_remaining_time(&economy, cost, 10.0);
+        assert!(t.is_infinite(), "expected infinity, got {t}");
+    }
+
+    #[test]
+    fn estimate_zero_work_is_instant() {
+        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 0.0,
+        };
+        let t = estimate_remaining_time(&economy, cost, 10.0);
+        assert!((t - 0.0).abs() < 1e-9, "expected 0s, got {t}");
     }
 
     #[test]
