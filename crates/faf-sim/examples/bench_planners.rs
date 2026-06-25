@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use faf_sim::{build_planner, GraphState, Strategy};
+use faf_sim::{GraphState, Planner, Strategy};
 use faf_units::DataIndex;
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +76,7 @@ fn main() {
             .unwrap_or_else(|| panic!("goal {} not found", target.goal_id));
 
         for strategy in STRATEGIES {
-            let planner = build_planner(*strategy).expect("valid strategy");
+            let planner = Planner::new(*strategy);
 
             let start = Instant::now();
             let initial = GraphState::new(&[acu]);
@@ -115,12 +115,10 @@ fn main() {
     let acu = index.find_unit("URL0001").expect("ACU exists");
     let goal = index.find_unit("URL0402").expect("Monkeylord exists");
 
-    let greedy = build_planner(Strategy::Greedy)
-        .unwrap()
+    let greedy = Planner::new(Strategy::Greedy)
         .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();
-    let beam = build_planner(Strategy::Beam { beam_width: 50 })
-        .unwrap()
+    let beam = Planner::new(Strategy::Beam { beam_width: 50 })
         .plan(&index, GraphState::new(&[acu]), goal)
         .unwrap();
 

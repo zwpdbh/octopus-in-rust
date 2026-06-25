@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use clap::Parser;
 use faf_sim::{
-    BeamPlanner, Capability, Command, GreedyPlanner, Observation, PlannerActor, ReactivePlanner,
-    SimActor, Strategy, TechGraph,
+    ActorPlanner, Capability, Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor,
+    Strategy, TechGraph,
 };
 use faf_units::DataIndex;
 use tokio::sync::mpsc;
@@ -189,8 +189,9 @@ async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strat
     );
     let sim_handle = tokio::spawn(sim.run());
 
-    let planner = build_reactive_planner(index.clone(), target_unit.clone(), strategy);
-    let planner_actor = PlannerActor::new(planner, obs_rx, cmd_tx);
+    let planner = build_reactive_planner(strategy);
+    let planner_actor =
+        PlannerActor::new(planner, index.clone(), target_unit.clone(), obs_rx, cmd_tx);
     let planner_handle = tokio::spawn(planner_actor.run());
 
     // Drive the simulation timer forward until the goal is reached or we hit
@@ -253,34 +254,20 @@ async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strat
 }
 
 /// Build a reactive planner for the actor loop from the CLI strategy.
-fn build_reactive_planner(
-    index: DataIndex,
-    goal: faf_units::Unit,
-    strategy: Strategy,
-) -> Box<dyn faf_sim::ReactivePlannerTrait> {
-    match strategy {
-        Strategy::Greedy => {
-            // Use a narrow, fine-grained beam search. The actor replans every
-            // tick, so it does not need the very deep lookahead used by the
-            // one-shot synchronous planner.
-            let sync_planner = GreedyPlanner {
-                max_steps: 400,
-                ..GreedyPlanner::default()
-            };
-            Box::new(ReactivePlanner::new(sync_planner, index, goal))
-        }
-        Strategy::Beam { beam_width } => {
-            // A coarser search dt lets the beam look further ahead cheaply,
-            // which is appropriate for long-horizon targets.
-            let sync_planner = BeamPlanner {
-                beam_width,
-                max_depth: 400,
-                dt: 10.0,
-                ..BeamPlanner::default()
-            };
-            Box::new(ReactivePlanner::new(sync_planner, index, goal))
-        }
-    }
+fn build_reactive_planner(strategy: Strategy) -> Box<dyn ActorPlanner> {
+    let config = match strategy {
+        Strategy::Greedy => PlannerConfig {
+            dt: 1.0,
+            max_depth: 400,
+            ..PlannerConfig::default()
+        },
+        Strategy::Beam { .. } => PlannerConfig {
+            dt: 10.0,
+            max_depth: 400,
+            ..PlannerConfig::default()
+        },
+    };
+    Box::new(Planner::with_config(strategy, config))
 }
 
 /// Format seconds as "Mm Ss" with one decimal place on seconds.

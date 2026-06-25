@@ -1,16 +1,15 @@
 //! Planner actor that observes the simulation and emits commands.
 //!
-//! Different planning strategies implement the [`Planner`] trait. The actor
+//! Different planning strategies implement the [`ActorPlanner`] trait. The actor
 //! receives observations, delegates the decision to the strategy, and forwards
 //! the resulting command back to the simulation.
 
+use faf_units::{DataIndex, Unit};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::message::{Command, Observation};
-
-pub mod reactive;
-
-pub use reactive::ReactivePlanner;
+use crate::planner::search::SearchAction;
+use crate::planner::Planner;
 
 /// A planning strategy that turns an observation into an optional command.
 ///
@@ -19,29 +18,66 @@ pub use reactive::ReactivePlanner;
 ///
 /// Returning `None` means the planner chooses not to act this tick. The
 /// simulation keeps running regardless — the player cannot pause the game.
-pub trait Planner: Send + Sync {
+pub trait ActorPlanner: Send + Sync {
     /// Decide the next command given the latest observation.
-    fn decide(&self, observation: &Observation) -> Option<Command>;
+    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command>;
 }
 
-impl Planner for Box<dyn Planner> {
-    fn decide(&self, observation: &Observation) -> Option<Command> {
-        (**self).decide(observation)
+impl ActorPlanner for Box<dyn ActorPlanner> {
+    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command> {
+        (**self).decide(index, goal, observation)
+    }
+}
+
+impl ActorPlanner for Planner {
+    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command> {
+        match observation {
+            Observation::State(state) => {
+                let plan = self.plan(index, state.clone(), goal).ok()?;
+                plan.first_action.and_then(search_action_to_command)
+            }
+            // Events alone do not trigger a new decision; wait for the next state snapshot.
+            Observation::Event(_) => None,
+        }
+    }
+}
+
+fn search_action_to_command(action: SearchAction) -> Option<Command> {
+    match action {
+        SearchAction::Build { unit_id, builders } => Some(Command::Build { unit_id, builders }),
+        SearchAction::Assist {
+            project_node,
+            builders,
+        } => Some(Command::Assist {
+            project_node,
+            builders,
+        }),
+        SearchAction::Wait => None,
     }
 }
 
 /// Actor that runs a planner strategy and exchanges messages with a simulation.
-pub struct PlannerActor<P: Planner> {
+pub struct PlannerActor<P: ActorPlanner> {
     planner: P,
+    index: DataIndex,
+    goal: Unit,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
 }
 
-impl<P: Planner> PlannerActor<P> {
+impl<P: ActorPlanner> PlannerActor<P> {
     /// Create a new planner actor.
-    pub fn new(planner: P, obs_rx: Receiver<Observation>, cmd_tx: Sender<Command>) -> Self {
+    pub fn new(
+        planner: P,
+        index: DataIndex,
+        goal: Unit,
+        obs_rx: Receiver<Observation>,
+        cmd_tx: Sender<Command>,
+    ) -> Self {
         Self {
             planner,
+            index,
+            goal,
             obs_rx,
             cmd_tx,
         }
@@ -50,7 +86,7 @@ impl<P: Planner> PlannerActor<P> {
     /// Run the actor until the simulation disconnects.
     pub async fn run(mut self) {
         while let Some(observation) = self.obs_rx.recv().await {
-            if let Some(command) = self.planner.decide(&observation) {
+            if let Some(command) = self.planner.decide(&self.index, &self.goal, &observation) {
                 if self.cmd_tx.send(command).await.is_err() {
                     break;
                 }
@@ -65,14 +101,12 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::message::{Command, Observation};
-    use crate::planner::{BeamPlanner, GreedyPlanner};
-    use crate::planner_actor::{
-        reactive::ReactivePlanner, Planner as ReactivePlannerTrait, PlannerActor,
-    };
+    use crate::planner::{Planner, Strategy};
+    use crate::planner_actor::{ActorPlanner, PlannerActor};
     use crate::sim_actor::SimActor;
 
     fn load_index() -> DataIndex {
-        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
+        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
         serde_json::from_str(json).expect("embedded index should parse")
     }
 
@@ -89,19 +123,20 @@ mod tests {
         let sim = SimActor::new(&[acu], index.clone(), Some(pgen), sim_dt, obs_tx, cmd_rx);
         tokio::spawn(sim.run());
 
-        let sync_planner = BeamPlanner {
-            beam_width: 20,
-            max_depth: 30,
-            dt: 10.0,
-            ..BeamPlanner::default()
-        };
-        let planner = ReactivePlanner::new(sync_planner, index.clone(), pgen.clone());
+        let planner = Planner::with_config(
+            Strategy::Beam { beam_width: 20 },
+            crate::planner::PlannerConfig {
+                dt: 10.0,
+                max_depth: 30,
+                ..crate::planner::PlannerConfig::default()
+            },
+        );
 
         let mut goal_reached = false;
         for _ in 0..1000 {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
-                    if let Some(cmd) = planner.decide(&Observation::State(state)) {
+                    if let Some(cmd) = planner.decide(&index, &pgen, &Observation::State(state)) {
                         if cmd_tx.send(cmd).await.is_err() {
                             break;
                         }
@@ -136,17 +171,13 @@ mod tests {
         let sim = SimActor::new(&[acu], index.clone(), Some(pgen), 0.5, obs_tx, cmd_rx);
         tokio::spawn(sim.run());
 
-        let sync_planner = GreedyPlanner {
-            max_steps: 50,
-            ..GreedyPlanner::default()
-        };
-        let planner = ReactivePlanner::new(sync_planner, index.clone(), pgen.clone());
+        let planner = Planner::new(Strategy::Greedy);
 
         let mut goal_reached = false;
         for _ in 0..1000 {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
-                    if let Some(cmd) = planner.decide(&Observation::State(state)) {
+                    if let Some(cmd) = planner.decide(&index, &pgen, &Observation::State(state)) {
                         if cmd_tx.send(cmd).await.is_err() {
                             break;
                         }
@@ -219,14 +250,15 @@ mod tests {
         let sim = SimActor::new(&[acu], index.clone(), Some(pgen), 0.5, obs_tx, cmd_rx);
         let sim_handle = tokio::spawn(sim.run());
 
-        let sync_planner = BeamPlanner {
-            beam_width: 20,
-            max_depth: 30,
-            dt: 10.0,
-            ..BeamPlanner::default()
-        };
-        let planner = ReactivePlanner::new(sync_planner, index.clone(), pgen.clone());
-        let planner_actor = PlannerActor::new(planner, obs_rx, cmd_tx);
+        let planner = Planner::with_config(
+            Strategy::Beam { beam_width: 20 },
+            crate::planner::PlannerConfig {
+                dt: 10.0,
+                max_depth: 30,
+                ..crate::planner::PlannerConfig::default()
+            },
+        );
+        let planner_actor = PlannerActor::new(planner, index.clone(), pgen.clone(), obs_rx, cmd_tx);
         let planner_handle = tokio::spawn(planner_actor.run());
 
         // Both actors should shut down cleanly once the pgen is completed.

@@ -22,10 +22,8 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use message::{Command, Observation};
-pub use planner::{
-    build_planner, BeamPlanner, GreedyPlanner, PlanResult, Planner, PlannerError, Strategy,
-};
-pub use planner_actor::{reactive::ReactivePlanner, Planner as ReactivePlannerTrait, PlannerActor};
+pub use planner::{PlanResult, Planner, PlannerConfig, PlannerError, Strategy};
+pub use planner_actor::{ActorPlanner, PlannerActor};
 pub use sim::{
     derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
     OngoingBuild, UnitNode,

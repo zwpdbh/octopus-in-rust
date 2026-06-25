@@ -1,9 +1,8 @@
 //! Planner abstraction for build-order generation.
 //!
-//! A `Planner` turns an initial [`GraphState`] into a [`PlanResult`]
-//! (timeline + completion time). All planners in this crate operate on the
-//! graph-growth model implemented in [`crate::sim`]; they differ only in
-//! how they search the space of possible build schedules.
+//! A [`Planner`] turns an initial [`GraphState`] into a [`PlanResult`]
+//! (timeline + completion time). It dispatches to strategy-specific pure
+//! functions based on its [`Strategy`] enum value.
 
 use std::error::Error;
 use std::fmt;
@@ -12,8 +11,7 @@ use std::str::FromStr;
 use faf_units::{DataIndex, Unit};
 
 use crate::economy::EconomyState;
-use crate::planner::search::SearchAction;
-use crate::planner::{BeamPlanner, GreedyPlanner};
+use crate::planner::{beam, greedy};
 use crate::sim::{BuildEvent, GraphState};
 use crate::tech_graph::TechGraphError;
 
@@ -28,7 +26,7 @@ pub struct PlanResult {
     pub final_economy: EconomyState,
     /// First action of the best path. Useful for reactive planners that only
     /// commit to the immediate next step.
-    pub first_action: Option<SearchAction>,
+    pub first_action: Option<crate::planner::search::SearchAction>,
 }
 
 /// Planner error type.
@@ -123,29 +121,77 @@ impl fmt::Display for Strategy {
     }
 }
 
-/// Build a planner instance for the requested strategy.
-pub fn build_planner(strategy: Strategy) -> Result<Box<dyn Planner>, PlannerError> {
-    match strategy {
-        Strategy::Greedy => Ok(Box::new(GreedyPlanner::default())),
-        Strategy::Beam { beam_width } => Ok(Box::new(BeamPlanner {
-            beam_width,
-            ..BeamPlanner::default()
-        })),
+/// Configuration shared by all planning strategies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlannerConfig {
+    /// Fixed simulation timestep in seconds.
+    pub dt: f64,
+    /// Maximum number of search layers to explore.
+    pub max_depth: usize,
+    /// Maximum number of mass extractors (including upgrades) to build.
+    pub max_mex_count: usize,
+    /// Maximum number of power generators to build.
+    pub max_pgen_count: usize,
+}
+
+impl Default for PlannerConfig {
+    /// Defaults tuned for beam search.
+    fn default() -> Self {
+        Self {
+            dt: 10.0,
+            max_depth: 400,
+            max_mex_count: 8,
+            max_pgen_count: 20,
+        }
     }
 }
 
-/// Algorithm that produces a build order/timeline for a goal unit.
-pub trait Planner {
+/// A planner that dispatches to a concrete strategy via enum matching.
+#[derive(Debug, Clone, Copy)]
+pub struct Planner {
+    /// Selected planning strategy.
+    pub strategy: Strategy,
+    /// Shared search configuration.
+    pub config: PlannerConfig,
+}
+
+impl Planner {
+    /// Create a planner with strategy-specific default configuration.
+    pub fn new(strategy: Strategy) -> Self {
+        let config = match strategy {
+            Strategy::Greedy => PlannerConfig {
+                dt: 1.0,
+                max_depth: 20_000,
+                max_mex_count: 8,
+                max_pgen_count: 20,
+            },
+            Strategy::Beam { .. } => PlannerConfig::default(),
+        };
+        Self { strategy, config }
+    }
+
+    /// Create a planner with an explicit configuration.
+    pub fn with_config(strategy: Strategy, config: PlannerConfig) -> Self {
+        Self { strategy, config }
+    }
+
     /// Run the planner from `initial_state` until `goal` is completed.
     ///
     /// The planner uses `index` to look up unit blueprints and builds its own
     /// internal [`crate::tech_graph::TechGraph`] for capability checks.
-    fn plan(
+    pub fn plan(
         &self,
         index: &DataIndex,
         initial_state: GraphState,
         goal: &Unit,
-    ) -> Result<PlanResult, PlannerError>;
+    ) -> Result<PlanResult, PlannerError> {
+        match self.strategy {
+            Strategy::Greedy => greedy::plan(index, initial_state, goal, &self.config),
+            Strategy::Beam { beam_width } => {
+                beam::plan(index, initial_state, goal, beam_width, &self.config)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -164,7 +210,7 @@ mod tests {
         let acu = index.find_unit("URL0001").expect("ACU exists");
         let goal = index.find_unit("URL0402").expect("Monkeylord exists");
 
-        let planner = GreedyPlanner::default();
+        let planner = Planner::new(Strategy::Greedy);
         let initial = GraphState::new(&[acu]);
         let result = planner.plan(&index, initial, goal).unwrap();
 
@@ -184,12 +230,14 @@ mod tests {
         let acu = index.find_unit("URL0001").expect("ACU exists");
         let goal = index.find_unit("URL0402").expect("Monkeylord exists");
 
-        let planner = BeamPlanner {
-            beam_width: 50,
-            max_depth: 400,
-            dt: 10.0,
-            ..Default::default()
-        };
+        let planner = Planner::with_config(
+            Strategy::Beam { beam_width: 50 },
+            PlannerConfig {
+                dt: 10.0,
+                max_depth: 400,
+                ..PlannerConfig::default()
+            },
+        );
         let initial = GraphState::new(&[acu]);
         let result = planner.plan(&index, initial, goal).unwrap();
 
