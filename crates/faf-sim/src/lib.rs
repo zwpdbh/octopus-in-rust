@@ -23,7 +23,7 @@ pub use economy::{
 };
 pub use message::{Command, Observation};
 pub use planner::{PlanResult, Planner, PlannerConfig, PlannerError, Strategy};
-pub use planner_actor::{ActorPlanner, PlannerActor};
+pub use planner_actor::PlannerActor;
 pub use sim::{
     derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
     OngoingBuild, UnitNode,

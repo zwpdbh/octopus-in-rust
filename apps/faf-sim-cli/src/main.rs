@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use clap::Parser;
 use faf_sim::{
-    ActorPlanner, Capability, Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor,
-    Strategy, TechGraph,
+    Capability, Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor, Strategy,
+    TechGraph,
 };
 use faf_units::DataIndex;
 use tokio::sync::mpsc;
@@ -254,7 +254,7 @@ async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strat
 }
 
 /// Build a reactive planner for the actor loop from the CLI strategy.
-fn build_reactive_planner(strategy: Strategy) -> Box<dyn ActorPlanner> {
+fn build_reactive_planner(strategy: Strategy) -> Planner {
     let config = match strategy {
         Strategy::Greedy => PlannerConfig {
             dt: 1.0,
@@ -267,7 +267,7 @@ fn build_reactive_planner(strategy: Strategy) -> Box<dyn ActorPlanner> {
             ..PlannerConfig::default()
         },
     };
-    Box::new(Planner::with_config(strategy, config))
+    Planner::with_config(strategy, config)
 }
 
 /// Format seconds as "Mm Ss" with one decimal place on seconds.

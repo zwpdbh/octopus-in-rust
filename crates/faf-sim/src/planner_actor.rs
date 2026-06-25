@@ -1,8 +1,7 @@
 //! Planner actor that observes the simulation and emits commands.
 //!
-//! Different planning strategies implement the [`ActorPlanner`] trait. The actor
-//! receives observations, delegates the decision to the strategy, and forwards
-//! the resulting command back to the simulation.
+//! The actor receives observations, delegates the decision to the underlying
+//! [`Planner`], and forwards the resulting command back to the simulation.
 
 use faf_units::{DataIndex, Unit};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -10,37 +9,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use crate::message::{Command, Observation};
 use crate::planner::search::SearchAction;
 use crate::planner::Planner;
-
-/// A planning strategy that turns an observation into an optional command.
-///
-/// Implementations may range from simple reactive heuristics to full lookahead
-/// searchers that clone the observed state and simulate internally.
-///
-/// Returning `None` means the planner chooses not to act this tick. The
-/// simulation keeps running regardless — the player cannot pause the game.
-pub trait ActorPlanner: Send + Sync {
-    /// Decide the next command given the latest observation.
-    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command>;
-}
-
-impl ActorPlanner for Box<dyn ActorPlanner> {
-    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command> {
-        (**self).decide(index, goal, observation)
-    }
-}
-
-impl ActorPlanner for Planner {
-    fn decide(&self, index: &DataIndex, goal: &Unit, observation: &Observation) -> Option<Command> {
-        match observation {
-            Observation::State(state) => {
-                let plan = self.plan(index, state.clone(), goal).ok()?;
-                plan.first_action.and_then(search_action_to_command)
-            }
-            // Events alone do not trigger a new decision; wait for the next state snapshot.
-            Observation::Event(_) => None,
-        }
-    }
-}
 
 fn search_action_to_command(action: SearchAction) -> Option<Command> {
     match action {
@@ -56,19 +24,19 @@ fn search_action_to_command(action: SearchAction) -> Option<Command> {
     }
 }
 
-/// Actor that runs a planner strategy and exchanges messages with a simulation.
-pub struct PlannerActor<P: ActorPlanner> {
-    planner: P,
+/// Actor that runs a planner and exchanges messages with a simulation.
+pub struct PlannerActor {
+    planner: Planner,
     index: DataIndex,
     goal: Unit,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
 }
 
-impl<P: ActorPlanner> PlannerActor<P> {
+impl PlannerActor {
     /// Create a new planner actor.
     pub fn new(
-        planner: P,
+        planner: Planner,
         index: DataIndex,
         goal: Unit,
         obs_rx: Receiver<Observation>,
@@ -84,9 +52,22 @@ impl<P: ActorPlanner> PlannerActor<P> {
     }
 
     /// Run the actor until the simulation disconnects.
+    ///
+    /// State observations are passed to the planner; events are ignored because
+    /// they do not trigger a new decision on their own.
     pub async fn run(mut self) {
         while let Some(observation) = self.obs_rx.recv().await {
-            if let Some(command) = self.planner.decide(&self.index, &self.goal, &observation) {
+            let command = match observation {
+                Observation::State(state) => {
+                    let plan = self.planner.plan(&self.index, state, &self.goal).ok();
+                    plan.and_then(|p| p.first_action)
+                        .and_then(search_action_to_command)
+                }
+                // Events alone do not trigger a new decision; wait for the next state snapshot.
+                Observation::Event(_) => None,
+            };
+
+            if let Some(command) = command {
                 if self.cmd_tx.send(command).await.is_err() {
                     break;
                 }
@@ -102,7 +83,7 @@ mod tests {
 
     use crate::message::{Command, Observation};
     use crate::planner::{Planner, Strategy};
-    use crate::planner_actor::{ActorPlanner, PlannerActor};
+    use crate::planner_actor::PlannerActor;
     use crate::sim_actor::SimActor;
 
     fn load_index() -> DataIndex {
@@ -136,7 +117,12 @@ mod tests {
         for _ in 0..1000 {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
-                    if let Some(cmd) = planner.decide(&index, &pgen, &Observation::State(state)) {
+                    let cmd = planner
+                        .plan(&index, state, &pgen)
+                        .ok()
+                        .and_then(|p| p.first_action)
+                        .and_then(super::search_action_to_command);
+                    if let Some(cmd) = cmd {
                         if cmd_tx.send(cmd).await.is_err() {
                             break;
                         }
@@ -177,7 +163,12 @@ mod tests {
         for _ in 0..1000 {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
-                    if let Some(cmd) = planner.decide(&index, &pgen, &Observation::State(state)) {
+                    let cmd = planner
+                        .plan(&index, state, &pgen)
+                        .ok()
+                        .and_then(|p| p.first_action)
+                        .and_then(super::search_action_to_command);
+                    if let Some(cmd) = cmd {
                         if cmd_tx.send(cmd).await.is_err() {
                             break;
                         }
