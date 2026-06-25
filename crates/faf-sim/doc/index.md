@@ -1,59 +1,40 @@
-# FAF Build Orders with Rust and Machine Learning
+# Optimizing FAF Build Orders with MCTS
 
-> A living draft. The goal is to explore how machine learning can optimize
-> build orders in *Forged Alliance Forever* (FAF), implemented in Rust. If the
-> exploration succeeds, these notes can become a practical book:
-> **"Machine Learning for Strategy Games in Rust"**.
+This track teaches how to use **Monte Carlo Tree Search (MCTS) with a learned value network** to optimize *Forged Alliance Forever* build orders. We assume you already know Rust and the basics of FAF; we do not re-explain what a neural network is or what reinforcement learning means in the abstract.
 
-## What this is
+The focus is practical: how to frame the simulator as an MCTS search problem, how to train a value network that estimates state quality, how to implement UCT search in Rust, and how to wire everything into the existing `faf-sim` planner.
 
-This folder documents the journey from a hand-written simulator and planner to
-a learning system that discovers strong FAF build orders. We start with the
-existing simulation model (`model.md`) and ask: *can we teach a program to play
-the opening and mid-game economy better than a human-written heuristic?*
+## What you will build
 
-## Who this is for
-
-- Rust programmers curious about machine learning.
-- FAF players interested in build-order optimization.
-- Machine-learning beginners who want a concrete, motivating project.
-
-No deep math background is assumed. When we introduce an acronym or a fancy
-term, we explain it in plain language and connect it back to the FAF problem.
+1. A state representation that the MCTS can reason about.
+2. A compact, legal action generator.
+3. A small neural network that predicts how much time remains from any state.
+4. A UCT search that uses that network to choose the next build/assist/wait command.
+5. A training pipeline that turns simulator rollouts into value-net weights.
+6. A benchmark suite that compares MCTS against the existing beam-search baseline.
 
 ## Reading order
 
 | # | File | What it covers |
 |---|------|----------------|
-| - | [`model.md`](./model.md) | The existing graph-growth simulator model. Read this first if you have not. |
-| 0 | [`00-introduction.md`](./00-introduction.md) | Why this project is interesting and what we hope to build. |
-| 1 | [`01-optimization-problems-and-search.md`](./01-optimization-problems-and-search.md) | Optimization as search: why FAF build orders are hard. |
-| 2 | [`02-what-is-machine-learning.md`](./02-what-is-machine-learning.md) | A gentle primer on machine learning for Rustaceans. |
-| 3 | [`03-reinforcement-learning-for-beginners.md`](./03-reinforcement-learning-for-beginners.md) | Reinforcement learning concepts and algorithms explained simply. |
-| 4 | [`04-faf-as-rl-environment.md`](./04-faf-as-rl-environment.md) | Mapping FAF build orders onto the RL framework. |
-| 5 | [`05-approach-landscape.md`](./05-approach-landscape.md) | Survey of possible approaches, from pure RL to hybrid search. |
-| 6 | [`06-mcts-value-net-plan.md`](./06-mcts-value-net-plan.md) | Concrete plan for MCTS + learned value network. |
+| 0 | [`00-why-mcts.md`](./00-why-mcts.md) | Why MCTS + value net fits FAF build-order optimization. |
+| 1 | [`01-the-state-graph.md`](./01-the-state-graph.md) | `GraphState` as the MCTS state: units, builders, economy, stall. |
+| 2 | [`02-actions-and-successors.md`](./02-actions-and-successors.md) | `SearchAction`, legal moves, successor generation, action masking. |
+| 3 | [`03-value-network.md`](./03-value-network.md) | Featurization, network architecture, supervised training with `burn`. |
+| 4 | [`04-mcts-search.md`](./04-mcts-search.md) | UCT selection, expansion, leaf evaluation, backup, tree reuse. |
+| 5 | [`05-integration.md`](./05-integration.md) | Wiring `Strategy::Mcts` into `Planner` and the CLI. |
+| 6 | [`06-training-pipeline.md`](./06-training-pipeline.md) | Data generation, warm-start, self-play, policy prior. |
+| 7 | [`07-benchmarking-and-tuning.md`](./07-benchmarking-and-tuning.md) | Metrics, benchmark suite, diagnosing and tuning the search. |
 
-## Status
+## Reference
 
-This is a foundation, not a finished book. The numbered chapters establish
-concepts and vocabulary. Later chapters will add:
-
-- State representation with graph neural networks.
-- Action masking and valid move generation.
-- Reward shaping and curriculum learning.
-- Training loops in Rust with libraries such as `candle` or `burn`.
-- Experiments against the existing beam-search baseline.
-
-## Current direction
-
-The chosen path is **MCTS with a learned value network** (see chapter 6).
-We will keep the existing simulator and action definitions, add state
-featurization and a small neural network, then replace beam search with
-closed-loop tree search.
+- [`model.md`](./model.md) — The full formal model: nodes, edges, builder constraints, economy, stall, objectives, and assumptions. Read this if you need the exact rules behind the simulator.
 
 ## Conventions
 
-- `// docref: example` marks teaching code that is not project source.
-- Long acronyms are expanded on first use in each file.
-- Rust types from `faf-sim` are referenced by module, e.g., `sim::GraphState`.
+- Code snippets taken from project source begin with a source-location comment:
+  ```rust
+  // crates/faf-sim/src/planner/core.rs ~line 75 — Strategy enum
+  ```
+- Conceptual or teaching-only snippets are marked `// docref: example`.
+- Acronyms are expanded on first use in each file.
