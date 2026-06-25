@@ -101,7 +101,9 @@ rollouts are exact. MCTS focuses computation on the most promising branches.
 - More complex system.
 - Needs a fast simulator and a well-trained value network.
 
-**Verdict:** The most powerful long-term approach for FAF.
+**Verdict:** The most powerful long-term approach for FAF. The project has
+selected this as the primary direction; see [`06-mcts-value-net-plan.md`](./06-mcts-value-net-plan.md)
+for the concrete implementation plan.
 
 ## 6. Curriculum learning
 
@@ -127,21 +129,26 @@ The agent masters simple episodes before facing hard ones.
 
 ## Recommended starting path
 
-For this project, a pragmatic sequence is:
+For this project, the selected sequence is detailed in
+[`06-mcts-value-net-plan.md`](./06-mcts-value-net-plan.md). The high-level
+milestones are:
 
-1. **Milestone 1 — Learned value function.** Train a network to predict
-   completion time from `GraphState`. Use it to rank states in a beam search.
-   This validates that learning is possible and gives an immediate baseline
-   comparison.
+1. **Milestone 0 — Baseline and instrumentation.** Lock down beam-search
+   benchmarks and trajectory logging.
 
-2. **Milestone 2 — Policy prior.** Train a policy network that proposes a
-   small set of promising actions for a state. Use it to prune the beam search
-   action space.
+2. **Milestone 1 — State featurization.** Convert `GraphState` into a fixed-size
+   feature vector the network can consume.
 
-3. **Milestone 3 — MCTS + networks.** Combine the value and policy networks
-   with tree search for strong planning-at-decision-time.
+3. **Milestone 2 — Learned value function.** Train a network to predict
+   remaining completion time from supervised rollout data.
 
-4. **Stretch goal — End-to-end RL.** Once the components work, explore whether
+4. **Milestone 3 — MCTS with value net.** Replace beam search with closed-loop
+   UCT search guided by the value network.
+
+5. **Milestone 4 — Policy prior.** Add a policy network head to guide MCTS
+   exploration, AlphaZero-style.
+
+6. **Stretch goal — End-to-end RL.** Once the components work, explore whether
    a pure PPO agent can match or exceed the hybrid system.
 
 This path keeps the project grounded in the existing simulator while steadily

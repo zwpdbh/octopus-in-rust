@@ -32,6 +32,7 @@ term, we explain it in plain language and connect it back to the FAF problem.
 | 3 | [`03-reinforcement-learning-for-beginners.md`](./03-reinforcement-learning-for-beginners.md) | Reinforcement learning concepts and algorithms explained simply. |
 | 4 | [`04-faf-as-rl-environment.md`](./04-faf-as-rl-environment.md) | Mapping FAF build orders onto the RL framework. |
 | 5 | [`05-approach-landscape.md`](./05-approach-landscape.md) | Survey of possible approaches, from pure RL to hybrid search. |
+| 6 | [`06-mcts-value-net-plan.md`](./06-mcts-value-net-plan.md) | Concrete plan for MCTS + learned value network. |
 
 ## Status
 
@@ -43,6 +44,13 @@ concepts and vocabulary. Later chapters will add:
 - Reward shaping and curriculum learning.
 - Training loops in Rust with libraries such as `candle` or `burn`.
 - Experiments against the existing beam-search baseline.
+
+## Current direction
+
+The chosen path is **MCTS with a learned value network** (see chapter 6).
+We will keep the existing simulator and action definitions, add state
+featurization and a small neural network, then replace beam search with
+closed-loop tree search.
 
 ## Conventions
 

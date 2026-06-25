@@ -11,7 +11,7 @@ use std::str::FromStr;
 use faf_units::{DataIndex, Unit};
 
 use crate::economy::EconomyState;
-use crate::planner::{beam, greedy};
+use crate::planner::{beam, greedy, mcts};
 use crate::sim::{BuildEvent, GraphState};
 use crate::tech_graph::TechGraphError;
 
@@ -69,8 +69,8 @@ impl From<TechGraphError> for PlannerError {
 
 /// Selectable planning algorithm.
 ///
-/// Both variants use the graph-growth model from [`crate::sim`]. The
-/// difference is the search algorithm applied to that model.
+/// All variants use the graph-growth model from [`crate::sim`]. The difference
+/// is the search algorithm applied to that model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// Greedy: pick the single best successor state at each step.
@@ -80,6 +80,11 @@ pub enum Strategy {
         /// Number of states kept after each search layer.
         beam_width: usize,
     },
+    /// Monte Carlo Tree Search guided by a learned value network.
+    Mcts {
+        /// Number of MCTS iterations to run per decision.
+        iterations: usize,
+    },
 }
 
 impl Strategy {
@@ -88,6 +93,7 @@ impl Strategy {
         match self {
             Strategy::Greedy => "greedy",
             Strategy::Beam { .. } => "beam",
+            Strategy::Mcts { .. } => "mcts",
         }
     }
 }
@@ -108,6 +114,14 @@ impl FromStr for Strategy {
                 return Ok(Strategy::Beam { beam_width: width });
             }
         }
+        if lower == "mcts" {
+            return Ok(Strategy::Mcts { iterations: 100 });
+        }
+        if let Some(rest) = lower.strip_prefix("mcts:") {
+            if let Ok(iterations) = rest.parse::<usize>() {
+                return Ok(Strategy::Mcts { iterations });
+            }
+        }
         Err(PlannerError::UnsupportedStrategy(s.to_string()))
     }
 }
@@ -117,6 +131,7 @@ impl fmt::Display for Strategy {
         match self {
             Strategy::Greedy => write!(f, "greedy"),
             Strategy::Beam { beam_width } => write!(f, "beam:{}", beam_width),
+            Strategy::Mcts { iterations } => write!(f, "mcts:{}", iterations),
         }
     }
 }
@@ -166,6 +181,7 @@ impl Planner {
                 max_pgen_count: 20,
             },
             Strategy::Beam { .. } => PlannerConfig::default(),
+            Strategy::Mcts { .. } => PlannerConfig::default(),
         };
         Self { strategy, config }
     }
@@ -189,6 +205,9 @@ impl Planner {
             Strategy::Greedy => greedy::plan(index, initial_state, goal, &self.config),
             Strategy::Beam { beam_width } => {
                 beam::plan(index, initial_state, goal, beam_width, &self.config)
+            }
+            Strategy::Mcts { iterations } => {
+                mcts::plan(index, initial_state, goal, iterations, &self.config)
             }
         }
     }
@@ -286,9 +305,22 @@ mod tests {
     }
 
     #[test]
+    fn strategy_parses_mcts() {
+        assert_eq!(
+            Strategy::from_str("mcts").unwrap(),
+            Strategy::Mcts { iterations: 100 }
+        );
+        assert_eq!(
+            Strategy::from_str("Mcts:500").unwrap(),
+            Strategy::Mcts { iterations: 500 }
+        );
+    }
+
+    #[test]
     fn strategy_display_includes_beam_width() {
         assert_eq!(Strategy::Greedy.to_string(), "greedy");
         assert_eq!(Strategy::Beam { beam_width: 20 }.to_string(), "beam:20");
+        assert_eq!(Strategy::Mcts { iterations: 200 }.to_string(), "mcts:200");
     }
 
     #[test]

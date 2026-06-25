@@ -266,6 +266,7 @@ fn build_reactive_planner(strategy: Strategy) -> Planner {
             max_depth: 400,
             ..PlannerConfig::default()
         },
+        Strategy::Mcts { .. } => PlannerConfig::default(),
     };
     Planner::with_config(strategy, config)
 }
@@ -288,6 +289,9 @@ fn run_plan(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strate
         Strategy::Greedy => {}
         Strategy::Beam { beam_width } => {
             println!("Beam width: {}", beam_width);
+        }
+        Strategy::Mcts { iterations } => {
+            println!("MCTS iterations: {}", iterations);
         }
     }
 
