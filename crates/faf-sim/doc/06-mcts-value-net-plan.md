@@ -139,8 +139,85 @@ input (N features)
 
 This is supervised learning, not RL, so it is stable and debuggable.
 
-**Library choice:** `candle` or `burn`. Both run in pure Rust. Start with
-whichever has the simpler MSE regression example.
+**Library choice:** `burn` (primary), with `candle` as a lightweight fallback.
+
+We want a single Rust codebase that can train the value network and run it
+inside the simulator. The main candidates are:
+
+| Library | Pure Rust | Training | GPU | Serialization | Best for |
+|---------|-----------|----------|-----|---------------|----------|
+| `burn` | Yes | Excellent | WGPU / CUDA / ROCm | SafeTensors, PyTorch | End-to-end Rust training + inference |
+| `candle` | Yes | Good | CUDA / Metal | SafeTensors | Lightweight inference, simple models |
+| `tch-rs` | No (libtorch) | Excellent | CUDA (best) | TorchScript | Maximum performance, accepts heavy deps |
+| `dfdx` | Yes | Yes | CUDA / WGPU | Custom | Type-safe shapes, more experimental |
+| `ort` | No (ONNX Runtime) | No | Many | ONNX | Inference-only deployment |
+
+**Recommendation: `burn`**
+
+- It is the most complete native Rust deep-learning framework.
+- It can train the value network, save to `SafeTensors`, and load the same
+  model in `faf-sim` without Python or libtorch.
+- Backend generics mean the same model runs on CPU (`NdArray`/`Flex`) during
+  development and on GPU (`WGPU` or `CUDA`) later by changing one type.
+- It has a regression example (`regression` in the burn repo) that maps
+  directly onto our value-prediction problem.
+- It includes `burn-rl` for future RL experiments.
+
+**Why not `candle` as primary?**
+
+`candle` is simpler and lighter, but its training ecosystem is smaller. It is
+a great choice if we later decide to train in Python/PyTorch and only do
+inference in Rust. For the integrated Rust path, `burn` is more future-proof.
+
+**Why not `tch-rs`?**
+
+` tch-rs` would give the fastest GPU training, but it drags in the entire
+libtorch dependency. That complicates builds, CI, and deployment — exactly the
+friction this project wants to avoid by staying in Rust.
+
+**Reference:** `synthesis` (github.com/coreylowman/synthesis) is a Rust
+AlphaZero implementation that uses `tch-rs` for Connect4. Its MCTS and
+self-play structure are good inspiration, but we would swap the PyTorch
+backend for `burn`.
+
+**Sketch of the value network in `burn`**
+
+```rust
+// docref: example
+use burn::nn::{Linear, Relu, Module};
+use burn::tensor::{Tensor, backend::Backend};
+
+#[derive(Module, Debug)]
+pub struct ValueNet<B: Backend> {
+    linear1: Linear<B>,
+    activation: Relu,
+    linear2: Linear<B>,
+    output: Linear<B>,
+}
+
+impl<B: Backend> ValueNet<B> {
+    pub fn new(device: &B::Device) -> Self {
+        Self {
+            linear1: Linear::new(device, 64, 128),
+            activation: Relu::new(),
+            linear2: Linear::new(device, 128, 64),
+            output: Linear::new(device, 64, 1),
+        }
+    }
+
+    /// Input: [batch, features]. Output: [batch, 1] in [-1, 0].
+    pub fn forward(&self, input: Tensor<B, 2>) -> Tensor<B, 2> {
+        let x = self.linear1.forward(input);
+        let x = self.activation.forward(x);
+        let x = self.linear2.forward(x);
+        let x = self.activation.forward(x);
+        self.output.forward(x) // MSE target is normalized remaining time
+    }
+}
+```
+
+Training would use `burn::optim::Adam` and an MSE loss over batches of
+`(features, target_value)` pairs generated from simulator rollouts.
 
 **Deliverable:**
 - `planner::mcts::ValueNet` struct wrapping the neural network.
