@@ -12,15 +12,15 @@ use crate::units::{UnitKind, Units};
 
 fn search_action_to_command(action: SearchAction) -> Option<Command> {
     match action {
-        SearchAction::Build { unit_id, builders } => Some(Command::Build { unit_id, builders }),
+        SearchAction::Build { unit_id, builder } => Some(Command::Build { unit_id, builder }),
         SearchAction::Upgrade {
             target_unit_id,
             old_node,
-            builders,
+            builder,
         } => Some(Command::Upgrade {
             target_unit_id,
             old_node,
-            builders,
+            builder,
         }),
         SearchAction::Assist {
             project_node,

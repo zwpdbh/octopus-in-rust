@@ -14,16 +14,13 @@ use crate::units::{UnitKind, Units};
 /// the best ranked state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchAction {
-    /// Build a unit with the given builders.
-    Build {
-        unit_id: UnitKind,
-        builders: Vec<NodeId>,
-    },
+    /// Build a unit with the given builder.
+    Build { unit_id: UnitKind, builder: NodeId },
     /// Upgrade an existing unit in-place to a higher-tier blueprint.
     Upgrade {
         target_unit_id: UnitKind,
         old_node: NodeId,
-        builders: Vec<NodeId>,
+        builder: NodeId,
     },
     /// Assist an active project with additional builders.
     Assist {
@@ -99,13 +96,13 @@ impl SearchConfig {
     }
 }
 
-/// Rule 1: try building each candidate unit.
+/// Rule 1: try building each candidate unit with a single builder.
 ///
 /// A candidate is skipped if it is already built, already under construction,
 /// or would exceed the configured caps (`max_mex_count` / `max_pgen_count`).
-/// For each legal candidate we emit two distinct build actions: start the
-/// project with all idle builders, and start it with only the fastest capable
-/// idle builder.
+/// For each legal candidate we emit exactly one build action: start the project
+/// with the fastest capable idle builder.  If the planner wants more build
+/// power on the project later, it can use an `Assist` action.
 fn add_build_candidates(
     successors: &mut Vec<(GraphState, SearchAction)>,
     state: &GraphState,
@@ -131,21 +128,8 @@ fn add_build_candidates(
             continue;
         }
 
-        // Variant 1: assign every idle builder to the new project.
-        if let Some((next, builders)) =
-            try_start_project(state, unit_id, idle_builders, units, config.dt)
-        {
-            successors.push((
-                next,
-                SearchAction::Build {
-                    unit_id: unit_id.clone(),
-                    builders,
-                },
-            ));
-        }
-
-        // Variant 2: assign only the single fastest capable idle builder.
-        // This gives the planner a cheap way to start many projects in parallel.
+        // Start the project with the single fastest capable idle builder.
+        // Additional builders can be added later with `Assist`.
         if let Some(builder) = fastest_idle_builder(idle_builders, state, unit_id, units) {
             if let Some((next, _)) = try_start_project(state, unit_id, &[builder], units, config.dt)
             {
@@ -153,7 +137,7 @@ fn add_build_candidates(
                     next,
                     SearchAction::Build {
                         unit_id: unit_id.clone(),
-                        builders: vec![builder],
+                        builder,
                     },
                 ));
             }
@@ -161,11 +145,11 @@ fn add_build_candidates(
     }
 }
 
-/// Rule 2: try upgrading finished units to their next-tier form.
+/// Rule 2: try upgrading finished units with a single builder.
 ///
 /// For every finished active unit that has a registered upgrade target, emit
-/// two actions: upgrade with all idle builders, and upgrade with only the
-/// fastest capable idle builder.
+/// one action: start the upgrade with the fastest capable idle builder.
+/// Additional builders can be added later with `Assist`.
 fn add_upgrade_candidates(
     successors: &mut Vec<(GraphState, SearchAction)>,
     state: &GraphState,
@@ -179,21 +163,7 @@ fn add_upgrade_candidates(
             continue;
         };
 
-        // Variant 1: all idle builders assist the upgrade.
-        if let Some((next, builders)) =
-            try_upgrade_project(state, &target, old_node, idle_builders, units, config.dt)
-        {
-            successors.push((
-                next,
-                SearchAction::Upgrade {
-                    target_unit_id: target.clone(),
-                    old_node,
-                    builders,
-                },
-            ));
-        }
-
-        // Variant 2: only the fastest capable idle builder assists.
+        // Start the upgrade with the single fastest capable idle builder.
         if let Some(builder) = fastest_idle_builder(idle_builders, state, &target, units) {
             if let Some((next, _)) =
                 try_upgrade_project(state, &target, old_node, &[builder], units, config.dt)
@@ -203,7 +173,7 @@ fn add_upgrade_candidates(
                     SearchAction::Upgrade {
                         target_unit_id: target.clone(),
                         old_node,
-                        builders: vec![builder],
+                        builder,
                     },
                 ));
             }
