@@ -37,12 +37,11 @@ use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 ///
 /// This is a **pruning heuristic**: it limits the branching factor of the
 /// search by only suggesting units that are likely to be useful for reaching
-/// the goal. Candidates include:
+/// the goal. Candidates come from two explicit rules:
 ///
-/// - The next unbuilt unit in the prerequisite chain.
-/// - The goal unit itself.
-/// - The most efficient mass extractor, power generator, engineer, and factory
-///   per tech tier.
+/// 1. [`add_goal_path_candidates`]: the next missing prerequisite and the goal itself.
+/// 2. [`add_efficient_economy_candidates`]: the most efficient eco/builder unit
+///    of each category per tech tier.
 pub(crate) fn candidate_units(
     units: &Units,
     state: &GraphState,
@@ -51,7 +50,24 @@ pub(crate) fn candidate_units(
 ) -> Vec<UnitKind> {
     let mut ids: HashSet<UnitKind> = HashSet::new();
 
-    // Next unbuilt unit in the prerequisite chain, plus the goal itself.
+    add_goal_path_candidates(&mut ids, state, goal_id, goal_chain);
+    add_efficient_economy_candidates(&mut ids, units);
+
+    ids.into_iter().collect()
+}
+
+/// Rule 1: add the next unbuilt unit on the path to the goal, plus the goal itself.
+///
+/// The prerequisite chain tells us what must exist before the goal can be built.
+/// We only add the *first* missing step so the planner can walk the chain one
+/// link at a time, but we always add the goal so the search can attempt the
+/// final target as soon as it becomes legal.
+fn add_goal_path_candidates(
+    ids: &mut HashSet<UnitKind>,
+    state: &GraphState,
+    goal_id: &UnitKind,
+    goal_chain: &[UnitKind],
+) {
     for id in goal_chain {
         if !state.has_completed_unit(id) {
             ids.insert(id.clone());
@@ -59,26 +75,28 @@ pub(crate) fn candidate_units(
         }
     }
     ids.insert(goal_id.clone());
+}
 
-    // Economy and builder candidates by tier. Use efficiency (output per
-    // mass invested) rather than raw cost so the planner prefers high-value
-    // investments such as T1 mass extractors and T3 power generators.
+/// Rule 2: add the most efficient eco/builder unit for each category and tier.
+///
+/// For every tech tier we consider four categories: mass extractor, power
+/// generator, engineer, and factory.  Within each category we keep only the
+/// unit with the highest output (or build rate) per mass invested.  This
+/// encodes the heuristic that investing in strong economy and builder capacity
+/// tends to produce faster build orders.
+fn add_efficient_economy_candidates(ids: &mut HashSet<UnitKind>, units: &Units) {
     for tech in [TechLevel::T1, TechLevel::T2, TechLevel::T3] {
-        if let Some(k) = pick_most_efficient(units, tech, UnitKind::Mex(tech)) {
-            ids.insert(k);
-        }
-        if let Some(k) = pick_most_efficient(units, tech, UnitKind::Pgen(tech)) {
-            ids.insert(k);
-        }
-        if let Some(k) = pick_most_efficient(units, tech, UnitKind::Engineer(tech)) {
-            ids.insert(k);
-        }
-        if let Some(k) = pick_most_efficient(units, tech, UnitKind::Factory(tech)) {
-            ids.insert(k);
+        for category in [
+            UnitKind::Mex(tech),
+            UnitKind::Pgen(tech),
+            UnitKind::Engineer(tech),
+            UnitKind::Factory(tech),
+        ] {
+            if let Some(k) = pick_most_efficient(units, tech, category) {
+                ids.insert(k);
+            }
         }
     }
-
-    ids.into_iter().collect()
 }
 
 /// Pick the most efficient buildable unit matching a category and tech tier.

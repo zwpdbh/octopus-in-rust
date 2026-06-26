@@ -1,5 +1,7 @@
 //! Shared search helpers for the graph-growth model.
 
+use std::collections::HashSet;
+
 use crate::planner::core::PlanResult;
 use crate::planner::heuristic::candidate_units;
 use crate::sim::{GraphSimError, GraphState, NodeId};
@@ -46,6 +48,12 @@ pub(crate) struct SearchConfig {
 impl SearchConfig {
     /// Generate all successor states reachable from `state` in one search step,
     /// together with the action that produced each state.
+    ///
+    /// The legal moves are: build a candidate unit, upgrade an existing unit,
+    /// assist an active project, or wait.  To keep the branching factor under
+    /// control, construction candidates come from [`candidate_units`], which
+    /// restricts new projects to goal-relevant or highly efficient eco/builder
+    /// units.
     pub fn successors(
         self,
         units: &Units,
@@ -53,6 +61,7 @@ impl SearchConfig {
         goal_id: &UnitKind,
         goal_chain: &[UnitKind],
     ) -> Vec<(GraphState, SearchAction)> {
+        // If nothing is idle, the only legal move is to let time advance.
         let idle_builders = state.idle_builders(units);
         if idle_builders.is_empty() {
             let mut next = state.clone();
@@ -60,117 +69,182 @@ impl SearchConfig {
             return vec![(next, SearchAction::Wait)];
         }
 
+        // Pre-compute filters used for construction candidates.
         let active_targets = state.active_target_unit_ids();
         let mex_count = state.count_active_mex();
         let pgen_count = state.count_active_pgen();
 
-        let mut successors: Vec<(GraphState, SearchAction)> = Vec::new();
+        // Ask the heuristic for a small menu of units worth building next.
         let candidates = candidate_units(units, state, goal_id, goal_chain);
 
-        for unit_id in candidates {
-            if state.has_completed_unit(&unit_id) {
-                continue;
-            }
-            if active_targets.contains(&unit_id) {
-                continue;
-            }
-            if matches!(unit_id, UnitKind::Mex(_)) && mex_count >= self.max_mex_count {
-                continue;
-            }
-            if matches!(unit_id, UnitKind::Pgen(_)) && pgen_count >= self.max_pgen_count {
-                continue;
-            }
+        let mut successors: Vec<(GraphState, SearchAction)> = Vec::new();
 
-            // Start with all idle builders.
-            if let Some((next, builders)) =
-                try_start_project(state, &unit_id, &idle_builders, units, self.dt)
+        // Apply the four successor-generation rules.
+        add_build_candidates(
+            &mut successors,
+            state,
+            units,
+            self,
+            &idle_builders,
+            &candidates,
+            &active_targets,
+            mex_count,
+            pgen_count,
+        );
+        add_upgrade_candidates(&mut successors, state, units, self, &idle_builders);
+        add_assist_candidates(&mut successors, state, units, self, &idle_builders);
+        add_wait_successor(&mut successors, state, units, self.dt);
+
+        successors
+    }
+}
+
+/// Rule 1: try building each candidate unit.
+///
+/// A candidate is skipped if it is already built, already under construction,
+/// or would exceed the configured caps (`max_mex_count` / `max_pgen_count`).
+/// For each legal candidate we emit two distinct build actions: start the
+/// project with all idle builders, and start it with only the fastest capable
+/// idle builder.
+fn add_build_candidates(
+    successors: &mut Vec<(GraphState, SearchAction)>,
+    state: &GraphState,
+    units: &Units,
+    config: SearchConfig,
+    idle_builders: &[NodeId],
+    candidates: &[UnitKind],
+    active_targets: &HashSet<UnitKind>,
+    mex_count: usize,
+    pgen_count: usize,
+) {
+    for unit_id in candidates {
+        if state.has_completed_unit(unit_id) {
+            continue;
+        }
+        if active_targets.contains(unit_id) {
+            continue;
+        }
+        if matches!(unit_id, UnitKind::Mex(_)) && mex_count >= config.max_mex_count {
+            continue;
+        }
+        if matches!(unit_id, UnitKind::Pgen(_)) && pgen_count >= config.max_pgen_count {
+            continue;
+        }
+
+        // Variant 1: assign every idle builder to the new project.
+        if let Some((next, builders)) =
+            try_start_project(state, unit_id, idle_builders, units, config.dt)
+        {
+            successors.push((
+                next,
+                SearchAction::Build {
+                    unit_id: unit_id.clone(),
+                    builders,
+                },
+            ));
+        }
+
+        // Variant 2: assign only the single fastest capable idle builder.
+        // This gives the planner a cheap way to start many projects in parallel.
+        if let Some(builder) = fastest_idle_builder(idle_builders, state, unit_id, units) {
+            if let Some((next, _)) = try_start_project(state, unit_id, &[builder], units, config.dt)
             {
                 successors.push((
                     next,
                     SearchAction::Build {
                         unit_id: unit_id.clone(),
-                        builders,
+                        builders: vec![builder],
                     },
                 ));
             }
+        }
+    }
+}
 
-            // Start with the single fastest idle builder that can build it.
-            if let Some(builder) = fastest_idle_builder(&idle_builders, state, &unit_id, units) {
-                if let Some((next, _)) =
-                    try_start_project(state, &unit_id, &[builder], units, self.dt)
-                {
-                    successors.push((
-                        next,
-                        SearchAction::Build {
-                            unit_id: unit_id.clone(),
-                            builders: vec![builder],
-                        },
-                    ));
-                }
-            }
+/// Rule 2: try upgrading finished units to their next-tier form.
+///
+/// For every finished active unit that has a registered upgrade target, emit
+/// two actions: upgrade with all idle builders, and upgrade with only the
+/// fastest capable idle builder.
+fn add_upgrade_candidates(
+    successors: &mut Vec<(GraphState, SearchAction)>,
+    state: &GraphState,
+    units: &Units,
+    config: SearchConfig,
+    idle_builders: &[NodeId],
+) {
+    for &old_node in &state.active_units() {
+        let old_kind = state.graph[old_node].unit_id.clone();
+        let Some(target) = units.upgrade_target(&old_kind) else {
+            continue;
+        };
+
+        // Variant 1: all idle builders assist the upgrade.
+        if let Some((next, builders)) =
+            try_upgrade_project(state, &target, old_node, idle_builders, units, config.dt)
+        {
+            successors.push((
+                next,
+                SearchAction::Upgrade {
+                    target_unit_id: target.clone(),
+                    old_node,
+                    builders,
+                },
+            ));
         }
 
-        // Upgrade finished units when a higher-tier version is useful.
-        for &old_node in &state.active_units() {
-            let old_kind = state.graph[old_node].unit_id.clone();
-            let Some(target) = units.upgrade_target(&old_kind) else {
-                continue;
-            };
-
-            // Start with all idle builders.
-            if let Some((next, builders)) =
-                try_upgrade_project(state, &target, old_node, &idle_builders, units, self.dt)
+        // Variant 2: only the fastest capable idle builder assists.
+        if let Some(builder) = fastest_idle_builder(idle_builders, state, &target, units) {
+            if let Some((next, _)) =
+                try_upgrade_project(state, &target, old_node, &[builder], units, config.dt)
             {
                 successors.push((
                     next,
                     SearchAction::Upgrade {
                         target_unit_id: target.clone(),
                         old_node,
-                        builders,
-                    },
-                ));
-            }
-
-            // Start with the single fastest idle builder that can build it.
-            if let Some(builder) = fastest_idle_builder(&idle_builders, state, &target, units) {
-                if let Some((next, _)) =
-                    try_upgrade_project(state, &target, old_node, &[builder], units, self.dt)
-                {
-                    successors.push((
-                        next,
-                        SearchAction::Upgrade {
-                            target_unit_id: target.clone(),
-                            old_node,
-                            builders: vec![builder],
-                        },
-                    ));
-                }
-            }
-        }
-
-        // Assist each active project with all currently idle builders.
-        for i in 0..state.active_projects.len() {
-            let project_node = state.active_projects[i].target_node;
-            if let Some((next, builders)) =
-                try_assist_project(state, i, &idle_builders, units, self.dt)
-            {
-                successors.push((
-                    next,
-                    SearchAction::Assist {
-                        project_node,
-                        builders,
+                        builders: vec![builder],
                     },
                 ));
             }
         }
-
-        // Wait one tick.
-        let mut wait = state.clone();
-        wait.tick(units, self.dt);
-        successors.push((wait, SearchAction::Wait));
-
-        successors
     }
+}
+
+/// Rule 3: try assisting each active project with all idle builders.
+fn add_assist_candidates(
+    successors: &mut Vec<(GraphState, SearchAction)>,
+    state: &GraphState,
+    units: &Units,
+    config: SearchConfig,
+    idle_builders: &[NodeId],
+) {
+    for i in 0..state.active_projects.len() {
+        let project_node = state.active_projects[i].target_node;
+        if let Some((next, builders)) =
+            try_assist_project(state, i, idle_builders, units, config.dt)
+        {
+            successors.push((
+                next,
+                SearchAction::Assist {
+                    project_node,
+                    builders,
+                },
+            ));
+        }
+    }
+}
+
+/// Rule 4: always allow advancing time without issuing a command.
+fn add_wait_successor(
+    successors: &mut Vec<(GraphState, SearchAction)>,
+    state: &GraphState,
+    units: &Units,
+    dt: f64,
+) {
+    let mut wait = state.clone();
+    wait.tick(units, dt);
+    successors.push((wait, SearchAction::Wait));
 }
 
 /// Compact visited-state key.
