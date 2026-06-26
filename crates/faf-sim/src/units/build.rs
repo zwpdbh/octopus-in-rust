@@ -162,3 +162,33 @@ pub(crate) fn push_unique(vec: &mut Vec<UnitKind>, kind: UnitKind) {
         vec.push(kind);
     }
 }
+
+/// The canonical UEF blueprint id used as the representative for a common
+/// `UnitKind`. Using a single faction keeps the abstract stats deterministic.
+pub(crate) fn canonical_blueprint_id(kind: &UnitKind) -> Option<&'static str> {
+    use TechLevel::*;
+    use UnitKind::*;
+    match kind {
+        Commander => Some("UEL0001"),
+        Engineer(T1) => Some("UEL0105"),
+        Engineer(T2) => Some("UEL0208"),
+        Engineer(T3) => Some("UEL0309"),
+        Factory(T1) => Some("UEB0101"),
+        Factory(T2) => Some("UEB0201"),
+        Factory(T3) => Some("UEB0301"),
+        Mex(T1) => Some("UEB1103"),
+        Mex(T2) => Some("UEB1202"),
+        Mex(T3) => Some("UEB1302"),
+        Pgen(T1) => Some("UEB1101"),
+        Pgen(T2) => Some("UEB1201"),
+        Pgen(T3) => Some("UEB1301"),
+        _ => None,
+    }
+}
+
+/// True if `unit` is the canonical representative for `kind`.
+pub(crate) fn is_canonical_for_kind(unit: &Unit, kind: &UnitKind) -> bool {
+    canonical_blueprint_id(kind)
+        .map(|id| unit.id.eq_ignore_ascii_case(id))
+        .unwrap_or(false)
+}

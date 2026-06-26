@@ -16,7 +16,7 @@
 //! - `build` — helpers that classify raw blueprints and build recipes.
 //! - `mod` — the public `Units` repository and re-exports.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
@@ -64,17 +64,30 @@ impl Units {
             }
         }
 
+        // Track which common kinds have already been fixed to their canonical
+        // UEF blueprint. Non-canonical duplicates are ignored once the canonical
+        // definition has been stored.
+        let mut canonical_kinds: HashSet<UnitKind> = HashSet::new();
+
         for unit in &index.units {
             let Some(mut def) = build::unit_def(unit) else {
                 continue;
             };
 
-            // Common kinds are stored once with the Common faction tag. The
-            // first unit encountered for a given common kind becomes the
-            // canonical definition.
             if build::is_common_kind(&def.kind) {
                 def.faction = Faction::Common;
-                if defs.contains_key(&def.kind) {
+                let is_canonical = build::is_canonical_for_kind(unit, &def.kind);
+                let already_canonical = canonical_kinds.contains(&def.kind);
+
+                // Keep an earlier non-canonical entry only until we find the
+                // canonical one; afterwards ignore further duplicates.
+                if defs.contains_key(&def.kind) && !is_canonical {
+                    continue;
+                }
+
+                if is_canonical {
+                    canonical_kinds.insert(def.kind.clone());
+                } else if already_canonical {
                     continue;
                 }
             }
@@ -291,7 +304,6 @@ impl Units {
             UnitKind::Engineer(TechLevel::T2),
             UnitKind::Engineer(TechLevel::T3),
         ];
-        let t3_engineer = vec![UnitKind::Engineer(TechLevel::T3)];
 
         // Mass extractors: T1 -> T2 -> T3.
         m.insert(
@@ -317,7 +329,7 @@ impl Units {
                     energy: 31625.0,
                     build_time: 6000.0,
                 },
-                builder_options: t3_engineer.clone(),
+                builder_options: t2_plus_engineer.clone(),
             }],
         );
 
@@ -345,7 +357,7 @@ impl Units {
                     energy: 40000.0,
                     build_time: 3000.0,
                 },
-                builder_options: t3_engineer.clone(),
+                builder_options: t2_plus_engineer.clone(),
             }],
         );
 
@@ -360,7 +372,7 @@ impl Units {
                     energy: 4800.0,
                     build_time: 800.0,
                 },
-                builder_options: t2_plus_engineer.clone(),
+                builder_options: any_engineer.clone(),
             }],
         );
         m.insert(
@@ -373,7 +385,10 @@ impl Units {
                     energy: 22000.0,
                     build_time: 2400.0,
                 },
-                builder_options: t3_engineer.clone(),
+                // Engineer(T2) is allowed so the search can reach T3 without
+                // already owning a T3 engineer (the engineering-suite
+                // prerequisite is abstracted away in this model).
+                builder_options: t2_plus_engineer.clone(),
             }],
         );
 
