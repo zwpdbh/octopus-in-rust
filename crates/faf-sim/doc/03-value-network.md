@@ -24,8 +24,8 @@ pub const FEATURE_COUNT: usize = 64;
 The `featurize` function is currently a placeholder:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 20 — featurize (placeholder)
-pub fn featurize(_state: &GraphState, _goal: &Unit) -> Vec<f32> {
+// crates/faf-sim/src/planner/mcts/features.rs ~line 19 — featurize (placeholder)
+pub fn featurize(_state: &GraphState, _goal_id: &str, _units: &Units) -> Vec<f32> {
     todo!("state featurization is not yet implemented")
 }
 ```

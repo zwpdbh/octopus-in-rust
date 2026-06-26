@@ -1,6 +1,6 @@
 # 0. Why MCTS for FAF Build Orders?
 
-A FAF build order is a sequence of build/assist/wait decisions that grows your economy and technology until a goal unit is finished. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
+A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal unit is finished. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
 This chapter explains why **Monte Carlo Tree Search (MCTS)** guided by a **learned value network** is a good fit, and why the existing greedy and beam strategies hit a ceiling.
 
@@ -60,7 +60,7 @@ The combination looks like this:
 ## Why FAF is a good testbed for this
 
 - **Deterministic simulator.** The same state and action always produce the same next state, so MCTS rollouts are exact and reproducible.
-- **Known rules.** Unit stats, build powers, and tech requirements come from `faf-units`; there is no hidden physics.
+- **Known rules.** Unit stats, build powers, tech requirements, and upgrade costs come from the `Units` repository; there is no hidden physics.
 - **Clear objective.** Minimize completion time, with a secondary efficiency metric.
 - **Compact state.** `GraphState` is structured data, not raw pixels, so featurization is straightforward.
 

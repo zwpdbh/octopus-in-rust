@@ -16,10 +16,9 @@
 //! All heavy details are currently `todo!()` so the structure can be reviewed
 //! before implementation.
 
-use faf_units::{DataIndex, Unit};
-
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
+use crate::units::Units;
 
 pub mod features;
 pub mod search;
@@ -27,7 +26,7 @@ pub mod value_net;
 
 pub use value_net::ValueNet;
 
-/// Run MCTS from `initial_state` toward `goal`.
+/// Run MCTS from `initial_state` toward `goal_id`.
 ///
 /// This is the entry point used by [`crate::planner::Planner`]. It will
 /// eventually:
@@ -36,9 +35,9 @@ pub use value_net::ValueNet;
 /// 2. Run `MctsSearch` for `iterations` expansions.
 /// 3. Extract the best action sequence and convert it into a `PlanResult`.
 pub fn plan(
-    _index: &DataIndex,
+    _units: &Units,
     _initial_state: GraphState,
-    _goal: &Unit,
+    _goal_id: &str,
     _iterations: usize,
     _config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {

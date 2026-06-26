@@ -4,10 +4,9 @@
 //! and value backup. This scaffold declares the structure but leaves the
 //! algorithm details as `todo!()`.
 
-use faf_units::{DataIndex, Unit};
-
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
+use crate::units::Units;
 
 use super::ValueNet;
 
@@ -45,20 +44,20 @@ impl MctsSearch {
         Self { config }
     }
 
-    /// Run MCTS from `initial_state` toward `goal` and return the best plan.
+    /// Run MCTS from `initial_state` toward `goal_id` and return the best plan.
     ///
     /// # Arguments
     ///
     /// * `initial_state` - The current simulator state (root of the tree).
-    /// * `goal` - The unit we are trying to build.
-    /// * `index` - Static unit blueprint data.
+    /// * `goal_id` - The blueprint id of the unit we are trying to build.
+    /// * `units` - Unified unit knowledge repository.
     /// * `planner_config` - Shared planner configuration.
     /// * `value_net` - The learned value network used for leaf evaluation.
     pub fn search(
         &self,
         _initial_state: GraphState,
-        _goal: &Unit,
-        _index: &DataIndex,
+        _goal_id: &str,
+        _units: &Units,
         _planner_config: &PlannerConfig,
         _value_net: &ValueNet,
     ) -> Result<PlanResult, PlannerError> {

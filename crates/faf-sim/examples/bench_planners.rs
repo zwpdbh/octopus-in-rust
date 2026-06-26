@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use faf_sim::{GraphState, Planner, Strategy};
+use faf_sim::{GraphState, Planner, Strategy, Units};
 use faf_units::DataIndex;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +60,7 @@ fn format_time(seconds: f64) -> String {
 
 fn main() {
     let index = load_index();
+    let units = Units::from_ref(&index);
 
     println!(
         "{:<24} {:<12} {:>14} {:>14}",
@@ -68,19 +69,19 @@ fn main() {
     println!("{}", "-".repeat(66));
 
     for target in TARGETS {
-        let acu = index
-            .find_unit(target.acu_id)
+        units
+            .find(target.acu_id)
             .unwrap_or_else(|| panic!("ACU {} not found", target.acu_id));
-        let goal = index
-            .find_unit(target.goal_id)
+        units
+            .find(target.goal_id)
             .unwrap_or_else(|| panic!("goal {} not found", target.goal_id));
 
         for strategy in STRATEGIES {
             let planner = Planner::new(*strategy);
 
             let start = Instant::now();
-            let initial = GraphState::new(&[acu]);
-            let result = planner.plan(&index, initial, goal);
+            let initial = GraphState::new(&units, &[target.acu_id]);
+            let result = planner.plan(&units, initial, target.goal_id);
             let elapsed = start.elapsed();
 
             match result {
@@ -112,14 +113,14 @@ fn main() {
 
     // Sanity check: beam search should beat the greedy baseline on the
     // targets used in the existing unit tests.
-    let acu = index.find_unit("URL0001").expect("ACU exists");
-    let goal = index.find_unit("URL0402").expect("Monkeylord exists");
+    units.find("URL0001").expect("ACU exists");
+    units.find("URL0402").expect("Monkeylord exists");
 
     let greedy = Planner::new(Strategy::Greedy)
-        .plan(&index, GraphState::new(&[acu]), goal)
+        .plan(&units, GraphState::new(&units, &["URL0001"]), "URL0402")
         .unwrap();
     let beam = Planner::new(Strategy::Beam { beam_width: 50 })
-        .plan(&index, GraphState::new(&[acu]), goal)
+        .plan(&units, GraphState::new(&units, &["URL0001"]), "URL0402")
         .unwrap();
 
     println!(

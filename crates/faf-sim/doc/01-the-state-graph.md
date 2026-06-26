@@ -25,19 +25,22 @@ The simulator starts with a single completed unit: the ACU (Armored Command Unit
 // }
 ```
 
-MCTS does not need to invent this representation; it reuses the existing simulator state as its node payload.
+MCTS does not need to invent this representation; it reuses the existing simulator state as its node payload. It also does not need to read raw FAF data; all unit knowledge comes through the `Units` repository.
 
 ## Nodes and edges
 
-Each node in the build graph represents one built unit. It stores at least:
+Each node in the build graph represents one built-unit slot. It stores at least:
 
-- `unit_id`: the blueprint identifier, e.g., `URL0001` (ACU), `URB0101` (T1 land factory), `URL0402` (Monkeylord).
-- `start_time`: when construction began.
-- `finish_time`: when construction completed.
+- `unit_id`: the current blueprint identifier, e.g., `URL0001` (ACU), `URB0101` (T1 land factory), `URL0402` (Monkeylord).
+- `state`: a lifecycle tag that says whether the slot is under construction or finished, and whether it was constructed from scratch or upgraded from another unit.
 
-A directed edge `A -> B` means unit `A` contributed build power to create unit `B`. Multiple incoming edges mean multiple builders assisted.
+A directed edge `A -> B` means unit `A` contributed build power to create or upgrade slot `B`. Multiple incoming edges mean multiple builders assisted.
 
-The initial graph contains exactly one node: the ACU, with `start_time = finish_time = 0`.
+The initial graph contains exactly one node: the ACU, finished at time 0.
+
+## Upgrades reuse slots
+
+When a unit is upgraded, the same node id is reused. Its `unit_id` changes to the target blueprint and its state becomes `Building(Upgrading { from_unit_id: old_id })`. On completion the state becomes `Finished(Upgraded { from_unit_id: old_id })`. This means the upgraded unit immediately replaces its predecessor's economy and builder contributions; there is no separate "old node" to disable.
 
 ## Builder constraints that shape the tree
 
@@ -45,7 +48,8 @@ Builder behavior creates most of the structure that MCTS must reason about:
 
 - A builder works on **exactly one target at a time**. Its build power is indivisible.
 - A builder can contribute to many units over its lifetime, but the construction intervals must not overlap.
-- To **start** a project, at least one assigned builder must be able to build the target according to the tech graph.
+- To **start** a project, at least one assigned builder must be able to build the target according to the tech graph in `Units`.
+- To **upgrade** a unit, the source unit must have a registered upgrade target in `Units.upgrade_table`.
 - Other builders may **assist** a project even if they cannot build the target themselves, provided they are real builders (commanders, engineers, factories).
 - For every edge `A -> B`: `finish_time(A) <= start_time(B)`.
 
@@ -90,7 +94,7 @@ The value network receives a featurized version of this snapshot (see [`03-value
 
 ## Assumptions
 
-- The static tech graph is known and fixed.
+- Unit knowledge is provided by `Units`; the tech graph and upgrade table are fixed for a given `Units` instance.
 - Build power, production, and drain are known per blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.

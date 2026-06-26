@@ -18,6 +18,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 
 use faf_units::{DataIndex, Unit};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -78,16 +79,16 @@ pub enum TechNode {
 }
 
 /// A capability-level dependency graph.
-#[derive(Debug)]
-pub struct TechGraph<'a> {
+#[derive(Debug, Clone)]
+pub struct TechGraph {
     graph: DiGraph<TechNode, ()>,
     node_map: HashMap<TechNode, NodeIndex>,
-    index: &'a DataIndex,
+    index: Arc<DataIndex>,
 }
 
-impl<'a> TechGraph<'a> {
+impl TechGraph {
     /// Build a capability graph from a unit index.
-    pub fn new(index: &'a DataIndex) -> Self {
+    pub fn new(index: Arc<DataIndex>) -> Self {
         let mut graph = DiGraph::new();
         let mut node_map = HashMap::new();
 
@@ -136,8 +137,8 @@ impl<'a> TechGraph<'a> {
     }
 
     /// Access the underlying unit index.
-    pub fn index(&self) -> &'a DataIndex {
-        self.index
+    pub fn index(&self) -> &DataIndex {
+        &self.index
     }
 
     /// Return every capability reachable as a prerequisite of `goal_unit_id`,
@@ -542,15 +543,15 @@ impl std::error::Error for TechGraphError {}
 mod tests {
     use super::*;
 
-    fn load_index() -> DataIndex {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+    fn load_index() -> std::sync::Arc<DataIndex> {
+        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
+        std::sync::Arc::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn monkeylord_chain_via_land_tech() {
         let index = load_index();
-        let graph = TechGraph::new(&index);
+        let graph = TechGraph::new(index);
 
         let chain = graph
             .prerequisite_chain("URL0402", Capability::ACU)
@@ -584,7 +585,7 @@ mod tests {
     #[test]
     fn fatboy_chain_via_land_tech() {
         let index = load_index();
-        let graph = TechGraph::new(&index);
+        let graph = TechGraph::new(index);
 
         let chain = graph
             .prerequisite_chain("UEL0401", Capability::ACU)
@@ -614,7 +615,7 @@ mod tests {
     #[test]
     fn t1_mex_only_needs_acu_or_t1_engineer() {
         let index = load_index();
-        let graph = TechGraph::new(&index);
+        let graph = TechGraph::new(index);
 
         let chain = graph
             .prerequisite_chain("URB1103", Capability::ACU)
@@ -636,7 +637,7 @@ mod tests {
     #[test]
     fn t3_pgen_needs_t3_builder() {
         let index = load_index();
-        let graph = TechGraph::new(&index);
+        let graph = TechGraph::new(index);
 
         let chain = graph
             .prerequisite_chain("URB1301", Capability::ACU)

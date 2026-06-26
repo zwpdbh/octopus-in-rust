@@ -1,11 +1,9 @@
 //! Shared search helpers for the graph-growth model.
 
-use faf_units::{DataIndex, Unit};
-
 use crate::planner::core::PlanResult;
 use crate::planner::heuristic::candidate_units;
 use crate::sim::{builder_power, GraphSimError, GraphState, NodeId};
-use crate::tech_graph::{Capability, TechGraph};
+use crate::units::{Capability, Units};
 
 /// Action that produced a successor state during search.
 ///
@@ -17,6 +15,12 @@ pub enum SearchAction {
     /// Build a unit with the given builders.
     Build {
         unit_id: String,
+        builders: Vec<NodeId>,
+    },
+    /// Upgrade an existing unit in-place to a higher-tier blueprint.
+    Upgrade {
+        target_unit_id: String,
+        old_node: NodeId,
         builders: Vec<NodeId>,
     },
     /// Assist an active project with additional builders.
@@ -44,25 +48,24 @@ impl SearchConfig {
     /// together with the action that produced each state.
     pub fn successors(
         self,
-        index: &DataIndex,
-        tech_graph: &TechGraph,
+        units: &Units,
         state: &GraphState,
-        goal: &Unit,
+        goal_id: &str,
         goal_chain: &[(Capability, String)],
     ) -> Vec<(GraphState, SearchAction)> {
-        let idle_builders = state.idle_builders(index);
+        let idle_builders = state.idle_builders(units);
         if idle_builders.is_empty() {
             let mut next = state.clone();
-            next.tick(index, self.dt);
+            next.tick(units, self.dt);
             return vec![(next, SearchAction::Wait)];
         }
 
         let active_targets = state.active_target_unit_ids();
-        let mex_count = state.count_active_by_category(index, "MASSEXTRACTION");
-        let pgen_count = state.count_active_by_category(index, "ENERGYPRODUCTION");
+        let mex_count = state.count_active_by_category(units, "MASSEXTRACTION");
+        let pgen_count = state.count_active_by_category(units, "ENERGYPRODUCTION");
 
         let mut successors: Vec<(GraphState, SearchAction)> = Vec::new();
-        let candidates = candidate_units(index, state, goal, goal_chain);
+        let candidates = candidate_units(units, state, goal_id, goal_chain);
 
         for unit in candidates {
             if state.has_completed_unit(&unit.id) {
@@ -82,7 +85,7 @@ impl SearchConfig {
 
             // Start with all idle builders.
             if let Some((next, builders)) =
-                try_start_project(state, unit, &idle_builders, tech_graph, index, self.dt)
+                try_start_project(state, &unit_id, &idle_builders, units, self.dt)
             {
                 successors.push((
                     next,
@@ -95,10 +98,10 @@ impl SearchConfig {
 
             // Start with the single fastest idle builder that can build it.
             if let Some(builder) =
-                fastest_idle_builder(&idle_builders, state, unit, tech_graph, index)
+                fastest_idle_builder(&idle_builders, state, &unit_id, units)
             {
                 if let Some((next, _)) =
-                    try_start_project(state, unit, &[builder], tech_graph, index, self.dt)
+                    try_start_project(state, &unit_id, &[builder], units, self.dt)
                 {
                     successors.push((
                         next,
@@ -111,11 +114,62 @@ impl SearchConfig {
             }
         }
 
+        // Upgrade finished units when a higher-tier version is useful.
+        for &old_node in &state.active_units() {
+            let old_unit_id = state.graph[old_node].unit_id.clone();
+            let Some((target, _cost)) = units.upgrade_target(&old_unit_id) else {
+                continue;
+            };
+            let target_id = target.id.clone();
+
+            // Start with all idle builders.
+            if let Some((next, builders)) = try_upgrade_project(
+                state,
+                &target_id,
+                old_node,
+                &idle_builders,
+                units,
+                self.dt,
+            ) {
+                successors.push((
+                    next,
+                    SearchAction::Upgrade {
+                        target_unit_id: target_id.clone(),
+                        old_node,
+                        builders,
+                    },
+                ));
+            }
+
+            // Start with the single fastest idle builder that can build it.
+            if let Some(builder) =
+                fastest_idle_builder(&idle_builders, state, &target_id, units)
+            {
+                if let Some((next, _)) = try_upgrade_project(
+                    state,
+                    &target_id,
+                    old_node,
+                    &[builder],
+                    units,
+                    self.dt,
+                ) {
+                    successors.push((
+                        next,
+                        SearchAction::Upgrade {
+                            target_unit_id: target_id.clone(),
+                            old_node,
+                            builders: vec![builder],
+                        },
+                    ));
+                }
+            }
+        }
+
         // Assist each active project with all currently idle builders.
         for i in 0..state.active_projects.len() {
             let project_node = state.active_projects[i].target_node;
             if let Some((next, builders)) =
-                try_assist_project(state, i, &idle_builders, tech_graph, index, self.dt)
+                try_assist_project(state, i, &idle_builders, units, self.dt)
             {
                 successors.push((
                     next,
@@ -129,7 +183,7 @@ impl SearchConfig {
 
         // Wait one tick.
         let mut wait = state.clone();
-        wait.tick(index, self.dt);
+        wait.tick(units, self.dt);
         successors.push((wait, SearchAction::Wait));
 
         successors
@@ -165,10 +219,9 @@ pub(crate) fn visited_key(state: &GraphState) -> VisitedKey {
 
 pub(crate) fn try_start_project(
     state: &GraphState,
-    target: &Unit,
+    target_id: &str,
     builders: &[NodeId],
-    graph: &TechGraph,
-    index: &DataIndex,
+    units: &Units,
     dt: f64,
 ) -> Option<(GraphState, Vec<NodeId>)> {
     if builders.is_empty() {
@@ -176,9 +229,35 @@ pub(crate) fn try_start_project(
     }
     let mut next = state.clone();
     let used_builders = builders.to_vec();
-    match next.start_project(target, builders, graph) {
+    match next.start_project(target_id, builders, units) {
         Ok(_) => {
-            next.tick(index, dt);
+            next.tick(units, dt);
+            Some((next, used_builders))
+        }
+        Err(GraphSimError::BuilderBusy(_))
+        | Err(GraphSimError::NoBuilders)
+        | Err(GraphSimError::CannotBuild { .. })
+        | Err(GraphSimError::NotBuildable(_))
+        | Err(GraphSimError::ProjectNotFound) => None,
+    }
+}
+
+pub(crate) fn try_upgrade_project(
+    state: &GraphState,
+    target_id: &str,
+    old_node: NodeId,
+    builders: &[NodeId],
+    units: &Units,
+    dt: f64,
+) -> Option<(GraphState, Vec<NodeId>)> {
+    if builders.is_empty() {
+        return None;
+    }
+    let mut next = state.clone();
+    let used_builders = builders.to_vec();
+    match next.start_upgrade_project(target_id, old_node, builders, units) {
+        Ok(_) => {
+            next.tick(units, dt);
             Some((next, used_builders))
         }
         Err(GraphSimError::BuilderBusy(_))
@@ -193,8 +272,7 @@ pub(crate) fn try_assist_project(
     state: &GraphState,
     project_index: usize,
     builders: &[NodeId],
-    graph: &TechGraph,
-    index: &DataIndex,
+    units: &Units,
     dt: f64,
 ) -> Option<(GraphState, Vec<NodeId>)> {
     if builders.is_empty() {
@@ -202,9 +280,9 @@ pub(crate) fn try_assist_project(
     }
     let mut next = state.clone();
     let used_builders = builders.to_vec();
-    match next.assist_project(project_index, builders, graph) {
+    match next.assist_project(project_index, builders, units) {
         Ok(_) => {
-            next.tick(index, dt);
+            next.tick(units, dt);
             Some((next, used_builders))
         }
         Err(GraphSimError::BuilderBusy(_))
@@ -218,19 +296,18 @@ pub(crate) fn try_assist_project(
 pub(crate) fn fastest_idle_builder(
     idle_builders: &[NodeId],
     state: &GraphState,
-    target: &Unit,
-    graph: &TechGraph,
-    index: &DataIndex,
+    target_id: &str,
+    units: &Units,
 ) -> Option<NodeId> {
     idle_builders
         .iter()
         .filter(|&&b| {
             let builder_id = &state.graph[b].unit_id;
-            graph.can_build(builder_id, &target.id).unwrap_or(false)
+            units.can_build(builder_id, target_id)
         })
         .max_by(|&&a, &&b| {
-            let pa = builder_power(a, &state.graph, index);
-            let pb = builder_power(b, &state.graph, index);
+            let pa = builder_power(a, &state.graph, units);
+            let pb = builder_power(b, &state.graph, units);
             pa.total_cmp(&pb)
         })
         .copied()

@@ -11,13 +11,12 @@
 
 use std::collections::HashSet;
 
-use faf_units::{BuildTargetStats, DataIndex, Unit};
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::economy::{
     apply_tick_graph, compute_drain, summarize_economy, EconomyState, RequestedBuildPower,
 };
-use crate::tech_graph::TechGraph;
+use crate::units::{BuildTargetStats, Unit, Units};
 
 /// A single event in the simulated build timeline.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,18 +34,20 @@ pub struct BuildEvent {
 ///
 /// Net income is production minus maintenance consumption. It may be negative,
 /// matching the in-game economy display.
-pub fn derive_economy(units: &[&Unit]) -> EconomyState {
+pub fn derive_economy(units: &Units, unit_ids: &[&str]) -> EconomyState {
+    let unit_refs: Vec<_> = unit_ids.iter().filter_map(|id| units.find(id)).collect();
+
     let mut mass_storage = 0.0;
     let mut energy_storage = 0.0;
 
-    for unit in units {
+    for unit in &unit_refs {
         if let Some(econ) = &unit.economy {
             mass_storage += econ.storage_mass.unwrap_or(0.0);
             energy_storage += econ.storage_energy.unwrap_or(0.0);
         }
     }
 
-    let net = summarize_economy(units, &[]);
+    let net = summarize_economy(units, unit_ids, &[]);
 
     EconomyState {
         net_mass_income: net.mass_per_second,
@@ -83,34 +84,117 @@ impl From<usize> for NodeId {
     }
 }
 
+/// Lifecycle state of a slot in the build graph.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnitNodeState {
+    /// The slot is currently being worked on: either initial construction or an
+    /// upgrade. It is not yet contributing to the economy or acting as a builder.
+    Building(BuildingUnitState),
+    /// The slot has finished its current incarnation and is active.
+    Finished(FinishedUnitState),
+}
+
+/// State of a slot that is currently under active construction or upgrade.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BuildingUnitState {
+    /// Initial construction of the unit in this slot.
+    Constructing {
+        /// When construction began.
+        start: f64,
+        /// Builders capable of building the target.
+        started_by: Vec<NodeId>,
+        /// Additional builders assisting construction.
+        assisted_by: Vec<NodeId>,
+    },
+    /// Upgrade of an existing unit in this slot to a higher-tier version.
+    Upgrading {
+        /// When the upgrade began.
+        start: f64,
+        /// The unit id this slot is being upgraded from.
+        from_unit_id: String,
+        /// Builders capable of building the upgrade target.
+        started_by: Vec<NodeId>,
+        /// Additional builders assisting the upgrade.
+        assisted_by: Vec<NodeId>,
+    },
+}
+
+/// State of a slot that has finished its current incarnation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FinishedUnitState {
+    /// Built from scratch.
+    Constructed {
+        /// When construction began.
+        start_time: f64,
+        /// When construction completed.
+        finish_time: f64,
+    },
+    /// Reached by upgrading an earlier unit in the same slot.
+    Upgraded {
+        /// When the upgrade began.
+        start_time: f64,
+        /// When the upgrade completed.
+        finish_time: f64,
+        /// The unit id before this upgrade completed.
+        from_unit_id: String,
+    },
+}
+
 /// One built unit in the growing build graph.
 #[derive(Debug, Clone)]
 pub struct UnitNode {
     /// Stable node identifier.
     pub id: NodeId,
-    /// Blueprint id of the unit represented by this node.
+    /// Current blueprint id of the unit in this slot.
     pub unit_id: String,
-    /// When construction of this unit began.
-    pub start_time: f64,
-    /// When construction of this unit completed. `NaN` until finished.
-    pub finish_time: f64,
-    /// If this node replaces an earlier node (e.g., a mex upgrade), points to
-    /// the node being replaced. The replaced node becomes inactive.
-    pub replaces: Option<NodeId>,
-    /// If this node was replaced by a later upgrade, points to the replacing
-    /// node. This node becomes inactive.
-    pub replaced_by: Option<NodeId>,
+    /// Lifecycle state of this slot.
+    pub state: UnitNodeState,
 }
 
 impl UnitNode {
-    /// True if this unit has finished construction.
-    pub fn is_completed(&self) -> bool {
-        !self.finish_time.is_nan()
+    /// True if this slot has finished construction or upgrade.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.state, UnitNodeState::Finished(_))
     }
 
-    /// True if this unit is finished and has not been replaced by an upgrade.
+    /// True if this slot is finished and currently active.
     pub fn is_active(&self) -> bool {
-        self.is_completed() && self.replaced_by.is_none()
+        self.is_finished()
+    }
+
+    /// The finish time of this slot, if it has finished.
+    pub fn finish_time(&self) -> Option<f64> {
+        match &self.state {
+            UnitNodeState::Finished(FinishedUnitState::Constructed { finish_time, .. }) => {
+                Some(*finish_time)
+            }
+            UnitNodeState::Finished(FinishedUnitState::Upgraded { finish_time, .. }) => {
+                Some(*finish_time)
+            }
+            _ => None,
+        }
+    }
+
+    /// True if this slot was reached by upgrading an earlier unit.
+    pub fn is_upgrade(&self) -> bool {
+        matches!(
+            self.state,
+            UnitNodeState::Building(BuildingUnitState::Upgrading { .. })
+                | UnitNodeState::Finished(FinishedUnitState::Upgraded { .. })
+        )
+    }
+
+    /// The unit id this slot upgraded from, if any.
+    pub fn from_unit_id(&self) -> Option<&str> {
+        match &self.state {
+            UnitNodeState::Building(BuildingUnitState::Upgrading { from_unit_id, .. }) => {
+                Some(from_unit_id)
+            }
+            UnitNodeState::Finished(FinishedUnitState::Upgraded { from_unit_id, .. }) => {
+                Some(from_unit_id)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -156,7 +240,7 @@ impl std::ops::IndexMut<NodeId> for BuildGraph {
 /// An ongoing build: a target unit and the builders currently working on it.
 #[derive(Debug, Clone)]
 pub struct OngoingBuild {
-    /// Node id of the unit being built.
+    /// Node id of the unit being built or upgraded.
     pub target_node: NodeId,
     /// Builder nodes assigned to this build. Builders are indivisible.
     pub builders: Vec<NodeId>,
@@ -164,9 +248,6 @@ pub struct OngoingBuild {
     pub remaining_work: f64,
     /// Time when this build started.
     pub start_time: f64,
-    /// If this build replaces an existing node (e.g., a mex upgrade), the old
-    /// node is disabled when this build completes.
-    pub replaces: Option<NodeId>,
 }
 
 /// Errors that can occur when manipulating a `GraphState`.
@@ -215,31 +296,27 @@ pub struct GraphState {
     pub events: Vec<BuildEvent>,
 }
 
-/// True if `unit` is a real builder (commander, engineer, or factory) and has
-/// a positive build rate.
-fn is_builder(unit: &Unit) -> bool {
-    (unit.has_category("COMMANDER")
-        || unit.has_category("ENGINEER")
-        || unit.has_category("FACTORY"))
-        && unit.builder_capability().is_some()
-}
-
 /// True if the node represents an active builder unit.
-fn is_builder_node(node_id: NodeId, graph: &BuildGraph, index: &DataIndex) -> bool {
+fn is_builder_node(node_id: NodeId, graph: &BuildGraph, units: &Units) -> bool {
     let node = &graph[node_id];
     if !node.is_active() {
         return false;
     }
-    index.find_unit(&node.unit_id).is_some_and(is_builder)
+    units.find(&node.unit_id).is_some_and(|u| {
+        (u.has_category("COMMANDER")
+            || u.has_category("ENGINEER")
+            || u.has_category("FACTORY"))
+            && u.builder_capability().is_some()
+    })
 }
 
 /// Build power contributed by a single active builder node.
-pub(crate) fn builder_power(node_id: NodeId, graph: &BuildGraph, index: &DataIndex) -> f64 {
+pub(crate) fn builder_power(node_id: NodeId, graph: &BuildGraph, units: &Units) -> f64 {
     let node = &graph[node_id];
     if !node.is_active() {
         return 0.0;
     }
-    let Some(unit) = index.find_unit(&node.unit_id) else {
+    let Some(unit) = units.find(&node.unit_id) else {
         return 0.0;
     };
     unit.builder_capability()
@@ -248,26 +325,26 @@ pub(crate) fn builder_power(node_id: NodeId, graph: &BuildGraph, index: &DataInd
 }
 
 impl GraphState {
-    /// Create a new simulation state from the given starting units.
+    /// Create a new simulation state from the given starting unit ids.
     ///
     /// All starting units are treated as already completed at time 0. Any
     /// builders among them are added to `idle_builders`.
-    pub fn new(starting_units: &[&Unit]) -> Self {
+    pub fn new(units: &Units, starting_unit_ids: &[&str]) -> Self {
         let mut graph = BuildGraph::default();
 
-        for (i, unit) in starting_units.iter().enumerate() {
+        for (i, id) in starting_unit_ids.iter().enumerate() {
             let node_id = NodeId::new(i);
             graph.graph.add_node(UnitNode {
                 id: node_id,
-                unit_id: unit.id.clone(),
-                start_time: 0.0,
-                finish_time: 0.0,
-                replaces: None,
-                replaced_by: None,
+                unit_id: id.to_string(),
+                state: UnitNodeState::Finished(FinishedUnitState::Constructed {
+                    start_time: 0.0,
+                    finish_time: 0.0,
+                }),
             });
         }
 
-        let economy = derive_economy(starting_units);
+        let economy = derive_economy(units, starting_unit_ids);
 
         Self {
             time: 0.0,
@@ -284,7 +361,7 @@ impl GraphState {
     /// This is derived from `graph` (active builder nodes) and `active_projects`
     /// (builders currently assigned to a project). It is computed on demand so
     /// there is only one source of truth for builder availability.
-    pub fn idle_builders(&self, index: &DataIndex) -> Vec<NodeId> {
+    pub fn idle_builders(&self, units: &Units) -> Vec<NodeId> {
         let busy: HashSet<NodeId> = self
             .active_projects
             .iter()
@@ -296,25 +373,24 @@ impl GraphState {
             .graph
             .node_weights()
             .filter(|n| n.is_active())
-            .filter(|n| is_builder_node(n.id, &self.graph, index))
+            .filter(|n| is_builder_node(n.id, &self.graph, units))
             .map(|n| n.id)
             .filter(|id| !busy.contains(id))
             .collect()
     }
 
-    /// Return the ids of all completed (built) units, including units that were
-    /// later replaced by upgrades.
-    pub fn completed_units(&self) -> Vec<NodeId> {
+    /// Return the ids of all finished units in the graph.
+    pub fn finished_units(&self) -> Vec<NodeId> {
         self.graph
             .graph
             .node_weights()
-            .filter(|n| n.is_completed())
+            .filter(|n| n.is_finished())
             .map(|n| n.id)
             .collect()
     }
 
-    /// Return the ids of all active units: completed units that have not been
-    /// replaced by an upgrade.
+    /// Return the ids of all active units: finished units that are not currently
+    /// upgrading.
     pub fn active_units(&self) -> Vec<NodeId> {
         self.graph
             .graph
@@ -324,16 +400,17 @@ impl GraphState {
             .collect()
     }
 
-    /// True if the unit represented by `node_id` has been completed.
+    /// True if the unit represented by `node_id` has finished construction or
+    /// upgrade.
     pub fn is_completed(&self, node_id: NodeId) -> bool {
         self.graph
             .graph
             .node_weight(node_id.0)
-            .is_some_and(|n| n.is_completed())
+            .is_some_and(|n| n.is_finished())
     }
 
-    /// True if the unit represented by `node_id` is active (completed and not
-    /// replaced).
+    /// True if the unit represented by `node_id` is active (finished and not
+    /// currently upgrading).
     pub fn is_active(&self, node_id: NodeId) -> bool {
         self.graph
             .graph
@@ -350,8 +427,8 @@ impl GraphState {
     }
 
     /// True if the given goal unit has been completed.
-    pub fn goal_reached(&self, goal: &Unit) -> bool {
-        self.has_completed_unit(&goal.id)
+    pub fn goal_reached(&self, goal_id: &str) -> bool {
+        self.has_completed_unit(goal_id)
     }
 
     /// Return the blueprint ids of all units currently under construction.
@@ -363,39 +440,46 @@ impl GraphState {
     }
 
     /// Count how many active units belong to the given category.
-    pub fn count_active_by_category(&self, index: &DataIndex, category: &str) -> usize {
+    pub fn count_active_by_category(&self, units: &Units, category: &str) -> usize {
         self.graph
             .graph
             .node_weights()
             .filter(|n| n.is_active())
-            .filter_map(|n| index.find_unit(&n.unit_id))
+            .filter_map(|n| units.find(&n.unit_id))
             .filter(|u| u.has_category(category))
             .count()
     }
 
     /// Return the blueprint data for every active unit in the graph.
-    pub fn active_unit_blueprints<'a>(&'a self, index: &'a DataIndex) -> Vec<&'a Unit> {
+    pub fn active_unit_blueprints<'a>(&'a self, units: &'a Units) -> Vec<&'a Unit> {
         self.graph
             .graph
             .node_weights()
             .filter(|n| n.is_active())
-            .filter_map(|n| index.find_unit(&n.unit_id))
+            .filter_map(|n| units.find(&n.unit_id))
             .collect()
     }
 
     /// Total build power of all active builders, including idle builders and
     /// builders currently assigned to active projects.
-    pub fn total_active_build_power(&self, index: &DataIndex) -> f64 {
-        self.idle_builders(index)
+    pub fn total_active_build_power(&self, units: &Units) -> f64 {
+        self.idle_builders(units)
             .iter()
             .chain(self.active_projects.iter().flat_map(|p| p.builders.iter()))
-            .map(|&b| builder_power(b, &self.graph, index))
+            .map(|&b| builder_power(b, &self.graph, units))
             .sum()
     }
 
     /// Re-derive the economy from all active units.
-    pub fn rebuild_economy(&mut self, index: &DataIndex) {
-        self.economy = derive_economy(&self.active_unit_blueprints(index));
+    pub fn rebuild_economy(&mut self, units: &Units) {
+        let active_ids: Vec<&str> = self
+            .graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active())
+            .map(|n| n.unit_id.as_str())
+            .collect();
+        self.economy = derive_economy(units, &active_ids);
     }
 
     /// Estimate the remaining time until `goal` is completed from this state.
@@ -408,9 +492,9 @@ impl GraphState {
     /// This is a heuristic, not an exact simulation. Lower is better.
     pub fn estimate_remaining_time_to_goal(
         &self,
-        goal: &Unit,
+        goal_id: &str,
         chain_unit_ids: &[String],
-        index: &DataIndex,
+        units: &Units,
     ) -> f64 {
         let mut total_mass = 0.0;
         let mut total_energy = 0.0;
@@ -420,17 +504,15 @@ impl GraphState {
             if self.has_completed_unit(id) {
                 continue;
             }
-            if let Some(unit) = index.find_unit(id) {
-                if let Some(stats) = unit.build_target_stats() {
-                    total_mass += stats.build_cost_mass;
-                    total_energy += stats.build_cost_energy;
-                    total_work += stats.build_time;
-                }
+            if let Some(stats) = units.build_cost(id) {
+                total_mass += stats.build_cost_mass;
+                total_energy += stats.build_cost_energy;
+                total_work += stats.build_time;
             }
         }
 
-        if !self.has_completed_unit(&goal.id) {
-            if let Some(stats) = goal.build_target_stats() {
+        if !self.has_completed_unit(goal_id) {
+            if let Some(stats) = units.build_cost(goal_id) {
                 total_mass += stats.build_cost_mass;
                 total_energy += stats.build_cost_energy;
                 total_work += stats.build_time;
@@ -443,7 +525,7 @@ impl GraphState {
                 build_cost_energy: total_energy,
                 build_time: total_work,
             },
-            self.total_active_build_power(index),
+            self.total_active_build_power(units),
         )
     }
 
@@ -451,7 +533,7 @@ impl GraphState {
     fn validate_builders(
         &self,
         builders: &[NodeId],
-        index: &DataIndex,
+        units: &Units,
     ) -> Result<(), GraphSimError> {
         if builders.is_empty() {
             return Err(GraphSimError::NoBuilders);
@@ -468,7 +550,7 @@ impl GraphState {
             if busy.contains(&builder) {
                 return Err(GraphSimError::BuilderBusy(builder));
             }
-            if !is_builder_node(builder, &self.graph, index) {
+            if !is_builder_node(builder, &self.graph, units) {
                 return Err(GraphSimError::CannotBuild {
                     builder: self.graph[builder].unit_id.clone(),
                     target: "(not a builder)".to_string(),
@@ -484,41 +566,36 @@ impl GraphState {
     /// builders assist. Returns the node id of the new target unit.
     pub fn start_project(
         &mut self,
-        target: &Unit,
+        target_id: &str,
         builders: &[NodeId],
-        graph: &TechGraph,
+        units: &Units,
     ) -> Result<NodeId, GraphSimError> {
-        self.validate_builders(builders, graph.index())?;
+        self.validate_builders(builders, units)?;
 
-        let stats = target
-            .build_target_stats()
-            .ok_or_else(|| GraphSimError::NotBuildable(target.id.clone()))?;
+        let stats = units
+            .build_cost(target_id)
+            .ok_or_else(|| GraphSimError::NotBuildable(target_id.to_string()))?;
 
-        // At least one builder must be able to build the target.
-        let has_capable_builder = builders.iter().any(|&b| {
-            let builder_unit_id = &self.graph[b].unit_id;
-            graph
-                .can_build(builder_unit_id, &target.id)
-                .unwrap_or(false)
-        });
-        if !has_capable_builder {
+        let (started_by, assisted_by) = self.split_builders(builders, target_id, units);
+        if started_by.is_empty() {
             return Err(GraphSimError::CannotBuild {
                 builder: builders
                     .first()
                     .map(|b| self.graph[*b].unit_id.clone())
                     .unwrap_or_default(),
-                target: target.id.clone(),
+                target: target_id.to_string(),
             });
         }
 
         let node_id = NodeId::new(self.graph.graph.node_count());
         self.graph.graph.add_node(UnitNode {
             id: node_id,
-            unit_id: target.id.clone(),
-            start_time: self.time,
-            finish_time: f64::NAN,
-            replaces: None,
-            replaced_by: None,
+            unit_id: target_id.to_string(),
+            state: UnitNodeState::Building(BuildingUnitState::Constructing {
+                start: self.time,
+                started_by: started_by.clone(),
+                assisted_by: assisted_by.clone(),
+            }),
         });
 
         for &builder in builders {
@@ -537,43 +614,96 @@ impl GraphState {
             builders: builders.to_vec(),
             remaining_work: stats.build_time,
             start_time: self.time,
-            replaces: None,
         });
 
         Ok(node_id)
     }
 
-    /// Start an upgrade project that will replace `old_node` when it completes.
-    ///
-    /// This behaves like [`Self::start_project`], but when the project finishes
-    /// the old node is marked as replaced and no longer contributes to the
-    /// economy or acts as a builder.
-    pub fn start_upgrade_project(
-        &mut self,
-        target: &Unit,
+    /// Split builders into those capable of building the target and assistants.
+    fn split_builders(
+        &self,
         builders: &[NodeId],
-        old_node: NodeId,
-        graph: &TechGraph,
-    ) -> Result<NodeId, GraphSimError> {
-        let new_node = self.start_project(target, builders, graph)?;
-        if let Some(project) = self
-            .active_projects
-            .iter_mut()
-            .find(|p| p.target_node == new_node)
-        {
-            project.replaces = Some(old_node);
+        target_id: &str,
+        units: &Units,
+    ) -> (Vec<NodeId>, Vec<NodeId>) {
+        let mut started_by = Vec::new();
+        let mut assisted_by = Vec::new();
+        for &builder in builders {
+            let builder_unit_id = &self.graph[builder].unit_id;
+            if units.can_build(builder_unit_id, target_id) {
+                started_by.push(builder);
+            } else {
+                assisted_by.push(builder);
+            }
         }
-        Ok(new_node)
+        (started_by, assisted_by)
     }
 
-    /// Mark `old_node` as replaced by `new_node`. The old node becomes inactive
-    /// and no longer contributes to the economy or build power. The economy is
-    /// re-derived from the remaining active units.
-    pub fn replace_node(&mut self, index: &DataIndex, old_node: NodeId, new_node: NodeId) {
-        self.graph[old_node].replaced_by = Some(new_node);
-        self.graph[new_node].replaces = Some(old_node);
+    /// Start an upgrade of `old_node` to `target` using the given idle builders.
+    ///
+    /// The same physical slot is reused: `old_node` moves into the `Upgrading`
+    /// state and its `unit_id` becomes the target blueprint. On completion the
+    /// slot finishes as `Finished(Upgraded { from_unit_id: old_id })`.
+    ///
+    /// `upgrade_cost` provides the mass, energy, and build-time required for the
+    /// upgrade step; it is separate from `target.build_target_stats()` because
+    /// upgrades in FAF have their own costs.
+    pub fn start_upgrade_project(
+        &mut self,
+        target_id: &str,
+        old_node: NodeId,
+        builders: &[NodeId],
+        units: &Units,
+    ) -> Result<NodeId, GraphSimError> {
+        self.validate_builders(builders, units)?;
 
-        self.rebuild_economy(index);
+        let old_unit_id = self.graph[old_node].unit_id.clone();
+        let (target, upgrade_cost) = units
+            .upgrade_target(&old_unit_id)
+            .ok_or_else(|| GraphSimError::NotBuildable(target_id.to_string()))?;
+        if target.id != target_id {
+            return Err(GraphSimError::NotBuildable(target_id.to_string()));
+        }
+        let stats = upgrade_cost.to_build_target_stats();
+
+        let (started_by, assisted_by) = self.split_builders(builders, target_id, units);
+        if started_by.is_empty() {
+            return Err(GraphSimError::CannotBuild {
+                builder: builders
+                    .first()
+                    .map(|b| self.graph[*b].unit_id.clone())
+                    .unwrap_or_default(),
+                target: target_id.to_string(),
+            });
+        }
+
+        self.graph[old_node].unit_id = target_id.to_string();
+        self.graph[old_node].state = UnitNodeState::Building(BuildingUnitState::Upgrading {
+            start: self.time,
+            from_unit_id: old_unit_id.clone(),
+            started_by: started_by.clone(),
+            assisted_by: assisted_by.clone(),
+        });
+
+        for &builder in builders {
+            self.graph.graph.add_edge(
+                builder.0,
+                old_node.0,
+                BuildEdge {
+                    start_time: self.time,
+                    finish_time: f64::NAN,
+                },
+            );
+        }
+
+        self.active_projects.push(OngoingBuild {
+            target_node: old_node,
+            builders: builders.to_vec(),
+            remaining_work: stats.build_time,
+            start_time: self.time,
+        });
+
+        Ok(old_node)
     }
 
     /// Assign additional idle `builders` to an already active project.
@@ -584,9 +714,9 @@ impl GraphState {
         &mut self,
         project_index: usize,
         builders: &[NodeId],
-        _graph: &TechGraph,
+        units: &Units,
     ) -> Result<(), GraphSimError> {
-        self.validate_builders(builders, _graph.index())?;
+        self.validate_builders(builders, units)?;
 
         let project = self
             .active_projects
@@ -613,7 +743,7 @@ impl GraphState {
     /// Advance the simulation by `dt` seconds.
     ///
     /// Returns the node ids of any units that completed during this tick.
-    pub fn tick(&mut self, index: &DataIndex, dt: f64) -> Vec<NodeId> {
+    pub fn tick(&mut self, units: &Units, dt: f64) -> Vec<NodeId> {
         if dt <= 0.0 {
             return Vec::new();
         }
@@ -631,18 +761,14 @@ impl GraphState {
 
         for project in &self.active_projects {
             let target_id = &self.graph[project.target_node].unit_id;
-            let Some(target) = index.find_unit(target_id) else {
-                project_powers.push(0.0);
-                continue;
-            };
-            let Some(stats) = target.build_target_stats() else {
+            let Some(stats) = units.build_cost(target_id) else {
                 project_powers.push(0.0);
                 continue;
             };
             let power: f64 = project
                 .builders
                 .iter()
-                .map(|&b| builder_power(b, &self.graph, index))
+                .map(|&b| builder_power(b, &self.graph, units))
                 .sum();
             project_powers.push(power);
             let Some(drain) = compute_drain(&stats, RequestedBuildPower(power)) else {
@@ -672,7 +798,35 @@ impl GraphState {
                     1.0
                 };
                 let finish_time = self.time + fraction * dt;
-                self.graph[project.target_node].finish_time = finish_time;
+
+                // Transition the target node to its finished state.
+                {
+                    let node = &mut self.graph[project.target_node];
+                    let (start_time, from_unit_id) = match &node.state {
+                        UnitNodeState::Building(BuildingUnitState::Constructing {
+                            start, ..
+                        }) => (*start, None),
+                        UnitNodeState::Building(BuildingUnitState::Upgrading {
+                            start,
+                            from_unit_id,
+                            ..
+                        }) => (*start, Some(from_unit_id.clone())),
+                        _ => (self.time, None),
+                    };
+                    node.state = match from_unit_id {
+                        Some(from_unit_id) => {
+                            UnitNodeState::Finished(FinishedUnitState::Upgraded {
+                                start_time,
+                                finish_time,
+                                from_unit_id,
+                            })
+                        }
+                        None => UnitNodeState::Finished(FinishedUnitState::Constructed {
+                            start_time,
+                            finish_time,
+                        }),
+                    };
+                }
 
                 // Record the finish time on every builder assignment edge.
                 for &builder in &project.builders {
@@ -704,18 +858,23 @@ impl GraphState {
 
         for i in completed_indices {
             let project = self.active_projects.remove(i);
-            let unit_id = self.graph[project.target_node].unit_id.clone();
-
-            // If this was an upgrade, disable the node it replaces.
-            if let Some(old_node) = project.replaces {
-                self.replace_node(index, old_node, project.target_node);
-            }
+            let node = &self.graph[project.target_node];
+            let unit_id = node.unit_id.clone();
+            let finish_time = match &node.state {
+                UnitNodeState::Finished(FinishedUnitState::Constructed { finish_time, .. }) => {
+                    *finish_time
+                }
+                UnitNodeState::Finished(FinishedUnitState::Upgraded { finish_time, .. }) => {
+                    *finish_time
+                }
+                _ => self.time,
+            };
 
             self.events.push(BuildEvent {
-                time: self.graph[project.target_node].finish_time,
+                time: finish_time,
                 unit_id: unit_id.clone(),
-                unit_name: index
-                    .find_unit(&unit_id)
+                unit_name: units
+                    .find(&unit_id)
                     .map(|u| u.display_name())
                     .unwrap_or_else(|| unit_id.clone()),
             });
@@ -723,7 +882,7 @@ impl GraphState {
 
         // Re-derive economy from all active (completed and not replaced) units.
         if !completed_nodes.is_empty() {
-            self.rebuild_economy(index);
+            self.rebuild_economy(units);
         }
 
         completed_nodes
@@ -744,18 +903,17 @@ impl GraphState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tech_graph::TechGraph;
+    use crate::units::{DataIndex, default_upgrade_table, Units, UpgradeCost};
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn acu_starting_economy() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let state = derive_economy(&[acu]);
+        let units = load_units();
+        let state = derive_economy(&units, &["URL0001"]);
 
         assert!((state.net_mass_income - 1.0).abs() < 1e-9);
         assert!((state.net_energy_income - 20.0).abs() < 1e-9);
@@ -765,11 +923,8 @@ mod tests {
 
     #[test]
     fn derive_economy_subtracts_maintenance() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let t1_mex = index.find_unit("URB1103").expect("T1 mex exists");
-
-        let state = derive_economy(&[acu, t1_mex]);
+        let units = load_units();
+        let state = derive_economy(&units, &["URL0001", "URB1103"]);
 
         // ACU: +1 mass/s, +20 energy/s. T1 mex: +2 mass/s, -2 energy/s maintenance.
         assert!((state.net_mass_income - 3.0).abs() < 1e-9);
@@ -778,22 +933,21 @@ mod tests {
 
     #[test]
     fn acu_builds_t1_pgen() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
+        let acu = units.find("URL0001").expect("ACU exists");
+        let pgen = units.find("URB1101").expect("T1 pgen exists");
 
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         let acu_node = NodeId::new(0);
         state
-            .start_project(pgen, &[acu_node], &graph)
+            .start_project("URB1101", &[acu_node], &units)
             .expect("ACU can build T1 pgen");
 
         let acu_rate = acu.builder_capability().unwrap().build_rate;
         let expected_ticks = (pgen.build_target_stats().unwrap().build_time / acu_rate).ceil();
         let mut completed = Vec::new();
         for _ in 0..(expected_ticks as usize + 5) {
-            completed.extend(state.tick(&index, 1.0));
+            completed.extend(state.tick(&units, 1.0));
             if !completed.is_empty() {
                 break;
             }
@@ -802,20 +956,17 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(state.graph[completed[0]].unit_id, "URB1101");
         assert!(state.time > 0.0);
-        assert!(state.idle_builders(&index).contains(&acu_node));
+        assert!(state.idle_builders(&units).contains(&acu_node));
     }
 
     #[test]
     fn build_edge_records_interval() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
 
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         let acu_node = NodeId::new(0);
         let pgen_node = state
-            .start_project(pgen, &[acu_node], &graph)
+            .start_project("URB1101", &[acu_node], &units)
             .expect("ACU can build T1 pgen");
 
         let edge_idx = state
@@ -833,7 +984,7 @@ mod tests {
 
         // Tick until the pgen completes.
         for _ in 0..1000 {
-            state.tick(&index, 1.0);
+            state.tick(&units, 1.0);
             if state.is_completed(pgen_node) {
                 break;
             }
@@ -850,25 +1001,24 @@ mod tests {
             !edge.finish_time.is_nan(),
             "completed edge should have a finish time"
         );
-        assert_eq!(edge.finish_time, state.graph[pgen_node].finish_time);
+        assert_eq!(
+            edge.finish_time,
+            state.graph[pgen_node].finish_time().expect("pgen finished")
+        );
     }
 
     #[test]
     fn builders_are_indivisible() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
-        let mex = index.find_unit("URB1103").expect("T1 mex exists");
+        let units = load_units();
 
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         let acu_node = NodeId::new(0);
         state
-            .start_project(pgen, &[acu_node], &graph)
+            .start_project("URB1101", &[acu_node], &units)
             .expect("ACU can build pgen");
 
         // ACU is busy, so starting another project with it must fail.
-        let result = state.start_project(mex, &[acu_node], &graph);
+        let result = state.start_project("URB1103", &[acu_node], &units);
         assert!(
             matches!(result, Err(GraphSimError::BuilderBusy(id)) if id == acu_node),
             "ACU should be busy"
@@ -877,22 +1027,17 @@ mod tests {
 
     #[test]
     fn concurrent_projects_with_disjoint_builders() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let factory = index.find_unit("URB0101").expect("T1 factory exists");
-        let eng = index.find_unit("URL0105").expect("T1 engineer exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
 
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         let acu_node = NodeId::new(0);
         let factory_node = state
-            .start_project(factory, &[acu_node], &graph)
+            .start_project("URB0101", &[acu_node], &units)
             .expect("ACU builds factory");
 
         // Tick until the factory completes.
         for _ in 0..1000 {
-            state.tick(&index, 1.0);
+            state.tick(&units, 1.0);
             if state.is_completed(factory_node) {
                 break;
             }
@@ -902,28 +1047,28 @@ mod tests {
         // Start two concurrent projects: factory builds an engineer, ACU builds
         // a pgen. Both use disjoint builder sets.
         let eng_node = state
-            .start_project(eng, &[factory_node], &graph)
+            .start_project("URL0105", &[factory_node], &units)
             .expect("factory builds engineer");
         let pgen_node = state
-            .start_project(pgen, &[acu_node], &graph)
+            .start_project("URB1101", &[acu_node], &units)
             .expect("ACU builds pgen");
 
         assert_eq!(state.active_projects.len(), 2);
         assert!(
-            state.idle_builders(&index).is_empty(),
+            state.idle_builders(&units).is_empty(),
             "all builders should be assigned"
         );
 
         // Both should make progress each tick.
         let before0 = state.active_projects[0].remaining_work;
         let before1 = state.active_projects[1].remaining_work;
-        state.tick(&index, 1.0);
+        state.tick(&units, 1.0);
         assert!(state.active_projects[0].remaining_work < before0);
         assert!(state.active_projects[1].remaining_work < before1);
 
         // Finish both.
         for _ in 0..1000 {
-            state.tick(&index, 1.0);
+            state.tick(&units, 1.0);
             if state.is_completed(eng_node) && state.is_completed(pgen_node) {
                 break;
             }
@@ -933,78 +1078,94 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_replaces_old_node() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let t1_mex = index.find_unit("URB1103").expect("T1 mex exists");
+    fn upgrade_reuses_slot_and_updates_economy() {
+        // Use a custom upgrade table so the ACU can build the upgrade target.
+        // This keeps the test focused on slot reuse and economy update.
+        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
+        let index: DataIndex =
+            serde_json::from_str(json).expect("embedded index should parse");
         let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let pgen_stats = pgen.build_target_stats().expect("pgen has stats");
+        let mut upgrade_table = default_upgrade_table();
+        upgrade_table.insert(
+            "URB1103",
+            "URB1101",
+            UpgradeCost {
+                mass: pgen_stats.build_cost_mass,
+                energy: pgen_stats.build_cost_energy,
+                build_time: pgen_stats.build_time,
+            },
+        );
+        let units = Units::with_upgrade_table(index, upgrade_table);
+        let t1_mex = units.find("URB1103").expect("T1 mex exists");
 
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         let acu_node = NodeId::new(0);
 
-        // Build a T1 mex and a pgen; the pgen will stand in for an upgraded unit.
-        let t1_mex_node = state
-            .start_project(t1_mex, &[acu_node], &graph)
+        // Build a T1 mex.
+        let mex_node = state
+            .start_project("URB1103", &[acu_node], &units)
             .expect("ACU builds T1 mex");
         for _ in 0..1000 {
-            state.tick(&index, 1.0);
-            if state.is_completed(t1_mex_node) {
+            state.tick(&units, 1.0);
+            if state.is_completed(mex_node) {
                 break;
             }
         }
-        assert!(state.is_active(t1_mex_node), "T1 mex should be active");
+        assert!(state.is_active(mex_node), "T1 mex should be active");
+        assert!(
+            state.graph[mex_node].finish_time().is_some(),
+            "finished node has a finish time"
+        );
 
         // Economy should include the T1 mex production.
         let income_with_t1 = state.economy.net_mass_income;
         assert!(income_with_t1 > 1.0, "T1 mex should add mass income");
 
-        // Build a second unit, then manually replace the T1 mex with it to test
-        // the replacement mechanism (the same mechanism used by upgrades).
-        let replacement_node = state
-            .start_project(pgen, &[acu_node], &graph)
-            .expect("ACU builds pgen");
+        // Upgrade the mex slot to a pgen. The same node id is reused.
+        state
+            .start_upgrade_project("URB1101", mex_node, &[acu_node], &units)
+            .expect("ACU can upgrade the mex slot");
+        assert!(
+            state.graph[mex_node].is_upgrade(),
+            "slot should be in an upgrade state"
+        );
+        assert_eq!(
+            state.graph[mex_node].from_unit_id(),
+            Some(t1_mex.id.as_str()),
+            "upgrade should remember the original unit id"
+        );
+
         for _ in 0..1000 {
-            state.tick(&index, 1.0);
-            if state.is_completed(replacement_node) {
+            state.tick(&units, 1.0);
+            if state.is_completed(mex_node) {
                 break;
             }
         }
-        assert!(state.is_active(replacement_node));
-        state.replace_node(&index, t1_mex_node, replacement_node);
-
-        // T1 mex should now be replaced / inactive.
+        assert!(state.is_active(mex_node), "upgraded slot should be active");
         assert!(
-            !state.is_active(t1_mex_node),
-            "T1 mex should be inactive after replacement"
-        );
-        assert_eq!(
-            state.graph[replacement_node].replaces,
-            Some(t1_mex_node),
-            "replacement node should record the node it replaces"
-        );
-        assert_eq!(
-            state.graph[t1_mex_node].replaced_by,
-            Some(replacement_node),
-            "old node should record the node that replaced it"
+            matches!(
+                state.graph[mex_node].state,
+                UnitNodeState::Finished(FinishedUnitState::Upgraded { .. })
+            ),
+            "slot should finish in the Upgraded state"
         );
 
-        // Economy should no longer include the T1 mex.
-        let income_after_replace = state.economy.net_mass_income;
+        // Economy should now reflect the pgen, not the mex.
+        let income_after_upgrade = state.economy.net_mass_income;
         assert!(
-            (income_after_replace - 1.0).abs() < 1e-3,
-            "replacing T1 mex with a pgen should leave only ACU mass income"
+            (income_after_upgrade - 1.0).abs() < 1e-3,
+            "upgrading mex to pgen should leave only ACU mass income"
         );
     }
 
     #[test]
     fn energy_stall_reduces_mass_income() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
+        let units = load_units();
 
         // Force an energy-stalled project by starting a huge drain with no
         // energy income. We do this by creating a fake project state manually.
-        let mut state = GraphState::new(&[acu]);
+        let mut state = GraphState::new(&units, &["URL0001"]);
         state.economy.net_mass_income = 10.0;
         state.economy.net_energy_income = 0.0;
         state.economy.energy_storage = 0.0;

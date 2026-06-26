@@ -8,12 +8,10 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
-use faf_units::{DataIndex, Unit};
-
 use crate::economy::EconomyState;
 use crate::planner::{beam, greedy, mcts};
 use crate::sim::{BuildEvent, GraphState};
-use crate::tech_graph::TechGraphError;
+use crate::units::{TechGraphError, Units};
 
 /// Result of running a planner to completion.
 #[derive(Debug, Clone, PartialEq)]
@@ -191,23 +189,23 @@ impl Planner {
         Self { strategy, config }
     }
 
-    /// Run the planner from `initial_state` until `goal` is completed.
+    /// Run the planner from `initial_state` until `goal_id` is completed.
     ///
-    /// The planner uses `index` to look up unit blueprints and builds its own
-    /// internal [`crate::tech_graph::TechGraph`] for capability checks.
+    /// The planner uses `units` to look up unit blueprints and capability
+    /// relationships.
     pub fn plan(
         &self,
-        index: &DataIndex,
+        units: &Units,
         initial_state: GraphState,
-        goal: &Unit,
+        goal_id: &str,
     ) -> Result<PlanResult, PlannerError> {
         match self.strategy {
-            Strategy::Greedy => greedy::plan(index, initial_state, goal, &self.config),
+            Strategy::Greedy => greedy::plan(units, initial_state, goal_id, &self.config),
             Strategy::Beam { beam_width } => {
-                beam::plan(index, initial_state, goal, beam_width, &self.config)
+                beam::plan(units, initial_state, goal_id, beam_width, &self.config)
             }
             Strategy::Mcts { iterations } => {
-                mcts::plan(index, initial_state, goal, iterations, &self.config)
+                mcts::plan(units, initial_state, goal_id, iterations, &self.config)
             }
         }
     }
@@ -217,21 +215,20 @@ impl Planner {
 mod tests {
     use super::*;
     use crate::sim::GraphState;
+    use crate::units::Units;
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn greedy_planner_reaches_monkeylord() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let goal = index.find_unit("URL0402").expect("Monkeylord exists");
+        let units = load_units();
 
         let planner = Planner::new(Strategy::Greedy);
-        let initial = GraphState::new(&[acu]);
-        let result = planner.plan(&index, initial, goal).unwrap();
+        let initial = GraphState::new(&units, &["URL0001"]);
+        let result = planner.plan(&units, initial, "URL0402").unwrap();
 
         assert!(
             result
@@ -245,9 +242,7 @@ mod tests {
 
     #[test]
     fn beam_planner_reaches_monkeylord() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let goal = index.find_unit("URL0402").expect("Monkeylord exists");
+        let units = load_units();
 
         let planner = Planner::with_config(
             Strategy::Beam { beam_width: 50 },
@@ -257,8 +252,8 @@ mod tests {
                 ..PlannerConfig::default()
             },
         );
-        let initial = GraphState::new(&[acu]);
-        let result = planner.plan(&index, initial, goal).unwrap();
+        let initial = GraphState::new(&units, &["URL0001"]);
+        let result = planner.plan(&units, initial, "URL0402").unwrap();
 
         assert!(
             result

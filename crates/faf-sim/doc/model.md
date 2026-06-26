@@ -8,12 +8,33 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 
 ### Nodes
 
-- Each node represents one built unit.
+- Each node represents one built-unit slot. A slot can be constructed from scratch or reached by upgrading an earlier unit in the same slot.
 - Every node stores:
-  - `unit_type`: the blueprint/unit kind (e.g., `URL0001`, `URB0101`, `URL0402`).
-  - `start_time`: when construction of this unit began.
-  - `finish_time`: when construction of this unit completed.
-- The initial graph contains exactly one node: the ACU, with `start_time = finish_time = 0`.
+  - `unit_id`: the current blueprint identifier, e.g., `URL0001` (ACU), `URB0101` (T1 land factory), `URL0402` (Monkeylord).
+  - `state`: a lifecycle tag describing whether the slot is under construction or finished, and whether it was reached by construction or by upgrade.
+- The initial graph contains exactly one node: the ACU, finished at time 0.
+
+### Node lifecycle
+
+```rust
+// crates/faf-sim/src/sim.rs ~line 89 — UnitNodeState
+pub enum UnitNodeState {
+    Building(BuildingUnitState),
+    Finished(FinishedUnitState),
+}
+
+pub enum BuildingUnitState {
+    Constructing { start: f64, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
+    Upgrading { start: f64, from_unit_id: String, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
+}
+
+pub enum FinishedUnitState {
+    Constructed { start_time: f64, finish_time: f64 },
+    Upgraded { start_time: f64, finish_time: f64, from_unit_id: String },
+}
+```
+
+A slot transitions from `Finished` to `Building(Upgrading)` when an upgrade is started, and back to `Finished(Upgraded)` when the upgrade completes. This reuses the same node id, so an upgraded unit replaces its predecessor's economy and build-power contributions automatically.
 
 ### Edges
 
@@ -32,10 +53,19 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 
 Building a new unit means:
 
-1. Choose a set of existing builder nodes that can build the desired unit type.
+1. Choose a set of existing builder nodes that can build the desired unit id.
 2. Create a new node `B` for the target unit.
 3. Add edges from each chosen builder to `B`.
 4. Compute `start_time(B)` and `finish_time(B)` from the eco-drain model.
+
+Upgrading an existing unit means:
+
+1. Choose a finished unit slot `A` that has a registered upgrade target.
+2. Reuse node `A`: set its `unit_id` to the target blueprint and its state to `Building(Upgrading { from_unit_id: old_id })`.
+3. Add edges from the builders working on the upgrade.
+4. Compute the upgrade's finish time from the upgrade cost.
+
+Upgrade costs and target mappings are stored in the `UpgradeTable`, which is part of the `Units` repository (see below). The simulator does not read upgrade information from the raw blueprint data.
 
 ### Time and economy
 
@@ -63,9 +93,24 @@ Building a new unit means:
 1. **Primary**: minimize the completion time of the goal unit.
 2. **Secondary**: among plans with the same primary completion time, maximize mass income per mass invested in economy up to the moment the goal unit finishes.
 
+## Unit knowledge repository
+
+All static unit knowledge is accessed through the `Units` abstraction in `crates/faf-sim/src/units/mod.rs`. `Units` owns a copy of the raw `faf-units` index and builds derived structures (`TechGraph`, `UpgradeTable`) from it. The rest of `faf-sim` does not import `faf-units` directly.
+
+```rust
+// crates/faf-sim/src/units/mod.rs ~line 34 — Units (abbreviated)
+pub struct Units {
+    index: Arc<DataIndex>,
+    tech_graph: TechGraph,
+    upgrade_table: UpgradeTable,
+}
+```
+
+This keeps the FAF community data format isolated in one place and lets `faf-sim` add game-specific interpretations (upgrade chains, capability graph) without polluting the raw data crate.
+
 ## Assumptions
 
-- The static tech graph (who can build whom) is known and fixed.
+- Unit knowledge is provided by `Units`; the static tech graph and upgrade table are known and fixed for a given `Units` instance.
 - Build power, production, and drain are known per unit blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.

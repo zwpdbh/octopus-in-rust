@@ -53,7 +53,7 @@ More iterations almost always improve quality, but with diminishing returns:
 | MCTS is much slower than beam | Too many expansions or expensive value-net inference | Reduce iterations, batch inference, or use a smaller network. |
 | MCTS finds worse plans | Value net is inaccurate or undertrained | Add more training data, especially from MCTS states. |
 | MCTS explores silly actions | `c_puct` too high or value net overconfident | Lower `c_puct`, add action pruning, or train a policy prior. |
-| MCTS gets stuck repeating actions | Action pruning too aggressive or successor bug | Verify `Wait` is always legal and successors cover the goal path. |
+| MCTS gets stuck repeating actions | Action pruning too aggressive or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
 | Value net returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
 
 ## Robustness checks

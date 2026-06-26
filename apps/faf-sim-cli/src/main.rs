@@ -21,7 +21,7 @@ use std::time::Duration;
 use clap::Parser;
 use faf_sim::{
     Capability, Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor, Strategy,
-    TechGraph,
+    Units,
 };
 use faf_units::DataIndex;
 use tokio::sync::mpsc;
@@ -36,23 +36,23 @@ use target::{Faction, ResearchTarget, UnitKind};
 async fn main() {
     let cli = Cli::parse();
     let index = load_index();
-    let graph = TechGraph::new(&index);
+    let units = Units::new(index);
 
     match cli.command {
         CliCommand::Deps(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_deps(&graph, target, &args.stop_at);
+            run_deps(&units, target, &args.stop_at);
         }
         CliCommand::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_simulate(&index, target, args.strategy).await;
+            run_simulate(&units, target, args.strategy).await;
         }
         CliCommand::Plan(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_plan(&index, &graph, target, args.strategy);
+            run_plan(&units, target, args.strategy);
         }
     }
 }
@@ -81,9 +81,9 @@ fn resolve_target(faction: Faction, unit: UnitKind) -> ResearchTarget {
     target
 }
 
-fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
+fn run_deps(units: &Units, target: ResearchTarget, stop_at: &[String]) {
     let blueprint_id = target.blueprint_id();
-    let unit = match graph.index().find_unit(blueprint_id) {
+    let unit = match units.find(blueprint_id) {
         Some(u) => u,
         None => {
             eprintln!("Blueprint id not found in index: {}", blueprint_id);
@@ -100,7 +100,7 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     );
 
     println!("\nDirect builders:");
-    match graph.builders_for(blueprint_id) {
+    match units.builders_for(blueprint_id) {
         Ok(builders) if builders.is_empty() => println!("  (none)"),
         Ok(builders) => {
             for b in builders {
@@ -121,10 +121,10 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
 
     println!("\nTransitive prerequisites:");
     let prereqs = if stop_at.is_empty() {
-        graph.all_prerequisites_default(blueprint_id)
+        units.all_prerequisites_default(blueprint_id)
     } else {
         let refs: Vec<&str> = stop_at.iter().map(|s| s.as_str()).collect();
-        graph.all_prerequisites(blueprint_id, &refs)
+        units.all_prerequisites(blueprint_id, &refs)
     };
 
     match prereqs {
@@ -150,23 +150,21 @@ fn run_deps(graph: &TechGraph, target: ResearchTarget, stop_at: &[String]) {
     }
 }
 
-async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strategy) {
+async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy) {
     let blueprint_id = target.blueprint_id();
-    let target_unit = index
-        .find_unit(blueprint_id)
+    units
+        .find(blueprint_id)
         .expect("target blueprint must exist in index");
 
     println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
 
-    let starting_unit = index
-        .find_unit(match target.faction {
-            Faction::Uef => "UEL0001",
-            Faction::Cybran => "URL0001",
-            Faction::Aeon => "UAL0001",
-            Faction::Seraphim => "XSL0001",
-        })
-        .expect("ACU should exists in index");
+    let starting_unit_id = match target.faction {
+        Faction::Uef => "UEL0001",
+        Faction::Cybran => "URL0001",
+        Faction::Aeon => "UAL0001",
+        Faction::Seraphim => "XSL0001",
+    };
 
     // Pause tokio's clock so the actor loop can be driven forward
     // deterministically without waiting for real wall-clock time.
@@ -180,9 +178,9 @@ async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strat
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
     let sim = SimActor::new(
-        &[starting_unit],
-        index.clone(),
-        Some(target_unit),
+        &[starting_unit_id],
+        units.clone(),
+        Some(blueprint_id),
         sim_dt,
         obs_tx,
         cmd_rx,
@@ -191,7 +189,7 @@ async fn run_simulate(index: &DataIndex, target: ResearchTarget, strategy: Strat
 
     let planner = build_reactive_planner(strategy);
     let planner_actor =
-        PlannerActor::new(planner, index.clone(), target_unit.clone(), obs_rx, cmd_tx);
+        PlannerActor::new(planner, units.clone(), blueprint_id, obs_rx, cmd_tx);
     let planner_handle = tokio::spawn(planner_actor.run());
 
     // Drive the simulation timer forward until the goal is reached or we hit
@@ -278,7 +276,7 @@ fn format_time(seconds: f64) -> String {
     format!("{:.0}m {:.1}s", minutes, secs)
 }
 
-fn run_plan(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strategy: Strategy) {
+fn run_plan(units: &Units, target: ResearchTarget, strategy: Strategy) {
     println!(
         "Plan target: {} strategy: {}",
         target.display_name(),
@@ -297,12 +295,12 @@ fn run_plan(index: &DataIndex, graph: &TechGraph, target: ResearchTarget, strate
 
     let blueprint_id = target.blueprint_id();
 
-    match graph.prerequisite_chain(blueprint_id, Capability::ACU) {
+    match units.prerequisite_chain(blueprint_id, Capability::ACU) {
         Ok(chain) => {
             println!("\nSymbolic tech chain:");
             for (i, (cap, unit_id)) in chain.iter().enumerate() {
-                let name = index
-                    .find_unit(unit_id)
+                let name = units
+                    .find(unit_id)
                     .map(|u| u.display_name())
                     .unwrap_or_else(|| unit_id.clone());
                 println!("{:>2}. {} → build {} ({})", i + 1, cap, name, unit_id);

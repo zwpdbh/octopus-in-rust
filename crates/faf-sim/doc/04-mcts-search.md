@@ -79,12 +79,12 @@ After expansion, evaluate the new child:
 The scaffold currently leaves the search loop unimplemented:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 57 — MctsSearch::search (placeholder)
+// crates/faf-sim/src/planner/mcts/search.rs ~line 56 — MctsSearch::search (placeholder)
 pub fn search(
     &self,
     _initial_state: GraphState,
-    _goal: &Unit,
-    _index: &DataIndex,
+    _goal_id: &str,
+    _units: &Units,
     _planner_config: &PlannerConfig,
     _value_net: &ValueNet,
 ) -> Result<PlanResult, PlannerError> {

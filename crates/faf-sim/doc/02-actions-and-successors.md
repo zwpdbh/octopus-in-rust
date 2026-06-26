@@ -2,16 +2,22 @@
 
 MCTS expands a state by applying every legal action. This chapter describes the action space for FAF build orders, how successors are generated, and how to keep the branching factor under control.
 
-## The three action types
+## The four action types
 
 The planner uses a single enum for all moves:
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 18 — SearchAction enum
+// crates/faf-sim/src/planner/search.rs ~line 14 — SearchAction enum
 pub enum SearchAction {
     /// Build a unit with the given builders.
     Build {
         unit_id: String,
+        builders: Vec<NodeId>,
+    },
+    /// Upgrade an existing unit in-place to a higher-tier blueprint.
+    Upgrade {
+        target_unit_id: String,
+        old_node: NodeId,
         builders: Vec<NodeId>,
     },
     /// Assist an active project with additional builders.
@@ -25,6 +31,7 @@ pub enum SearchAction {
 ```
 
 - `Build` starts a new project for a unit, assigning one or more idle builders to it.
+- `Upgrade` reuses an existing finished slot and transitions it to a higher-tier unit. The source unit must have a registered upgrade target in `Units`.
 - `Assist` adds idle builders to an already-started project.
 - `Wait` advances the simulator by one tick. It is the only legal action when no builder is idle.
 
@@ -33,13 +40,12 @@ pub enum SearchAction {
 The existing `SearchConfig::successors` function produces every `(GraphState, SearchAction)` pair reachable in one step. MCTS calls this function at expansion time.
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 47 — SearchConfig::successors (signature)
+// crates/faf-sim/src/planner/search.rs ~line 49 — SearchConfig::successors (signature)
 pub fn successors(
     self,
-    index: &DataIndex,
-    tech_graph: &TechGraph,
+    units: &Units,
     state: &GraphState,
-    goal: &Unit,
+    goal_id: &str,
     goal_chain: &[(Capability, String)],
 ) -> Vec<(GraphState, SearchAction)> {
     // ...
@@ -49,10 +55,11 @@ pub fn successors(
 The function does the following:
 
 1. Collect idle builders. If none are idle, return only a `Wait` successor.
-2. Determine candidate units that could help reach the goal, using the tech graph and the goal's prerequisite chain.
+2. Determine candidate units that could help reach the goal, using `Units` (tech graph and goal prerequisite chain).
 3. For each candidate unit, try starting a project with all idle builders and with the single fastest capable idle builder.
-4. For each active project, try assisting it with all idle builders.
-5. Always include a `Wait` successor.
+4. For each finished unit that has a registered upgrade target in `Units`, try starting an upgrade with all idle builders and with the single fastest capable idle builder.
+5. For each active project, try assisting it with all idle builders.
+6. Always include a `Wait` successor.
 
 ## Why the branching factor matters
 
@@ -70,7 +77,8 @@ The current code already does some pruning via `max_mex_count`, `max_pgen_count`
 Not every `SearchAction` is valid in every state. The simulator rejects actions that violate constraints:
 
 - A busy builder cannot start a new project.
-- A builder cannot build a unit it is not capable of building.
+- A builder cannot build or upgrade a unit it is not capable of building.
+- A builder cannot upgrade a unit that has no registered upgrade target.
 - A builder cannot assist a non-existent project.
 
 The successor generator pre-filters most illegal actions, and the simulator's `start_project`/`assist_project` methods return errors for the rest. MCTS expansion should never crash on an illegal action; it should simply skip it.

@@ -5,13 +5,11 @@
 
 use std::collections::HashSet;
 
-use faf_units::{DataIndex, Unit};
-
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 
 use crate::planner::search::{to_plan_result, visited_key, SearchAction, SearchConfig, VisitedKey};
 use crate::sim::GraphState;
-use crate::tech_graph::{Capability, TechGraph};
+use crate::units::{Capability, Units};
 
 /// A node in the beam, tracking the state and the first action taken from the
 /// root state on the path that led here.
@@ -20,19 +18,18 @@ struct BeamNode {
     first_action: Option<SearchAction>,
 }
 
-/// Plan a build order for `goal` using beam search.
+/// Plan a build order for `goal_id` using beam search.
 ///
 /// `beam_width` controls how many states are kept after each search layer.
 /// `config` provides the shared search parameters.
 pub(crate) fn plan(
-    index: &DataIndex,
+    units: &Units,
     initial_state: GraphState,
-    goal: &Unit,
+    goal_id: &str,
     beam_width: usize,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    let tech_graph = TechGraph::new(index);
-    let goal_chain = tech_graph.prerequisite_chain(&goal.id, Capability::ACU)?;
+    let goal_chain = units.prerequisite_chain(goal_id, Capability::ACU)?;
 
     let chain_unit_ids: Vec<String> = goal_chain.iter().map(|(_, id)| id.clone()).collect();
 
@@ -58,7 +55,7 @@ pub(crate) fn plan(
             }
 
             for (succ_state, action) in
-                search_config.successors(index, &tech_graph, &node.state, goal, &goal_chain)
+                search_config.successors(units, &node.state, goal_id, &goal_chain)
             {
                 let first_action = node.first_action.clone().unwrap_or(action);
                 next_beam.push(BeamNode {
@@ -71,10 +68,10 @@ pub(crate) fn plan(
         next_beam.sort_by(|a, b| {
             let fa = a.state.time
                 + a.state
-                    .estimate_remaining_time_to_goal(goal, &chain_unit_ids, index);
+                    .estimate_remaining_time_to_goal(goal_id, &chain_unit_ids, units);
             let fb = b.state.time
                 + b.state
-                    .estimate_remaining_time_to_goal(goal, &chain_unit_ids, index);
+                    .estimate_remaining_time_to_goal(goal_id, &chain_unit_ids, units);
             fa.total_cmp(&fb)
         });
 
@@ -84,7 +81,7 @@ pub(crate) fn plan(
         }
 
         // If any state in the sorted beam satisfies the goal, return it.
-        if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal)) {
+        if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal_id)) {
             return Ok(to_plan_result(
                 node.state.clone(),
                 preferred_first_action(&beam),
@@ -93,7 +90,7 @@ pub(crate) fn plan(
     }
 
     // Final pass: any remaining state may already satisfy the goal.
-    if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal)) {
+    if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal_id)) {
         return Ok(to_plan_result(
             node.state.clone(),
             preferred_first_action(&beam),
@@ -118,7 +115,9 @@ pub(crate) fn plan(
 fn preferred_first_action(beam: &[BeamNode]) -> Option<SearchAction> {
     for node in beam {
         match &node.first_action {
-            Some(SearchAction::Build { .. }) | Some(SearchAction::Assist { .. }) => {
+            Some(SearchAction::Build { .. })
+            | Some(SearchAction::Assist { .. })
+            | Some(SearchAction::Upgrade { .. }) => {
                 return node.first_action.clone();
             }
             _ => {}
@@ -132,17 +131,16 @@ mod tests {
     use super::*;
     use crate::planner::core::{Planner, Strategy};
     use crate::sim::GraphState;
+    use crate::units::Units;
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn beam_planner_reaches_pgen() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let goal = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
 
         let planner = Planner::with_config(
             Strategy::Beam { beam_width: 20 },
@@ -152,8 +150,8 @@ mod tests {
                 ..PlannerConfig::default()
             },
         );
-        let initial = GraphState::new(&[acu]);
-        let result = planner.plan(&index, initial, goal).unwrap();
+        let initial = GraphState::new(&units, &["URL0001"]);
+        let result = planner.plan(&units, initial, "URB1101").unwrap();
 
         assert!(
             result

@@ -10,6 +10,9 @@ Short names and acronyms used across this documentation track.
 | FAF | Forged Alliance Forever | The game whose build orders this project optimizes. |
 | MCTS | Monte Carlo Tree Search | The search algorithm at the core of this track. |
 | ReLU | Rectified Linear Unit | Activation function used in the value network. |
+| TechGraph | Capability-level dependency graph | `Units` layer that answers "who can build whom?" |
 | UCB1 | Upper Confidence Bound 1 | The selection formula used inside UCT. |
 | UCT | Upper Confidence Bound applied to Trees | The tree-selection strategy used by MCTS. |
+| Units | Unified unit knowledge repository | `faf-sim` abstraction over `faf-units`. |
+| UpgradeTable | Hand-curated upgrade cost table | `Units` layer that answers "what upgrades into what, and for what cost?" |
 | WGPU | WebGPU | Optional `burn` backend for cross-platform GPU inference. |

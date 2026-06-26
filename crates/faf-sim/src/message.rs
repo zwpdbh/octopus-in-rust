@@ -26,6 +26,15 @@ pub enum Command {
         /// Builder nodes to add to the project.
         builders: Vec<NodeId>,
     },
+    /// Upgrade an existing unit in-place to a higher-tier blueprint.
+    Upgrade {
+        /// Blueprint id of the unit to upgrade into.
+        target_unit_id: String,
+        /// Node id of the unit being upgraded.
+        old_node: NodeId,
+        /// Builder nodes that will work on the upgrade.
+        builders: Vec<NodeId>,
+    },
 }
 
 /// Observation sent from the simulation to the planner.

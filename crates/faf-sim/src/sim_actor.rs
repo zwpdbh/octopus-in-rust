@@ -14,22 +14,21 @@
 
 use std::time::Duration;
 
-use faf_units::{DataIndex, Unit};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, Interval};
 
 use crate::message::{Command, Observation};
 use crate::sim::{BuildEvent, GraphSimError, GraphState, NodeId};
-use crate::tech_graph::TechGraph;
+use crate::units::Units;
 
 /// Actor that runs the simulation.
 pub struct SimActor {
     /// Authoritative simulation state.
     pub state: GraphState,
-    /// Unit database.
-    pub index: DataIndex,
-    /// Goal unit that, when completed, stops the simulation.
-    pub goal: Option<Unit>,
+    /// Unified unit knowledge repository.
+    pub units: Units,
+    /// Goal unit id that, when completed, stops the simulation.
+    pub goal: Option<String>,
     /// Fixed tick duration in seconds.
     pub dt: f64,
     /// Timer that drives the simulation tick loop.
@@ -48,19 +47,19 @@ impl SimActor {
     /// If `goal` is `Some`, the actor will stop automatically once that unit has
     /// been completed.
     pub fn new(
-        starting_units: &[&Unit],
-        index: DataIndex,
-        goal: Option<&Unit>,
+        starting_unit_ids: &[&str],
+        units: Units,
+        goal_id: Option<&str>,
         dt: f64,
         obs_tx: Sender<Observation>,
         cmd_rx: Receiver<Command>,
     ) -> Self {
-        let state = GraphState::new(starting_units);
+        let state = GraphState::new(&units, starting_unit_ids);
         let timer = interval(Duration::from_secs_f64(dt));
         Self {
             state,
-            index,
-            goal: goal.cloned(),
+            units,
+            goal: goal_id.map(|id| id.to_string()),
             dt,
             timer,
             command_queue: Vec::new(),
@@ -108,7 +107,7 @@ impl SimActor {
             self.apply_command(command)?;
         }
 
-        let completed = self.state.tick(&self.index, self.dt);
+        let completed = self.state.tick(&self.units, self.dt);
 
         // Report each completed unit as an event.
         for node_id in completed {
@@ -134,22 +133,17 @@ impl SimActor {
 
     /// Returns true if the configured goal unit has been completed.
     fn goal_reached(&self) -> bool {
-        let Some(goal) = &self.goal else {
+        let Some(goal_id) = &self.goal else {
             return false;
         };
-        self.state.goal_reached(goal)
+        self.state.goal_reached(goal_id)
     }
 
     /// Apply a planner command to the simulation state.
     fn apply_command(&mut self, command: Command) -> Result<(), GraphSimError> {
-        let graph = TechGraph::new(&self.index);
         match command {
             Command::Build { unit_id, builders } => {
-                let target = self
-                    .index
-                    .find_unit(&unit_id)
-                    .ok_or_else(|| GraphSimError::NotBuildable(unit_id))?;
-                self.state.start_project(target, &builders, &graph)?;
+                self.state.start_project(&unit_id, &builders, &self.units)?;
             }
             Command::Assist {
                 project_node,
@@ -165,7 +159,15 @@ impl SimActor {
                     .position(|p| p.target_node == project_node)
                     .ok_or(GraphSimError::ProjectNotFound)?;
                 self.state
-                    .assist_project(project_index, &builders, &graph)?;
+                    .assist_project(project_index, &builders, &self.units)?;
+            }
+            Command::Upgrade {
+                target_unit_id,
+                old_node,
+                builders,
+            } => {
+                self.state
+                    .start_upgrade_project(&target_unit_id, old_node, &builders, &self.units)?;
             }
         }
         Ok(())
@@ -175,8 +177,8 @@ impl SimActor {
     fn build_event(&self, node_id: NodeId) -> BuildEvent {
         let unit_id = self.state.graph[node_id].unit_id.clone();
         let unit_name = self
-            .index
-            .find_unit(&unit_id)
+            .units
+            .find(&unit_id)
             .map(|u| u.display_name().to_string())
             .unwrap_or_else(|| unit_id.clone());
         BuildEvent {

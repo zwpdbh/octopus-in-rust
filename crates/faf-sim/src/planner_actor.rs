@@ -3,16 +3,25 @@
 //! The actor receives observations, delegates the decision to the underlying
 //! [`Planner`], and forwards the resulting command back to the simulation.
 
-use faf_units::{DataIndex, Unit};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::message::{Command, Observation};
 use crate::planner::search::SearchAction;
 use crate::planner::Planner;
+use crate::units::Units;
 
 fn search_action_to_command(action: SearchAction) -> Option<Command> {
     match action {
         SearchAction::Build { unit_id, builders } => Some(Command::Build { unit_id, builders }),
+        SearchAction::Upgrade {
+            target_unit_id,
+            old_node,
+            builders,
+        } => Some(Command::Upgrade {
+            target_unit_id,
+            old_node,
+            builders,
+        }),
         SearchAction::Assist {
             project_node,
             builders,
@@ -27,8 +36,8 @@ fn search_action_to_command(action: SearchAction) -> Option<Command> {
 /// Actor that runs a planner and exchanges messages with a simulation.
 pub struct PlannerActor {
     planner: Planner,
-    index: DataIndex,
-    goal: Unit,
+    units: Units,
+    goal_id: String,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
 }
@@ -37,15 +46,15 @@ impl PlannerActor {
     /// Create a new planner actor.
     pub fn new(
         planner: Planner,
-        index: DataIndex,
-        goal: Unit,
+        units: Units,
+        goal_id: &str,
         obs_rx: Receiver<Observation>,
         cmd_tx: Sender<Command>,
     ) -> Self {
         Self {
             planner,
-            index,
-            goal,
+            units,
+            goal_id: goal_id.to_string(),
             obs_rx,
             cmd_tx,
         }
@@ -59,7 +68,10 @@ impl PlannerActor {
         while let Some(observation) = self.obs_rx.recv().await {
             let command = match observation {
                 Observation::State(state) => {
-                    let plan = self.planner.plan(&self.index, state, &self.goal).ok();
+                    let plan = self
+                        .planner
+                        .plan(&self.units, state, &self.goal_id)
+                        .ok();
                     plan.and_then(|p| p.first_action)
                         .and_then(search_action_to_command)
                 }
@@ -78,30 +90,28 @@ impl PlannerActor {
 
 #[cfg(test)]
 mod tests {
-    use faf_units::DataIndex;
     use tokio::sync::mpsc;
 
     use crate::message::{Command, Observation};
     use crate::planner::{Planner, Strategy};
     use crate::planner_actor::PlannerActor;
     use crate::sim_actor::SimActor;
+    use crate::units::Units;
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[tokio::test]
     async fn reactive_beam_actor_reaches_pgen() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
         let sim_dt = 0.5;
 
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&[acu], index.clone(), Some(pgen), sim_dt, obs_tx, cmd_rx);
+        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), sim_dt, obs_tx, cmd_rx);
         tokio::spawn(sim.run());
 
         let planner = Planner::with_config(
@@ -118,7 +128,7 @@ mod tests {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
                     let cmd = planner
-                        .plan(&index, state, &pgen)
+                        .plan(&units, state, "URB1101")
                         .ok()
                         .and_then(|p| p.first_action)
                         .and_then(super::search_action_to_command);
@@ -147,14 +157,12 @@ mod tests {
 
     #[tokio::test]
     async fn reactive_greedy_actor_reaches_pgen() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
 
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&[acu], index.clone(), Some(pgen), 0.5, obs_tx, cmd_rx);
+        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), 0.5, obs_tx, cmd_rx);
         tokio::spawn(sim.run());
 
         let planner = Planner::new(Strategy::Greedy);
@@ -164,7 +172,7 @@ mod tests {
             match obs_rx.recv().await {
                 Some(Observation::State(state)) => {
                     let cmd = planner
-                        .plan(&index, state, &pgen)
+                        .plan(&units, state, "URB1101")
                         .ok()
                         .and_then(|p| p.first_action)
                         .and_then(super::search_action_to_command);
@@ -193,14 +201,13 @@ mod tests {
 
     #[tokio::test]
     async fn sim_actor_ticks_without_planner_commands() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
+        let units = load_units();
         let dt = 0.1;
 
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&[acu], index.clone(), None, dt, obs_tx, cmd_rx);
+        let sim = SimActor::new(&["URL0001"], units.clone(), None, dt, obs_tx, cmd_rx);
         let handle = tokio::spawn(sim.run());
 
         // The simulation ticks on its own timer. Collect observations for a
@@ -227,14 +234,12 @@ mod tests {
 
     #[tokio::test]
     async fn actor_loop_reaches_goal_and_stops() {
-        let index = load_index();
-        let acu = index.find_unit("URL0001").expect("ACU exists");
-        let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
+        let units = load_units();
 
         let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&[acu], index.clone(), Some(pgen), 0.5, obs_tx, cmd_rx);
+        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), 0.5, obs_tx, cmd_rx);
         let sim_handle = tokio::spawn(sim.run());
 
         let planner = Planner::with_config(
@@ -245,7 +250,7 @@ mod tests {
                 ..crate::planner::PlannerConfig::default()
             },
         );
-        let planner_actor = PlannerActor::new(planner, index.clone(), pgen.clone(), obs_rx, cmd_tx);
+        let planner_actor = PlannerActor::new(planner, units.clone(), "URB1101", obs_rx, cmd_tx);
         let planner_handle = tokio::spawn(planner_actor.run());
 
         // Both actors should shut down cleanly once the pgen is completed.

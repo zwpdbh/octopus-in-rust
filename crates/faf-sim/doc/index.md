@@ -9,7 +9,7 @@ The focus is practical: how to frame the simulator as an MCTS search problem, ho
 1. A state representation that the MCTS can reason about.
 2. A compact, legal action generator.
 3. A small neural network that predicts how much time remains from any state.
-4. A UCT search that uses that network to choose the next build/assist/wait command.
+4. A UCT search that uses that network to choose the next build/upgrade/assist/wait command.
 5. A training pipeline that turns simulator rollouts into value-net weights.
 6. A benchmark suite that compares MCTS against the existing beam-search baseline.
 

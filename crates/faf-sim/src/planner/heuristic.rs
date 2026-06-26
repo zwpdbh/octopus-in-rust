@@ -30,10 +30,8 @@
 
 use std::collections::HashSet;
 
-use faf_units::{DataIndex, Unit};
-
 use crate::sim::GraphState;
-use crate::tech_graph::Capability;
+use crate::units::{Capability, Unit, Units};
 
 /// Candidate units to consider building next.
 ///
@@ -46,9 +44,9 @@ use crate::tech_graph::Capability;
 /// - The most efficient mass extractor, power generator, engineer, and factory
 ///   per tech tier matching the goal faction.
 pub(crate) fn candidate_units<'a>(
-    index: &'a DataIndex,
+    units: &'a Units,
     state: &'a GraphState,
-    goal: &Unit,
+    goal_id: &str,
     goal_chain: &[(Capability, String)],
 ) -> Vec<&'a Unit> {
     let mut ids: HashSet<String> = HashSet::new();
@@ -60,11 +58,11 @@ pub(crate) fn candidate_units<'a>(
             break;
         }
     }
-    ids.insert(goal.id.clone());
+    ids.insert(goal_id.to_ascii_uppercase());
 
-    let goal_faction = goal.faction();
-    let faction_units: Vec<&Unit> = index
-        .units
+    let goal_faction = units.find(goal_id).and_then(|u| u.faction());
+    let faction_units: Vec<&Unit> = units
+        .all_units()
         .iter()
         .filter(|u| match goal_faction {
             Some(f) => u.is_faction(f),
@@ -104,7 +102,7 @@ pub(crate) fn candidate_units<'a>(
     }
 
     ids.iter()
-        .filter_map(|id| index.find_unit(id))
+        .filter_map(|id| units.find(id))
         .filter(|u| u.build_target_stats().is_some())
         .collect()
 }
@@ -170,18 +168,18 @@ fn efficiency(unit: &Unit, category: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faf_units::DataIndex;
+    use crate::units::Units;
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn most_efficient_mex_is_t1() {
-        let index = load_index();
-        let faction_units: Vec<&Unit> = index
-            .units
+        let units = load_units();
+        let faction_units: Vec<&Unit> = units
+            .all_units()
             .iter()
             .filter(|u| u.is_faction("Cybran"))
             .collect();
@@ -197,9 +195,9 @@ mod tests {
 
     #[test]
     fn higher_tech_pgen_is_more_efficient() {
-        let index = load_index();
-        let faction_units: Vec<&Unit> = index
-            .units
+        let units = load_units();
+        let faction_units: Vec<&Unit> = units
+            .all_units()
             .iter()
             .filter(|u| u.is_faction("Cybran"))
             .collect();
@@ -231,9 +229,9 @@ mod tests {
 
     #[test]
     fn higher_tech_engineer_is_more_efficient() {
-        let index = load_index();
-        let faction_units: Vec<&Unit> = index
-            .units
+        let units = load_units();
+        let faction_units: Vec<&Unit> = units
+            .all_units()
             .iter()
             .filter(|u| u.is_faction("Cybran"))
             .collect();

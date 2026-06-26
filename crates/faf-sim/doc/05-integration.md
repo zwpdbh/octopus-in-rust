@@ -31,20 +31,20 @@ The MCTS variant is already declared. The missing piece is the implementation of
 `Planner::plan` matches on the strategy and forwards to the corresponding module:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 198 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 196 — Planner::plan dispatch
 pub fn plan(
     &self,
-    index: &DataIndex,
+    units: &Units,
     initial_state: GraphState,
-    goal: &Unit,
+    goal_id: &str,
 ) -> Result<PlanResult, PlannerError> {
     match self.strategy {
-        Strategy::Greedy => greedy::plan(index, initial_state, goal, &self.config),
+        Strategy::Greedy => greedy::plan(units, initial_state, goal_id, &self.config),
         Strategy::Beam { beam_width } => {
-            beam::plan(index, initial_state, goal, beam_width, &self.config)
+            beam::plan(units, initial_state, goal_id, beam_width, &self.config)
         }
         Strategy::Mcts { iterations } => {
-            mcts::plan(index, initial_state, goal, iterations, &self.config)
+            mcts::plan(units, initial_state, goal_id, iterations, &self.config)
         }
     }
 }
@@ -53,11 +53,11 @@ pub fn plan(
 The MCTS entry point is currently a stub:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 38 — mcts::plan (placeholder)
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 37 — mcts::plan (placeholder)
 pub fn plan(
-    _index: &DataIndex,
+    _units: &Units,
     _initial_state: GraphState,
-    _goal: &Unit,
+    _goal_id: &str,
     _iterations: usize,
     _config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
@@ -69,7 +69,7 @@ When implemented, it should:
 
 1. Load or construct a `ValueNet`.
 2. Build an `MctsSearch` with the requested iteration count.
-3. Run `search` from `initial_state`.
+3. Run `search` from `initial_state` using `units` for all unit knowledge.
 4. Convert the best `SearchAction` into a `PlanResult`.
 
 ## Reactive planning
@@ -149,7 +149,7 @@ A minimal integration test looks like this:
 ```rust
 // docref: example
 let planner = Planner::new(Strategy::Mcts { iterations: 100 });
-let result = planner.plan(&index, initial_state, goal)?;
+let result = planner.plan(&units, initial_state, "URL0402")?;
 
 if let Some(action) = result.first_action {
     println!("next action: {:?}", action);

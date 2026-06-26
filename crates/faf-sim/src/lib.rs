@@ -2,11 +2,11 @@
 //!
 //! This crate sits on top of `faf-units` and provides:
 //!
-//! - `tech_graph` — symbolic capability dependency graph (who can build whom).
 //! - `economy` — continuous-drain resource model.
 //! - `sim` — economy derivation and graph-growth simulator.
 //! - `planner` — planner trait, strategy registry, and concrete planner
 //!   implementations.
+//! - `units` — unified unit knowledge repository (capabilities, upgrades, stats).
 
 pub mod economy;
 pub mod message;
@@ -14,7 +14,7 @@ pub mod planner;
 pub mod planner_actor;
 pub mod sim;
 pub mod sim_actor;
-pub mod tech_graph;
+pub mod units;
 
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
@@ -30,24 +30,25 @@ pub use sim::{
 };
 pub use sim_actor::SimActor;
 
-pub use tech_graph::{Capability, TechGraph, TechGraphError, TechNode};
+pub use units::{
+    default_upgrade_table, Capability, TechGraph, TechGraphError, TechNode, Units, UpgradeCost,
+    UpgradeTable,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faf_units::DataIndex;
 
-    fn load_index() -> DataIndex {
+    fn load_units() -> Units {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        serde_json::from_str(json).expect("embedded index should parse")
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn monkeylord_requires_t3_engineer_or_t3_acu() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
+        let units = load_units();
 
-        let builders: Vec<String> = graph
+        let builders: Vec<String> = units
             .builders_for("URL0402")
             .expect("URL0402 exists")
             .into_iter()
@@ -66,10 +67,9 @@ mod tests {
 
     #[test]
     fn t1_factory_is_built_by_commander_and_t1_engineer() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
+        let units = load_units();
 
-        let builders: Vec<String> = graph
+        let builders: Vec<String> = units
             .builders_for("URB0101")
             .expect("URB0101 exists")
             .into_iter()
@@ -82,10 +82,9 @@ mod tests {
 
     #[test]
     fn all_prerequisites_for_monkeylord_via_engineer_path() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
+        let units = load_units();
 
-        let prereqs: Vec<String> = graph
+        let prereqs: Vec<String> = units
             .all_prerequisites_default("URL0402")
             .expect("URL0402 exists")
             .into_iter()
@@ -104,10 +103,9 @@ mod tests {
 
     #[test]
     fn uef_fatboy_prerequisites_contain_factory_and_engineer_chains() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
+        let units = load_units();
 
-        let direct: Vec<String> = graph
+        let direct: Vec<String> = units
             .builders_for("UEL0401")
             .expect("UEL0401 exists")
             .into_iter()
@@ -130,7 +128,7 @@ mod tests {
             direct
         );
 
-        let prereqs: Vec<String> = graph
+        let prereqs: Vec<String> = units
             .all_prerequisites_default("UEL0401")
             .expect("UEL0401 exists")
             .into_iter()
@@ -170,8 +168,7 @@ mod tests {
 
     #[test]
     fn unknown_unit_returns_error() {
-        let index = load_index();
-        let graph = TechGraph::new(&index);
-        assert!(graph.all_prerequisites_default("NOT_A_UNIT").is_err());
+        let units = load_units();
+        assert!(units.all_prerequisites_default("NOT_A_UNIT").is_err());
     }
 }

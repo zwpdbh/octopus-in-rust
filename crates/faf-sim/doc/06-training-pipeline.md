@@ -18,8 +18,8 @@ Run the existing beam planner (or even greedy and random policies) on a curricul
 
 For every visited `GraphState`, record:
 
-- the state features,
-- the goal unit,
+- the state features (using `featurize(state, goal_id, &units)`),
+- the goal unit id,
 - the true final completion time from that state.
 
 Because the simulator is deterministic, the completion time from any state is exact. You do not need to average over multiple rollouts.
@@ -58,8 +58,8 @@ A pure value net still lets MCTS explore blindly at the root. You can add a **po
 
 The policy network takes the same features as the value network and outputs a probability for each legal action. Because the action space is variable-size, use action masking:
 
-1. Generate all legal actions with `SearchConfig::successors`.
-2. Map each action to a fixed index in an action vocabulary.
+1. Generate all legal actions with `SearchConfig::successors(&units, state, goal_id, goal_chain)`.
+2. Map each action to a fixed index in an action vocabulary. `Upgrade` actions are indexed by `(old_node, target_unit_id)`; `Build` actions by `unit_id`; `Assist` by `project_node`; `Wait` is a single fixed index.
 3. Set the logits of illegal actions to `-inf` before softmax.
 
 The UCT formula then becomes:
