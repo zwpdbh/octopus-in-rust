@@ -6,7 +6,7 @@ For the full formal model â€” exact definitions, constraints, and assumptions â€
 
 ## From ACU to goal
 
-The simulator starts with a single completed unit: the ACU. Every other unit is built by assigning builders from the existing graph. The state therefore records:
+The simulator starts with a single completed unit: the ACU (Armored Command Unit). Every other unit is built by assigning builders from the existing graph. The state therefore records:
 
 - every unit that exists,
 - when each unit started and finished,
@@ -85,7 +85,7 @@ The value network receives a featurized version of this snapshot (see [`03-value
 
 ## Objectives
 
-1. **Primary:** minimize the completion time of the last goal unit.
+1. **Primary:** minimize the completion time of the goal unit.
 2. **Secondary:** among plans with the same primary time, maximize mass income per mass invested in economy up to that completion time. This prevents the optimizer from rewarding extra economy built after the goal is already reached.
 
 ## Assumptions
@@ -94,4 +94,4 @@ The value network receives a featurized version of this snapshot (see [`03-value
 - Build power, production, and drain are known per blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.
-- There may be one or more goal units.
+- There is exactly one goal unit.

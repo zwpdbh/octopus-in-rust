@@ -319,6 +319,106 @@ pub struct EconomyState {
     pub energy_storage_cap: f64,
 }
 
+impl EconomyState {
+    /// Estimate how long it would take this economy to finish `cost` work at
+    /// `build_power` under a continuous, constant-income approximation.
+    ///
+    /// Unlike taking the max of independent mass/energy/build estimates, this
+    /// models the interaction between them: resources drain continuously while
+    /// building, so a resource shortage can force build power to throttle even
+    /// before storage is empty.
+    ///
+    /// Assumptions:
+    /// - Mass and energy income stay constant.
+    /// - Total build power stays constant.
+    /// - Remaining resource costs are distributed proportionally over remaining
+    ///   build work (a continuous / fluid approximation).
+    /// - Resources already in storage can be spent immediately.
+    ///
+    /// The result is exact under those assumptions. In the real planner, income
+    /// and build power change as new units are built, and projects are discrete,
+    /// so this remains a heuristic estimate.
+    pub fn estimate_remaining_time(&self, cost: BuildTargetStats, build_power: f64) -> f64 {
+        if cost.build_time <= 0.0 {
+            return 0.0;
+        }
+        if build_power <= 0.0 {
+            return f64::INFINITY;
+        }
+
+        let mut remaining_mass = cost.build_cost_mass;
+        let mut remaining_energy = cost.build_cost_energy;
+        let mut remaining_work = cost.build_time;
+        let mut mass_storage = self.mass_storage;
+        let mut energy_storage = self.energy_storage;
+        let mass_income = self.net_mass_income;
+        let energy_income = self.net_energy_income;
+        let mut elapsed = 0.0;
+
+        while remaining_work > 1e-9 {
+            // Cost intensity of the remaining work (fluid approximation).
+            let mass_per_work = remaining_mass / remaining_work;
+            let energy_per_work = remaining_energy / remaining_work;
+
+            // Sustainable build rate for each resource (income == drain).
+            let mass_sustainable_bp = if mass_per_work > 0.0 {
+                mass_income / mass_per_work
+            } else {
+                f64::INFINITY
+            };
+            let energy_sustainable_bp = if energy_per_work > 0.0 {
+                energy_income / energy_per_work
+            } else {
+                f64::INFINITY
+            };
+
+            // Effective BP is limited by resources whose storage is already empty:
+            // we cannot drain them faster than income allows.
+            let mut effective_bp = build_power;
+            if mass_storage <= 1e-9 {
+                effective_bp = effective_bp.min(mass_sustainable_bp);
+            }
+            if energy_storage <= 1e-9 {
+                effective_bp = effective_bp.min(energy_sustainable_bp);
+            }
+
+            if effective_bp <= 1e-9 {
+                return f64::INFINITY;
+            }
+
+            // Build at effective_bp. How long until a resource with positive
+            // storage depletes?
+            let mass_drain_rate = effective_bp * mass_per_work;
+            let energy_drain_rate = effective_bp * energy_per_work;
+            let net_mass = mass_income - mass_drain_rate;
+            let net_energy = energy_income - energy_drain_rate;
+
+            let time_to_finish = remaining_work / effective_bp;
+            let mut dt = time_to_finish;
+            if mass_storage > 1e-9 && net_mass < -1e-9 {
+                dt = dt.min(-mass_storage / net_mass);
+            }
+            if energy_storage > 1e-9 && net_energy < -1e-9 {
+                dt = dt.min(-energy_storage / net_energy);
+            }
+
+            if dt <= 1e-9 {
+                // Cannot make progress; prevent an infinite loop.
+                return f64::INFINITY;
+            }
+
+            elapsed += dt;
+            mass_storage += net_mass * dt;
+            energy_storage += net_energy * dt;
+            remaining_work -= effective_bp * dt;
+            remaining_mass -= mass_drain_rate * dt;
+            remaining_energy -= energy_drain_rate * dt;
+        }
+
+        elapsed
+    }
+}
+
 /// Result of applying a drain to an economy state for one second.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TickResult {
@@ -987,5 +1087,81 @@ mod tests {
         }
 
         assert!(checked > 0, "no resource producers found in index");
+    }
+
+    fn test_economy(
+        mass_storage: f64,
+        energy_storage: f64,
+        mass_income: f64,
+        energy_income: f64,
+    ) -> EconomyState {
+        EconomyState {
+            net_mass_income: mass_income,
+            net_energy_income: energy_income,
+            mass_storage,
+            energy_storage,
+            mass_storage_cap: 0.0,
+            energy_storage_cap: 0.0,
+        }
+    }
+
+    #[test]
+    fn estimate_build_power_bottleneck() {
+        // Resources and income are abundant; only build power limits progress.
+        let economy = test_economy(1000.0, 1000.0, 100.0, 100.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 100.0,
+        };
+        let t = economy.estimate_remaining_time(cost, 10.0);
+        assert!((t - 10.0).abs() < 1e-9, "expected 10s, got {t}");
+    }
+
+    #[test]
+    fn estimate_resource_bottleneck_with_storage_burn() {
+        // BP is high, income is low, and storage covers some initial work.
+        // Total cost: 200 mass + 200 energy, work: 200, BP: 10.
+        // Storage: 100 mass + 100 energy.
+        // Income: 1 mass/s + 1 energy/s.
+        // Cost intensity: 1 mass/work, 1 energy/work.
+        // Sustainable BP = min(10, 1/1, 1/1) = 1.
+        // Burn at BP 10: drain excess = 9 each. Storage lasts 100/9 ≈ 11.11s.
+        // Work done in burn: 111.11. Remaining work: 88.89.
+        // Sustainable phase: 88.89 / 1 = 88.89s.
+        // Total: 100s.
+        let economy = test_economy(100.0, 100.0, 1.0, 1.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 200.0,
+            build_cost_energy: 200.0,
+            build_time: 200.0,
+        };
+        let t = economy.estimate_remaining_time(cost, 10.0);
+        assert!((t - 100.0).abs() < 1e-6, "expected ~100s, got {t}");
+    }
+
+    #[test]
+    fn estimate_no_progress_when_unaffordable() {
+        // No income and no storage means we cannot finish any work.
+        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 100.0,
+        };
+        let t = economy.estimate_remaining_time(cost, 10.0);
+        assert!(t.is_infinite(), "expected infinity, got {t}");
+    }
+
+    #[test]
+    fn estimate_zero_work_is_instant() {
+        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
+        let cost = BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 100.0,
+            build_time: 0.0,
+        };
+        let t = economy.estimate_remaining_time(cost, 10.0);
+        assert!((t - 0.0).abs() < 1e-9, "expected 0s, got {t}");
     }
 }

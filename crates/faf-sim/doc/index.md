@@ -29,6 +29,7 @@ The focus is practical: how to frame the simulator as an MCTS search problem, ho
 ## Reference
 
 - [`model.md`](./model.md) — The full formal model: nodes, edges, builder constraints, economy, stall, objectives, and assumptions. Read this if you need the exact rules behind the simulator.
+- [`glossary.md`](./glossary.md) — Acronyms and short names used throughout this track.
 
 ## Conventions
 

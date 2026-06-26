@@ -137,11 +137,7 @@ impl SimActor {
         let Some(goal) = &self.goal else {
             return false;
         };
-        self.state
-            .graph
-            .graph
-            .node_weights()
-            .any(|n| n.is_active() && n.unit_id.eq_ignore_ascii_case(&goal.id))
+        self.state.goal_reached(goal)
     }
 
     /// Apply a planner command to the simulation state.

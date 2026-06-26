@@ -1,6 +1,6 @@
 # 5. Integration
 
-This chapter explains how to wire the MCTS planner into the existing `faf-sim` planner enum and run it from the CLI.
+This chapter explains how to wire the MCTS planner into the existing `faf-sim` planner enum and run it from the CLI (Command Line Interface).
 
 ## Strategy enum
 

@@ -39,8 +39,8 @@ pub fn successors(
     index: &DataIndex,
     tech_graph: &TechGraph,
     state: &GraphState,
-    goals: &[&Unit],
-    goal_chains: &[Vec<(Capability, String)>],
+    goal: &Unit,
+    goal_chain: &[(Capability, String)],
 ) -> Vec<(GraphState, SearchAction)> {
     // ...
 }
@@ -49,7 +49,7 @@ pub fn successors(
 The function does the following:
 
 1. Collect idle builders. If none are idle, return only a `Wait` successor.
-2. Determine candidate units that could help reach the goal, using the tech graph and goal chains.
+2. Determine candidate units that could help reach the goal, using the tech graph and the goal's prerequisite chain.
 3. For each candidate unit, try starting a project with all idle builders and with the single fastest capable idle builder.
 4. For each active project, try assisting it with all idle builders.
 5. Always include a `Wait` successor.

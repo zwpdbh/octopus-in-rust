@@ -8,10 +8,8 @@ use std::collections::HashSet;
 use faf_units::{DataIndex, Unit};
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
-use crate::planner::heuristic::score;
-use crate::planner::search::{
-    goals_reached, to_plan_result, visited_key, SearchAction, SearchConfig, VisitedKey,
-};
+
+use crate::planner::search::{to_plan_result, visited_key, SearchAction, SearchConfig, VisitedKey};
 use crate::sim::GraphState;
 use crate::tech_graph::{Capability, TechGraph};
 
@@ -34,41 +32,9 @@ pub(crate) fn plan(
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     let tech_graph = TechGraph::new(index);
-    plan_goals(
-        index,
-        &tech_graph,
-        initial_state,
-        &[goal],
-        beam_width,
-        config,
-    )
-}
+    let goal_chain = tech_graph.prerequisite_chain(&goal.id, Capability::ACU)?;
 
-/// Plan a build order for one or more goal units.
-pub(crate) fn plan_goals(
-    index: &DataIndex,
-    tech_graph: &TechGraph,
-    initial_state: GraphState,
-    goals: &[&Unit],
-    beam_width: usize,
-    config: &PlannerConfig,
-) -> Result<PlanResult, PlannerError> {
-    if goals.is_empty() {
-        return Err(PlannerError::SearchExhausted);
-    }
-
-    let mut goal_chains: Vec<Vec<(Capability, String)>> = Vec::with_capacity(goals.len());
-    for goal in goals {
-        let chain = tech_graph.prerequisite_chain(&goal.id, Capability::ACU)?;
-        goal_chains.push(chain);
-    }
-
-    let mut chain_unit_ids: Vec<String> = goal_chains
-        .iter()
-        .flat_map(|chain| chain.iter().map(|(_, id)| id.clone()))
-        .collect();
-    chain_unit_ids.sort();
-    chain_unit_ids.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    let chain_unit_ids: Vec<String> = goal_chain.iter().map(|(_, id)| id.clone()).collect();
 
     let search_config = SearchConfig {
         dt: config.dt,
@@ -92,7 +58,7 @@ pub(crate) fn plan_goals(
             }
 
             for (succ_state, action) in
-                search_config.successors(index, tech_graph, &node.state, goals, &goal_chains)
+                search_config.successors(index, &tech_graph, &node.state, goal, &goal_chain)
             {
                 let first_action = node.first_action.clone().unwrap_or(action);
                 next_beam.push(BeamNode {
@@ -103,8 +69,12 @@ pub(crate) fn plan_goals(
         }
 
         next_beam.sort_by(|a, b| {
-            let fa = a.state.time + score(&a.state, goals, &chain_unit_ids, index);
-            let fb = b.state.time + score(&b.state, goals, &chain_unit_ids, index);
+            let fa = a.state.time
+                + a.state
+                    .estimate_remaining_time_to_goal(goal, &chain_unit_ids, index);
+            let fb = b.state.time
+                + b.state
+                    .estimate_remaining_time_to_goal(goal, &chain_unit_ids, index);
             fa.total_cmp(&fb)
         });
 
@@ -113,8 +83,8 @@ pub(crate) fn plan_goals(
             break;
         }
 
-        // If any state in the sorted beam satisfies the goals, return it.
-        if let Some(node) = beam.iter().find(|n| goals_reached(&n.state, goals)) {
+        // If any state in the sorted beam satisfies the goal, return it.
+        if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal)) {
             return Ok(to_plan_result(
                 node.state.clone(),
                 preferred_first_action(&beam),
@@ -122,8 +92,8 @@ pub(crate) fn plan_goals(
         }
     }
 
-    // Final pass: any remaining state may already satisfy the goals.
-    if let Some(node) = beam.iter().find(|n| goals_reached(&n.state, goals)) {
+    // Final pass: any remaining state may already satisfy the goal.
+    if let Some(node) = beam.iter().find(|n| n.state.goal_reached(goal)) {
         return Ok(to_plan_result(
             node.state.clone(),
             preferred_first_action(&beam),

@@ -18,7 +18,7 @@ Run each goal with each strategy multiple times and report the mean and standard
 
 ## Primary metrics
 
-1. **Completion time.** The in-game seconds when the last goal unit finishes. Lower is better.
+1. **Completion time.** The in-game seconds when the goal unit finishes. Lower is better.
 2. **Wall-clock planning time per decision.** How long the planner takes to choose an action. MCTS should not be orders of magnitude slower than beam search.
 3. **Number of simulator ticks per decision.** How much of the simulator budget the search consumes. This correlates with wall-clock time but is independent of hardware.
 

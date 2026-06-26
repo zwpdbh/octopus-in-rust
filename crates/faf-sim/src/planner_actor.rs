@@ -220,11 +220,7 @@ mod tests {
 
         // Without a goal the simulation should still contain the starting ACU.
         assert!(
-            final_state
-                .graph
-                .graph
-                .node_weights()
-                .any(|n| n.is_active() && n.unit_id.eq_ignore_ascii_case("URL0001")),
+            final_state.has_completed_unit("URL0001"),
             "ACU should still be present after ticks"
         );
     }
@@ -260,11 +256,7 @@ mod tests {
         // The simulation stops after the goal is reached, so the authoritative
         // state must contain the completed pgen.
         assert!(
-            final_state
-                .graph
-                .graph
-                .node_weights()
-                .any(|n| n.is_active() && n.unit_id.eq_ignore_ascii_case("URB1101")),
+            final_state.has_completed_unit("URB1101"),
             "final state should contain the completed pgen"
         );
     }

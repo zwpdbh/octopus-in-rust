@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use faf_units::{DataIndex, Unit};
+use faf_units::{BuildTargetStats, DataIndex, Unit};
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::economy::{
@@ -341,6 +341,112 @@ impl GraphState {
             .is_some_and(|n| n.is_active())
     }
 
+    /// True if an active unit with the given blueprint id has been completed.
+    pub fn has_completed_unit(&self, unit_id: &str) -> bool {
+        self.graph
+            .graph
+            .node_weights()
+            .any(|n| n.is_active() && n.unit_id.eq_ignore_ascii_case(unit_id))
+    }
+
+    /// True if the given goal unit has been completed.
+    pub fn goal_reached(&self, goal: &Unit) -> bool {
+        self.has_completed_unit(&goal.id)
+    }
+
+    /// Return the blueprint ids of all units currently under construction.
+    pub fn active_target_unit_ids(&self) -> HashSet<String> {
+        self.active_projects
+            .iter()
+            .map(|p| self.graph[p.target_node].unit_id.to_ascii_uppercase())
+            .collect()
+    }
+
+    /// Count how many active units belong to the given category.
+    pub fn count_active_by_category(&self, index: &DataIndex, category: &str) -> usize {
+        self.graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active())
+            .filter_map(|n| index.find_unit(&n.unit_id))
+            .filter(|u| u.has_category(category))
+            .count()
+    }
+
+    /// Return the blueprint data for every active unit in the graph.
+    pub fn active_unit_blueprints<'a>(&'a self, index: &'a DataIndex) -> Vec<&'a Unit> {
+        self.graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active())
+            .filter_map(|n| index.find_unit(&n.unit_id))
+            .collect()
+    }
+
+    /// Total build power of all active builders, including idle builders and
+    /// builders currently assigned to active projects.
+    pub fn total_active_build_power(&self, index: &DataIndex) -> f64 {
+        self.idle_builders(index)
+            .iter()
+            .chain(self.active_projects.iter().flat_map(|p| p.builders.iter()))
+            .map(|&b| builder_power(b, &self.graph, index))
+            .sum()
+    }
+
+    /// Re-derive the economy from all active units.
+    pub fn rebuild_economy(&mut self, index: &DataIndex) {
+        self.economy = derive_economy(&self.active_unit_blueprints(index));
+    }
+
+    /// Estimate the remaining time until `goal` is completed from this state.
+    ///
+    /// `chain_unit_ids` lists the prerequisite units that still need to be built
+    /// before the goal. The estimate aggregates their remaining cost and work,
+    /// then uses [`EconomyState::estimate_remaining_time`] to model how income,
+    /// storage, and build power interact.
+    ///
+    /// This is a heuristic, not an exact simulation. Lower is better.
+    pub fn estimate_remaining_time_to_goal(
+        &self,
+        goal: &Unit,
+        chain_unit_ids: &[String],
+        index: &DataIndex,
+    ) -> f64 {
+        let mut total_mass = 0.0;
+        let mut total_energy = 0.0;
+        let mut total_work = 0.0;
+
+        for id in chain_unit_ids {
+            if self.has_completed_unit(id) {
+                continue;
+            }
+            if let Some(unit) = index.find_unit(id) {
+                if let Some(stats) = unit.build_target_stats() {
+                    total_mass += stats.build_cost_mass;
+                    total_energy += stats.build_cost_energy;
+                    total_work += stats.build_time;
+                }
+            }
+        }
+
+        if !self.has_completed_unit(&goal.id) {
+            if let Some(stats) = goal.build_target_stats() {
+                total_mass += stats.build_cost_mass;
+                total_energy += stats.build_cost_energy;
+                total_work += stats.build_time;
+            }
+        }
+
+        self.economy.estimate_remaining_time(
+            BuildTargetStats {
+                build_cost_mass: total_mass,
+                build_cost_energy: total_energy,
+                build_time: total_work,
+            },
+            self.total_active_build_power(index),
+        )
+    }
+
     /// Validate that every builder in `builders` is idle and is a real builder.
     fn validate_builders(
         &self,
@@ -467,14 +573,7 @@ impl GraphState {
         self.graph[old_node].replaced_by = Some(new_node);
         self.graph[new_node].replaces = Some(old_node);
 
-        let owned_units: Vec<&Unit> = self
-            .graph
-            .graph
-            .node_weights()
-            .filter(|n| n.is_active())
-            .filter_map(|n| index.find_unit(&n.unit_id))
-            .collect();
-        self.economy = derive_economy(&owned_units);
+        self.rebuild_economy(index);
     }
 
     /// Assign additional idle `builders` to an already active project.
@@ -624,14 +723,7 @@ impl GraphState {
 
         // Re-derive economy from all active (completed and not replaced) units.
         if !completed_nodes.is_empty() {
-            let owned_units: Vec<&Unit> = self
-                .graph
-                .graph
-                .node_weights()
-                .filter(|n| n.is_active())
-                .filter_map(|n| index.find_unit(&n.unit_id))
-                .collect();
-            self.economy = derive_economy(&owned_units);
+            self.rebuild_economy(index);
         }
 
         completed_nodes

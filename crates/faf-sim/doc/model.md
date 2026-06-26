@@ -2,7 +2,7 @@
 
 ## Core idea
 
-A FAF build order is a directed graph that grows over time. Nodes are built units; edges record which existing units contributed build power to create a new unit. The optimization problem is to grow this graph from the starting ACU until it contains all goal units, while minimizing the time when the last goal unit finishes.
+A FAF build order is a directed graph that grows over time. Nodes are built units; edges record which existing units contributed build power to create a new unit. The optimization problem is to grow this graph from the starting ACU until it contains the goal unit, while minimizing the time when the goal unit finishes.
 
 ## Definitions
 
@@ -60,8 +60,8 @@ Building a new unit means:
 
 ## Objectives
 
-1. **Primary**: minimize the completion time of the last goal unit.
-2. **Secondary**: among plans with the same primary completion time, maximize mass income per mass invested in economy up to the moment the last goal unit finishes.
+1. **Primary**: minimize the completion time of the goal unit.
+2. **Secondary**: among plans with the same primary completion time, maximize mass income per mass invested in economy up to the moment the goal unit finishes.
 
 ## Assumptions
 
@@ -69,7 +69,7 @@ Building a new unit means:
 - Build power, production, and drain are known per unit blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.
-- There may be one or more goal units.
+- There is exactly one goal unit.
 - Energy stall reduces mass income linearly with available energy. (This is a working assumption; verify against FAF Lua/source when possible.)
 
 ## Notes

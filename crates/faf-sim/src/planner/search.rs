@@ -1,7 +1,5 @@
 //! Shared search helpers for the graph-growth model.
 
-use std::collections::HashSet;
-
 use faf_units::{DataIndex, Unit};
 
 use crate::planner::core::PlanResult;
@@ -49,8 +47,8 @@ impl SearchConfig {
         index: &DataIndex,
         tech_graph: &TechGraph,
         state: &GraphState,
-        goals: &[&Unit],
-        goal_chains: &[Vec<(Capability, String)>],
+        goal: &Unit,
+        goal_chain: &[(Capability, String)],
     ) -> Vec<(GraphState, SearchAction)> {
         let idle_builders = state.idle_builders(index);
         if idle_builders.is_empty() {
@@ -59,33 +57,15 @@ impl SearchConfig {
             return vec![(next, SearchAction::Wait)];
         }
 
-        let active_targets: HashSet<String> = state
-            .active_projects
-            .iter()
-            .map(|p| state.graph[p.target_node].unit_id.to_ascii_uppercase())
-            .collect();
-
-        let owned_units: Vec<&Unit> = state
-            .graph
-            .graph
-            .node_weights()
-            .filter(|n| n.is_active())
-            .filter_map(|n| index.find_unit(&n.unit_id))
-            .collect();
-        let mex_count = owned_units
-            .iter()
-            .filter(|u| u.has_category("MASSEXTRACTION"))
-            .count();
-        let pgen_count = owned_units
-            .iter()
-            .filter(|u| u.has_category("ENERGYPRODUCTION"))
-            .count();
+        let active_targets = state.active_target_unit_ids();
+        let mex_count = state.count_active_by_category(index, "MASSEXTRACTION");
+        let pgen_count = state.count_active_by_category(index, "ENERGYPRODUCTION");
 
         let mut successors: Vec<(GraphState, SearchAction)> = Vec::new();
-        let candidates = candidate_units(index, state, goals, goal_chains);
+        let candidates = candidate_units(index, state, goal, goal_chain);
 
         for unit in candidates {
-            if has_completed_unit(state, &unit.id) {
+            if state.has_completed_unit(&unit.id) {
                 continue;
             }
             if active_targets.contains(&unit.id.to_ascii_uppercase()) {
@@ -154,18 +134,6 @@ impl SearchConfig {
 
         successors
     }
-}
-
-pub(crate) fn goals_reached(state: &GraphState, goals: &[&Unit]) -> bool {
-    goals.iter().all(|g| has_completed_unit(state, &g.id))
-}
-
-pub(crate) fn has_completed_unit(state: &GraphState, unit_id: &str) -> bool {
-    state
-        .graph
-        .graph
-        .node_weights()
-        .any(|n| n.is_active() && n.unit_id.eq_ignore_ascii_case(unit_id))
 }
 
 /// Compact visited-state key.

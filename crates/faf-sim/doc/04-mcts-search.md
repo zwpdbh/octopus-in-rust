@@ -1,6 +1,6 @@
 # 4. MCTS Search
 
-This chapter describes the UCT search loop: how MCTS selects a node to expand, how it generates children, how the value network evaluates a leaf, and how values flow back up the tree.
+This chapter describes the **UCT** (Upper Confidence Bound applied to Trees) search loop: how MCTS selects a node to expand, how it generates children, how the value network evaluates a leaf, and how values flow back up the tree.
 
 ## Node structure
 
@@ -33,7 +33,7 @@ Each MCTS iteration repeats these steps:
 
 ### Selection
 
-At each internal node, pick the child that maximizes UCB1:
+At each internal node, pick the child that maximizes **UCB1** (Upper Confidence Bound 1):
 
 ```text
 UCB1(child) = (child.total_value / child.visits)

@@ -1,0 +1,15 @@
+# Glossary
+
+Short names and acronyms used across this documentation track.
+
+| Short name | Full name | Where it appears |
+|---|---|---|
+| ACU | Armored Command Unit | The starting unit in every FAF build order. |
+| CLI | Command Line Interface | `faf-sim-cli`, the command-line tool that runs planners. |
+| CUDA | Compute Unified Device Architecture | Optional `burn` backend for GPU inference. |
+| FAF | Forged Alliance Forever | The game whose build orders this project optimizes. |
+| MCTS | Monte Carlo Tree Search | The search algorithm at the core of this track. |
+| ReLU | Rectified Linear Unit | Activation function used in the value network. |
+| UCB1 | Upper Confidence Bound 1 | The selection formula used inside UCT. |
+| UCT | Upper Confidence Bound applied to Trees | The tree-selection strategy used by MCTS. |
+| WGPU | WebGPU | Optional `burn` backend for cross-platform GPU inference. |
