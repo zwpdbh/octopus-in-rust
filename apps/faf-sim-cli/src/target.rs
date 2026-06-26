@@ -279,6 +279,14 @@ impl ResearchTarget {
         )
     }
 
+    /// Convert this CLI target to the optimizer's abstract `UnitKind`.
+    ///
+    /// All current CLI targets are faction-unique units, so this maps to the
+    /// blueprint id wrapped in `UnitKind::Unique`.
+    pub fn to_sim_unit_kind(&self) -> faf_sim::UnitKind {
+        faf_sim::UnitKind::Unique(faf_sim::UnitId(self.blueprint_id().to_string()))
+    }
+
     /// Validate that the chosen unit exists for the chosen faction.
     pub fn validate(&self) -> Result<(), String> {
         if self.blueprint_id().is_empty() {

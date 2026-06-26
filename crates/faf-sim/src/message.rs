@@ -5,6 +5,7 @@
 //! human player observes the game and sends discrete commands.
 
 use crate::sim::{BuildEvent, GraphState, NodeId};
+use crate::units::UnitKind;
 
 /// Command sent from the planner to the simulation.
 ///
@@ -15,7 +16,7 @@ pub enum Command {
     /// Start building a unit with the given idle builders.
     Build {
         /// Blueprint id of the unit to build.
-        unit_id: String,
+        unit_id: UnitKind,
         /// Builder nodes that will work on the project.
         builders: Vec<NodeId>,
     },
@@ -29,7 +30,7 @@ pub enum Command {
     /// Upgrade an existing unit in-place to a higher-tier blueprint.
     Upgrade {
         /// Blueprint id of the unit to upgrade into.
-        target_unit_id: String,
+        target_unit_id: UnitKind,
         /// Node id of the unit being upgraded.
         old_node: NodeId,
         /// Builder nodes that will work on the upgrade.

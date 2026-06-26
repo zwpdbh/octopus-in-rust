@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use faf_sim::{GraphState, Planner, Strategy, Units};
+use faf_sim::{GraphState, Planner, Strategy, UnitId, UnitKind, Units};
 use faf_units::DataIndex;
 
 #[derive(Debug, Clone, Copy)]
@@ -69,19 +69,22 @@ fn main() {
     println!("{}", "-".repeat(66));
 
     for target in TARGETS {
+        let acu_kind = UnitKind::Commander;
+        let goal_kind = UnitKind::Unique(UnitId(target.goal_id.to_string()));
+
         units
-            .find(target.acu_id)
+            .def(&acu_kind)
             .unwrap_or_else(|| panic!("ACU {} not found", target.acu_id));
         units
-            .find(target.goal_id)
+            .def(&goal_kind)
             .unwrap_or_else(|| panic!("goal {} not found", target.goal_id));
 
         for strategy in STRATEGIES {
             let planner = Planner::new(*strategy);
 
             let start = Instant::now();
-            let initial = GraphState::new(&units, &[target.acu_id]);
-            let result = planner.plan(&units, initial, target.goal_id);
+            let initial = GraphState::new(&units, &[acu_kind.clone()]);
+            let result = planner.plan(&units, initial, &goal_kind);
             let elapsed = start.elapsed();
 
             match result {
@@ -113,14 +116,25 @@ fn main() {
 
     // Sanity check: beam search should beat the greedy baseline on the
     // targets used in the existing unit tests.
-    units.find("URL0001").expect("ACU exists");
-    units.find("URL0402").expect("Monkeylord exists");
+    units.def(&UnitKind::Commander).expect("ACU exists");
+    units
+        .def(&UnitKind::Unique(UnitId("URL0402".to_string())))
+        .expect("Monkeylord exists");
 
+    let goal = UnitKind::Unique(UnitId("URL0402".to_string()));
     let greedy = Planner::new(Strategy::Greedy)
-        .plan(&units, GraphState::new(&units, &["URL0001"]), "URL0402")
+        .plan(
+            &units,
+            GraphState::new(&units, &[UnitKind::Commander]),
+            &goal,
+        )
         .unwrap();
     let beam = Planner::new(Strategy::Beam { beam_width: 50 })
-        .plan(&units, GraphState::new(&units, &["URL0001"]), "URL0402")
+        .plan(
+            &units,
+            GraphState::new(&units, &[UnitKind::Commander]),
+            &goal,
+        )
         .unwrap();
 
     println!(

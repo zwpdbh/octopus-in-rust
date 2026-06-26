@@ -6,7 +6,7 @@
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
-use crate::units::Units;
+use crate::units::{UnitKind, Units};
 
 use super::ValueNet;
 
@@ -56,7 +56,7 @@ impl MctsSearch {
     pub fn search(
         &self,
         _initial_state: GraphState,
-        _goal_id: &str,
+        _goal_id: &UnitKind,
         _units: &Units,
         _planner_config: &PlannerConfig,
         _value_net: &ValueNet,

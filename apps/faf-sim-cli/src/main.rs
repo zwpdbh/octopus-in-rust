@@ -20,8 +20,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use faf_sim::{
-    Capability, Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor, Strategy,
-    Units,
+    Command, Observation, Planner, PlannerActor, PlannerConfig, SimActor, Strategy, Units,
 };
 use faf_units::DataIndex;
 use tokio::sync::mpsc;
@@ -36,13 +35,13 @@ use target::{Faction, ResearchTarget, UnitKind};
 async fn main() {
     let cli = Cli::parse();
     let index = load_index();
-    let units = Units::new(index);
+    let units = Units::new(index.clone());
 
     match cli.command {
         CliCommand::Deps(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
             let target = resolve_target(faction, unit);
-            run_deps(&units, target, &args.stop_at);
+            run_deps(&units, &index, target);
         }
         CliCommand::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(args.target);
@@ -81,9 +80,9 @@ fn resolve_target(faction: Faction, unit: UnitKind) -> ResearchTarget {
     target
 }
 
-fn run_deps(units: &Units, target: ResearchTarget, stop_at: &[String]) {
+fn run_deps(units: &Units, index: &DataIndex, target: ResearchTarget) {
     let blueprint_id = target.blueprint_id();
-    let unit = match units.find(blueprint_id) {
+    let unit = match index.find_unit(blueprint_id) {
         Some(u) => u,
         None => {
             eprintln!("Blueprint id not found in index: {}", blueprint_id);
@@ -99,72 +98,40 @@ fn run_deps(units: &Units, target: ResearchTarget, stop_at: &[String]) {
         unit.tech_level().unwrap_or("?")
     );
 
+    let goal_kind = target.to_sim_unit_kind();
+
     println!("\nDirect builders:");
-    match units.builders_for(blueprint_id) {
-        Ok(builders) if builders.is_empty() => println!("  (none)"),
-        Ok(builders) => {
-            for b in builders {
-                println!(
-                    "  {} — {} / {} [{}]",
-                    b.id,
-                    b.display_name(),
-                    b.name_zh().unwrap_or("?"),
-                    b.tech_level().unwrap_or("?")
-                );
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    let builders = units.builders_for(&goal_kind);
+    if builders.is_empty() {
+        println!("  (none)");
+    } else {
+        for b in builders {
+            println!("  {:?} — {}", b, units.display_name(&b));
         }
     }
 
     println!("\nTransitive prerequisites:");
-    let prereqs = if stop_at.is_empty() {
-        units.all_prerequisites_default(blueprint_id)
+    let prereqs = units.prerequisite_chain(&goal_kind);
+    if prereqs.is_empty() {
+        println!("  (none)");
     } else {
-        let refs: Vec<&str> = stop_at.iter().map(|s| s.as_str()).collect();
-        units.all_prerequisites(blueprint_id, &refs)
-    };
-
-    match prereqs {
-        Ok(units) => {
-            if units.is_empty() {
-                println!("  (none)");
-            } else {
-                for p in units {
-                    println!(
-                        "  {} — {} / {} [{}]",
-                        p.id,
-                        p.display_name(),
-                        p.name_zh().unwrap_or("?"),
-                        p.tech_level().unwrap_or("?")
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+        for p in prereqs {
+            println!("  {:?} — {}", p, units.display_name(&p));
         }
     }
 }
 
 async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy) {
-    let blueprint_id = target.blueprint_id();
+    let goal_kind = target.to_sim_unit_kind();
     units
-        .find(blueprint_id)
+        .def(&goal_kind)
         .expect("target blueprint must exist in index");
 
     println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
 
-    let starting_unit_id = match target.faction {
-        Faction::Uef => "UEL0001",
-        Faction::Cybran => "URL0001",
-        Faction::Aeon => "UAL0001",
-        Faction::Seraphim => "XSL0001",
-    };
+    // All factions start with the same abstract commander kind.
+    let starting_unit = faf_sim::UnitKind::Commander;
 
     // Pause tokio's clock so the actor loop can be driven forward
     // deterministically without waiting for real wall-clock time.
@@ -178,9 +145,9 @@ async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy)
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
     let sim = SimActor::new(
-        &[starting_unit_id],
+        &[starting_unit],
         units.clone(),
-        Some(blueprint_id),
+        Some(goal_kind.clone()),
         sim_dt,
         obs_tx,
         cmd_rx,
@@ -188,7 +155,8 @@ async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy)
     let sim_handle = tokio::spawn(sim.run());
 
     let planner = build_reactive_planner(strategy);
-    let planner_actor = PlannerActor::new(planner, units.clone(), blueprint_id, obs_rx, cmd_tx);
+    let planner_actor =
+        PlannerActor::new(planner, units.clone(), goal_kind.clone(), obs_rx, cmd_tx);
     let planner_handle = tokio::spawn(planner_actor.run());
 
     // Drive the simulation timer forward until the goal is reached or we hit
@@ -242,9 +210,9 @@ async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy)
     println!("{:>12}  {}", "------------", "----");
     for event in &final_state.events {
         println!(
-            "{:>12}  {} ({})",
+            "{:>12}  {} ({:?})",
             format_time(event.time),
-            event.unit_name,
+            units.display_name(&event.unit_id),
             event.unit_id
         );
     }
@@ -292,22 +260,20 @@ fn run_plan(units: &Units, target: ResearchTarget, strategy: Strategy) {
         }
     }
 
-    let blueprint_id = target.blueprint_id();
+    let goal_kind = target.to_sim_unit_kind();
 
-    match units.prerequisite_chain(blueprint_id, Capability::ACU) {
-        Ok(chain) => {
-            println!("\nSymbolic tech chain:");
-            for (i, (cap, unit_id)) in chain.iter().enumerate() {
-                let name = units
-                    .find(unit_id)
-                    .map(|u| u.display_name())
-                    .unwrap_or_else(|| unit_id.clone());
-                println!("{:>2}. {} → build {} ({})", i + 1, cap, name, unit_id);
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    let chain = units.prerequisite_chain(&goal_kind);
+    println!("\nSymbolic tech chain:");
+    if chain.is_empty() {
+        println!("  (none)");
+    } else {
+        for (i, kind) in chain.iter().enumerate() {
+            println!(
+                "{:>2}. build {} ({:?})",
+                i + 1,
+                units.display_name(kind),
+                kind
+            );
         }
     }
 }

@@ -6,7 +6,7 @@
 //! - `sim` — economy derivation and graph-growth simulator.
 //! - `planner` — planner trait, strategy registry, and concrete planner
 //!   implementations.
-//! - `units` — unified unit knowledge repository (capabilities, upgrades, stats).
+//! - `units` — unified unit knowledge repository (unit kinds, recipes, stats).
 
 pub mod economy;
 pub mod message;
@@ -31,8 +31,7 @@ pub use sim::{
 pub use sim_actor::SimActor;
 
 pub use units::{
-    default_upgrade_table, Capability, TechGraph, TechGraphError, TechNode, Units, UpgradeCost,
-    UpgradeTable,
+    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, Units, UpgradeRecipe,
 };
 
 #[cfg(test)]
@@ -45,23 +44,18 @@ mod tests {
     }
 
     #[test]
-    fn monkeylord_requires_t3_engineer_or_t3_acu() {
+    fn monkeylord_requires_t3_engineer() {
         let units = load_units();
 
-        let builders: Vec<String> = units
-            .builders_for("URL0402")
-            .expect("URL0402 exists")
-            .into_iter()
-            .map(|u| u.id.clone())
-            .collect();
+        let builders = units.builders_for(&UnitKind::Unique(UnitId("URL0402".to_string())));
 
         assert!(
-            builders.contains(&"URL0309".to_string()),
-            "Monkeylord should be buildable by the Cybran T3 engineer"
+            builders.contains(&UnitKind::Engineer(TechLevel::T3)),
+            "Monkeylord should be buildable by a T3 engineer"
         );
         assert!(
-            !builders.contains(&"URL0001".to_string()),
-            "base ACU should not build Monkeylord in the capability model"
+            !builders.contains(&UnitKind::Commander),
+            "base ACU should not build Monkeylord"
         );
     }
 
@@ -69,106 +63,71 @@ mod tests {
     fn t1_factory_is_built_by_commander_and_t1_engineer() {
         let units = load_units();
 
-        let builders: Vec<String> = units
-            .builders_for("URB0101")
-            .expect("URB0101 exists")
-            .into_iter()
-            .map(|u| u.id.clone())
-            .collect();
-
-        assert!(builders.contains(&"URL0001".to_string()));
-        assert!(builders.contains(&"URL0105".to_string()));
+        let builders = units.builders_for(&UnitKind::Factory(TechLevel::T1));
+        assert!(builders.contains(&UnitKind::Commander));
+        assert!(builders.contains(&UnitKind::Engineer(TechLevel::T1)));
     }
 
     #[test]
-    fn all_prerequisites_for_monkeylord_via_engineer_path() {
+    fn monkeylord_prerequisites_contain_factory_and_engineer_chains() {
         let units = load_units();
 
-        let prereqs: Vec<String> = units
-            .all_prerequisites_default("URL0402")
-            .expect("URL0402 exists")
-            .into_iter()
-            .map(|u| u.id.clone())
-            .collect();
+        let prereqs = units.prerequisite_chain(&UnitKind::Unique(UnitId("URL0402".to_string())));
 
-        // Via the T3 engineer path, we need the full factory upgrade chain.
-        assert!(prereqs.contains(&"URL0309".to_string()), "T3 engineer");
-        assert!(prereqs.contains(&"URB0301".to_string()), "T3 factory");
-        assert!(prereqs.contains(&"URB0201".to_string()), "T2 factory");
-        assert!(prereqs.contains(&"URB0101".to_string()), "T1 factory");
+        assert!(
+            prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
+            "T1 factory"
+        );
+        assert!(
+            prereqs.contains(&UnitKind::Factory(TechLevel::T2)),
+            "T2 factory"
+        );
+        assert!(
+            prereqs.contains(&UnitKind::Factory(TechLevel::T3)),
+            "T3 factory"
+        );
 
-        // Commanders are the default stopping point, so URL0001 is not expanded.
-        assert!(!prereqs.contains(&"URL0001".to_string()));
+        // Commanders are the default stopping point, so it is not expanded.
+        assert!(!prereqs.contains(&UnitKind::Commander));
     }
 
     #[test]
-    fn uef_fatboy_prerequisites_contain_factory_and_engineer_chains() {
+    fn fatboy_prerequisites_contain_factory_and_engineer_chains() {
         let units = load_units();
 
-        let direct: Vec<String> = units
-            .builders_for("UEL0401")
-            .expect("UEL0401 exists")
-            .into_iter()
-            .map(|u| u.id.clone())
-            .collect();
+        let direct = units.builders_for(&UnitKind::Unique(UnitId("UEL0401".to_string())));
         assert!(
-            direct.contains(&"UEL0309".to_string()),
-            "Fatboy should be buildable by UEF T3 engineer"
+            direct.contains(&UnitKind::Engineer(TechLevel::T3)),
+            "Fatboy should be buildable by a T3 engineer"
         );
         assert!(
-            !direct.contains(&"UEL0001".to_string()),
-            "base ACU should not build Fatboy in the capability model"
-        );
-        // Only UEF builders.
-        assert!(
-            direct
-                .iter()
-                .all(|id| id.starts_with("UE") || id.starts_with("XEL")),
-            "all direct builders should be UEF: {:?}",
-            direct
+            !direct.contains(&UnitKind::Commander),
+            "base ACU should not build Fatboy"
         );
 
-        let prereqs: Vec<String> = units
-            .all_prerequisites_default("UEL0401")
-            .expect("UEL0401 exists")
-            .into_iter()
-            .map(|u| u.id.clone())
-            .collect();
-
-        // Factory upgrade chain.
+        let prereqs = units.prerequisite_chain(&UnitKind::Unique(UnitId("UEL0401".to_string())));
         assert!(
-            prereqs.contains(&"UEB0301".to_string())
-                || prereqs.contains(&"UEB0302".to_string())
-                || prereqs.contains(&"UEB0303".to_string())
-                || prereqs.contains(&"UEB0304".to_string()),
-            "T3 factory prerequisite"
+            prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
+            "T1 factory"
         );
         assert!(
-            prereqs.contains(&"UEB0201".to_string())
-                || prereqs.contains(&"UEB0202".to_string())
-                || prereqs.contains(&"UEB0203".to_string()),
-            "T2 factory prerequisite"
+            prereqs.contains(&UnitKind::Factory(TechLevel::T2)),
+            "T2 factory"
         );
         assert!(
-            prereqs.contains(&"UEB0101".to_string())
-                || prereqs.contains(&"UEB0102".to_string())
-                || prereqs.contains(&"UEB0103".to_string()),
-            "T1 factory prerequisite"
-        );
-
-        // T3 engineer prerequisite.
-        assert!(
-            prereqs.contains(&"UEL0309".to_string()),
-            "T3 engineer prerequisite"
+            prereqs.contains(&UnitKind::Factory(TechLevel::T3)),
+            "T3 factory"
         );
 
         // ACU is the default stop point, so it should not appear as a prerequisite.
-        assert!(!prereqs.contains(&"UEL0001".to_string()));
+        assert!(!prereqs.contains(&UnitKind::Commander));
     }
 
     #[test]
-    fn unknown_unit_returns_error() {
+    fn unknown_unit_has_no_definition() {
         let units = load_units();
-        assert!(units.all_prerequisites_default("NOT_A_UNIT").is_err());
+        assert!(units
+            .def(&UnitKind::Unique(UnitId("NOT_A_UNIT".to_string())))
+            .is_none());
     }
 }

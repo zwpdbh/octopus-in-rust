@@ -18,7 +18,7 @@
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
-use crate::units::Units;
+use crate::units::{UnitKind, Units};
 
 pub mod features;
 pub mod search;
@@ -37,7 +37,7 @@ pub use value_net::ValueNet;
 pub fn plan(
     _units: &Units,
     _initial_state: GraphState,
-    _goal_id: &str,
+    _goal_id: &UnitKind,
     _iterations: usize,
     _config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {

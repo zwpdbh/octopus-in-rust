@@ -9,7 +9,7 @@ use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 
 use crate::planner::search::{to_plan_result, visited_key, SearchAction, SearchConfig, VisitedKey};
 use crate::sim::GraphState;
-use crate::units::{Capability, Units};
+use crate::units::{UnitKind, Units};
 
 /// A node in the beam, tracking the state and the first action taken from the
 /// root state on the path that led here.
@@ -25,13 +25,13 @@ struct BeamNode {
 pub(crate) fn plan(
     units: &Units,
     initial_state: GraphState,
-    goal_id: &str,
+    goal_id: &UnitKind,
     beam_width: usize,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    let goal_chain = units.prerequisite_chain(goal_id, Capability::ACU)?;
+    let goal_chain = units.prerequisite_chain(goal_id);
 
-    let chain_unit_ids: Vec<String> = goal_chain.iter().map(|(_, id)| id.clone()).collect();
+    let chain_unit_ids: Vec<UnitKind> = goal_chain.clone();
 
     let search_config = SearchConfig {
         dt: config.dt,
@@ -131,7 +131,7 @@ mod tests {
     use super::*;
     use crate::planner::core::{Planner, Strategy};
     use crate::sim::GraphState;
-    use crate::units::Units;
+    use crate::units::{TechLevel, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
@@ -150,14 +150,16 @@ mod tests {
                 ..PlannerConfig::default()
             },
         );
-        let initial = GraphState::new(&units, &["URL0001"]);
-        let result = planner.plan(&units, initial, "URB1101").unwrap();
+        let initial = GraphState::new(&units, &[UnitKind::Commander]);
+        let result = planner
+            .plan(&units, initial, &UnitKind::Pgen(TechLevel::T1))
+            .unwrap();
 
         assert!(
             result
                 .events
                 .iter()
-                .any(|e| e.unit_id.eq_ignore_ascii_case("URB1101")),
+                .any(|e| e.unit_id == UnitKind::Pgen(TechLevel::T1)),
             "plan should build the goal pgen"
         );
         assert!(result.completion_time > 0.0);

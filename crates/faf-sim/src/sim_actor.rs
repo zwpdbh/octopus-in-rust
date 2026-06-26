@@ -19,7 +19,7 @@ use tokio::time::{interval, Interval};
 
 use crate::message::{Command, Observation};
 use crate::sim::{BuildEvent, GraphSimError, GraphState, NodeId};
-use crate::units::Units;
+use crate::units::{UnitKind, Units};
 
 /// Actor that runs the simulation.
 pub struct SimActor {
@@ -28,7 +28,7 @@ pub struct SimActor {
     /// Unified unit knowledge repository.
     pub units: Units,
     /// Goal unit id that, when completed, stops the simulation.
-    pub goal: Option<String>,
+    pub goal: Option<UnitKind>,
     /// Fixed tick duration in seconds.
     pub dt: f64,
     /// Timer that drives the simulation tick loop.
@@ -45,19 +45,19 @@ impl SimActor {
     /// If `goal` is `Some`, the actor will stop automatically once that unit has
     /// been completed.
     pub fn new(
-        starting_unit_ids: &[&str],
+        starting_units: &[UnitKind],
         units: Units,
-        goal_id: Option<&str>,
+        goal_id: Option<UnitKind>,
         dt: f64,
         obs_tx: Sender<Observation>,
         cmd_rx: Receiver<Command>,
     ) -> Self {
-        let state = GraphState::new(&units, starting_unit_ids);
+        let state = GraphState::new(&units, starting_units);
         let timer = interval(Duration::from_secs_f64(dt));
         Self {
             state,
             units,
-            goal: goal_id.map(|id| id.to_string()),
+            goal: goal_id,
             dt,
             timer,
             obs_tx,
@@ -172,11 +172,7 @@ impl SimActor {
     /// Build a `BuildEvent` for a completed node.
     fn build_event(&self, node_id: NodeId) -> BuildEvent {
         let unit_id = self.state.graph[node_id].unit_id.clone();
-        let unit_name = self
-            .units
-            .find(&unit_id)
-            .map(|u| u.display_name().to_string())
-            .unwrap_or_else(|| unit_id.clone());
+        let unit_name = self.units.display_name(&unit_id);
         BuildEvent {
             time: self.state.time,
             unit_id,

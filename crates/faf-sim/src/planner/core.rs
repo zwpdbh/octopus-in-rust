@@ -11,7 +11,7 @@ use std::str::FromStr;
 use crate::economy::EconomyState;
 use crate::planner::{beam, greedy, mcts};
 use crate::sim::{BuildEvent, GraphState};
-use crate::units::{TechGraphError, Units};
+use crate::units::{UnitKind, Units};
 
 /// Result of running a planner to completion.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,8 +36,6 @@ pub enum PlannerError {
     SimulationFailed,
     /// The search ran out of states before reaching the goal.
     SearchExhausted,
-    /// Dependency/capability graph query failed.
-    TechGraph(TechGraphError),
 }
 
 impl fmt::Display for PlannerError {
@@ -52,18 +50,11 @@ impl fmt::Display for PlannerError {
             PlannerError::SearchExhausted => {
                 write!(f, "search exhausted without reaching the goal")
             }
-            PlannerError::TechGraph(e) => write!(f, "tech graph error: {}", e),
         }
     }
 }
 
 impl Error for PlannerError {}
-
-impl From<TechGraphError> for PlannerError {
-    fn from(e: TechGraphError) -> Self {
-        PlannerError::TechGraph(e)
-    }
-}
 
 /// Selectable planning algorithm.
 ///
@@ -197,7 +188,7 @@ impl Planner {
         &self,
         units: &Units,
         initial_state: GraphState,
-        goal_id: &str,
+        goal_id: &UnitKind,
     ) -> Result<PlanResult, PlannerError> {
         match self.strategy {
             Strategy::Greedy => greedy::plan(units, initial_state, goal_id, &self.config),
@@ -215,7 +206,7 @@ impl Planner {
 mod tests {
     use super::*;
     use crate::sim::GraphState;
-    use crate::units::Units;
+    use crate::units::{UnitId, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
@@ -227,14 +218,12 @@ mod tests {
         let units = load_units();
 
         let planner = Planner::new(Strategy::Greedy);
-        let initial = GraphState::new(&units, &["URL0001"]);
-        let result = planner.plan(&units, initial, "URL0402").unwrap();
+        let initial = GraphState::new(&units, &[UnitKind::Commander]);
+        let goal = UnitKind::Unique(UnitId("URL0402".to_string()));
+        let result = planner.plan(&units, initial, &goal).unwrap();
 
         assert!(
-            result
-                .events
-                .iter()
-                .any(|e| e.unit_id.eq_ignore_ascii_case("URL0402")),
+            result.events.iter().any(|e| e.unit_id == goal),
             "timeline should include the goal unit"
         );
         assert!(result.completion_time > 0.0);
@@ -252,14 +241,12 @@ mod tests {
                 ..PlannerConfig::default()
             },
         );
-        let initial = GraphState::new(&units, &["URL0001"]);
-        let result = planner.plan(&units, initial, "URL0402").unwrap();
+        let initial = GraphState::new(&units, &[UnitKind::Commander]);
+        let goal = UnitKind::Unique(UnitId("URL0402".to_string()));
+        let result = planner.plan(&units, initial, &goal).unwrap();
 
         assert!(
-            result
-                .events
-                .iter()
-                .any(|e| e.unit_id.eq_ignore_ascii_case("URL0402")),
+            result.events.iter().any(|e| e.unit_id == goal),
             "timeline should include the goal unit"
         );
         assert!(result.completion_time > 0.0);

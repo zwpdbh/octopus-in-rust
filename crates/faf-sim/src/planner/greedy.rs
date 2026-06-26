@@ -8,7 +8,7 @@
 use crate::planner::beam;
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
-use crate::units::Units;
+use crate::units::{UnitKind, Units};
 
 /// Greedy beam width.
 ///
@@ -20,7 +20,7 @@ const GREEDY_BEAM_WIDTH: usize = 3;
 pub(crate) fn plan(
     units: &Units,
     initial_state: GraphState,
-    goal_id: &str,
+    goal_id: &UnitKind,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     beam::plan(units, initial_state, goal_id, GREEDY_BEAM_WIDTH, config)
@@ -30,7 +30,7 @@ pub(crate) fn plan(
 mod tests {
     use crate::planner::core::{Planner, Strategy};
     use crate::sim::GraphState;
-    use crate::units::Units;
+    use crate::units::{TechLevel, UnitKind, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
@@ -42,14 +42,16 @@ mod tests {
         let units = load_units();
 
         let planner = Planner::new(Strategy::Greedy);
-        let initial = GraphState::new(&units, &["URL0001"]);
-        let result = planner.plan(&units, initial, "URB1101").unwrap();
+        let initial = GraphState::new(&units, &[UnitKind::Commander]);
+        let result = planner
+            .plan(&units, initial, &UnitKind::Pgen(TechLevel::T1))
+            .unwrap();
 
         assert!(
             result
                 .events
                 .iter()
-                .any(|e| e.unit_id.eq_ignore_ascii_case("URB1101")),
+                .any(|e| e.unit_id == UnitKind::Pgen(TechLevel::T1)),
             "plan should build the goal pgen"
         );
         assert!(result.completion_time > 0.0);
