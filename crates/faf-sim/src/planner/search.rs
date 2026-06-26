@@ -131,8 +131,7 @@ fn add_build_candidates(
         // Start the project with the single fastest capable idle builder.
         // Additional builders can be added later with `Assist`.
         if let Some(builder) = fastest_idle_builder(idle_builders, state, unit_id, units) {
-            if let Some((next, _)) = try_start_project(state, unit_id, &[builder], units, config.dt)
-            {
+            if let Some(next) = try_start_project(state, unit_id, builder, units, config.dt) {
                 successors.push((
                     next,
                     SearchAction::Build {
@@ -165,8 +164,8 @@ fn add_upgrade_candidates(
 
         // Start the upgrade with the single fastest capable idle builder.
         if let Some(builder) = fastest_idle_builder(idle_builders, state, &target, units) {
-            if let Some((next, _)) =
-                try_upgrade_project(state, &target, old_node, &[builder], units, config.dt)
+            if let Some(next) =
+                try_upgrade_project(state, &target, old_node, builder, units, config.dt)
             {
                 successors.push((
                     next,
@@ -244,22 +243,22 @@ pub(crate) fn visited_key(state: &GraphState) -> VisitedKey {
     (owned, active)
 }
 
+/// Try starting a project for `target` with a single `builder`.
+///
+/// On success, returns the state after the project is started and one tick has
+/// elapsed.  On failure (busy builder, cannot build, etc.) returns `None`.
 pub(crate) fn try_start_project(
     state: &GraphState,
     target: &UnitKind,
-    builders: &[NodeId],
+    builder: NodeId,
     units: &Units,
     dt: f64,
-) -> Option<(GraphState, Vec<NodeId>)> {
-    if builders.is_empty() {
-        return None;
-    }
+) -> Option<GraphState> {
     let mut next = state.clone();
-    let used_builders = builders.to_vec();
-    match next.start_project(target, builders, units) {
+    match next.start_project(target, &[builder], units) {
         Ok(_) => {
             next.tick(units, dt);
-            Some((next, used_builders))
+            Some(next)
         }
         Err(GraphSimError::BuilderBusy(_))
         | Err(GraphSimError::NoBuilders)
@@ -269,23 +268,23 @@ pub(crate) fn try_start_project(
     }
 }
 
+/// Try upgrading `old_node` to `target` with a single `builder`.
+///
+/// On success, returns the state after the upgrade is started and one tick has
+/// elapsed.  On failure returns `None`.
 pub(crate) fn try_upgrade_project(
     state: &GraphState,
     target: &UnitKind,
     old_node: NodeId,
-    builders: &[NodeId],
+    builder: NodeId,
     units: &Units,
     dt: f64,
-) -> Option<(GraphState, Vec<NodeId>)> {
-    if builders.is_empty() {
-        return None;
-    }
+) -> Option<GraphState> {
     let mut next = state.clone();
-    let used_builders = builders.to_vec();
-    match next.start_upgrade_project(target, old_node, builders, units) {
+    match next.start_upgrade_project(target, old_node, &[builder], units) {
         Ok(_) => {
             next.tick(units, dt);
-            Some((next, used_builders))
+            Some(next)
         }
         Err(GraphSimError::BuilderBusy(_))
         | Err(GraphSimError::NoBuilders)
