@@ -188,8 +188,7 @@ async fn run_simulate(units: &Units, target: ResearchTarget, strategy: Strategy)
     let sim_handle = tokio::spawn(sim.run());
 
     let planner = build_reactive_planner(strategy);
-    let planner_actor =
-        PlannerActor::new(planner, units.clone(), blueprint_id, obs_rx, cmd_tx);
+    let planner_actor = PlannerActor::new(planner, units.clone(), blueprint_id, obs_rx, cmd_tx);
     let planner_handle = tokio::spawn(planner_actor.run());
 
     // Drive the simulation timer forward until the goal is reached or we hit

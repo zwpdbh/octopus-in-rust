@@ -33,8 +33,6 @@ pub struct SimActor {
     pub dt: f64,
     /// Timer that drives the simulation tick loop.
     pub timer: Interval,
-    /// Commands queued from the planner but not yet applied.
-    pub command_queue: Vec<Command>,
     /// Channel on which to send observations to the planner.
     pub obs_tx: Sender<Observation>,
     /// Channel on which to receive commands from the planner.
@@ -62,7 +60,6 @@ impl SimActor {
             goal: goal_id.map(|id| id.to_string()),
             dt,
             timer,
-            command_queue: Vec::new(),
             obs_tx,
             cmd_rx,
         }
@@ -86,10 +83,11 @@ impl SimActor {
                     }
                 }
 
-                // External command: queue it for application on the next tick.
+                // External command: apply it immediately. The effect on the
+                // simulation state is visible at the next tick.
                 maybe_cmd = self.cmd_rx.recv() => {
                     match maybe_cmd {
-                        Some(cmd) => self.command_queue.push(cmd),
+                        Some(cmd) => self.apply_command(cmd)?,
                         None => break,
                     }
                 }
@@ -99,14 +97,8 @@ impl SimActor {
         Ok(self.state)
     }
 
-    /// Apply any queued commands, advance one tick, and report events.
+    /// Advance one tick and report events.
     async fn tick_and_report(&mut self) -> Result<(), GraphSimError> {
-        // Apply all queued commands before the tick.
-        let commands: Vec<Command> = self.command_queue.drain(..).collect();
-        for command in commands {
-            self.apply_command(command)?;
-        }
-
         let completed = self.state.tick(&self.units, self.dt);
 
         // Report each completed unit as an event.
@@ -166,8 +158,12 @@ impl SimActor {
                 old_node,
                 builders,
             } => {
-                self.state
-                    .start_upgrade_project(&target_unit_id, old_node, &builders, &self.units)?;
+                self.state.start_upgrade_project(
+                    &target_unit_id,
+                    old_node,
+                    &builders,
+                    &self.units,
+                )?;
             }
         }
         Ok(())

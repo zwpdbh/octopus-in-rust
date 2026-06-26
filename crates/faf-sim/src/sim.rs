@@ -303,9 +303,7 @@ fn is_builder_node(node_id: NodeId, graph: &BuildGraph, units: &Units) -> bool {
         return false;
     }
     units.find(&node.unit_id).is_some_and(|u| {
-        (u.has_category("COMMANDER")
-            || u.has_category("ENGINEER")
-            || u.has_category("FACTORY"))
+        (u.has_category("COMMANDER") || u.has_category("ENGINEER") || u.has_category("FACTORY"))
             && u.builder_capability().is_some()
     })
 }
@@ -530,11 +528,7 @@ impl GraphState {
     }
 
     /// Validate that every builder in `builders` is idle and is a real builder.
-    fn validate_builders(
-        &self,
-        builders: &[NodeId],
-        units: &Units,
-    ) -> Result<(), GraphSimError> {
+    fn validate_builders(&self, builders: &[NodeId], units: &Units) -> Result<(), GraphSimError> {
         if builders.is_empty() {
             return Err(GraphSimError::NoBuilders);
         }
@@ -903,7 +897,7 @@ impl GraphState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{DataIndex, default_upgrade_table, Units, UpgradeCost};
+    use crate::units::{default_upgrade_table, DataIndex, Units, UpgradeCost};
 
     fn load_units() -> Units {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
@@ -1082,8 +1076,7 @@ mod tests {
         // Use a custom upgrade table so the ACU can build the upgrade target.
         // This keeps the test focused on slot reuse and economy update.
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        let index: DataIndex =
-            serde_json::from_str(json).expect("embedded index should parse");
+        let index: DataIndex = serde_json::from_str(json).expect("embedded index should parse");
         let pgen = index.find_unit("URB1101").expect("T1 pgen exists");
         let pgen_stats = pgen.build_target_stats().expect("pgen has stats");
         let mut upgrade_table = default_upgrade_table();

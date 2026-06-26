@@ -97,9 +97,7 @@ impl SearchConfig {
             }
 
             // Start with the single fastest idle builder that can build it.
-            if let Some(builder) =
-                fastest_idle_builder(&idle_builders, state, &unit_id, units)
-            {
+            if let Some(builder) = fastest_idle_builder(&idle_builders, state, &unit_id, units) {
                 if let Some((next, _)) =
                     try_start_project(state, &unit_id, &[builder], units, self.dt)
                 {
@@ -123,14 +121,9 @@ impl SearchConfig {
             let target_id = target.id.clone();
 
             // Start with all idle builders.
-            if let Some((next, builders)) = try_upgrade_project(
-                state,
-                &target_id,
-                old_node,
-                &idle_builders,
-                units,
-                self.dt,
-            ) {
+            if let Some((next, builders)) =
+                try_upgrade_project(state, &target_id, old_node, &idle_builders, units, self.dt)
+            {
                 successors.push((
                     next,
                     SearchAction::Upgrade {
@@ -142,17 +135,10 @@ impl SearchConfig {
             }
 
             // Start with the single fastest idle builder that can build it.
-            if let Some(builder) =
-                fastest_idle_builder(&idle_builders, state, &target_id, units)
-            {
-                if let Some((next, _)) = try_upgrade_project(
-                    state,
-                    &target_id,
-                    old_node,
-                    &[builder],
-                    units,
-                    self.dt,
-                ) {
+            if let Some(builder) = fastest_idle_builder(&idle_builders, state, &target_id, units) {
+                if let Some((next, _)) =
+                    try_upgrade_project(state, &target_id, old_node, &[builder], units, self.dt)
+                {
                     successors.push((
                         next,
                         SearchAction::Upgrade {

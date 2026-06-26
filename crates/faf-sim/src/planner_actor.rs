@@ -68,10 +68,7 @@ impl PlannerActor {
         while let Some(observation) = self.obs_rx.recv().await {
             let command = match observation {
                 Observation::State(state) => {
-                    let plan = self
-                        .planner
-                        .plan(&self.units, state, &self.goal_id)
-                        .ok();
+                    let plan = self.planner.plan(&self.units, state, &self.goal_id).ok();
                     plan.and_then(|p| p.first_action)
                         .and_then(search_action_to_command)
                 }
@@ -111,7 +108,14 @@ mod tests {
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), sim_dt, obs_tx, cmd_rx);
+        let sim = SimActor::new(
+            &["URL0001"],
+            units.clone(),
+            Some("URB1101"),
+            sim_dt,
+            obs_tx,
+            cmd_rx,
+        );
         tokio::spawn(sim.run());
 
         let planner = Planner::with_config(
@@ -162,7 +166,14 @@ mod tests {
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), 0.5, obs_tx, cmd_rx);
+        let sim = SimActor::new(
+            &["URL0001"],
+            units.clone(),
+            Some("URB1101"),
+            0.5,
+            obs_tx,
+            cmd_rx,
+        );
         tokio::spawn(sim.run());
 
         let planner = Planner::new(Strategy::Greedy);
@@ -239,7 +250,14 @@ mod tests {
         let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-        let sim = SimActor::new(&["URL0001"], units.clone(), Some("URB1101"), 0.5, obs_tx, cmd_rx);
+        let sim = SimActor::new(
+            &["URL0001"],
+            units.clone(),
+            Some("URB1101"),
+            0.5,
+            obs_tx,
+            cmd_rx,
+        );
         let sim_handle = tokio::spawn(sim.run());
 
         let planner = Planner::with_config(
