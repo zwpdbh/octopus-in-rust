@@ -31,6 +31,34 @@ pub enum PlanEdgeKind {
     Upgrade,
 }
 
+/// A simplified, ACU-rooted plan graph for a goal unit.
+///
+/// This is a thin wrapper around the internal [`DiGraph`] so that domain-specific
+/// methods (distance heuristics, relevance queries, etc.) can be added later
+/// without leaking the raw graph type into every consumer.
+#[derive(Debug, Clone)]
+pub struct PlanGraph {
+    plan_graph: DiGraph<UnitKind, PlanEdgeKind>,
+    goal: UnitKind,
+}
+
+impl PlanGraph {
+    /// Wrap an existing graph and its goal.
+    pub fn new(plan_graph: DiGraph<UnitKind, PlanEdgeKind>, goal: UnitKind) -> Self {
+        Self { plan_graph, goal }
+    }
+
+    /// The goal unit this plan graph was built for.
+    pub fn goal(&self) -> &UnitKind {
+        &self.goal
+    }
+
+    /// Borrow the underlying petgraph structure.
+    pub fn graph(&self) -> &DiGraph<UnitKind, PlanEdgeKind> {
+        &self.plan_graph
+    }
+}
+
 /// Error returned when a plan graph cannot be constructed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanGraphError {
@@ -61,10 +89,7 @@ impl std::error::Error for PlanGraphError {}
 /// - `Build` edges for same-tier construction (e.g. T2 factory -> T2 engineer).
 /// - `Upgrade` edges for tier progression (e.g. T1 factory -> T2 factory).
 /// - The actual build edge from the goal's legal builder(s) to the goal.
-pub fn build_plan_graph(
-    units: &Units,
-    goal: &UnitKind,
-) -> Result<DiGraph<UnitKind, PlanEdgeKind>, PlanGraphError> {
+pub fn build_plan_graph(units: &Units, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
     let max_tech = max_tech_needed(units, goal);
     let relevant = relevant_unit_kinds(max_tech, goal);
 
@@ -82,7 +107,7 @@ pub fn build_plan_graph(
         return Err(PlanGraphError::GoalUnreachable(goal.clone()));
     }
 
-    Ok(graph)
+    Ok(PlanGraph::new(graph, goal.clone()))
 }
 
 /// Determine the highest technology tier that must be achieved to build
@@ -275,7 +300,8 @@ mod tests {
     fn fatboy_plan_graph_includes_tech_and_economy() {
         let units = load_units();
         let goal = UnitKind::Unique(crate::units::UnitId("UEL0401".to_string()));
-        let graph = build_plan_graph(&units, &goal).expect("fatboy should be reachable");
+        let plan_graph = build_plan_graph(&units, &goal).expect("fatboy should be reachable");
+        let graph = plan_graph.graph();
 
         let node_set: HashSet<UnitKind> =
             graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();
@@ -294,7 +320,8 @@ mod tests {
     fn fatboy_plan_graph_has_build_and_upgrade_edges() {
         let units = load_units();
         let goal = UnitKind::Unique(crate::units::UnitId("UEL0401".to_string()));
-        let graph = build_plan_graph(&units, &goal).expect("fatboy should be reachable");
+        let plan_graph = build_plan_graph(&units, &goal).expect("fatboy should be reachable");
+        let graph = plan_graph.graph();
 
         let edges: Vec<(UnitKind, UnitKind, PlanEdgeKind)> = graph
             .raw_edges()
@@ -329,7 +356,8 @@ mod tests {
     fn t1_pgen_plan_graph_stops_at_t1() {
         let units = load_units();
         let goal = UnitKind::Pgen(TechLevel::T1);
-        let graph = build_plan_graph(&units, &goal).expect("t1 pgen should be reachable");
+        let plan_graph = build_plan_graph(&units, &goal).expect("t1 pgen should be reachable");
+        let graph = plan_graph.graph();
 
         let node_set: HashSet<UnitKind> =
             graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();

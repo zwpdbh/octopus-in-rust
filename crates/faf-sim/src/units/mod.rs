@@ -20,9 +20,8 @@ use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
-use crate::planner::plan_graph::{build_plan_graph, PlanEdgeKind, PlanGraphError};
+use crate::planner::plan_graph::{build_plan_graph, PlanGraph, PlanGraphError};
 use crate::planner::strips::{build_operators, Operator};
-use petgraph::graph::DiGraph;
 
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UpgradeRecipe,
@@ -197,10 +196,7 @@ impl Units {
     /// The graph includes the technology chain (factories, engineers) and the
     /// economic infrastructure (mex, pgen) required to reach the goal, rooted
     /// at the ACU.
-    pub fn plan_graph(
-        &self,
-        goal: &UnitKind,
-    ) -> Result<DiGraph<UnitKind, PlanEdgeKind>, PlanGraphError> {
+    pub fn plan_graph(&self, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
         build_plan_graph(self, goal)
     }
 

@@ -18,11 +18,11 @@ use std::collections::HashMap;
 
 use clap::Parser;
 use faf_sim::{
-    run_build_order_simulation, PlanEdgeKind, SimulationConfig, Strategy, UnitKind as SimUnitKind,
-    Units as SimUnits,
+    run_build_order_simulation, PlanEdgeKind, PlanGraph, SimulationConfig, Strategy,
+    UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, RenderOptions};
 
@@ -223,19 +223,20 @@ impl EdgeLabel for VisualEdge {
 /// human-readable labels and edge styles.
 fn build_visual_graph(
     units: &SimUnits,
-    plan_graph: &DiGraph<SimUnitKind, PlanEdgeKind>,
-) -> DiGraph<String, VisualEdge> {
-    let mut graph = DiGraph::<String, VisualEdge>::new();
+    plan_graph: &PlanGraph,
+) -> petgraph::graph::DiGraph<String, VisualEdge> {
+    let inner = plan_graph.graph();
+    let mut graph = petgraph::graph::DiGraph::<String, VisualEdge>::new();
     let mut indices: HashMap<SimUnitKind, NodeIndex> = HashMap::new();
 
-    for node in plan_graph.node_indices() {
-        let kind = &plan_graph[node];
+    for node in inner.node_indices() {
+        let kind = &inner[node];
         indices.insert(kind.clone(), graph.add_node(node_label(units, kind)));
     }
 
-    for edge in plan_graph.edge_references() {
-        let from = indices[&plan_graph[edge.source()]];
-        let to = indices[&plan_graph[edge.target()]];
+    for edge in inner.edge_references() {
+        let from = indices[&inner[edge.source()]];
+        let to = indices[&inner[edge.target()]];
         graph.add_edge(from, to, VisualEdge::for_kind(*edge.weight()));
     }
 
