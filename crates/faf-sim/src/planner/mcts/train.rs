@@ -47,6 +47,9 @@ pub struct TrainConfig {
     /// Probability of taking a random action during training (epsilon-greedy
     /// exploration on top of the softmax policy).
     pub epsilon: f32,
+    /// Entropy bonus coefficient. Higher values encourage more exploration by
+    /// keeping the policy distribution spread out.
+    pub entropy_coef: f32,
 }
 
 impl Default for TrainConfig {
@@ -58,6 +61,7 @@ impl Default for TrainConfig {
             learning_rate: 1e-3,
             gamma: 0.99,
             epsilon: 0.1,
+            entropy_coef: 0.01,
         }
     }
 }
@@ -92,6 +96,8 @@ struct Episode {
     steps: Vec<EpisodeStep>,
     reached_goal: bool,
     completion_time: f64,
+    /// Shaped reward computed from the final state.
+    final_reward: f32,
 }
 
 /// Trainer for the MLP policy network.
@@ -104,6 +110,12 @@ pub struct Trainer {
     config: TrainConfig,
     device: TrainDevice,
     rng: ThreadRng,
+    /// Running mean of episode returns for baseline subtraction.
+    return_mean: f32,
+    /// Running variance of episode returns for normalization.
+    return_var: f32,
+    /// Number of episodes used to estimate the return statistics.
+    return_count: f32,
 }
 
 impl Trainer {
@@ -118,6 +130,9 @@ impl Trainer {
             config,
             device,
             rng: thread_rng(),
+            return_mean: 0.0,
+            return_var: 0.0,
+            return_count: 0.0,
         }
     }
 
@@ -156,7 +171,12 @@ impl Trainer {
         planner_config: &PlannerConfig,
     ) -> Episode {
         let mut state = GraphState::new(units, &[UnitKind::Commander]);
-        let mut episode = Episode::default();
+        let mut episode = Episode {
+            reached_goal: false,
+            completion_time: 0.0,
+            final_reward: 0.0,
+            steps: Vec::new(),
+        };
 
         for _ in 0..self.config.max_steps {
             if state.goal_reached(goal) {
@@ -210,23 +230,37 @@ impl Trainer {
             });
         }
 
+        episode.final_reward = compute_progress_reward(&state, units, goal, plan);
         self.compute_returns(&mut episode);
         episode
     }
 
-    /// Fill in the discounted return for each step from the final reward.
-    fn compute_returns(&self, episode: &mut Episode) {
-        let reward = if episode.reached_goal {
-            // Higher reward for faster completion.
-            (1.0 / (1.0 + episode.completion_time as f32)).clamp(1e-6, 1.0)
-        } else {
-            0.0
-        };
-
+    /// Fill in the normalized return for each step from the final reward.
+    ///
+    /// Because the reward is computed from the final state only, every step in
+    /// the episode receives the same raw return. A running mean/variance
+    /// baseline across episodes is used for normalization instead of a per-
+    /// episode mean (which would collapse to zero).
+    fn compute_returns(&mut self, episode: &mut Episode) {
         let step_count = episode.steps.len();
-        for (t, step) in episode.steps.iter_mut().enumerate() {
-            let steps_to_end = step_count - t;
-            step.return_value = reward * self.config.gamma.powi(steps_to_end as i32);
+        if step_count == 0 {
+            return;
+        }
+
+        let raw_return = episode.final_reward;
+
+        // Update running mean and variance using Welford's algorithm.
+        self.return_count += 1.0;
+        let delta = raw_return - self.return_mean;
+        self.return_mean += delta / self.return_count;
+        let delta2 = raw_return - self.return_mean;
+        self.return_var += delta * delta2;
+
+        let std = (self.return_var / self.return_count).sqrt().max(1e-6);
+        let normalized = (raw_return - self.return_mean) / std;
+
+        for step in &mut episode.steps {
+            step.return_value = normalized;
         }
     }
 
@@ -252,13 +286,20 @@ impl Trainer {
                 TensorData::new(vec![step.action_index as i64], [1]),
                 &self.device,
             );
-            let selected_log_prob = log_probs.select(0, index_tensor);
+            let selected_log_prob = log_probs.clone().select(0, index_tensor);
 
             let return_tensor = Tensor::<TrainBackend, 1>::from_data(
                 TensorData::new(vec![step.return_value], [1]),
                 &self.device,
             );
-            let loss = selected_log_prob.neg().mul(return_tensor);
+            let policy_loss = selected_log_prob.neg().mul(return_tensor);
+
+            // Entropy bonus: encourage exploration by penalizing low entropy.
+            let probs = log_probs.clone().exp();
+            let entropy = (probs * log_probs).neg().sum();
+            let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
+
+            let loss = policy_loss + entropy_loss;
 
             let grads = loss.backward();
             let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
@@ -281,6 +322,63 @@ impl Trainer {
     pub fn into_model(self) -> ValueNet<TrainBackend> {
         self.model
     }
+}
+
+/// Compute a shaped reward from the final state of an episode.
+///
+/// The reward encourages:
+/// - owning units on the plan graph, weighted by proximity to the goal;
+/// - reaching higher factory and engineer tech tiers;
+/// - completing the goal quickly.
+fn compute_progress_reward(
+    state: &GraphState,
+    units: &Units,
+    goal: &UnitKind,
+    plan: &PlanGraph,
+) -> f32 {
+    use crate::units::TechLevel;
+
+    let mut reward = 0.0f32;
+
+    // Reward for owning nodes on the plan graph. Nodes closer to the goal
+    // contribute more, so the policy is pushed toward the goal path.
+    for node in plan.graph().node_indices() {
+        let kind = &plan.graph()[node];
+        if state.has_completed_unit(kind) {
+            let distance = crate::planner::mcts::features::distance_to_goal(plan, kind);
+            reward += 2.0 / (1.0 + distance as f32);
+        }
+    }
+
+    // Tech-tier milestones: unlocking higher-tier factories and engineers is
+    // critical for reaching the goal.
+    let factory_tier = [TechLevel::T1, TechLevel::T2, TechLevel::T3]
+        .iter()
+        .filter(|t| state.has_completed_unit(&UnitKind::Factory(**t)))
+        .count() as f32;
+    let engineer_tier = [TechLevel::T1, TechLevel::T2, TechLevel::T3]
+        .iter()
+        .filter(|t| state.has_completed_unit(&UnitKind::Engineer(**t)))
+        .count() as f32;
+    reward += factory_tier * 3.0;
+    reward += engineer_tier * 3.0;
+
+    // Economy scale: more build power and income let the agent execute faster.
+    reward += (state.total_active_build_power(units) as f32 / 50.0).clamp(0.0, 5.0);
+    reward += (state.economy.net_mass_income as f32 / 50.0).clamp(0.0, 5.0);
+    reward += (state.economy.net_energy_income as f32 / 200.0).clamp(0.0, 5.0);
+
+    // Large bonus for reaching the goal, with a time premium for faster runs.
+    if state.goal_reached(goal) {
+        reward += 100.0;
+        reward += 1000.0 / (1.0 + state.time as f32);
+    } else {
+        // Penalty for failing to reach the goal within the step budget,
+        // so the agent prefers finishing episodes rather than stalling.
+        reward -= 5.0;
+    }
+
+    reward
 }
 
 /// Sample an action from the softmax over candidate scores.
@@ -361,5 +459,34 @@ mod tests {
         let stats = trainer.train(&units, &goal);
 
         assert_eq!(stats.episode_lengths.len(), 3);
+    }
+
+    #[test]
+    fn save_and_load_model_round_trip() {
+        let units = load_units();
+        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
+        let mut trainer = Trainer::new(TrainConfig {
+            episodes: 2,
+            max_steps: 20,
+            ..Default::default()
+        });
+        trainer.train(&units, &goal);
+        let model = trainer.into_model();
+
+        let dir = std::env::temp_dir().join("faf-sim-train-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("test-model");
+
+        save_model(&model, &path).expect("save should succeed");
+        let loaded = load_model(&path).expect("load should succeed");
+
+        let device: TrainDevice = Default::default();
+        let dummy = vec![0.0f32; FEATURE_COUNT];
+        let before = model.evaluate_single(dummy.clone(), &device);
+        let after = loaded.evaluate_single(dummy, &device);
+        assert!(
+            (before - after).abs() < 1e-3,
+            "loaded model should produce approximately the same output as the saved model"
+        );
     }
 }

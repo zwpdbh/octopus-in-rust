@@ -28,6 +28,10 @@ pub struct BuildEvent {
     pub unit_id: UnitKind,
     /// Display name for the completed unit.
     pub unit_name: String,
+    /// Node id of the unit slot in the build graph. This lets visualisers
+    /// correlate an event with the builder assignments and upgrade history of
+    /// the same physical slot.
+    pub node_id: NodeId,
 }
 
 /// Derive an economy state by summing production, consumption, and storage
@@ -892,6 +896,7 @@ impl GraphState {
                 time: finish_time,
                 unit_id: unit_id.clone(),
                 unit_name: units.display_name(&unit_id),
+                node_id: project.target_node,
             });
         }
 

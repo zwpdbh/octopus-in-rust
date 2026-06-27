@@ -476,14 +476,26 @@ where
         ));
         out.push('\n');
 
-        let text_y = pos.y + options.font_size * 0.35;
+        let lines: Vec<&str> = label.split('\n').collect();
+        let line_count = lines.len();
+        let total_height = options.font_size * line_count as f32 * 1.2;
+        let start_y = pos.y - total_height / 2.0 + options.font_size * 0.6;
         out.push_str(&format!(
-            r##"  <text x="{x:.1}" y="{text_y:.1}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="#212529" font-family="sans-serif">{label}</text>"##,
+            r##"  <text x="{x:.1}" y="{start_y:.1}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="#212529" font-family="sans-serif">"##,
             x = pos.x,
+            start_y = start_y,
             font_size = options.font_size,
-            label = escape_xml(&label)
         ));
-        out.push('\n');
+        for (i, line) in lines.iter().enumerate() {
+            let dy = if i == 0 { 0.0 } else { options.font_size * 1.2 };
+            out.push_str(&format!(
+                r##"<tspan x="{x:.1}" dy="{dy:.1}">{label}</tspan>"##,
+                x = pos.x,
+                dy = dy,
+                label = escape_xml(line),
+            ));
+        }
+        out.push_str("</text>\n");
     }
 
     // Legend.

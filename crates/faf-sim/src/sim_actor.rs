@@ -178,6 +178,7 @@ impl SimActor {
             time: self.state.time,
             unit_id,
             unit_name,
+            node_id,
         }
     }
 }

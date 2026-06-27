@@ -37,6 +37,8 @@ pub enum PlannerError {
     SimulationFailed,
     /// The search ran out of states before reaching the goal.
     SearchExhausted,
+    /// A generic planner error.
+    Other(String),
 }
 
 impl fmt::Display for PlannerError {
@@ -50,6 +52,9 @@ impl fmt::Display for PlannerError {
             }
             PlannerError::SearchExhausted => {
                 write!(f, "search exhausted without reaching the goal")
+            }
+            PlannerError::Other(msg) => {
+                write!(f, "{}", msg)
             }
         }
     }

@@ -31,13 +31,13 @@ pub struct ValueNet<B: Backend> {
 impl<B: Backend> ValueNet<B> {
     /// Create a new value network for the fixed feature size.
     ///
-    /// Architecture: FEATURE_COUNT -> 128 -> 64 -> 1.
+    /// Architecture: FEATURE_COUNT -> 256 -> 128 -> 1.
     pub fn new(device: &B::Device) -> Self {
         Self {
-            linear1: LinearConfig::new(FEATURE_COUNT, 128).init(device),
+            linear1: LinearConfig::new(FEATURE_COUNT, 256).init(device),
             activation: Relu::new(),
-            linear2: LinearConfig::new(128, 64).init(device),
-            output: LinearConfig::new(64, 1).init(device),
+            linear2: LinearConfig::new(256, 128).init(device),
+            output: LinearConfig::new(128, 1).init(device),
         }
     }
 

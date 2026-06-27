@@ -150,7 +150,7 @@ fn tier_value(tier: TechLevel) -> f32 {
 }
 
 /// Shortest number of edges from `kind` to the goal in the plan graph.
-fn distance_to_goal(plan: &PlanGraph, kind: &UnitKind) -> usize {
+pub(crate) fn distance_to_goal(plan: &PlanGraph, kind: &UnitKind) -> usize {
     let goal_idx = plan
         .graph()
         .node_indices()

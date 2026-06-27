@@ -31,7 +31,7 @@ The MCTS variant is already declared. The missing piece is the implementation of
 `Planner::plan` matches on the strategy and forwards to the corresponding module:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 196 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 230 — Planner::plan dispatch
 pub fn plan(
     &self,
     units: &Units,
@@ -41,8 +41,16 @@ pub fn plan(
     match self.strategy {
         Strategy::Mcts {
             iterations,
-            value_net,
-        } => mcts::plan(units, initial_state, goal_id, iterations, value_net, &self.config),
+            value_net: value_net_kind,
+        } => mcts::plan(
+            units,
+            initial_state,
+            goal_id,
+            iterations,
+            value_net_kind,
+            self.value_net.clone(),
+            &self.config,
+        ),
     }
 }
 ```
@@ -50,16 +58,18 @@ pub fn plan(
 The MCTS entry point is currently a stub:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 37 — mcts::plan (placeholder)
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 37 — mcts::plan
 pub fn plan(
-    _units: &Units,
-    _initial_state: GraphState,
-    _goal_id: &UnitKind,
-    _iterations: usize,
-    _value_net: ValueNetKind,
-    _config: &PlannerConfig,
+    units: &Units,
+    initial_state: GraphState,
+    goal_id: &UnitKind,
+    iterations: usize,
+    value_net_kind: ValueNetKind,
+    value_net: Option<ValueNet<Autodiff<NdArray>>>,
+    config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    todo!("MCTS + value-net planner is not yet implemented")
+    // Greedy MLP baseline: score candidates and pick the best executable action.
+    // Full UCT search will replace this later while reusing the same value net.
 }
 ```
 
@@ -191,4 +201,38 @@ if let Some(action) = result.first_action {
 }
 ```
 
-Once this works, the next step is to train the value network so the search has something meaningful to evaluate.
+## Training and model persistence
+
+Train a model from the CLI:
+
+```text
+faf-sim train -e 100 -m 500 cybran monkeylord
+```
+
+This runs REINFORCE rollouts and saves the trained value network to
+`data/models/mlp-cybran-monkeylord.mpk`.
+
+`simulate` loads the trained model automatically if it exists:
+
+```text
+faf-sim simulate cybran monkeylord
+```
+
+If no trained model is found, `simulate` falls back to a randomly initialized
+network.
+
+Programmatically, use the trainer API:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train.rs ~line 310 — train_policy
+let (model, stats) = train_policy(&units, &goal, TrainConfig::default());
+save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
+```
+
+And load it later:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train.rs ~line 332 — load_model
+let model = load_model(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
+let planner = Planner::with_value_net(strategy, PlannerConfig::default(), model);
+```
