@@ -25,7 +25,7 @@ pub use economy::{
 pub use message::{Command, Observation};
 pub use planner::{
     build_operators, build_plan_graph, Fact, Operator, PlanEdgeKind, PlanGraph, PlanGraphError,
-    PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
+    PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,

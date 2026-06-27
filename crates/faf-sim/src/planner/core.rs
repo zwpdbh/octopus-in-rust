@@ -55,16 +55,53 @@ impl fmt::Display for PlannerError {
 
 impl Error for PlannerError {}
 
+/// Architecture of the learned value network used inside MCTS.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ValueNetKind {
+    /// Multi-layer perceptron that scores candidates independently.
+    #[default]
+    Mlp,
+    /// Graph neural network that reasons over the plan graph structure.
+    Gnn,
+}
+
+impl fmt::Display for ValueNetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueNetKind::Mlp => write!(f, "mlp"),
+            ValueNetKind::Gnn => write!(f, "gnn"),
+        }
+    }
+}
+
+impl FromStr for ValueNetKind {
+    type Err = PlannerError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "mlp" => Ok(ValueNetKind::Mlp),
+            "gnn" => Ok(ValueNetKind::Gnn),
+            _ => Err(PlannerError::UnsupportedStrategy(format!(
+                "unknown value net kind '{}'",
+                s
+            ))),
+        }
+    }
+}
+
 /// Selectable planning algorithm.
 ///
-/// Currently only MCTS is supported. The enum is kept so future strategies can
-/// be added without changing the public API.
+/// Currently only MCTS is supported, but the value network that guides it can be
+/// chosen between MLP and GNN. The enum is kept so future strategies can be
+/// added without changing the public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// Monte Carlo Tree Search guided by a learned value network.
     Mcts {
         /// Number of MCTS iterations to run per decision.
         iterations: usize,
+        /// Kind of learned value network to use inside MCTS.
+        value_net: ValueNetKind,
     },
 }
 
@@ -81,21 +118,59 @@ impl FromStr for Strategy {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lower = s.to_ascii_lowercase();
         if lower == "mcts" {
-            return Ok(Strategy::Mcts { iterations: 100 });
+            return Ok(Strategy::Mcts {
+                iterations: 100,
+                value_net: ValueNetKind::Mlp,
+            });
         }
-        if let Some(rest) = lower.strip_prefix("mcts:") {
-            if let Ok(iterations) = rest.parse::<usize>() {
-                return Ok(Strategy::Mcts { iterations });
+
+        let Some(rest) = lower.strip_prefix("mcts") else {
+            return Err(PlannerError::UnsupportedStrategy(s.to_string()));
+        };
+
+        // Supported forms:
+        //   mcts:<iter>
+        //   mcts:<iter>:<net>
+        //   mcts::<net>   (default iterations)
+        let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
+
+        match parts.len() {
+            1 => {
+                if let Ok(iterations) = parts[0].parse::<usize>() {
+                    Ok(Strategy::Mcts {
+                        iterations,
+                        value_net: ValueNetKind::Mlp,
+                    })
+                } else {
+                    let value_net = ValueNetKind::from_str(parts[0])?;
+                    Ok(Strategy::Mcts {
+                        iterations: 100,
+                        value_net,
+                    })
+                }
             }
+            2 => {
+                let iterations = parts[0]
+                    .parse::<usize>()
+                    .map_err(|_| PlannerError::UnsupportedStrategy(s.to_string()))?;
+                let value_net = ValueNetKind::from_str(parts[1])?;
+                Ok(Strategy::Mcts {
+                    iterations,
+                    value_net,
+                })
+            }
+            _ => Err(PlannerError::UnsupportedStrategy(s.to_string())),
         }
-        Err(PlannerError::UnsupportedStrategy(s.to_string()))
     }
 }
 
 impl fmt::Display for Strategy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Strategy::Mcts { iterations } => write!(f, "mcts:{}", iterations),
+            Strategy::Mcts {
+                iterations,
+                value_net,
+            } => write!(f, "mcts:{}:{}", iterations, value_net),
         }
     }
 }
@@ -161,9 +236,17 @@ impl Planner {
         goal_id: &UnitKind,
     ) -> Result<PlanResult, PlannerError> {
         match self.strategy {
-            Strategy::Mcts { iterations } => {
-                mcts::plan(units, initial_state, goal_id, iterations, &self.config)
-            }
+            Strategy::Mcts {
+                iterations,
+                value_net,
+            } => mcts::plan(
+                units,
+                initial_state,
+                goal_id,
+                iterations,
+                value_net,
+                &self.config,
+            ),
         }
     }
 }
@@ -176,17 +259,52 @@ mod tests {
     fn strategy_parses_mcts() {
         assert_eq!(
             Strategy::from_str("mcts").unwrap(),
-            Strategy::Mcts { iterations: 100 }
+            Strategy::Mcts {
+                iterations: 100,
+                value_net: ValueNetKind::Mlp
+            }
         );
         assert_eq!(
             Strategy::from_str("Mcts:500").unwrap(),
-            Strategy::Mcts { iterations: 500 }
+            Strategy::Mcts {
+                iterations: 500,
+                value_net: ValueNetKind::Mlp
+            }
+        );
+        assert_eq!(
+            Strategy::from_str("mcts:500:gnn").unwrap(),
+            Strategy::Mcts {
+                iterations: 500,
+                value_net: ValueNetKind::Gnn
+            }
+        );
+        assert_eq!(
+            Strategy::from_str("mcts::gnn").unwrap(),
+            Strategy::Mcts {
+                iterations: 100,
+                value_net: ValueNetKind::Gnn
+            }
         );
     }
 
     #[test]
-    fn strategy_display_includes_iterations() {
-        assert_eq!(Strategy::Mcts { iterations: 200 }.to_string(), "mcts:200");
+    fn strategy_display_includes_value_net() {
+        assert_eq!(
+            Strategy::Mcts {
+                iterations: 200,
+                value_net: ValueNetKind::Mlp
+            }
+            .to_string(),
+            "mcts:200:mlp"
+        );
+        assert_eq!(
+            Strategy::Mcts {
+                iterations: 200,
+                value_net: ValueNetKind::Gnn
+            }
+            .to_string(),
+            "mcts:200:gnn"
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //! All heavy details are currently `todo!()` so the structure can be reviewed
 //! before implementation.
 
-use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
+use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::sim::GraphState;
 use crate::units::{UnitKind, Units};
 
@@ -39,6 +39,7 @@ pub fn plan(
     _initial_state: GraphState,
     _goal_id: &UnitKind,
     _iterations: usize,
+    _value_net: ValueNetKind,
     _config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     todo!("MCTS + value-net planner is not yet implemented")

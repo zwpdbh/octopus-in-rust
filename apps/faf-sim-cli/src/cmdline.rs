@@ -60,8 +60,8 @@ pub struct PlanArgs {
 /// Arguments for the `simulate` subcommand.
 #[derive(Parser)]
 pub struct SimulateArgs {
-    /// Planner strategy (`mcts` or `mcts:<iterations>`).
-    #[arg(short = 's', long, default_value = "mcts:100")]
+    /// Planner strategy (`mcts`, `mcts:<iterations>`, or `mcts:<iterations>:<mlp|gnn>`).
+    #[arg(short = 's', long, default_value = "mcts:100:mlp")]
     pub strategy: faf_sim::Strategy,
     /// Faction and unit to target.
     #[command(subcommand)]
