@@ -38,14 +38,14 @@ pub enum PlanEdgeKind {
 /// without leaking the raw graph type into every consumer.
 #[derive(Debug, Clone)]
 pub struct PlanGraph {
-    plan_graph: DiGraph<UnitKind, PlanEdgeKind>,
+    plan: DiGraph<UnitKind, PlanEdgeKind>,
     goal: UnitKind,
 }
 
 impl PlanGraph {
     /// Wrap an existing graph and its goal.
-    pub fn new(plan_graph: DiGraph<UnitKind, PlanEdgeKind>, goal: UnitKind) -> Self {
-        Self { plan_graph, goal }
+    pub fn new(plan: DiGraph<UnitKind, PlanEdgeKind>, goal: UnitKind) -> Self {
+        Self { plan, goal }
     }
 
     /// The goal unit this plan graph was built for.
@@ -55,7 +55,7 @@ impl PlanGraph {
 
     /// Borrow the underlying petgraph structure.
     pub fn graph(&self) -> &DiGraph<UnitKind, PlanEdgeKind> {
-        &self.plan_graph
+        &self.plan
     }
 }
 
