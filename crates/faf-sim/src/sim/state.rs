@@ -921,7 +921,7 @@ mod tests {
     use crate::units::TechLevel;
 
     fn load_units() -> Units {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
+        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
         Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 

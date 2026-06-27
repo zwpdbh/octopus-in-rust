@@ -2834,6 +2834,8 @@ dependencies = [
  "clap",
  "faf-sim",
  "faf-units",
+ "petgraph 0.6.5",
+ "petgraph-svg",
  "serde_json",
  "tokio",
 ]
@@ -5231,6 +5233,13 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "serde",
+]
+
+[[package]]
+name = "petgraph-svg"
+version = "0.1.0"
+dependencies = [
+ "petgraph 0.6.5",
 ]
 
 [[package]]

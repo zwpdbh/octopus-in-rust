@@ -6,6 +6,7 @@
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::message::{Command, Observation};
+use crate::planner::dependency_graph::DependencyGraph;
 use crate::planner::search::SearchAction;
 use crate::planner::Planner;
 use crate::units::{UnitKind, Units};
@@ -40,6 +41,10 @@ pub struct PlannerActor {
     goal_id: UnitKind,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
+    /// Optional symbolic dependency tree used to validate or guide planner
+    /// decisions. Currently stored for future use; the reactive loop still
+    /// trusts the underlying planner.
+    dependency_graph: Option<DependencyGraph>,
 }
 
 impl PlannerActor {
@@ -57,7 +62,35 @@ impl PlannerActor {
             goal_id,
             obs_rx,
             cmd_tx,
+            dependency_graph: None,
         }
+    }
+
+    /// Create a planner actor with a pre-computed dependency graph.
+    ///
+    /// The graph is currently stored for diagnostics and future guidance; the
+    /// actor still delegates tick-by-tick decisions to the underlying planner.
+    pub fn new_with_graph(
+        planner: Planner,
+        units: Units,
+        goal_id: UnitKind,
+        obs_rx: Receiver<Observation>,
+        cmd_tx: Sender<Command>,
+        dependency_graph: DependencyGraph,
+    ) -> Self {
+        Self {
+            planner,
+            units,
+            goal_id,
+            obs_rx,
+            cmd_tx,
+            dependency_graph: Some(dependency_graph),
+        }
+    }
+
+    /// Return the dependency graph passed at construction, if any.
+    pub fn dependency_graph(&self) -> Option<&DependencyGraph> {
+        self.dependency_graph.as_ref()
     }
 
     /// Run the actor until the simulation disconnects.

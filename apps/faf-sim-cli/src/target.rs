@@ -3,10 +3,8 @@
 //! Instead of a flat list of blueprint ids, the CLI is organized as:
 //!
 //! ```text
-//! faf-sim deps uef fatboy
-//! faf-sim deps cybran monkeylord
-//! faf-sim deps aeon nuke
-//! faf-sim simulate cybran monkeylord -s beam
+//! faf-sim plan cybran monkeylord
+//! faf-sim simulate -s beam cybran monkeylord
 //! ```
 //!
 //! Each faction has its own unit enum so that clap can constrain the possible

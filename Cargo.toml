@@ -5,6 +5,7 @@ members = [
     "crates/brain",
     "crates/faf-units",
     "crates/faf-sim",
+    "crates/petgraph-svg",
     "crates/faf-downloader",
     "plugins/example-http",
     "plugins/faf-units",

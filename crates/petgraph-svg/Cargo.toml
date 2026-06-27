@@ -1,0 +1,10 @@
+[package]
+name = "petgraph-svg"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Render a petgraph directed graph to a static SVG image."
+license = "MIT"
+
+[dependencies]
+petgraph = "0.6"

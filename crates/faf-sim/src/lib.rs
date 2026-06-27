@@ -22,11 +22,15 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use message::{Command, Observation};
-pub use planner::{PlanResult, Planner, PlannerConfig, PlannerError, Strategy};
+pub use planner::{
+    build_dependency_graph, build_operators, DependencyGraph, DependencyGraphError, DependencyNode,
+    Fact, Operator, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
+};
 pub use planner_actor::PlannerActor;
 pub use sim::{
-    derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
-    OngoingBuild, UnitNode,
+    derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
+    GraphState, NodeId, OngoingBuild, SimulationConfig, SimulationError, SimulationResult,
+    UnitNode,
 };
 pub use sim_actor::SimActor;
 

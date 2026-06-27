@@ -10,7 +10,7 @@ license = "MIT"
 burn = { version = "0.21", default-features = false, features = ["std", "ndarray", "autodiff"] }
 faf-units = { path = "../faf-units" }
 petgraph = "0.6"
-tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time", "test-util"] }
 
 [dev-dependencies]
 serde_json = "1"

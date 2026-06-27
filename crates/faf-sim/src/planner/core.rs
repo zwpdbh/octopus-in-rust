@@ -175,6 +175,27 @@ impl Planner {
         Self { strategy, config }
     }
 
+    /// Create a planner tuned for the reactive actor loop.
+    ///
+    /// Reactive simulation re-plans every tick, so the planner uses a smaller
+    /// depth and a timestep appropriate for the strategy.
+    pub fn reactive(strategy: Strategy) -> Self {
+        let config = match strategy {
+            Strategy::Greedy => PlannerConfig {
+                dt: 1.0,
+                max_depth: 400,
+                ..PlannerConfig::default()
+            },
+            Strategy::Beam { .. } => PlannerConfig {
+                dt: 10.0,
+                max_depth: 400,
+                ..PlannerConfig::default()
+            },
+            Strategy::Mcts { .. } => PlannerConfig::default(),
+        };
+        Self::with_config(strategy, config)
+    }
+
     /// Create a planner with an explicit configuration.
     pub fn with_config(strategy: Strategy, config: PlannerConfig) -> Self {
         Self { strategy, config }

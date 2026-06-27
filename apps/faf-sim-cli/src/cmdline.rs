@@ -32,39 +32,34 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Subcommand)]
 pub enum Command {
-    /// Show the dependency graph for a target unit.
-    Deps(DepsArgs),
-    /// Simulate a build order and print timing/resource trace.
-    Simulate(SimulateArgs),
-    /// Generate a build order for a target unit.
+    /// Generate a rule-based build plan for a target unit.
+    ///
+    /// The output is an SVG image of the dependency graph showing the units
+    /// that must be built (or upgraded) to reach the goal. No timing or
+    /// resource simulation is performed; this is purely symbolic dependency
+    /// planning.
     Plan(PlanArgs),
-}
-
-/// Arguments for the `deps` subcommand.
-#[derive(Parser)]
-pub struct DepsArgs {
-    /// Faction and unit to inspect.
-    #[command(subcommand)]
-    pub target: FactionTarget,
-    /// Stop expanding prerequisites at these unit ids (default: commanders).
-    #[arg(long, value_delimiter = ',', global = true)]
-    pub stop_at: Vec<String>,
-}
-
-/// Arguments for the `simulate` subcommand.
-#[derive(Parser)]
-pub struct SimulateArgs {
-    /// Planner strategy (`greedy`, `beam`, or `beam:<width>`).
-    #[arg(short = 's', long, default_value = "greedy")]
-    pub strategy: faf_sim::Strategy,
-    /// Faction and unit to target.
-    #[command(subcommand)]
-    pub target: FactionTarget,
+    /// Simulate a build order and print timing/resource trace.
+    ///
+    /// Uses the symbolic plan graph together with a planner strategy to explore
+    /// an estimated completion timeline.
+    Simulate(SimulateArgs),
 }
 
 /// Arguments for the `plan` subcommand.
 #[derive(Parser)]
 pub struct PlanArgs {
+    /// Faction and unit to target.
+    #[command(subcommand)]
+    pub target: FactionTarget,
+    /// Write the SVG plan to this file instead of a temporary file.
+    #[arg(short = 'o', long)]
+    pub output: Option<std::path::PathBuf>,
+}
+
+/// Arguments for the `simulate` subcommand.
+#[derive(Parser)]
+pub struct SimulateArgs {
     /// Planner strategy (`greedy`, `beam`, or `beam:<width>`).
     #[arg(short = 's', long, default_value = "greedy")]
     pub strategy: faf_sim::Strategy,
