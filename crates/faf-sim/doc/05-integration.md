@@ -4,15 +4,19 @@ This chapter explains how to wire the MCTS planner into the existing `faf-sim` p
 
 ## Strategy enum
 
-The `Planner` dispatches to a single strategy, MCTS, but the value network that guides it can be selected:
+The `Planner` dispatches to a single strategy, MCTS, but the network that guides it can be selected:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 75 — Strategy enum
+// crates/faf-sim/src/planner/core.rs ~line 67 — ValueNetKind
 pub enum ValueNetKind {
+    /// Multi-layer perceptron that scores candidates independently.
+    #[default]
     Mlp,
+    /// Graph neural network that reasons over the plan graph structure.
     Gnn,
 }
 
+// crates/faf-sim/src/planner/core.rs ~line 105 — Strategy enum
 pub enum Strategy {
     /// Monte Carlo Tree Search guided by a learned value network.
     Mcts {
@@ -24,14 +28,14 @@ pub enum Strategy {
 }
 ```
 
-The MCTS variant is already declared. The missing piece is the implementation of `mcts::plan`.
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected.
 
 ## Entry point
 
 `Planner::plan` matches on the strategy and forwards to the corresponding module:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 230 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 259 — Planner::plan dispatch
 pub fn plan(
     &self,
     units: &Units,
@@ -55,30 +59,29 @@ pub fn plan(
 }
 ```
 
-The MCTS entry point is currently a stub:
+The MCTS entry point is currently a stochastic one-step MLP policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 37 — mcts::plan
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 45 — mcts::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
-    iterations: usize,
+    _iterations: usize,
     value_net_kind: ValueNetKind,
-    value_net: Option<ValueNet<Autodiff<NdArray>>>,
+    value_net: Option<ValueNet<TrainBackend>>,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    // Greedy MLP baseline: score candidates and pick the best executable action.
-    // Full UCT search will replace this later while reusing the same value net.
+    match value_net_kind {
+        ValueNetKind::Mlp => mlp_policy_plan(units, initial_state, goal_id, value_net, config),
+        ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
+            "GNN value net is not yet implemented".to_string(),
+        )),
+    }
 }
 ```
 
-When implemented, it should:
-
-1. Load or construct a `ValueNet`.
-2. Build an `MctsSearch` with the requested iteration count.
-3. Run `search` from `initial_state` using `units` for all unit knowledge.
-4. Convert the best `SearchAction` into a `PlanResult`.
+It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `ValueNet`.
 
 ## Reactive planning
 
@@ -112,7 +115,7 @@ A reactive actor reads `first_action`, executes it, and ignores the projected `e
 The strategy can be parsed from a string:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 117 — Strategy::from_str MCTS parsing
+// crates/faf-sim/src/planner/core.rs ~line 127 — Strategy::from_str MCTS parsing
 if lower == "mcts" {
     return Ok(Strategy::Mcts {
         iterations: 100,
@@ -168,10 +171,10 @@ When MCTS is stable, you can make it the default strategy for the CLI and benchm
 
 ## Configuration
 
-`PlannerConfig` is shared by all strategies. The current defaults are tuned for beam search:
+`PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 152 — PlannerConfig default
+// crates/faf-sim/src/planner/core.rs ~line 198 — PlannerConfig default
 fn default() -> Self {
     Self {
         dt: 10.0,
@@ -203,28 +206,10 @@ if let Some(action) = result.first_action {
 
 ## Training and model persistence
 
-Train a model from the CLI:
-
-```text
-faf-sim train -e 100 -m 500 cybran monkeylord
-```
-
-This runs REINFORCE rollouts and saves the trained value network to
-`data/models/mlp-cybran-monkeylord.mpk`.
-
-`simulate` loads the trained model automatically if it exists:
-
-```text
-faf-sim simulate cybran monkeylord
-```
-
-If no trained model is found, `simulate` falls back to a randomly initialized
-network.
-
-Programmatically, use the trainer API:
+Train a model programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 310 — train_policy
+// crates/faf-sim/src/planner/mcts/train.rs ~line 413 — train_policy
 let (model, stats) = train_policy(&units, &goal, TrainConfig::default());
 save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 ```
@@ -232,7 +217,9 @@ save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap()
 And load it later:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 332 — load_model
+// crates/faf-sim/src/planner/mcts/train.rs ~line 436 — load_model
 let model = load_model(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 let planner = Planner::with_value_net(strategy, PlannerConfig::default(), model);
 ```
+
+The CLI may wrap these calls with subcommands such as `train` and `simulate`; the programmatic API is the source of truth.

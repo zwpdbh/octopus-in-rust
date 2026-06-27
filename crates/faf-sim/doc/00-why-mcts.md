@@ -2,7 +2,7 @@
 
 A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal unit is finished. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
-This chapter explains why **Monte Carlo Tree Search (MCTS)** guided by a **learned value network** is a good fit, and why the existing greedy and beam strategies hit a ceiling.
+This chapter explains why **Monte Carlo Tree Search (MCTS)** guided by a **learned policy network** is a good fit, and why the existing greedy and beam strategies hit a ceiling.
 
 ## The search space is enormous and sequential
 
@@ -26,7 +26,7 @@ MCTS also naturally balances two things that are hard to encode by hand:
 
 The UCT formula (covered in [`04-mcts-search.md`](./04-mcts-search.md)) does this balance mathematically.
 
-## Why a value network, not random rollouts?
+## Why a learned policy, not random rollouts?
 
 In classic MCTS, a leaf is evaluated by playing random moves to the end and averaging the result. For FAF this is too expensive:
 
@@ -34,7 +34,7 @@ In classic MCTS, a leaf is evaluated by playing random moves to the end and aver
 - The reward is sparse (you only know the result when the goal finishes).
 - Random rollouts produce mostly terrible build orders, so the signal is noisy.
 
-A **value network** replaces the random rollout. It is a learned function `V(state)` that predicts the expected remaining time to the goal in a single forward pass. MCTS still explores the tree, but it evaluates leaves with the network instead of simulating to the end.
+A **learned policy network** replaces the random rollout. It is a function `π(action | state)` that, in a single forward pass, scores every legal candidate action and samples the next move. MCTS still explores the tree, but it selects moves with the network instead of simulating random sequences to the end.
 
 The combination looks like this:
 
@@ -43,8 +43,8 @@ The combination looks like this:
                 │
                 ▼
         ┌───────────────┐
-        │  MCTS search  │◄────── value estimates
-        │  (UCT tree)   │        from neural net
+        │  MCTS search  │◄────── action preferences
+        │  (UCT tree)   │        from policy net
         └───────┬───────┘
                 │
                 ▼
@@ -56,6 +56,8 @@ The combination looks like this:
                 ▼
         next GraphState
 ```
+
+The current implementation uses the policy network as a one-step stochastic planner. Full UCT tree search will be layered on top later while reusing the same network.
 
 ## Why FAF is a good testbed for this
 
@@ -72,4 +74,4 @@ The combination looks like this:
 
 ## The roadmap in one paragraph
 
-We model the simulator state as an MCTS node, generate legal moves with the existing successor function, train a small network to estimate remaining time, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.
+We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, train a small network to score `(state, candidate)` pairs, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.

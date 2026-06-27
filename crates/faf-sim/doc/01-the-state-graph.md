@@ -53,7 +53,7 @@ Builder behavior creates most of the structure that MCTS must reason about:
 - Other builders may **assist** a project even if they cannot build the target themselves, provided they are real builders (commanders, engineers, factories).
 - For every edge `A -> B`: `finish_time(A) <= start_time(B)`.
 
-These rules determine which `SearchAction` expansions are legal from a given state.
+These rules determine which candidates and `SearchAction` expansions are legal from a given state.
 
 ## Economy and stall
 
@@ -85,7 +85,7 @@ GraphState
 └── active_projects
 ```
 
-The value network receives a featurized version of this snapshot (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
+The policy network receives a featurized version of this snapshot paired with each legal candidate (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
 
 ## Objectives
 

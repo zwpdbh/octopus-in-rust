@@ -1,13 +1,55 @@
 # 4. MCTS Search
 
-This chapter describes the **UCT** (Upper Confidence Bound applied to Trees) search loop: how MCTS selects a node to expand, how it generates children, how the value network evaluates a leaf, and how values flow back up the tree.
+This chapter describes the **planned** UCT (Upper Confidence Bound applied to Trees) search loop and the current one-step MLP policy that sits underneath it.
 
-## Node structure
+## Current status: one-step policy
+
+The `Strategy::Mcts` planner currently runs a **stochastic one-step policy**, not a full UCT tree search. At each decision tick it:
+
+1. Derives `SelectionPools` from the `PlanGraph` and current `GraphState`.
+2. Scores every legal candidate with the learned MLP.
+3. Filters out candidates that are not immediately executable.
+4. Samples the next action from a softmax over the remaining scores.
+
+This is implemented in `mcts::plan`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 45 — mcts::plan
+pub fn plan(
+    units: &Units,
+    initial_state: GraphState,
+    goal_id: &UnitKind,
+    _iterations: usize,
+    value_net_kind: ValueNetKind,
+    value_net: Option<ValueNet<TrainBackend>>,
+    config: &PlannerConfig,
+) -> Result<PlanResult, PlannerError> {
+    match value_net_kind {
+        ValueNetKind::Mlp => mlp_policy_plan(units, initial_state, goal_id, value_net, config),
+        ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
+            "GNN value net is not yet implemented".to_string(),
+        )),
+    }
+}
+```
+
+The `_iterations` parameter is ignored because there is no tree yet. Full UCT will use the same `ValueNet` and the same candidate generation; it will add tree search on top.
+
+## Planned UCT design
+
+When UCT is implemented, each MCTS iteration will repeat four steps:
+
+1. **Select.** Traverse from the root to a leaf using the UCT formula.
+2. **Expand.** Add one or more children to the leaf using `SelectionPools::derive`.
+3. **Evaluate.** Run the policy/value network on each new child (or use the terminal outcome if the state is done).
+4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
+
+### Node structure
 
 Each MCTS node stores the simulator state at that point in the tree plus statistics:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 25 — MctsNode
+// crates/faf-sim/src/planner/mcts/search.rs ~line 23 — MctsNode
 pub struct MctsNode {
     /// Simulator state at this node.
     pub state: GraphState,
@@ -20,20 +62,9 @@ pub struct MctsNode {
 }
 ```
 
-A production node also tracks the action that led from its parent and the list of untried actions. The scaffold keeps only the essentials; you will extend it as you add features.
-
-## The four steps
-
-Each MCTS iteration repeats these steps:
-
-1. **Select.** Traverse from the root to a leaf using the UCT formula.
-2. **Expand.** Add one or more children to the leaf using `successors`.
-3. **Evaluate.** Run the value network on each new child (or use the terminal outcome if the state is done).
-4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
-
 ### Selection
 
-At each internal node, pick the child that maximizes **UCB1** (Upper Confidence Bound 1):
+At each internal node, pick the child that maximizes **UCB1**:
 
 ```text
 UCB1(child) = (child.total_value / child.visits)
@@ -45,7 +76,7 @@ The first term is exploitation: children with high average value are preferred. 
 The configuration is captured in `MctsConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 16 — MctsConfig
+// crates/faf-sim/src/planner/mcts/search.rs ~line 14 — MctsConfig
 pub struct MctsConfig {
     /// Number of MCTS iterations (selection/expansion/evaluation/backup loops).
     pub iterations: usize,
@@ -58,35 +89,35 @@ A larger `c_puct` makes the search explore more aggressively. A smaller `c_puct`
 
 ### Expansion
 
-When the selected node is not fully expanded, generate one of its untried legal actions:
+When the selected node is not fully expanded, generate one of its untried legal candidates:
 
 ```text
-action = pop untried action
-next_state = apply(action, state)
+action = pop untried candidate
+next_state = apply(candidate, state)
 child = MctsNode { state: next_state, total_value: 0.0, visits: 0, children: [] }
 add child to node.children
 ```
 
-If the node is already fully expanded, selection continues deeper. In the simplest implementation you expand one child per visit; later you can batch-expand several children at once.
+If the node is already fully expanded, selection continues deeper.
 
 ### Evaluation
 
 After expansion, evaluate the new child:
 
-- If the state has reached the goal, the value is the exact terminal value (e.g., `1.0` for success or the normalized negative completion time).
-- Otherwise, featurize the state and run the value network.
+- If the state has reached the goal, the value is the exact terminal value.
+- Otherwise, featurize the state and run the learned network.
 
 The scaffold currently leaves the search loop unimplemented:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 56 — MctsSearch::search (placeholder)
+// crates/faf-sim/src/planner/mcts/search.rs ~line 56 — MctsSearch::search
 pub fn search(
     &self,
     _initial_state: GraphState,
-    _goal_id: &str,
+    _goal_id: &UnitKind,
     _units: &Units,
     _planner_config: &PlannerConfig,
-    _value_net: &ValueNet,
+    _value_net: &ValueNet<NdArray>,
 ) -> Result<PlanResult, PlannerError> {
     let _ = self.config;
     todo!("MCTS search loop is not yet implemented")
@@ -124,7 +155,7 @@ Two common budget modes:
 The `Strategy::Mcts` variant exposes the iteration count and the value-net kind:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 84 — Strategy::Mcts variant
+// crates/faf-sim/src/planner/core.rs ~line 105 — Strategy::Mcts variant
 Mcts {
     /// Number of MCTS iterations to run per decision.
     iterations: usize,

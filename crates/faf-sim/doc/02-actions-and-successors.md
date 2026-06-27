@@ -1,105 +1,189 @@
 # 2. Actions and Successors
 
-MCTS expands a state by applying every legal action. This chapter describes the action space for FAF build orders, how successors are generated, and how to keep the branching factor under control.
+The MLP planner expands a state by choosing from the legal **candidates** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level candidates used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
 
-## The four action types
+## Two-level action model
 
-The planner uses a single enum for all moves:
+The planner makes decisions at the level of **candidates**:
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 14 — SearchAction enum
-pub enum SearchAction {
-    /// Build a unit with the given builders.
-    Build {
-        unit_id: String,
-        builders: Vec<NodeId>,
-    },
-    /// Upgrade an existing unit in-place to a higher-tier blueprint.
-    Upgrade {
-        target_unit_id: String,
-        old_node: NodeId,
-        builders: Vec<NodeId>,
-    },
-    /// Assist an active project with additional builders.
-    Assist {
-        project_node: NodeId,
-        builders: Vec<NodeId>,
-    },
-    /// Advance time without issuing a command.
-    Wait,
+// crates/faf-sim/src/planner/mcts/pools.rs ~line 21 — Candidate enum
+pub enum Candidate {
+    /// Build a new unit of the given kind.
+    Build(UnitKind),
+    /// Upgrade an existing `from` unit into `to`.
+    Upgrade { from: UnitKind, to: UnitKind },
+    /// Assign all idle engineers of the given tier to assist an active project.
+    Assist(TechLevel),
 }
 ```
 
-- `Build` starts a new project for a unit, assigning one or more idle builders to it.
-- `Upgrade` reuses an existing finished slot and transitions it to a higher-tier unit. The source unit must have a registered upgrade target in `Units`.
-- `Assist` adds idle builders to an already-started project.
-- `Wait` advances the simulator by one tick. It is the only legal action when no builder is idle.
-
-## Successor generation
-
-The existing `SearchConfig::successors` function produces every `(GraphState, SearchAction)` pair reachable in one step. MCTS calls this function at expansion time.
+A candidate is an abstract choice. Before it can be executed it is converted into a concrete `SearchAction`:
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 49 — SearchConfig::successors (signature)
-pub fn successors(
-    self,
-    units: &Units,
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 124 — candidate_to_action
+pub(crate) fn candidate_to_action(
+    candidate: &Candidate,
     state: &GraphState,
-    goal_id: &str,
-    goal_chain: &[(Capability, String)],
-) -> Vec<(GraphState, SearchAction)> {
+    units: &Units,
+    _plan: &PlanGraph,
+) -> Option<SearchAction> {
     // ...
 }
 ```
 
-The function does the following:
+The separation is useful because the MLP policy reasons over a small, plan-graph-constrained set of candidates, while the simulator still consumes the existing `SearchAction` commands.
 
-1. Collect idle builders. If none are idle, return only a `Wait` successor.
-2. Determine candidate units that could help reach the goal, using `Units` (tech graph and goal prerequisite chain).
-3. For each candidate unit, try starting a project with all idle builders and with the single fastest capable idle builder.
-4. For each finished unit that has a registered upgrade target in `Units`, try starting an upgrade with all idle builders and with the single fastest capable idle builder.
-5. For each active project, try assisting it with all idle builders.
-6. Always include a `Wait` successor.
+## Generating candidates from the plan graph
+
+`SelectionPools` derives the current legal candidates by walking the static `PlanGraph`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/pools.rs ~line 70 — SelectionPools
+pub struct SelectionPools {
+    /// Units that can be built next.
+    pub build: Vec<UnitKind>,
+    /// Upgrades that can be started next.
+    pub upgrade: Vec<(UnitKind, UnitKind)>,
+    /// Idle engineers available to assist, grouped by tier.
+    pub assist: AssistCounts,
+}
+```
+
+```rust
+// crates/faf-sim/src/planner/mcts/pools.rs ~line 82 — SelectionPools::derive
+pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+    let mut build = HashSet::new();
+    let mut upgrade = HashSet::new();
+
+    let active_targets = state.active_target_unit_ids();
+
+    for edge in plan.graph().edge_references() {
+        let source = &plan.graph()[edge.source()];
+        let target = &plan.graph()[edge.target()];
+
+        // Source must be owned and active; target must not be owned or
+        // already under construction.
+        if !state.has_completed_unit(source)
+            || state.has_completed_unit(target)
+            || active_targets.contains(target)
+        {
+            continue;
+        }
+
+        match edge.weight() {
+            PlanEdgeKind::Build => {
+                // Source in a build edge is the builder.
+                if is_idle_builder(state, units, source) {
+                    build.insert(target.clone());
+                }
+            }
+            PlanEdgeKind::Upgrade => {
+                // Source in an upgrade edge is the unit being upgraded.
+                if can_upgrade(state, units, source, target) {
+                    upgrade.insert((source.clone(), target.clone()));
+                }
+            }
+        }
+    }
+
+    Self {
+        build: build.into_iter().collect(),
+        upgrade: upgrade.into_iter().collect(),
+        assist: derive_assist_counts(state, units),
+    }
+}
+```
+
+For each edge `source -> target` in the plan graph:
+
+- The source must be a completed, active unit in the current state.
+- The target must not already be completed or under construction.
+- For a **build** edge, the source must be an idle builder capable of building the target.
+- For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
+
+`Assist` candidates are derived separately from idle engineers grouped by tech tier:
+
+```rust
+// crates/faf-sim/src/planner/mcts/pools.rs ~line 36 — AssistCounts
+pub struct AssistCounts {
+    pub t1: u32,
+    pub t2: u32,
+    pub t3: u32,
+}
+```
+
+## From candidates to executable actions
+
+`SelectionPools::candidates` flattens the pools into a `Vec<Candidate>`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/pools.rs ~line 125 — SelectionPools::candidates
+pub fn candidates(&self) -> Vec<Candidate> {
+    // ... build -> Candidate::Build, upgrade -> Candidate::Upgrade,
+    //     non-empty assist tiers -> Candidate::Assist
+}
+```
+
+The policy scores each candidate, but not every scored candidate can be executed immediately. The planner filters by `candidate_to_action` before sampling. For example, a `Build` candidate needs a specific idle builder node; if the only capable builder became busy during the current tick, the candidate is skipped and the planner issues `Wait`.
+
+## Low-level `SearchAction`
+
+The concrete simulator commands are still the existing `SearchAction` enum:
+
+```rust
+// crates/faf-sim/src/planner/search.rs ~line 14 — SearchAction enum
+pub enum SearchAction {
+    Build {
+        unit_id: UnitKind,
+        builder: NodeId,
+    },
+    Upgrade {
+        target_unit_id: UnitKind,
+        old_node: NodeId,
+        builder: NodeId,
+    },
+    Assist {
+        project_node: NodeId,
+        builders: Vec<NodeId>,
+    },
+    Wait,
+}
+```
+
+- `Build` starts a new project for a unit, assigning one idle builder to it.
+- `Upgrade` reuses an existing finished slot and transitions it to a higher-tier unit.
+- `Assist` adds all idle engineers of a tier to an already-started project.
+- `Wait` advances the simulator by one tick.
+
+The current MLP planner usually assigns a single builder; future successors may assign multiple builders to a project.
 
 ## Why the branching factor matters
 
-The successor list can grow quickly. A state with several idle engineers and factories may have tens of legal actions. MCTS can handle large branching factors better than exhaustive search, but only if each expansion is cheap and the value net is accurate enough to guide selection.
+The candidate list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal candidates. The policy network keeps the decision cheap:
 
-There are two ways to keep the tree manageable:
+1. Generate candidates once with `SelectionPools::derive`.
+2. Score all candidates in a single batched forward pass.
+3. Sample one candidate and convert it to a `SearchAction`.
 
-1. **Action pruning.** Remove obviously bad actions before expansion. For example, never build more power generators than a configured cap, never start a unit that already exists or is already under construction, and prefer goal-relevant candidates.
-2. **Action masking.** Generate the full legal set, but let a policy network assign near-zero probability to uninteresting actions so MCTS does not waste visits on them.
-
-The current code already does some pruning via `max_mex_count`, `max_pgen_count`, and the candidate filter. A learned policy prior (see [`06-training-pipeline.md`](./06-training-pipeline.md)) can add a second layer of masking.
+This is `O(n_candidates)` forward work per decision, not a tree expansion.
 
 ## Legal move validation
 
-Not every `SearchAction` is valid in every state. The simulator rejects actions that violate constraints:
+Not every `Candidate` is valid in every state. The simulator rejects actions that violate constraints:
 
 - A busy builder cannot start a new project.
 - A builder cannot build or upgrade a unit it is not capable of building.
 - A builder cannot upgrade a unit that has no registered upgrade target.
 - A builder cannot assist a non-existent project.
 
-The successor generator pre-filters most illegal actions, and the simulator's `start_project`/`assist_project` methods return errors for the rest. MCTS expansion should never crash on an illegal action; it should simply skip it.
-
-## MCTS expansion
-
-When MCTS selects a node for expansion, it asks:
-
-```text
-for each (next_state, action) in successors(state):
-    create child MCTS node
-    attach action as the move that leads to it
-```
-
-Each child becomes a leaf that the value network will evaluate on its first visit. After evaluation, the value is backed up along the path to the root. The details are in [`04-mcts-search.md`](./04-mcts-search.md).
+The candidate generator pre-filters most illegal actions, and `candidate_to_action` plus the simulator's `start_project`/`assist_project` methods catch the rest. The planner handles rejection by issuing `Wait` and trying again on the next tick.
 
 ## Key design choice: discrete actions, continuous time
 
-Actions are discrete (build this unit, assist that project, wait), but time is continuous. The simulator advances by a fixed `dt` each tick. MCTS therefore operates on a discretized decision grid. The choice of `dt` matters:
+Actions are discrete (build this unit, upgrade that unit, assist, wait), but time is continuous. The simulator advances by a fixed `dt` each tick. The planner therefore operates on a discretized decision grid. The choice of `dt` matters:
 
-- A small `dt` gives finer control but expands more nodes.
+- A small `dt` gives finer control but issues more decisions.
 - A large `dt` is faster but may miss tight timing windows.
 
-The existing `PlannerConfig::dt` default is `10.0` seconds for beam search. MCTS can often use a smaller effective `dt` because it focuses computation only on promising branches.
+The default `PlannerConfig::dt` is `10.0` seconds.

@@ -19,24 +19,28 @@ Run each goal with each strategy multiple times and report the mean and standard
 ## Primary metrics
 
 1. **Completion time.** The in-game seconds when the goal unit finishes. Lower is better.
-2. **Wall-clock planning time per decision.** How long the planner takes to choose an action. MCTS should not be orders of magnitude slower than beam search.
-3. **Number of simulator ticks per decision.** How much of the simulator budget the search consumes. This correlates with wall-clock time but is independent of hardware.
+2. **Goal reach rate.** The fraction of episodes that reach the goal within the step budget. Higher is better.
+3. **Wall-clock planning time per decision.** How long the planner takes to choose an action. MCTS should not be orders of magnitude slower than beam search.
+4. **Number of simulator ticks per decision.** How much of the simulator budget the search consumes. This correlates with wall-clock time but is independent of hardware.
 
 ## Secondary metrics
 
 - **Mass income per mass invested** at completion time. Captures economy efficiency.
 - **Idle builder time.** Measures whether the planner keeps builders working.
 - **Energy stall frequency.** A proxy for build-order robustness.
-- **Tree size / nodes expanded.** Useful for debugging the search budget.
+- **Episode return.** The shaped reward the policy-gradient trainer observes.
+- **Tree size / nodes expanded.** Useful for debugging the search budget once UCT is implemented.
 
 ## Tuning `c_puct`
 
-The UCT exploration constant is the most important hyperparameter.
+The UCT exploration constant is the most important hyperparameter once full tree search is implemented.
 
 - Start at `sqrt(2) ≈ 1.414`.
 - If MCTS keeps exploring obviously bad branches, lower `c_puct`.
 - If MCTS misses good but non-obvious branches, raise `c_puct`.
 - Tune on the medium goals first; the hard goals are too slow for rapid iteration.
+
+Until UCT is implemented, exploration is controlled by `TrainConfig::epsilon` (random action probability) and `TrainConfig::entropy_coef` (entropy bonus).
 
 ## Tuning iteration budget
 
@@ -46,15 +50,18 @@ More iterations almost always improve quality, but with diminishing returns:
 - Stop when doubling iterations no longer measurably improves completion time.
 - For real-time use, cap wall-clock time instead.
 
+Currently the `iterations` field of `Strategy::Mcts` is ignored because the planner is a one-step policy. It will become meaningful once `MctsSearch::search` is implemented.
+
 ## Diagnosing failure modes
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| MCTS is much slower than beam | Too many expansions or expensive value-net inference | Reduce iterations, batch inference, or use a smaller network. |
-| MCTS finds worse plans | Value net is inaccurate or undertrained | Add more training data, especially from MCTS states. |
-| MCTS explores silly actions | `c_puct` too high or value net overconfident | Lower `c_puct`, add action pruning, or train a policy prior. |
-| MCTS gets stuck repeating actions | Action pruning too aggressive or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
-| Value net returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
+| MCTS is much slower than beam | Too many expansions or expensive network inference | Reduce iterations, batch inference, or use a smaller network. |
+| MCTS finds worse plans | Policy/value network is inaccurate or undertrained | Add more training data, especially from MCTS states. |
+| MCTS explores silly actions | `c_puct` too high or policy network overconfident | Lower `c_puct`, add candidate pruning, or train a policy prior. |
+| MCTS gets stuck repeating actions | Candidate generation bug or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
+| Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
+| Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |
 
 ## Robustness checks
 
@@ -64,23 +71,23 @@ A good planner should not be brittle. Test:
 - **Different starting economy.** Does it adapt to slight resource variations?
 - **Slightly different goal.** If the goal is a similar unit, does it reuse structure?
 
-If the planner fails these, the value net may be overfitting to the exact training distribution.
+If the planner fails these, the network may be overfitting to the exact training distribution.
 
 ## Reporting results
 
 Keep a results table like this:
 
 ```text
-Strategy            T1 pgen  T1 fac+eng  T2 fac  T3 eng  Monkeylord  avg ms/decision
-----------------------------------------------------------------------------------
-beam:50             12.3     45.2        180.1   520.4   3250.0      1.2
-mcts:100 (warm)     12.5     44.8        178.5   515.2   3180.0      3.5
-mcts:500 (warm)     12.1     43.9        175.3   508.7   3105.0      16.2
-mcts:500 (self-play) 12.0    43.5        173.1   501.4   2980.0      16.5
+Strategy              T1 pgen  T1 fac+eng  T2 fac  T3 eng  Monkeylord  avg ms/decision
+------------------------------------------------------------------------------------
+beam:50               12.3     45.2        180.1   520.4   3250.0      1.2
+mcts:100 (warm)       12.5     44.8        178.5   515.2   3180.0      3.5
+mcts:500 (warm)       12.1     43.9        175.3   508.7   3105.0      16.2
+mcts:500 (self-play)  12.0     43.5        173.1   501.4   2980.0      16.5
 ```
 
 A result is accepted only if it is faster or equal on average and not orders of magnitude slower. The final column protects against planners that trade huge compute for small gains.
 
 ## Long-term maintenance
 
-As the simulator gains features — reclaim, multiple goals, opponent modeling — revisit the benchmarks. The value network will need retraining, and the search budget may need adjustment. The benchmark suite is the contract that keeps the planner honest.
+As the simulator gains features — reclaim, multiple goals, opponent modeling — revisit the benchmarks. The policy network will need retraining, and the search budget may need adjustment. The benchmark suite is the contract that keeps the planner honest.
