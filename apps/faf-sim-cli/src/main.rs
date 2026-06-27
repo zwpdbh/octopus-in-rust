@@ -6,8 +6,9 @@
 //! faf-sim simulate -s beam:20 cybran monkeylord
 //! ```
 //!
-//! `plan` emits an SVG image of the dependency graph showing the units that
-//! must be built (or upgraded) to reach the goal. No timing or resource
+//! `plan` emits an SVG image of the ACU-rooted plan graph showing the units
+//! that must be built or upgraded to reach the goal, including both the
+//! technology chain and the economic infrastructure. No timing or resource
 //! simulation is performed; this is purely symbolic dependency planning.
 //!
 //! `simulate` runs the reactive simulator using the plan graph and a chosen
@@ -16,10 +17,14 @@
 use std::collections::HashMap;
 
 use clap::Parser;
-use faf_sim::{run_build_order_simulation, DependencyNode, Fact, SimulationConfig, Strategy};
+use faf_sim::{
+    run_build_order_simulation, PlanEdgeKind, SimulationConfig, Strategy, UnitKind as SimUnitKind,
+    Units as SimUnits,
+};
 use faf_units::DataIndex;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph_svg::{graph_to_svg, RenderOptions};
+use petgraph::visit::EdgeRef;
+use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, RenderOptions};
 
 mod cmdline;
 mod target;
@@ -31,7 +36,7 @@ use target::{Faction, ResearchTarget, UnitKind};
 async fn main() {
     let cli = Cli::parse();
     let index = load_index();
-    let units = faf_sim::Units::new(index.clone());
+    let units = SimUnits::new(index.clone());
 
     match cli.command {
         CliCommand::Plan(args) => {
@@ -71,7 +76,7 @@ fn resolve_target(faction: Faction, unit: UnitKind) -> ResearchTarget {
     target
 }
 
-async fn run_simulate(units: &faf_sim::Units, target: ResearchTarget, strategy: Strategy) {
+async fn run_simulate(units: &SimUnits, target: ResearchTarget, strategy: Strategy) {
     let goal_kind = target.to_sim_unit_kind();
     units
         .def(&goal_kind)
@@ -115,7 +120,7 @@ fn format_time(seconds: f64) -> String {
 }
 
 fn run_plan(
-    units: &faf_sim::Units,
+    units: &SimUnits,
     index: &DataIndex,
     target: ResearchTarget,
     output: Option<std::path::PathBuf>,
@@ -127,15 +132,15 @@ fn run_plan(
     }
 
     let goal_kind = target.to_sim_unit_kind();
-    let dep_graph = match units.dependency_graph(&goal_kind) {
+    let plan_graph = match units.plan_graph(&goal_kind) {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("Failed to build dependency graph: {}", e);
+            eprintln!("Failed to build plan graph: {}", e);
             std::process::exit(1);
         }
     };
 
-    let visual_graph = build_visual_graph(units, &dep_graph.root);
+    let visual_graph = build_visual_graph(units, &plan_graph);
 
     let path = match output {
         Some(path) => path,
@@ -149,7 +154,14 @@ fn run_plan(
         }
     };
 
-    let options = RenderOptions::default();
+    let options = RenderOptions {
+        background_color: Some("#f0f4f8".to_string()),
+        legend: vec![
+            LegendItem::solid("build", "#555555"),
+            LegendItem::dashed("upgrade", "#0066cc", "5,5"),
+        ],
+        ..RenderOptions::default()
+    };
     if let Err(e) = graph_to_svg(&visual_graph, &path, &options) {
         eprintln!("Failed to render plan to SVG: {}", e);
         std::process::exit(1);
@@ -162,71 +174,86 @@ fn run_plan(
     }
 }
 
-/// Build a directed graph from the dependency tree, collapsing duplicate unit
-/// kinds into a single node.
-///
-/// Edges point from a unit toward its prerequisites (e.g. `goal -> factory_t3
-/// -> factory_t1 -> commander`) so that the rendered image reads top-down from
-/// the goal to the starting units.
-fn build_visual_graph(
-    units: &faf_sim::Units,
-    root: &DependencyNode,
-) -> DiGraph<String, ()> {
-    let mut graph = DiGraph::<String, ()>::new();
-    let mut indices: HashMap<faf_sim::UnitKind, NodeIndex> = HashMap::new();
+/// Visual edge style used to distinguish build and upgrade actions.
+#[derive(Debug, Clone)]
+struct VisualEdge {
+    label: String,
+    color: String,
+    dash: Option<String>,
+}
 
-    fn ensure_node(
-        graph: &mut DiGraph<String, ()>,
-        units: &faf_sim::Units,
-        kind: &faf_sim::UnitKind,
-        indices: &mut HashMap<faf_sim::UnitKind, NodeIndex>,
-    ) -> NodeIndex {
-        *indices
-            .entry(kind.clone())
-            .or_insert_with(|| graph.add_node(node_label(units, kind)))
-    }
-
-    fn node_label(units: &faf_sim::Units, kind: &faf_sim::UnitKind) -> String {
-        use faf_sim::{TechLevel, UnitKind};
-        let name = units.display_name(kind);
+impl VisualEdge {
+    fn for_kind(kind: PlanEdgeKind) -> Self {
         match kind {
-            UnitKind::Engineer(tl)
-            | UnitKind::Factory(tl)
-            | UnitKind::Mex(tl)
-            | UnitKind::Pgen(tl) => {
-                let tier = match tl {
-                    TechLevel::T1 => 1,
-                    TechLevel::T2 => 2,
-                    TechLevel::T3 => 3,
-                    TechLevel::T4 => 4,
-                };
-                format!("{} (T{})", name, tier)
-            }
-            UnitKind::Commander | UnitKind::Unique(_) => name.to_string(),
+            PlanEdgeKind::Build => Self {
+                label: String::new(),
+                color: "#555555".to_string(),
+                dash: None,
+            },
+            PlanEdgeKind::Upgrade => Self {
+                label: String::new(),
+                color: "#0066cc".to_string(),
+                dash: Some("5,5".to_string()),
+            },
         }
     }
+}
 
-    fn walk(
-        graph: &mut DiGraph<String, ()>,
-        units: &faf_sim::Units,
-        node: &DependencyNode,
-        indices: &mut HashMap<faf_sim::UnitKind, NodeIndex>,
-    ) {
-        let Fact::Have(target_kind) = &node.goal;
-        let target_idx = ensure_node(graph, units, target_kind, indices);
-
-        for sub in &node.subgoals {
-            let Fact::Have(source_kind) = &sub.goal;
-            let source_idx = ensure_node(graph, units, source_kind, indices);
-            // Add edge only once; petgraph allows parallel edges but the
-            // visualiser is clearer without duplicates.
-            if graph.find_edge(target_idx, source_idx).is_none() {
-                graph.add_edge(target_idx, source_idx, ());
-            }
-            walk(graph, units, sub, indices);
-        }
+impl EdgeLabel for VisualEdge {
+    fn label(&self) -> Option<String> {
+        Some(self.label.clone())
     }
 
-    walk(&mut graph, units, root, &mut indices);
+    fn color(&self) -> Option<String> {
+        Some(self.color.clone())
+    }
+
+    fn dash_array(&self) -> Option<String> {
+        self.dash.clone()
+    }
+}
+
+/// Build a labelled petgraph from the ACU-rooted plan graph for rendering.
+///
+/// The returned graph preserves the structure of `plan_graph` but attaches
+/// human-readable labels and edge styles.
+fn build_visual_graph(
+    units: &SimUnits,
+    plan_graph: &DiGraph<SimUnitKind, PlanEdgeKind>,
+) -> DiGraph<String, VisualEdge> {
+    let mut graph = DiGraph::<String, VisualEdge>::new();
+    let mut indices: HashMap<SimUnitKind, NodeIndex> = HashMap::new();
+
+    for node in plan_graph.node_indices() {
+        let kind = &plan_graph[node];
+        indices.insert(kind.clone(), graph.add_node(node_label(units, kind)));
+    }
+
+    for edge in plan_graph.edge_references() {
+        let from = indices[&plan_graph[edge.source()]];
+        let to = indices[&plan_graph[edge.target()]];
+        graph.add_edge(from, to, VisualEdge::for_kind(*edge.weight()));
+    }
+
     graph
+}
+
+fn node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
+    use faf_sim::{TechLevel, UnitKind};
+    let name = units.display_name(kind);
+    match kind {
+        UnitKind::Engineer(tl)
+        | UnitKind::Factory(tl)
+        | UnitKind::Mex(tl)
+        | UnitKind::Pgen(tl) => {
+            let tier = match tl {
+                TechLevel::T1 => 1,
+                TechLevel::T2 => 2,
+                TechLevel::T3 => 3,
+                TechLevel::T4 => 4,
+            };
+            format!("{} (T{})", name, tier)
+        }
+        UnitKind::Commander | UnitKind::Unique(_) => name.to_string(),
+    }
 }

@@ -23,8 +23,9 @@ pub use economy::{
 };
 pub use message::{Command, Observation};
 pub use planner::{
-    build_dependency_graph, build_operators, DependencyGraph, DependencyGraphError, DependencyNode,
-    Fact, Operator, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
+    build_dependency_graph, build_operators, build_plan_graph, DependencyGraph,
+    DependencyGraphError, DependencyNode, Fact, Operator, PlanEdgeKind, PlanGraphError, PlanResult,
+    Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
 };
 pub use planner_actor::PlannerActor;
 pub use sim::{

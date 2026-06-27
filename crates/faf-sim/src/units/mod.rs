@@ -23,7 +23,9 @@ use faf_units::DataIndex;
 use crate::planner::dependency_graph::{
     build_dependency_graph, DependencyGraph, DependencyGraphError,
 };
+use crate::planner::plan_graph::{build_plan_graph, PlanEdgeKind, PlanGraphError};
 use crate::planner::strips::{build_operators, Operator};
+use petgraph::graph::DiGraph;
 
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UpgradeRecipe,
@@ -203,6 +205,18 @@ impl Units {
     ) -> Result<DependencyGraph, DependencyGraphError> {
         let ops = self.operators();
         build_dependency_graph(goal.clone(), &[UnitKind::Commander], &ops)
+    }
+
+    /// Build a simplified, ACU-rooted plan graph for the requested unit.
+    ///
+    /// The graph includes the technology chain (factories, engineers) and the
+    /// economic infrastructure (mex, pgen) required to reach the goal, rooted
+    /// at the ACU.
+    pub fn plan_graph(
+        &self,
+        goal: &UnitKind,
+    ) -> Result<DiGraph<UnitKind, PlanEdgeKind>, PlanGraphError> {
+        build_plan_graph(self, goal)
     }
 
     /// Return the prerequisite chain from the starting commander to a goal.

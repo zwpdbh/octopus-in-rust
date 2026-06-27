@@ -41,6 +41,41 @@ pub enum Orientation {
     LeftToRight,
 }
 
+/// A single entry for the graph legend.
+#[derive(Debug, Clone)]
+pub struct LegendItem {
+    /// Text shown next to the sample line.
+    pub label: String,
+    /// Stroke colour of the sample line.
+    pub color: String,
+    /// Optional dash-array for the sample line.
+    pub dash_array: Option<String>,
+}
+
+impl LegendItem {
+    /// Convenience constructor for a solid-line legend entry.
+    pub fn solid(label: impl Into<String>, color: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            color: color.into(),
+            dash_array: None,
+        }
+    }
+
+    /// Convenience constructor for a dashed-line legend entry.
+    pub fn dashed(
+        label: impl Into<String>,
+        color: impl Into<String>,
+        dash_array: impl Into<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            color: color.into(),
+            dash_array: Some(dash_array.into()),
+        }
+    }
+}
+
 /// Options that control the generated SVG.
 #[derive(Debug, Clone)]
 pub struct RenderOptions {
@@ -68,6 +103,12 @@ pub struct RenderOptions {
     pub node_radius: f32,
     /// Stroke width for node rectangles in pixels.
     pub stroke_width: f32,
+    /// Optional SVG background colour. `None` leaves the background transparent.
+    pub background_color: Option<String>,
+    /// Legend entries drawn in the top-right corner.
+    pub legend: Vec<LegendItem>,
+    /// Font size for legend text in pixels.
+    pub legend_font_size: f32,
 }
 
 impl Default for RenderOptions {
@@ -85,6 +126,9 @@ impl Default for RenderOptions {
             orientation: Orientation::TopToBottom,
             node_radius: 6.0,
             stroke_width: 1.5,
+            background_color: None,
+            legend: Vec::new(),
+            legend_font_size: 11.0,
         }
     }
 }
@@ -146,10 +190,20 @@ impl NodeLabel for () {
     }
 }
 
-/// Types that can provide an optional label for a graph edge.
+/// Types that can provide an optional label and colour for a graph edge.
 pub trait EdgeLabel {
     /// Optional text label drawn along the edge.
     fn label(&self) -> Option<String> {
+        None
+    }
+
+    /// Optional SVG stroke colour. Returning `None` uses the default.
+    fn color(&self) -> Option<String> {
+        None
+    }
+
+    /// Optional SVG stroke dash-array (e.g. `"5,5"` for dashed lines).
+    fn dash_array(&self) -> Option<String> {
         None
     }
 }
@@ -165,6 +219,30 @@ impl EdgeLabel for String {
 impl EdgeLabel for &str {
     fn label(&self) -> Option<String> {
         Some((*self).to_string())
+    }
+}
+
+impl EdgeLabel for (String, String) {
+    fn label(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
+
+    fn color(&self) -> Option<String> {
+        Some(self.1.clone())
+    }
+}
+
+impl EdgeLabel for (String, String, String) {
+    fn label(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
+
+    fn color(&self) -> Option<String> {
+        Some(self.1.clone())
+    }
+
+    fn dash_array(&self) -> Option<String> {
+        Some(self.2.clone())
     }
 }
 
@@ -319,6 +397,14 @@ where
     ));
     out.push('\n');
 
+    // Background.
+    if let Some(ref bg) = options.background_color {
+        out.push_str(&format!(
+            r##"  <rect width="100%" height="100%" fill="{bg}"/>"##,
+        ));
+        out.push('\n');
+    }
+
     // Arrowhead marker.
     out.push_str(
         r##"  <defs>
@@ -344,19 +430,28 @@ where
         let mid_x = (sx + tx) / 2.0;
         let mid_y = (sy + ty) / 2.0;
 
+        let weight = graph.edge_weight(edge.id()).expect("valid edge");
+        let stroke = weight.color().unwrap_or_else(|| "#555555".to_string());
+        let dash_attr = weight
+            .dash_array()
+            .map(|d| format!(r##" stroke-dasharray="{}""##, d))
+            .unwrap_or_default();
+
         out.push_str(&format!(
-            r##"  <path d="M {sx:.1} {sy:.1} C {sx:.1} {mid_y:.1}, {tx:.1} {mid_y:.1}, {tx:.1} {ty:.1}" fill="none" stroke="#555555" stroke-width="{stroke_width}" marker-end="url(#arrowhead)"/>"##,
+            r##"  <path d="M {sx:.1} {sy:.1} C {sx:.1} {mid_y:.1}, {tx:.1} {mid_y:.1}, {tx:.1} {ty:.1}" fill="none" stroke="{stroke}" stroke-width="{stroke_width}"{dash_attr} marker-end="url(#arrowhead)"/>"##,
             stroke_width = options.stroke_width
         ));
         out.push('\n');
 
-        if let Some(label) = graph.edge_weight(edge.id()).and_then(|w| w.label()) {
-            out.push_str(&format!(
-                r##"  <text x="{mid_x:.1}" y="{mid_y:.1}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="#555555">{label}</text>"##,
-                font_size = options.font_size * 0.9,
-                label = escape_xml(&label)
-            ));
-            out.push('\n');
+        if let Some(label) = weight.label() {
+            if !label.is_empty() {
+                out.push_str(&format!(
+                    r##"  <text x="{mid_x:.1}" y="{mid_y:.1}" text-anchor="middle" dominant-baseline="middle" font-size="{font_size}" fill="{stroke}">{label}</text>"##,
+                    font_size = options.font_size * 0.9,
+                    label = escape_xml(&label)
+                ));
+                out.push('\n');
+            }
         }
     }
 
@@ -390,8 +485,61 @@ where
         out.push('\n');
     }
 
+    // Legend.
+    if !options.legend.is_empty() {
+        render_legend(&mut out, width, height, options);
+    }
+
     out.push_str("</svg>\n");
     out
+}
+
+/// Render a legend in the top-right corner.
+fn render_legend(out: &mut String, width: f32, _height: f32, options: &RenderOptions) {
+    let item_height = options.legend_font_size + 8.0;
+    let line_width = 24.0f32;
+    let line_height = 2.0f32;
+    let padding = 10.0f32;
+    let box_width = {
+        let max_label_width = options.legend.iter().map(|i| i.label.len() as f32 * options.legend_font_size * 0.6).fold(0.0f32, f32::max);
+        line_width + 8.0 + max_label_width + 2.0 * padding
+    };
+    let box_height = options.legend.len() as f32 * item_height + 2.0 * padding;
+
+    let x = width - box_width - options.margin_x / 2.0;
+    let y = options.margin_y / 2.0;
+
+    // Legend background.
+    out.push_str(&format!(
+        r##"  <rect x="{x:.1}" y="{y:.1}" width="{box_width:.1}" height="{box_height:.1}" rx="4" ry="4" fill="#ffffff" stroke="#cccccc" stroke-width="1" opacity="0.95"/>"##,
+    ));
+    out.push('\n');
+
+    for (idx, item) in options.legend.iter().enumerate() {
+        let item_y = y + padding + idx as f32 * item_height + options.legend_font_size / 2.0;
+        let line_x1 = x + padding;
+        let line_x2 = line_x1 + line_width;
+        let text_x = line_x2 + 8.0;
+
+        let dash_attr = item
+            .dash_array
+            .as_ref()
+            .map(|d| format!(r##" stroke-dasharray="{}""##, escape_xml(d)))
+            .unwrap_or_default();
+
+        out.push_str(&format!(
+            r##"  <line x1="{line_x1:.1}" y1="{item_y:.1}" x2="{line_x2:.1}" y2="{item_y:.1}" stroke="{color}" stroke-width="{line_height}"{dash_attr}/>"##,
+            color = escape_xml(&item.color)
+        ));
+        out.push('\n');
+
+        out.push_str(&format!(
+            r##"  <text x="{text_x:.1}" y="{item_y:.1}" dominant-baseline="middle" font-size="{font_size}" fill="#333333" font-family="sans-serif">{label}</text>"##,
+            font_size = options.legend_font_size,
+            label = escape_xml(&item.label)
+        ));
+        out.push('\n');
+    }
 }
 
 fn edge_endpoints_top_bottom(
