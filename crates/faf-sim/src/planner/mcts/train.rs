@@ -10,8 +10,8 @@ use burn::module::Module;
 use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{Adam, AdamConfig, Optimizer};
 use burn::record::{CompactRecorder, Recorder};
-use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::activation::{log_softmax, softmax};
+use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::{Tensor, TensorData};
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
@@ -207,7 +207,12 @@ impl Trainer {
             let action_index = if self.rng.gen::<f32>() < self.config.epsilon {
                 self.rng.gen_range(0..candidates.len())
             } else {
-                sample_action_index(&self.model, &candidate_features, &self.device, &mut self.rng)
+                sample_action_index(
+                    &self.model,
+                    &candidate_features,
+                    &self.device,
+                    &mut self.rng,
+                )
             };
 
             let selected = &candidates[action_index];
@@ -303,9 +308,9 @@ impl Trainer {
 
             let grads = loss.backward();
             let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-            self.model = self
-                .optimizer
-                .step(self.config.learning_rate.into(), self.model.clone(), grads);
+            self.model =
+                self.optimizer
+                    .step(self.config.learning_rate.into(), self.model.clone(), grads);
 
             total_loss += loss.into_data().as_slice::<f32>().unwrap()[0];
             update_count += 1;
@@ -399,7 +404,8 @@ fn sample_action_index<B: AutodiffBackend>(
     let prob_vec: Vec<f32> = probs.into_data().as_slice::<f32>().unwrap().to_vec();
 
     // WeightedIndex handles numerical normalization better than raw softmax.
-    let dist = WeightedIndex::new(&prob_vec).unwrap_or_else(|_| WeightedIndex::new(vec![1.0f32; n]).unwrap());
+    let dist = WeightedIndex::new(&prob_vec)
+        .unwrap_or_else(|_| WeightedIndex::new(vec![1.0f32; n]).unwrap());
     dist.sample(rng)
 }
 

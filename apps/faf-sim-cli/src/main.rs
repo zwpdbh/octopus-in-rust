@@ -17,12 +17,10 @@
 use std::collections::{HashMap, HashSet};
 
 use clap::Parser;
+use faf_sim::planner::mcts::train::{load_model, save_model, train_policy, TrainConfig};
 use faf_sim::{
     run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, PlanGraph, Planner,
     SimulationConfig, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
-};
-use faf_sim::planner::mcts::train::{
-    load_model, save_model, train_policy, TrainConfig,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
@@ -120,7 +118,11 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         "Training complete: {}/{} episodes reached the goal",
         stats.goal_reaches, args.episodes
     );
-    if let Some(&best) = stats.completion_times.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+    if let Some(&best) = stats
+        .completion_times
+        .iter()
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+    {
         println!("Best completion time: {}", format_time(best));
     }
 

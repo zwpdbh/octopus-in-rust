@@ -114,9 +114,7 @@ fn mlp_policy_plan(
 /// Numerically stable softmax over raw candidate scores.
 fn softmax(scores: &[f32], temperature: f32) -> Vec<f32> {
     let temp = temperature.max(1e-6);
-    let max = scores
-        .iter()
-        .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let max = scores.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
     let exps: Vec<f32> = scores.iter().map(|s| ((s - max) / temp).exp()).collect();
     let sum: f32 = exps.iter().sum();
     exps.into_iter().map(|e| e / sum).collect()
@@ -174,10 +172,7 @@ fn find_upgrade_parts(
     from: &UnitKind,
     to: &UnitKind,
 ) -> Option<(NodeId, NodeId)> {
-    let recipe = units
-        .upgrade_recipes(from)
-        .iter()
-        .find(|r| r.to == *to)?;
+    let recipe = units.upgrade_recipes(from).iter().find(|r| r.to == *to)?;
 
     let old_node = state
         .graph
@@ -284,7 +279,8 @@ mod tests {
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
 
-        let result = mlp_policy_plan(&units, state, &goal, None, &config).expect("plan should succeed");
+        let result =
+            mlp_policy_plan(&units, state, &goal, None, &config).expect("plan should succeed");
 
         assert!(
             result.first_action.is_some(),

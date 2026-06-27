@@ -33,30 +33,41 @@ pub fn state_features(
     let economy = &state.economy;
     features.push(clamp((economy.net_mass_income / 100.0) as f32));
     features.push(clamp((economy.net_energy_income / 1000.0) as f32));
-    features.push(storage_ratio(economy.mass_storage, economy.mass_storage_cap));
+    features.push(storage_ratio(
+        economy.mass_storage,
+        economy.mass_storage_cap,
+    ));
     features.push(storage_ratio(
         economy.energy_storage,
         economy.energy_storage_cap,
     ));
-    features.push(clamp((state.total_active_build_power(units) / 100.0) as f32));
+    features.push(clamp(
+        (state.total_active_build_power(units) / 100.0) as f32,
+    ));
     features.push(clamp((state.time / 3600.0) as f32));
-    features.push(clamp(state.count_active_mex() as f32 / config.max_mex_count as f32));
-    features.push(clamp(state.count_active_pgen() as f32 / config.max_pgen_count as f32));
+    features.push(clamp(
+        state.count_active_mex() as f32 / config.max_mex_count as f32,
+    ));
+    features.push(clamp(
+        state.count_active_pgen() as f32 / config.max_pgen_count as f32,
+    ));
     features.push(clamp(state.active_projects.len() as f32 / 10.0));
-    features.push(bool_f32(state.has_completed_unit(&UnitKind::Factory(TechLevel::T2))));
-    features.push(bool_f32(state.has_completed_unit(&UnitKind::Factory(TechLevel::T3))));
-    features.push(bool_f32(state.has_completed_unit(&UnitKind::Engineer(TechLevel::T3))));
+    features.push(bool_f32(
+        state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
+    ));
+    features.push(bool_f32(
+        state.has_completed_unit(&UnitKind::Factory(TechLevel::T3)),
+    ));
+    features.push(bool_f32(
+        state.has_completed_unit(&UnitKind::Engineer(TechLevel::T3)),
+    ));
 
     debug_assert_eq!(features.len(), STATE_FEATURE_COUNT);
     features
 }
 
 /// Convert a candidate action into a fixed-length feature vector.
-pub fn candidate_features(
-    candidate: &Candidate,
-    plan: &PlanGraph,
-    units: &Units,
-) -> Vec<f32> {
+pub fn candidate_features(candidate: &Candidate, plan: &PlanGraph, units: &Units) -> Vec<f32> {
     let mut features = vec![0.0f32; CANDIDATE_FEATURE_COUNT];
 
     let (target, is_build, is_upgrade, is_assist) = match candidate {
@@ -118,7 +129,11 @@ fn clamp(v: f32) -> f32 {
 
 /// Convert a boolean to 0.0 or 1.0.
 fn bool_f32(b: bool) -> f32 {
-    if b { 1.0 } else { 0.0 }
+    if b {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// Return the storage ratio, or 0.0 if capacity is zero.

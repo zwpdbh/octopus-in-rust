@@ -240,7 +240,11 @@ impl Planner {
     }
 
     /// Create a planner that uses a trained value network.
-    pub fn with_value_net(strategy: Strategy, config: PlannerConfig, value_net: ValueNet<TrainBackend>) -> Self {
+    pub fn with_value_net(
+        strategy: Strategy,
+        config: PlannerConfig,
+        value_net: ValueNet<TrainBackend>,
+    ) -> Self {
         Self {
             strategy,
             config,

@@ -123,12 +123,8 @@ impl SelectionPools {
 
     /// Return all candidates as a flat list.
     pub fn candidates(&self) -> Vec<Candidate> {
-        let mut candidates: Vec<Candidate> = self
-            .build
-            .iter()
-            .cloned()
-            .map(Candidate::Build)
-            .collect();
+        let mut candidates: Vec<Candidate> =
+            self.build.iter().cloned().map(Candidate::Build).collect();
 
         candidates.extend(
             self.upgrade
@@ -164,12 +160,7 @@ fn is_idle_builder(state: &GraphState, units: &Units, kind: &UnitKind) -> bool {
 ///
 /// The source unit must be active and not already busy, and there must be an
 /// idle builder capable of performing the upgrade.
-fn can_upgrade(
-    state: &GraphState,
-    units: &Units,
-    source: &UnitKind,
-    target: &UnitKind,
-) -> bool {
+fn can_upgrade(state: &GraphState, units: &Units, source: &UnitKind, target: &UnitKind) -> bool {
     // Find an active source unit that is not already upgrading or building.
     let source_nodes: Vec<_> = state
         .graph
