@@ -4,22 +4,22 @@ This chapter explains how to wire the MCTS planner into the existing `faf-sim` p
 
 ## Strategy enum
 
-The `Planner` already dispatches to three strategies:
+The `Planner` dispatches to a single strategy, MCTS, but the value network that guides it can be selected:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 75 — Strategy enum
+pub enum ValueNetKind {
+    Mlp,
+    Gnn,
+}
+
 pub enum Strategy {
-    /// Greedy: pick the single best successor state at each step.
-    Greedy,
-    /// Beam search: keep the top-K most promising states each layer.
-    Beam {
-        /// Number of states kept after each search layer.
-        beam_width: usize,
-    },
     /// Monte Carlo Tree Search guided by a learned value network.
     Mcts {
         /// Number of MCTS iterations to run per decision.
         iterations: usize,
+        /// Kind of learned value network to use inside MCTS.
+        value_net: ValueNetKind,
     },
 }
 ```
@@ -36,16 +36,13 @@ pub fn plan(
     &self,
     units: &Units,
     initial_state: GraphState,
-    goal_id: &str,
+    goal_id: &UnitKind,
 ) -> Result<PlanResult, PlannerError> {
     match self.strategy {
-        Strategy::Greedy => greedy::plan(units, initial_state, goal_id, &self.config),
-        Strategy::Beam { beam_width } => {
-            beam::plan(units, initial_state, goal_id, beam_width, &self.config)
-        }
-        Strategy::Mcts { iterations } => {
-            mcts::plan(units, initial_state, goal_id, iterations, &self.config)
-        }
+        Strategy::Mcts {
+            iterations,
+            value_net,
+        } => mcts::plan(units, initial_state, goal_id, iterations, value_net, &self.config),
     }
 }
 ```
@@ -57,8 +54,9 @@ The MCTS entry point is currently a stub:
 pub fn plan(
     _units: &Units,
     _initial_state: GraphState,
-    _goal_id: &str,
+    _goal_id: &UnitKind,
     _iterations: usize,
+    _value_net: ValueNetKind,
     _config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     todo!("MCTS + value-net planner is not yet implemented")
@@ -106,20 +104,54 @@ The strategy can be parsed from a string:
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 117 — Strategy::from_str MCTS parsing
 if lower == "mcts" {
-    return Ok(Strategy::Mcts { iterations: 100 });
+    return Ok(Strategy::Mcts {
+        iterations: 100,
+        value_net: ValueNetKind::Mlp,
+    });
 }
-if let Some(rest) = lower.strip_prefix("mcts:") {
-    if let Ok(iterations) = rest.parse::<usize>() {
-        return Ok(Strategy::Mcts { iterations });
+
+let Some(rest) = lower.strip_prefix("mcts") else {
+    return Err(PlannerError::UnsupportedStrategy(s.to_string()));
+};
+
+let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
+
+match parts.len() {
+    1 => {
+        if let Ok(iterations) = parts[0].parse::<usize>() {
+            Ok(Strategy::Mcts {
+                iterations,
+                value_net: ValueNetKind::Mlp,
+            })
+        } else {
+            let value_net = ValueNetKind::from_str(parts[0])?;
+            Ok(Strategy::Mcts {
+                iterations: 100,
+                value_net,
+            })
+        }
     }
+    2 => {
+        let iterations = parts[0]
+            .parse::<usize>()
+            .map_err(|_| PlannerError::UnsupportedStrategy(s.to_string()))?;
+        let value_net = ValueNetKind::from_str(parts[1])?;
+        Ok(Strategy::Mcts {
+            iterations,
+            value_net,
+        })
+    }
+    _ => Err(PlannerError::UnsupportedStrategy(s.to_string())),
 }
 ```
 
 So the CLI can accept arguments such as:
 
 ```text
-faf-sim-cli plan --strategy mcts --goal URL0402
-faf-sim-cli plan --strategy mcts:500 --goal URL0402
+faf-sim simulate --strategy mcts cybran monkeylord
+faf-sim simulate --strategy mcts:500 cybran monkeylord
+faf-sim simulate --strategy mcts:500:gnn cybran monkeylord
+faf-sim simulate --strategy mcts::gnn cybran monkeylord
 ```
 
 When MCTS is stable, you can make it the default strategy for the CLI and benchmarks.
@@ -148,8 +180,11 @@ A minimal integration test looks like this:
 
 ```rust
 // docref: example
-let planner = Planner::new(Strategy::Mcts { iterations: 100 });
-let result = planner.plan(&units, initial_state, "URL0402")?;
+let planner = Planner::new(Strategy::Mcts {
+    iterations: 100,
+    value_net: ValueNetKind::Mlp,
+});
+let result = planner.plan(&units, initial_state, &UnitKind::Unique(UnitId("URL0402".to_string())))?;
 
 if let Some(action) = result.first_action {
     println!("next action: {:?}", action);

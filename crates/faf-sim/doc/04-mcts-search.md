@@ -121,13 +121,15 @@ Two common budget modes:
 - **Iteration budget:** run exactly `N` iterations. Simple and reproducible.
 - **Time budget:** run as many iterations as possible within `T` milliseconds. Better for real-time use.
 
-The `Strategy::Mcts` variant currently exposes only iterations:
+The `Strategy::Mcts` variant exposes the iteration count and the value-net kind:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 84 — Strategy::Mcts variant
 Mcts {
     /// Number of MCTS iterations to run per decision.
     iterations: usize,
+    /// Kind of learned value network to use inside MCTS.
+    value_net: ValueNetKind,
 },
 ```
 
