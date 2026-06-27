@@ -10,6 +10,7 @@ license = "MIT"
 burn = { version = "0.21", default-features = false, features = ["std", "ndarray", "autodiff"] }
 faf-units = { path = "../faf-units" }
 petgraph = "0.6"
+rand = "0.8"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time", "test-util"] }
 
 [dev-dependencies]

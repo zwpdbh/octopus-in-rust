@@ -1,59 +1,48 @@
-//! Learned value network for MCTS leaf evaluation.
+//! Learned value network for MCTS candidate scoring.
 //!
-//! The network predicts a scalar value for a `GraphState`. In this scaffold it
-//! is a tiny MLP with the `NdArray` backend so the rest of `faf-sim` does not
-//! need to be generic over a Burn backend.
+//! The network predicts a scalar score for a `(state, candidate)` pair. It is
+//! generic over a Burn backend so the same architecture can be used for
+//! inference (`NdArray`) and training (`Autodiff<NdArray>`).
 
-use burn::backend::NdArray;
 use burn::module::Module;
 use burn::nn::{Linear, LinearConfig, Relu};
+use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
 
-/// Fixed backend for the value network.
-///
-/// Using a concrete backend keeps the public API simple. Later we can make this
-/// configurable via feature flags (e.g., `wgpu` or `cuda`) without changing
-/// call sites.
-pub type Backend = NdArray;
+use super::features::{candidate_features, featurize, state_features, FEATURE_COUNT};
+use super::pools::Candidate;
+use crate::planner::core::PlannerConfig;
+use crate::planner::plan_graph::PlanGraph;
+use crate::sim::GraphState;
+use crate::units::{UnitKind, Units};
 
-/// Device on which the network runs.
-pub type Device = burn::tensor::Device<Backend>;
-
-/// A small MLP that estimates the value of a FAF state.
+/// A small MLP that scores a candidate action in a given state.
 ///
-/// Input shape: `[batch, feature_count]`.
+/// Input shape: `[batch, FEATURE_COUNT]`.
 /// Output shape: `[batch, 1]`.
-#[derive(Module, Debug, Clone)]
-pub struct ValueNet {
-    linear1: Linear<Backend>,
+#[derive(Module, Debug)]
+pub struct ValueNet<B: Backend> {
+    linear1: Linear<B>,
     activation: Relu,
-    linear2: Linear<Backend>,
-    output: Linear<Backend>,
+    linear2: Linear<B>,
+    output: Linear<B>,
 }
 
-impl ValueNet {
-    /// Create a new value network with the given input feature count.
+impl<B: Backend> ValueNet<B> {
+    /// Create a new value network for the fixed feature size.
     ///
-    /// Architecture: feature_count -> 128 -> 64 -> 1.
-    pub fn new(feature_count: usize, device: &Device) -> Self {
+    /// Architecture: FEATURE_COUNT -> 128 -> 64 -> 1.
+    pub fn new(device: &B::Device) -> Self {
         Self {
-            linear1: LinearConfig::new(feature_count, 128).init(device),
+            linear1: LinearConfig::new(FEATURE_COUNT, 128).init(device),
             activation: Relu::new(),
             linear2: LinearConfig::new(128, 64).init(device),
             output: LinearConfig::new(64, 1).init(device),
         }
     }
 
-    /// Evaluate a batch of states.
-    ///
-    /// # Arguments
-    ///
-    /// * `features` - A `[batch, feature_count]` tensor of state features.
-    ///
-    /// # Returns
-    ///
-    /// A `[batch, 1]` tensor with the predicted value of each state.
-    pub fn forward(&self, features: Tensor<Backend, 2>) -> Tensor<Backend, 2> {
+    /// Evaluate a batch of feature vectors.
+    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.linear1.forward(features);
         let x = self.activation.forward(x);
         let x = self.linear2.forward(x);
@@ -61,22 +50,51 @@ impl ValueNet {
         self.output.forward(x)
     }
 
-    /// Convenience wrapper for a single state feature vector.
-    ///
-    /// # Arguments
-    ///
-    /// * `features` - A `Vec<f32>` of length `feature_count`.
-    /// * `device` - The device to run inference on.
-    ///
-    /// # Returns
-    ///
-    /// A scalar value estimate.
-    pub fn evaluate_single(&self, features: Vec<f32>, device: &Device) -> f32 {
+    /// Convenience wrapper for a single raw feature vector.
+    pub fn evaluate_single(&self, features: Vec<f32>, device: &B::Device) -> f32 {
         let feature_count = features.len();
         let data = TensorData::new(features, [1, feature_count]);
         let tensor = Tensor::from_data(data, device);
         let output = self.forward(tensor);
         output.into_data().as_slice::<f32>().unwrap()[0]
+    }
+
+    /// Score a single candidate in a single state.
+    pub fn score(
+        &self,
+        state: &GraphState,
+        candidate: &Candidate,
+        goal_id: &UnitKind,
+        units: &Units,
+        plan: &PlanGraph,
+        config: &PlannerConfig,
+        device: &B::Device,
+    ) -> f32 {
+        let features = featurize(state, candidate, goal_id, units, plan, config);
+        self.evaluate_single(features, device)
+    }
+
+    /// Score a batch of candidates in the same state.
+    pub fn score_candidates(
+        &self,
+        state: &GraphState,
+        candidates: &[Candidate],
+        goal_id: &UnitKind,
+        units: &Units,
+        plan: &PlanGraph,
+        config: &PlannerConfig,
+        device: &B::Device,
+    ) -> Vec<(Candidate, f32)> {
+        let state_feats = state_features(state, goal_id, units, config);
+        candidates
+            .iter()
+            .map(|c| {
+                let mut features = state_feats.clone();
+                features.extend(candidate_features(c, plan, units));
+                let score = self.evaluate_single(features, device);
+                (c.clone(), score)
+            })
+            .collect()
     }
 }
 
@@ -87,10 +105,9 @@ mod tests {
     #[test]
     fn value_net_runs_forward_pass() {
         let device = Default::default();
-        let net = ValueNet::new(8, &device);
+        let net: ValueNet<burn::backend::NdArray> = ValueNet::new(&device);
 
-        // A dummy state feature vector.
-        let features = vec![0.0f32; 8];
+        let features = vec![0.0f32; FEATURE_COUNT];
         let value = net.evaluate_single(features, &device);
 
         // The network is randomly initialized, so we only assert that it

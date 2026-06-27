@@ -18,8 +18,11 @@ use std::collections::HashMap;
 
 use clap::Parser;
 use faf_sim::{
-    run_build_order_simulation, PlanEdgeKind, PlanGraph, SimulationConfig, Strategy,
+    run_build_order_simulation, PlanEdgeKind, PlanGraph, Planner, SimulationConfig, Strategy,
     UnitKind as SimUnitKind, Units as SimUnits,
+};
+use faf_sim::planner::mcts::train::{
+    load_model, save_model, train_policy, TrainConfig,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
@@ -29,7 +32,7 @@ use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, RenderOptions};
 mod cmdline;
 mod target;
 
-use cmdline::{Cli, Command as CliCommand, FactionTarget};
+use cmdline::{Cli, Command as CliCommand, FactionTarget, TrainArgs};
 use target::{Faction, ResearchTarget, UnitKind};
 
 #[tokio::main(flavor = "current_thread")]
@@ -40,12 +43,17 @@ async fn main() {
 
     match cli.command {
         CliCommand::Plan(args) => {
-            let (faction, unit) = resolve_faction_target(args.target);
+            let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
             run_plan(&units, &index, target, args.output);
         }
+        CliCommand::Train(args) => {
+            let (faction, unit) = resolve_faction_target(&args.target);
+            let target = resolve_target(faction, unit);
+            run_train(&units, target, args);
+        }
         CliCommand::Simulate(args) => {
-            let (faction, unit) = resolve_faction_target(args.target);
+            let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
             run_simulate(&units, target, args.strategy).await;
         }
@@ -58,7 +66,7 @@ fn load_index() -> DataIndex {
 }
 
 /// Convert a faction subcommand into the internal `(Faction, UnitKind)` pair.
-fn resolve_faction_target(target: FactionTarget) -> (Faction, UnitKind) {
+fn resolve_faction_target(target: &FactionTarget) -> (Faction, UnitKind) {
     match target {
         FactionTarget::Uef(args) => (Faction::Uef, args.unit.into()),
         FactionTarget::Cybran(args) => (Faction::Cybran, args.unit.into()),
@@ -76,7 +84,54 @@ fn resolve_target(faction: Faction, unit: UnitKind) -> ResearchTarget {
     target
 }
 
+fn model_path(target: &ResearchTarget) -> std::path::PathBuf {
+    let file_name = format!(
+        "mlp-{}-{}.bin",
+        target.faction.display_name().to_ascii_lowercase(),
+        target
+            .unit
+            .display_name()
+            .to_ascii_lowercase()
+            .replace(' ', "-")
+    );
+    std::path::PathBuf::from("data/models").join(file_name)
+}
+
+fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
+    let goal_kind = target.to_sim_unit_kind();
+    units
+        .def(&goal_kind)
+        .expect("target blueprint must exist in index");
+
+    println!(
+        "Training MLP for {} {}",
+        target.faction.display_name(),
+        target.unit.display_name()
+    );
+
+    let config = TrainConfig {
+        episodes: args.episodes,
+        max_steps: args.max_steps,
+        ..Default::default()
+    };
+    let (model, stats) = train_policy(units, &goal_kind, config);
+
+    println!(
+        "Training complete: {}/{} episodes reached the goal",
+        stats.goal_reaches, args.episodes
+    );
+    if let Some(&best) = stats.completion_times.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+        println!("Best completion time: {}", format_time(best));
+    }
+
+    let path = model_path(&target);
+    save_model(&model, &path).expect("save trained model");
+    println!("Model saved to {}", path.display());
+}
+
 async fn run_simulate(units: &SimUnits, target: ResearchTarget, strategy: Strategy) {
+    use faf_sim::PlannerConfig;
+
     let goal_kind = target.to_sim_unit_kind();
     units
         .def(&goal_kind)
@@ -85,7 +140,21 @@ async fn run_simulate(units: &SimUnits, target: ResearchTarget, strategy: Strate
     println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
 
-    let config = SimulationConfig::for_strategy(strategy);
+    let path = model_path(&target);
+    let planner = if path.exists() {
+        println!("Loading trained model from {}", path.display());
+        let model = load_model(&path).expect("load trained model");
+        Planner::with_value_net(strategy, PlannerConfig::default(), model)
+    } else {
+        println!("No trained model found; using random initialization");
+        Planner::reactive(strategy)
+    };
+
+    let config = SimulationConfig {
+        planner,
+        sim_dt: 10.0,
+        max_sim_time: 8.0 * 60.0 * 60.0,
+    };
     let result = match run_build_order_simulation(units.clone(), goal_kind.clone(), config).await {
         Ok(r) => r,
         Err(e) => {

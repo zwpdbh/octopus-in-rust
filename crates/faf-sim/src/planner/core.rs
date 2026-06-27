@@ -9,6 +9,8 @@ use std::str::FromStr;
 
 use crate::economy::EconomyState;
 use crate::planner::mcts;
+use crate::planner::mcts::train::TrainBackend;
+use crate::planner::mcts::value_net::ValueNet;
 use crate::sim::{BuildEvent, GraphState};
 use crate::units::{UnitKind, Units};
 
@@ -201,12 +203,15 @@ impl Default for PlannerConfig {
 }
 
 /// A planner that dispatches to the MCTS strategy.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Planner {
     /// Selected planning strategy.
     pub strategy: Strategy,
     /// Shared search configuration.
     pub config: PlannerConfig,
+    /// Optional trained value network. If present, MCTS uses it instead of a
+    /// fresh random initialization.
+    pub value_net: Option<ValueNet<TrainBackend>>,
 }
 
 impl Planner {
@@ -222,7 +227,20 @@ impl Planner {
 
     /// Create a planner with an explicit configuration.
     pub fn with_config(strategy: Strategy, config: PlannerConfig) -> Self {
-        Self { strategy, config }
+        Self {
+            strategy,
+            config,
+            value_net: None,
+        }
+    }
+
+    /// Create a planner that uses a trained value network.
+    pub fn with_value_net(strategy: Strategy, config: PlannerConfig, value_net: ValueNet<TrainBackend>) -> Self {
+        Self {
+            strategy,
+            config,
+            value_net: Some(value_net),
+        }
     }
 
     /// Run the planner from `initial_state` until `goal_id` is completed.
@@ -238,13 +256,14 @@ impl Planner {
         match self.strategy {
             Strategy::Mcts {
                 iterations,
-                value_net,
+                value_net: value_net_kind,
             } => mcts::plan(
                 units,
                 initial_state,
                 goal_id,
                 iterations,
-                value_net,
+                value_net_kind,
+                self.value_net.clone(),
                 &self.config,
             ),
         }

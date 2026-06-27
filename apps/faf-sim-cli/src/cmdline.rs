@@ -39,10 +39,16 @@ pub enum Command {
     /// resource simulation is performed; this is purely symbolic dependency
     /// planning.
     Plan(PlanArgs),
+    /// Train an MLP value network for a target unit.
+    ///
+    /// Runs policy-gradient rollouts and saves the trained model so that
+    /// `simulate` can use it instead of a randomly initialized network.
+    Train(TrainArgs),
     /// Simulate a build order and print timing/resource trace.
     ///
     /// Uses the symbolic plan graph together with a planner strategy to explore
-    /// an estimated completion timeline.
+    /// an estimated completion timeline. If a trained model exists for the
+    /// target, it is loaded automatically.
     Simulate(SimulateArgs),
 }
 
@@ -55,6 +61,20 @@ pub struct PlanArgs {
     /// Write the SVG plan to this file instead of a temporary file.
     #[arg(short = 'o', long)]
     pub output: Option<std::path::PathBuf>,
+}
+
+/// Arguments for the `train` subcommand.
+#[derive(Parser)]
+pub struct TrainArgs {
+    /// Number of training episodes.
+    #[arg(short = 'e', long, default_value = "100")]
+    pub episodes: usize,
+    /// Maximum simulator steps per episode.
+    #[arg(short = 'm', long, default_value = "500")]
+    pub max_steps: usize,
+    /// Faction and unit to target.
+    #[command(subcommand)]
+    pub target: FactionTarget,
 }
 
 /// Arguments for the `simulate` subcommand.

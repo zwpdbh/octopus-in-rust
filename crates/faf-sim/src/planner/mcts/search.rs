@@ -8,8 +8,8 @@ use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
 use crate::units::{UnitKind, Units};
 
-use super::ValueNet;
-
+use super::value_net::ValueNet;
+use burn::backend::NdArray;
 /// Configuration for an MCTS search.
 #[derive(Debug, Clone, Copy)]
 pub struct MctsConfig {
@@ -59,7 +59,7 @@ impl MctsSearch {
         _goal_id: &UnitKind,
         _units: &Units,
         _planner_config: &PlannerConfig,
-        _value_net: &ValueNet,
+        _value_net: &ValueNet<NdArray>,
     ) -> Result<PlanResult, PlannerError> {
         let _ = self.config;
         todo!("MCTS search loop is not yet implemented")

@@ -22,7 +22,7 @@ const DEFAULT_SIM_DT: f64 = 10.0;
 const DEFAULT_MAX_SIM_TIME: f64 = 8.0 * 60.0 * 60.0;
 
 /// Configuration for a reactive build-order simulation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SimulationConfig {
     /// Planner used to make decisions each tick.
     pub planner: Planner,
