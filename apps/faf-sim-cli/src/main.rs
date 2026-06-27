@@ -3,7 +3,7 @@
 //! ```text
 //! faf-sim plan cybran monkeylord
 //! faf-sim simulate cybran monkeylord
-//! faf-sim simulate -s beam:20 cybran monkeylord
+//! faf-sim simulate -s mcts:200 cybran monkeylord
 //! ```
 //!
 //! `plan` emits an SVG image of the ACU-rooted plan graph showing the units
@@ -148,7 +148,11 @@ fn run_plan(
             let file_name = format!(
                 "faf-sim-plan-{}-{}.svg",
                 target.faction.display_name().to_ascii_lowercase(),
-                target.unit.display_name().to_ascii_lowercase().replace(' ', "-")
+                target
+                    .unit
+                    .display_name()
+                    .to_ascii_lowercase()
+                    .replace(' ', "-")
             );
             std::env::temp_dir().join(file_name)
         }
@@ -242,10 +246,7 @@ fn node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
     use faf_sim::{TechLevel, UnitKind};
     let name = units.display_name(kind);
     match kind {
-        UnitKind::Engineer(tl)
-        | UnitKind::Factory(tl)
-        | UnitKind::Mex(tl)
-        | UnitKind::Pgen(tl) => {
+        UnitKind::Engineer(tl) | UnitKind::Factory(tl) | UnitKind::Mex(tl) | UnitKind::Pgen(tl) => {
             let tier = match tl {
                 TechLevel::T1 => 1,
                 TechLevel::T2 => 2,

@@ -8,14 +8,15 @@
 //!   implementations.
 //! - `units` — unified unit knowledge repository (unit kinds, recipes, stats).
 
+pub mod decision_actor;
 pub mod economy;
 pub mod message;
 pub mod planner;
-pub mod decision_actor;
 pub mod sim;
 pub mod sim_actor;
 pub mod units;
 
+pub use decision_actor::DecisionActor;
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
@@ -26,7 +27,6 @@ pub use planner::{
     build_operators, build_plan_graph, Fact, Operator, PlanEdgeKind, PlanGraphError, PlanResult,
     Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
 };
-pub use decision_actor::DecisionActor;
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
     GraphState, NodeId, OngoingBuild, SimulationConfig, SimulationError, SimulationResult,

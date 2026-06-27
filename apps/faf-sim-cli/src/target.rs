@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! faf-sim plan cybran monkeylord
-//! faf-sim simulate -s beam cybran monkeylord
+//! faf-sim simulate -s mcts cybran monkeylord
 //! ```
 //!
 //! Each faction has its own unit enum so that clap can constrain the possible

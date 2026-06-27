@@ -13,7 +13,7 @@
 //! For `plan` and `simulate`, the target faction/unit is a subcommand so clap
 //! can constrain `<UNIT>` to faction-legal values. The planner strategy is a
 //! single typed argument that carries any strategy-specific configuration
-//! (e.g. `beam:20`) inside its value.
+//! (e.g. `mcts:200`) inside its value.
 
 use clap::{Parser, Subcommand};
 
@@ -60,8 +60,8 @@ pub struct PlanArgs {
 /// Arguments for the `simulate` subcommand.
 #[derive(Parser)]
 pub struct SimulateArgs {
-    /// Planner strategy (`greedy`, `beam`, or `beam:<width>`).
-    #[arg(short = 's', long, default_value = "greedy")]
+    /// Planner strategy (`mcts` or `mcts:<iterations>`).
+    #[arg(short = 's', long, default_value = "mcts:100")]
     pub strategy: faf_sim::Strategy,
     /// Faction and unit to target.
     #[command(subcommand)]

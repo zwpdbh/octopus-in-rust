@@ -9,9 +9,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time;
 
+use crate::decision_actor::DecisionActor;
 use crate::message::{Command, Observation};
 use crate::planner::Planner;
-use crate::decision_actor::DecisionActor;
 use crate::sim::state::{GraphSimError, GraphState};
 use crate::sim_actor::SimActor;
 use crate::units::{UnitKind, Units};
@@ -178,42 +178,5 @@ pub async fn run_build_order_simulation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::planner::Strategy;
-    use crate::units::{TechLevel, Units};
-
-    fn load_units() -> Units {
-        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
-    }
-
-    #[tokio::test]
-    async fn reactive_greedy_reaches_pgen() {
-        let units = load_units();
-        let config = SimulationConfig::for_strategy(Strategy::Greedy);
-        let goal = UnitKind::Pgen(TechLevel::T1);
-
-        let result = run_build_order_simulation(units, goal.clone(), config)
-            .await
-            .expect("simulation should reach T1 pgen");
-
-        assert!(
-            result.final_state.goal_reached(&goal),
-            "final state should contain the goal unit"
-        );
-    }
-
-    #[tokio::test]
-    async fn reactive_beam_reaches_pgen() {
-        let units = load_units();
-        let mut config = SimulationConfig::for_strategy(Strategy::Beam { beam_width: 20 });
-        config.sim_dt = 10.0;
-        let goal = UnitKind::Pgen(TechLevel::T1);
-
-        let result = run_build_order_simulation(units, goal.clone(), config)
-            .await
-            .expect("simulation should reach T1 pgen");
-
-        assert!(result.final_state.goal_reached(&goal));
-    }
+    // MCTS simulation tests will be added once the MCTS planner is implemented.
 }

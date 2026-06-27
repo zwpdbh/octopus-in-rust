@@ -1,9 +1,9 @@
 //! Monte Carlo Tree Search planner guided by a learned value network.
 //!
 //! This module is a placeholder scaffold for the MCTS + value-net approach
-//! described in `crates/faf-sim/doc/06-mcts-value-net-plan.md`. The public API
-//! mirrors the other strategy modules (`greedy`, `beam`) so it can be slotted
-//! into [`crate::planner::Planner`] via [`Strategy::Mcts`](crate::planner::Strategy::Mcts).
+//! described in `crates/faf-sim/doc/06-mcts-value-net-plan.md`. It is the only
+//! supported strategy and is exposed through
+//! [`Strategy::Mcts`](crate::planner::Strategy::Mcts).
 //!
 //! # Basic flow
 //!

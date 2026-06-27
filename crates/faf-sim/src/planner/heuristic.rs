@@ -1,10 +1,11 @@
 //! Heuristic functions for ranking and pruning graph-growth search states.
 //!
-//! The functions in this module are **simplifications** used to guide the beam
-//! search. They do not model FAF's discrete-project economy accurately; that
-//! behavior is implemented in [`crate::economy`] and [`crate::sim`]. Instead,
-//! these heuristics compute cheap completion-time estimates so the search can
-//! rank candidate states without running a full simulation at every step.
+//! The functions in this module are **simplifications** used to guide the
+//! planner's search. They do not model FAF's discrete-project economy
+//! accurately; that behavior is implemented in [`crate::economy`] and
+//! [`crate::sim`]. Instead, these heuristics compute cheap completion-time
+//! estimates so the search can rank candidate states without running a full
+//! simulation at every step.
 //!
 //! The main estimate lives on [`crate::economy::EconomyState`] as
 //! [`estimate_remaining_time`](crate::economy::EconomyState::estimate_remaining_time).
@@ -27,6 +28,10 @@
 //! 2. Total build power stays constant.
 //! 3. Remaining resource costs are spread proportionally over remaining work.
 //! 4. Resources already in storage can be spent immediately.
+//!
+//! This module is temporarily unused while the MCTS planner is being
+//! implemented.
+#![allow(dead_code)]
 
 use std::collections::HashSet;
 

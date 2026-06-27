@@ -352,7 +352,8 @@ fn compute_positions<N, E>(
     for (level, nodes) in &by_level {
         let count = nodes.len();
         let level_w = count as f32 * options.node_width + (count as f32 - 1.0) * options.node_gap_x;
-        let start_x = options.margin_x + (effective_width - level_w) / 2.0 + options.node_width / 2.0;
+        let start_x =
+            options.margin_x + (effective_width - level_w) / 2.0 + options.node_width / 2.0;
 
         for (idx, node) in nodes.iter().enumerate() {
             let x = start_x + idx as f32 * (options.node_width + options.node_gap_x);
@@ -501,7 +502,11 @@ fn render_legend(out: &mut String, width: f32, _height: f32, options: &RenderOpt
     let line_height = 2.0f32;
     let padding = 10.0f32;
     let box_width = {
-        let max_label_width = options.legend.iter().map(|i| i.label.len() as f32 * options.legend_font_size * 0.6).fold(0.0f32, f32::max);
+        let max_label_width = options
+            .legend
+            .iter()
+            .map(|i| i.label.len() as f32 * options.legend_font_size * 0.6)
+            .fold(0.0f32, f32::max);
         line_width + 8.0 + max_label_width + 2.0 * padding
     };
     let box_height = options.legend.len() as f32 * item_height + 2.0 * padding;
@@ -607,8 +612,12 @@ mod tests {
     #[test]
     fn empty_graph_errors() {
         let graph = DiGraph::<String, ()>::new();
-        let err = graph_to_svg(&graph, "/tmp/petgraph-svg-empty.svg", &RenderOptions::default())
-            .unwrap_err();
+        let err = graph_to_svg(
+            &graph,
+            "/tmp/petgraph-svg-empty.svg",
+            &RenderOptions::default(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("empty"));
     }
 }

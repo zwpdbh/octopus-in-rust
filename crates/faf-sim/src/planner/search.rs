@@ -1,4 +1,9 @@
 //! Shared search helpers for the graph-growth model.
+//!
+//! This module is temporarily unused while the MCTS planner is being
+//! implemented. The successor-generation helpers will be reused by MCTS once
+//! its search loop is filled in.
+#![allow(dead_code)]
 
 use std::collections::HashSet;
 

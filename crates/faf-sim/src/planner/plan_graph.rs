@@ -61,7 +61,10 @@ impl std::error::Error for PlanGraphError {}
 /// - `Build` edges for same-tier construction (e.g. T2 factory -> T2 engineer).
 /// - `Upgrade` edges for tier progression (e.g. T1 factory -> T2 factory).
 /// - The actual build edge from the goal's legal builder(s) to the goal.
-pub fn build_plan_graph(units: &Units, goal: &UnitKind) -> Result<DiGraph<UnitKind, PlanEdgeKind>, PlanGraphError> {
+pub fn build_plan_graph(
+    units: &Units,
+    goal: &UnitKind,
+) -> Result<DiGraph<UnitKind, PlanEdgeKind>, PlanGraphError> {
     let max_tech = max_tech_needed(units, goal);
     let relevant = relevant_unit_kinds(max_tech, goal);
 
@@ -108,10 +111,9 @@ fn max_tech_needed(units: &Units, goal: &UnitKind) -> TechLevel {
 /// Return the technology tier of a common unit kind, if it has one.
 fn tech_level(kind: &UnitKind) -> Option<TechLevel> {
     match kind {
-        UnitKind::Engineer(t)
-        | UnitKind::Factory(t)
-        | UnitKind::Mex(t)
-        | UnitKind::Pgen(t) => Some(*t),
+        UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => {
+            Some(*t)
+        }
         UnitKind::Commander => Some(TechLevel::T1),
         UnitKind::Unique(_) => None,
     }
@@ -189,7 +191,13 @@ fn add_upgrade_edges(
     for from in relevant {
         for recipe in units.upgrade_recipes(from) {
             if relevant_set.contains(&recipe.from) && relevant_set.contains(&recipe.to) {
-                add_edge(graph, indices, &recipe.from, &recipe.to, PlanEdgeKind::Upgrade);
+                add_edge(
+                    graph,
+                    indices,
+                    &recipe.from,
+                    &recipe.to,
+                    PlanEdgeKind::Upgrade,
+                );
             }
         }
     }
@@ -234,7 +242,11 @@ fn is_natural_build_edge(builder: &UnitKind, target: &UnitKind) -> bool {
 }
 
 /// True if `goal` is reachable from `start` in `graph`.
-fn is_reachable(graph: &DiGraph<UnitKind, PlanEdgeKind>, start: &UnitKind, goal: &UnitKind) -> bool {
+fn is_reachable(
+    graph: &DiGraph<UnitKind, PlanEdgeKind>,
+    start: &UnitKind,
+    goal: &UnitKind,
+) -> bool {
     let mut bfs = Bfs::new(
         graph,
         graph
@@ -265,7 +277,8 @@ mod tests {
         let goal = UnitKind::Unique(crate::units::UnitId("UEL0401".to_string()));
         let graph = build_plan_graph(&units, &goal).expect("fatboy should be reachable");
 
-        let node_set: HashSet<UnitKind> = graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();
+        let node_set: HashSet<UnitKind> =
+            graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();
 
         assert!(node_set.contains(&UnitKind::Commander));
         assert!(node_set.contains(&UnitKind::Factory(TechLevel::T1)));
@@ -318,7 +331,8 @@ mod tests {
         let goal = UnitKind::Pgen(TechLevel::T1);
         let graph = build_plan_graph(&units, &goal).expect("t1 pgen should be reachable");
 
-        let node_set: HashSet<UnitKind> = graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();
+        let node_set: HashSet<UnitKind> =
+            graph.raw_nodes().iter().map(|n| n.weight.clone()).collect();
 
         assert!(node_set.contains(&UnitKind::Commander));
         assert!(node_set.contains(&UnitKind::Pgen(TechLevel::T1)));
