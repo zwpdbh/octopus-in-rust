@@ -11,7 +11,7 @@ use tokio::time;
 
 use crate::message::{Command, Observation};
 use crate::planner::Planner;
-use crate::planner_actor::PlannerActor;
+use crate::decision_actor::DecisionActor;
 use crate::sim::state::{GraphSimError, GraphState};
 use crate::sim_actor::SimActor;
 use crate::units::{UnitKind, Units};
@@ -104,7 +104,7 @@ impl From<tokio::task::JoinError> for SimulationError {
 /// Run a reactive build-order simulation.
 ///
 /// This function pauses Tokio's virtual clock, spawns a `SimActor` and a
-/// `PlannerActor`, and drives time forward in `config.sim_dt` increments until
+/// `DecisionActor`, and drives time forward in `config.sim_dt` increments until
 /// the goal is reached or `config.max_sim_time` is exceeded.
 ///
 /// # Panics
@@ -127,11 +127,6 @@ pub async fn run_build_order_simulation(
     let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-    // Build a symbolic dependency graph before starting the simulation. The
-    // graph is advisory: the numeric planner still drives tick-by-tick
-    // decisions, but the tree gives the actor a validated path to the goal.
-    let dependency_graph = units.dependency_graph(&goal).ok();
-
     let sim = SimActor::new(
         &[UnitKind::Commander],
         units.clone(),
@@ -142,12 +137,8 @@ pub async fn run_build_order_simulation(
     );
     let sim_handle = tokio::spawn(sim.run());
 
-    let planner_actor = if let Some(graph) = dependency_graph {
-        PlannerActor::new_with_graph(config.planner, units, goal, obs_rx, cmd_tx, graph)
-    } else {
-        PlannerActor::new(config.planner, units, goal, obs_rx, cmd_tx)
-    };
-    let planner_handle = tokio::spawn(planner_actor.run());
+    let decision_actor = DecisionActor::new(config.planner, units, goal, obs_rx, cmd_tx);
+    let planner_handle = tokio::spawn(decision_actor.run());
 
     // Drive the simulation timer forward until the goal is reached or we hit
     // the safety cap.

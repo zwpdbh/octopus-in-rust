@@ -1,7 +1,7 @@
 //! ACU-rooted plan graph for build-order visualisation.
 //!
-//! Unlike the backward-chained [`DependencyGraph`], the plan graph starts from
-//! the ACU and expands forward through build and upgrade rules. It includes
+//! The plan graph starts from the ACU and expands forward through build and
+//! upgrade rules. It includes
 //! both the technology chain (factories, engineers) and the economic
 //! infrastructure (mass extractors, power generators) required to reach a
 //! goal unit.

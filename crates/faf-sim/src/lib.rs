@@ -11,7 +11,7 @@
 pub mod economy;
 pub mod message;
 pub mod planner;
-pub mod planner_actor;
+pub mod decision_actor;
 pub mod sim;
 pub mod sim_actor;
 pub mod units;
@@ -23,11 +23,10 @@ pub use economy::{
 };
 pub use message::{Command, Observation};
 pub use planner::{
-    build_dependency_graph, build_operators, build_plan_graph, DependencyGraph,
-    DependencyGraphError, DependencyNode, Fact, Operator, PlanEdgeKind, PlanGraphError, PlanResult,
+    build_operators, build_plan_graph, Fact, Operator, PlanEdgeKind, PlanGraphError, PlanResult,
     Planner, PlannerConfig, PlannerError, Strategy, StripsAction,
 };
-pub use planner_actor::PlannerActor;
+pub use decision_actor::DecisionActor;
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
     GraphState, NodeId, OngoingBuild, SimulationConfig, SimulationError, SimulationResult,

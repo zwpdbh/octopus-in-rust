@@ -1,4 +1,4 @@
-//! Planner actor that observes the simulation and emits commands.
+//! Decision actor that observes the simulation and emits commands.
 //!
 //! The actor receives observations, delegates the decision to the underlying
 //! [`Planner`], and forwards the resulting command back to the simulation.
@@ -6,7 +6,6 @@
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::message::{Command, Observation};
-use crate::planner::dependency_graph::DependencyGraph;
 use crate::planner::search::SearchAction;
 use crate::planner::Planner;
 use crate::units::{UnitKind, Units};
@@ -35,19 +34,15 @@ fn search_action_to_command(action: SearchAction) -> Option<Command> {
 }
 
 /// Actor that runs a planner and exchanges messages with a simulation.
-pub struct PlannerActor {
+pub struct DecisionActor {
     planner: Planner,
     units: Units,
     goal_id: UnitKind,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
-    /// Optional symbolic dependency tree used to validate or guide planner
-    /// decisions. Currently stored for future use; the reactive loop still
-    /// trusts the underlying planner.
-    dependency_graph: Option<DependencyGraph>,
 }
 
-impl PlannerActor {
+impl DecisionActor {
     /// Create a new planner actor.
     pub fn new(
         planner: Planner,
@@ -62,35 +57,7 @@ impl PlannerActor {
             goal_id,
             obs_rx,
             cmd_tx,
-            dependency_graph: None,
         }
-    }
-
-    /// Create a planner actor with a pre-computed dependency graph.
-    ///
-    /// The graph is currently stored for diagnostics and future guidance; the
-    /// actor still delegates tick-by-tick decisions to the underlying planner.
-    pub fn new_with_graph(
-        planner: Planner,
-        units: Units,
-        goal_id: UnitKind,
-        obs_rx: Receiver<Observation>,
-        cmd_tx: Sender<Command>,
-        dependency_graph: DependencyGraph,
-    ) -> Self {
-        Self {
-            planner,
-            units,
-            goal_id,
-            obs_rx,
-            cmd_tx,
-            dependency_graph: Some(dependency_graph),
-        }
-    }
-
-    /// Return the dependency graph passed at construction, if any.
-    pub fn dependency_graph(&self) -> Option<&DependencyGraph> {
-        self.dependency_graph.as_ref()
     }
 
     /// Run the actor until the simulation disconnects.
@@ -124,7 +91,7 @@ mod tests {
 
     use crate::message::{Command, Observation};
     use crate::planner::{Planner, Strategy};
-    use crate::planner_actor::PlannerActor;
+    use crate::decision_actor::DecisionActor;
     use crate::sim_actor::SimActor;
     use crate::units::{TechLevel, UnitKind, Units};
 
@@ -308,14 +275,14 @@ mod tests {
                 ..crate::planner::PlannerConfig::default()
             },
         );
-        let planner_actor = PlannerActor::new(
+        let decision_actor = DecisionActor::new(
             planner,
             units.clone(),
             UnitKind::Pgen(TechLevel::T1),
             obs_rx,
             cmd_tx,
         );
-        let planner_handle = tokio::spawn(planner_actor.run());
+        let planner_handle = tokio::spawn(decision_actor.run());
 
         // Both actors should shut down cleanly once the pgen is completed.
         let (sim_result, planner_result) = tokio::join!(sim_handle, planner_handle);

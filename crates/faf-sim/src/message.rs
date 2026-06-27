@@ -1,6 +1,6 @@
-//! Messages exchanged between the simulation actor and planner actor.
+//! Messages exchanged between the simulation actor and decision actor.
 //!
-//! The architecture treats `SimActor` and `PlannerActor` as two concurrent
+//! The architecture treats `SimActor` and `DecisionActor` as two concurrent
 //! components that communicate only through these messages. This mirrors how a
 //! human player observes the game and sends discrete commands.
 
