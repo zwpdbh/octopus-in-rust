@@ -28,8 +28,7 @@ pub use planner::{
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
-    GraphState, NodeId, OngoingBuild, SimulationConfig, SimulationError, SimulationResult,
-    UnitNode,
+    GraphState, NodeId, SimulationConfig, SimulationError, SimulationResult, UnitNode,
 };
 
 pub use units::{

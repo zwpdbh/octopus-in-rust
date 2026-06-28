@@ -145,14 +145,8 @@ impl SimActor {
                 if builders.is_empty() {
                     return Ok(());
                 }
-                let project_index = self
-                    .state
-                    .active_projects
-                    .iter()
-                    .position(|p| p.target_node == project_node)
-                    .ok_or(GraphSimError::ProjectNotFound)?;
                 self.state
-                    .assist_project(project_index, &builders, &self.units)?;
+                    .assist_project(project_node, &builders, &self.units)?;
             }
             Command::Upgrade {
                 target_unit_id,

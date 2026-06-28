@@ -9,7 +9,7 @@
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::plan_graph::PlanGraph;
 use crate::planner::search::SearchAction;
-use crate::sim::{GraphSimError, GraphState, NodeId};
+use crate::sim::{GraphSimError, GraphState, NodeId, UnitNodeState};
 use crate::units::{TechLevel, UnitKind, Units};
 
 use self::pools::{Candidate, SelectionPools};
@@ -203,14 +203,17 @@ fn idle_engineers_of_tier(state: &GraphState, units: &Units, tier: TechLevel) ->
 /// Current heuristic: assist the project with the most remaining work.
 fn best_project_to_assist(state: &GraphState) -> Option<NodeId> {
     state
-        .active_projects
-        .iter()
+        .graph
+        .graph
+        .node_weights()
+        .filter(|n| matches!(n.state, UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }))
         .max_by(|a, b| {
-            a.remaining_work
-                .partial_cmp(&b.remaining_work)
+            a.remaining_work()
+                .unwrap_or(0.0)
+                .partial_cmp(&b.remaining_work().unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|p| p.target_node)
+        .map(|n| n.id)
 }
 
 /// Apply a [`SearchAction`] to a mutable simulator state.
@@ -238,12 +241,7 @@ pub(crate) fn execute_action(
             if builders.is_empty() {
                 return Ok(());
             }
-            let project_index = state
-                .active_projects
-                .iter()
-                .position(|p| p.target_node == *project_node)
-                .ok_or(GraphSimError::ProjectNotFound)?;
-            state.assist_project(project_index, builders, units)?;
+            state.assist_project(*project_node, builders, units)?;
         }
         SearchAction::Wait => {
             state.tick(units, dt);

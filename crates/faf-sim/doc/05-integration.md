@@ -110,6 +110,106 @@ pub struct PlanResult {
 
 A reactive actor reads `first_action`, executes it, and ignores the projected `events` and `completion_time` because the real plan will be recomputed from the updated state.
 
+## Actor wiring
+
+The reactive loop is implemented as two Tokio actors that communicate over channels. The actor code lives in `crates/faf-sim/src/actors/`:
+
+- `actors/sim_actor.rs` — owns the authoritative `GraphState` and ticks on a timer.
+- `actors/decision_actor.rs` — owns the `Planner` and converts `first_action` into a `Command`.
+- `actors/message.rs` — defines the `Command` and `Observation` messages exchanged between them.
+
+The message protocol is intentionally small:
+
+```rust
+// crates/faf-sim/src/actors/message.rs ~line 15 — Command
+pub enum Command {
+    Build { unit_id: UnitKind, builder: NodeId },
+    Assist { project_node: NodeId, builders: Vec<NodeId> },
+    Upgrade { target_unit_id: UnitKind, old_node: NodeId, builder: NodeId },
+}
+
+// crates/faf-sim/src/actors/message.rs ~line 46 — Observation
+pub enum Observation {
+    Event(BuildEvent),
+    State(GraphState),
+}
+```
+
+`SimActor::run` advances the simulation and emits observations:
+
+```rust
+// crates/faf-sim/src/actors/sim_actor.rs ~line 73 — SimActor::run
+pub async fn run(mut self) -> Result<GraphState, GraphSimError> {
+    loop {
+        tokio::select! {
+            _ = self.timer.tick() => {
+                self.tick_and_report().await?;
+                if self.goal_reached() { break; }
+            }
+            maybe_cmd = self.cmd_rx.recv() => {
+                match maybe_cmd {
+                    Some(cmd) => self.apply_command(cmd)?,
+                    None => break,
+                }
+            }
+        }
+    }
+    Ok(self.state)
+}
+```
+
+`DecisionActor::run` waits for state observations, calls `Planner::plan`, and sends the resulting command back:
+
+```rust
+// crates/faf-sim/src/actors/decision_actor.rs ~line 67 — DecisionActor::run
+pub async fn run(mut self) {
+    while let Some(observation) = self.obs_rx.recv().await {
+        let command = match observation {
+            Observation::State(state) => {
+                let plan = self.planner.plan(&self.units, state, &self.goal_id).ok();
+                plan.and_then(|p| p.first_action)
+                    .and_then(search_action_to_command)
+            }
+            Observation::Event(_) => None,
+        };
+        if let Some(command) = command {
+            if self.cmd_tx.send(command).await.is_err() { break; }
+        }
+    }
+}
+```
+
+For deterministic testing, `run_build_order_simulation` in `sim/runner.rs` pauses Tokio's clock, spawns both actors, and drives time forward in fixed increments:
+
+```rust
+// crates/faf-sim/src/sim/runner.rs ~line 113 — run_build_order_simulation
+pub async fn run_build_order_simulation(
+    units: Units,
+    goal: UnitKind,
+    config: SimulationConfig,
+) -> Result<SimulationResult, SimulationError> {
+    assert!(config.sim_dt > 0.0, "sim_dt must be positive");
+    time::pause();
+
+    let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+
+    let sim = SimActor::new(&[UnitKind::Commander], units.clone(),
+                            Some(goal.clone()), config.sim_dt, obs_tx, cmd_rx);
+    let sim_handle = tokio::spawn(sim.run());
+
+    let decision_actor = DecisionActor::new(config.planner, units, goal, obs_rx, cmd_tx);
+    let planner_handle = tokio::spawn(decision_actor.run());
+
+    // ... drive timer until finished ...
+    let final_state = sim_handle.await??;
+    let _ = planner_handle.await;
+    // ...
+}
+```
+
+All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so callers can use `faf_sim::SimActor`, `faf_sim::DecisionActor`, `faf_sim::Command`, and `faf_sim::Observation` directly.
+
 ## CLI usage
 
 The strategy can be parsed from a string:

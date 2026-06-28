@@ -51,7 +51,13 @@ pub fn state_features(
     features.push(clamp(
         state.count_active_pgen() as f32 / config.max_pgen_count as f32,
     ));
-    features.push(clamp(state.active_projects.len() as f32 / 10.0));
+    let active_project_count = state
+        .graph
+        .graph
+        .node_weights()
+        .filter(|n| matches!(n.state, crate::sim::UnitNodeState::Constructing { .. } | crate::sim::UnitNodeState::Upgrading { .. }))
+        .count();
+    features.push(clamp(active_project_count as f32 / 10.0));
     features.push(bool_f32(
         state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
     ));

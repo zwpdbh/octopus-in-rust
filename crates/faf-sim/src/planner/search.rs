@@ -193,10 +193,17 @@ fn add_assist_candidates(
     config: SearchConfig,
     idle_builders: &[NodeId],
 ) {
-    for i in 0..state.active_projects.len() {
-        let project_node = state.active_projects[i].target_node;
+    let active_projects: Vec<NodeId> = state
+        .graph
+        .graph
+        .node_weights()
+        .filter(|n| matches!(n.state, crate::sim::UnitNodeState::Constructing { .. } | crate::sim::UnitNodeState::Upgrading { .. }))
+        .map(|n| n.id)
+        .collect();
+
+    for project_node in active_projects {
         if let Some((next, builders)) =
-            try_assist_project(state, i, idle_builders, units, config.dt)
+            try_assist_project(state, project_node, idle_builders, units, config.dt)
         {
             successors.push((
                 next,
@@ -235,11 +242,13 @@ pub(crate) fn visited_key(state: &GraphState) -> VisitedKey {
     owned.sort();
 
     let mut active: Vec<(UnitKind, i64)> = state
-        .active_projects
-        .iter()
-        .map(|p| {
-            let target = state.graph[p.target_node].unit_id.clone();
-            let work = (p.remaining_work * 100.0).round() as i64;
+        .graph
+        .graph
+        .node_weights()
+        .filter(|n| matches!(n.state, crate::sim::UnitNodeState::Constructing { .. } | crate::sim::UnitNodeState::Upgrading { .. }))
+        .map(|n| {
+            let target = n.unit_id.clone();
+            let work = (n.remaining_work().unwrap_or(0.0) * 100.0).round() as i64;
             (target, work)
         })
         .collect();
@@ -301,7 +310,7 @@ pub(crate) fn try_upgrade_project(
 
 pub(crate) fn try_assist_project(
     state: &GraphState,
-    project_index: usize,
+    project_node: NodeId,
     builders: &[NodeId],
     units: &Units,
     dt: f64,
@@ -311,7 +320,7 @@ pub(crate) fn try_assist_project(
     }
     let mut next = state.clone();
     let used_builders = builders.to_vec();
-    match next.assist_project(project_index, builders, units) {
+    match next.assist_project(project_node, builders, units) {
         Ok(_) => {
             next.tick(units, dt);
             Some((next, used_builders))

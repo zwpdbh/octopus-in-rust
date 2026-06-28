@@ -8,7 +8,7 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 
 ### Nodes
 
-- Each node represents one built-unit slot. A slot can be constructed from scratch or reached by upgrading an earlier unit in the same slot.
+- Each node represents one built-unit slot. A slot can be constructed from scratch or created by upgrading an earlier unit, which retires the earlier slot.
 - Every node stores:
   - `unit_id`: the current blueprint identifier, e.g., `URL0001` (ACU), `URB0101` (T1 land factory), `URL0402` (Monkeylord).
   - `state`: a lifecycle tag describing whether the slot is under construction or finished, and whether it was reached by construction or by upgrade.
@@ -17,24 +17,19 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 ### Node lifecycle
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 89 — UnitNodeState
+// crates/faf-sim/src/sim/state.rs ~line 91 — UnitNodeState (abbreviated)
 pub enum UnitNodeState {
-    Building(BuildingUnitState),
-    Finished(FinishedUnitState),
-}
-
-pub enum BuildingUnitState {
     Constructing { start: f64, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
-    Upgrading { start: f64, from_unit_id: String, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
-}
-
-pub enum FinishedUnitState {
+    Upgrading { start: f64, from_unit_id: UnitKind, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
     Constructed { start_time: f64, finish_time: f64 },
-    Upgraded { start_time: f64, finish_time: f64, from_unit_id: String },
+    Upgraded { start_time: f64, finish_time: f64, from_unit_id: UnitKind },
+    Replaced { start_time: f64, finish_time: f64, into: NodeId },
 }
 ```
 
-A slot transitions from `Finished` to `Building(Upgrading)` when an upgrade is started, and back to `Finished(Upgraded)` when the upgrade completes. This reuses the same node id, so an upgraded unit replaces its predecessor's economy and build-power contributions automatically.
+The state machine is flat: there are no nested `Building`/`Finished` wrappers. `Constructed` and `Upgraded` are active finished states; `Constructing` and `Upgrading` are in-progress states; `Replaced` is a retired state used for the source node of an upgrade.
+
+An upgrade creates a **new** node and retires the source slot. When an upgrade starts, the source node moves to `Replaced { into: new_node }` so it no longer contributes to the economy or acts as a builder. The new node starts in `Upgrading { from_unit_id: old_kind }` and finishes as `Upgraded { from_unit_id: old_kind }`. This makes the upgrade history explicit in the graph while keeping the active unit set unambiguous.
 
 ### Edges
 
@@ -61,8 +56,8 @@ Building a new unit means:
 Upgrading an existing unit means:
 
 1. Choose a finished unit slot `A` that has a registered upgrade target.
-2. Reuse node `A`: set its `unit_id` to the target blueprint and its state to `Building(Upgrading { from_unit_id: old_id })`.
-3. Add edges from the builders working on the upgrade.
+2. Create a new node `B` for the upgraded unit and set `A` to `Replaced { into: B }`.
+3. Set `B`'s state to `Upgrading { from_unit_id: old_id }` and add edges from the builders working on the upgrade to `B`.
 4. Compute the upgrade's finish time from the upgrade cost.
 
 Upgrade costs and target mappings are stored in the `UpgradeTable`, which is part of the `Units` repository (see below). The simulator does not read upgrade information from the raw blueprint data.
@@ -98,11 +93,11 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
 All static unit knowledge is accessed through the `Units` abstraction in `crates/faf-sim/src/units/mod.rs`. `Units` owns a copy of the raw `faf-units` index and builds derived structures (`TechGraph`, `UpgradeTable`) from it. The rest of `faf-sim` does not import `faf-units` directly.
 
 ```rust
-// crates/faf-sim/src/units/mod.rs ~line 34 — Units (abbreviated)
+// crates/faf-sim/src/units/mod.rs ~line 39 — Units (abbreviated)
 pub struct Units {
-    index: Arc<DataIndex>,
-    tech_graph: TechGraph,
-    upgrade_table: UpgradeTable,
+    defs: HashMap<UnitKind, UnitDef>,
+    builds: HashMap<UnitKind, BuildRecipe>,
+    upgrades: HashMap<UnitKind, Vec<UpgradeRecipe>>,
 }
 ```
 

@@ -152,7 +152,7 @@ pub enum SearchAction {
 ```
 
 - `Build` starts a new project for a unit, assigning one idle builder to it.
-- `Upgrade` reuses an existing finished slot and transitions it to a higher-tier unit.
+- `Upgrade` starts a new project for the higher-tier unit and retires the source slot.
 - `Assist` adds all idle engineers of a tier to an already-started project.
 - `Wait` advances the simulator by one tick.
 

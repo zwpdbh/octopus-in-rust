@@ -11,18 +11,18 @@ The simulator starts with a single completed unit: the ACU (Armored Command Unit
 - every unit that exists,
 - when each unit started and finished,
 - which builders contributed to which unit,
-- the current economy,
-- active construction projects.
+- the current economy.
+
+Active construction projects are not stored separately; they are the graph nodes currently in the `Constructing` or `Upgrading` state.
 
 ```rust
-// crates/faf-sim/src/sim.rs ~line 205 — GraphState (abbreviated)
-// pub struct GraphState {
-//     pub time: f64,
-//     pub graph: BuildGraph,
-//     pub economy: EconomyState,
-//     pub active_projects: Vec<OngoingBuild>,
-//     pub events: Vec<BuildEvent>,
-// }
+// crates/faf-sim/src/sim/state.rs ~line 287 — GraphState (abbreviated)
+pub struct GraphState {
+    pub time: f64,
+    pub graph: BuildGraph,
+    pub economy: EconomyState,
+    pub events: Vec<BuildEvent>,
+}
 ```
 
 MCTS does not need to invent this representation; it reuses the existing simulator state as its node payload. It also does not need to read raw FAF data; all unit knowledge comes through the `Units` repository.
@@ -34,13 +34,15 @@ Each node in the build graph represents one built-unit slot. It stores at least:
 - `unit_id`: the current blueprint identifier, e.g., `URL0001` (ACU), `URB0101` (T1 land factory), `URL0402` (Monkeylord).
 - `state`: a lifecycle tag that says whether the slot is under construction or finished, and whether it was constructed from scratch or upgraded from another unit.
 
-A directed edge `A -> B` means unit `A` contributed build power to create or upgrade slot `B`. Multiple incoming edges mean multiple builders assisted.
+A directed edge `A -> B` means unit `A` contributed build power to create unit `B`. Multiple incoming edges mean multiple builders assisted.
 
 The initial graph contains exactly one node: the ACU, finished at time 0.
 
-## Upgrades reuse slots
+## Upgrades add new nodes
 
-When a unit is upgraded, the same node id is reused. Its `unit_id` changes to the target blueprint and its state becomes `Building(Upgrading { from_unit_id: old_id })`. On completion the state becomes `Finished(Upgraded { from_unit_id: old_id })`. This means the upgraded unit immediately replaces its predecessor's economy and builder contributions; there is no separate "old node" to disable.
+An upgrade creates a **new** node for the upgraded unit rather than reusing the old slot. The source node moves to `Replaced { into: new_node }`, so it is no longer counted as an active unit for economy or builder calculations. The new node starts as `Upgrading { from_unit_id: old_id }` and completes as `Upgraded { from_unit_id: old_id }`.
+
+This keeps the graph history explicit: the old unit remains visible as a retired node, while the active unit set contains only the new upgraded unit.
 
 ## Builder constraints that shape the tree
 
@@ -82,7 +84,7 @@ GraphState
 ├── time
 ├── graph of completed and under-construction units
 ├── economy
-└── active_projects
+└── events
 ```
 
 The policy network receives a featurized version of this snapshot paired with each legal candidate (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
