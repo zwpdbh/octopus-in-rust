@@ -5,7 +5,7 @@
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::message::{Command, Observation};
+use crate::actors::message::{Command, Observation};
 use crate::planner::search::SearchAction;
 use crate::planner::Planner;
 use crate::units::{UnitKind, Units};
@@ -89,12 +89,12 @@ impl DecisionActor {
 mod tests {
     use tokio::sync::mpsc;
 
-    use crate::message::{Command, Observation};
-    use crate::sim_actor::SimActor;
+    use crate::actors::message::{Command, Observation};
+    use crate::actors::sim_actor::SimActor;
     use crate::units::{UnitKind, Units};
 
     fn load_units() -> Units {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
+        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
         Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 

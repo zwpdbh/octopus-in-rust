@@ -8,21 +8,20 @@
 //!   implementations.
 //! - `units` — unified unit knowledge repository (unit kinds, recipes, stats).
 
-pub mod decision_actor;
+pub mod actors;
 pub mod economy;
-pub mod message;
 pub mod planner;
 pub mod sim;
-pub mod sim_actor;
 pub mod units;
 
-pub use decision_actor::DecisionActor;
+pub use actors::decision_actor::DecisionActor;
+pub use actors::message::{Command, Observation};
+pub use actors::sim_actor::SimActor;
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
-pub use message::{Command, Observation};
 pub use planner::{
     build_operators, build_plan_graph, Fact, Operator, PlanEdgeKind, PlanGraph, PlanGraphError,
     PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
@@ -32,7 +31,6 @@ pub use sim::{
     GraphState, NodeId, OngoingBuild, SimulationConfig, SimulationError, SimulationResult,
     UnitNode,
 };
-pub use sim_actor::SimActor;
 
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, Units, UpgradeRecipe,

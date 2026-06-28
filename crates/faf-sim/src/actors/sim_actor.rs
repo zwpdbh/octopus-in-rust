@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, Interval};
 
-use crate::message::{Command, Observation};
+use crate::actors::message::{Command, Observation};
 use crate::sim::{BuildEvent, GraphSimError, GraphState, NodeId};
 use crate::units::{UnitKind, Units};
 

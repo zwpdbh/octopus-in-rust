@@ -9,11 +9,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time;
 
-use crate::decision_actor::DecisionActor;
-use crate::message::{Command, Observation};
+use crate::actors::decision_actor::DecisionActor;
+use crate::actors::message::{Command, Observation};
+use crate::actors::sim_actor::SimActor;
 use crate::planner::Planner;
 use crate::sim::state::{GraphSimError, GraphState};
-use crate::sim_actor::SimActor;
 use crate::units::{UnitKind, Units};
 
 /// Default simulation timestep in seconds.
@@ -155,11 +155,7 @@ pub async fn run_build_order_simulation(
         ticks += 1;
     }
 
-    let final_state = match sim_handle.await {
-        Ok(Ok(state)) => state,
-        Ok(Err(e)) => return Err(e.into()),
-        Err(e) => return Err(e.into()),
-    };
+    let final_state = sim_handle.await??;
 
     // The planner actor exits once the observation channel is closed.
     let _ = planner_handle.await;
