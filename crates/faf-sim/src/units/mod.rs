@@ -313,6 +313,22 @@ impl Units {
             }
         }
 
+        // Storage caps can be built by any engineer tier once an engineer exists.
+        for kind in [UnitKind::MassStorage, UnitKind::EnergyStorage] {
+            m.insert(
+                kind.clone(),
+                BuildRecipe {
+                    target: kind.clone(),
+                    prereq: None,
+                    builder_options: vec![
+                        UnitKind::Engineer(TechLevel::T1),
+                        UnitKind::Engineer(TechLevel::T2),
+                        UnitKind::Engineer(TechLevel::T3),
+                    ],
+                },
+            );
+        }
+
         m
     }
 
@@ -456,5 +472,21 @@ mod tests {
         assert!(units
             .upgrade_target(&UnitKind::Engineer(TechLevel::T1))
             .is_none());
+    }
+
+    #[test]
+    fn storage_units_are_classified_and_buildable() {
+        let units = load_units();
+
+        let mass_storage_def = units.def(&UnitKind::MassStorage).expect("mass storage def");
+        assert_eq!(mass_storage_def.kind, UnitKind::MassStorage);
+        assert!(mass_storage_def.mass_storage > 0.0);
+
+        let energy_storage_def = units.def(&UnitKind::EnergyStorage).expect("energy storage def");
+        assert_eq!(energy_storage_def.kind, UnitKind::EnergyStorage);
+        assert!(energy_storage_def.energy_storage > 0.0);
+
+        assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::MassStorage));
+        assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::EnergyStorage));
     }
 }

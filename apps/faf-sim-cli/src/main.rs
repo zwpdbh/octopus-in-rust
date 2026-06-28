@@ -393,6 +393,7 @@ fn node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
             format!("{} (T{})", name, tier)
         }
         UnitKind::Commander | UnitKind::Unique(_) => name.to_string(),
+        UnitKind::MassStorage | UnitKind::EnergyStorage => name.to_string(),
     }
 }
 

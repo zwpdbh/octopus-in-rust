@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use petgraph::visit::EdgeRef;
 
 use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
+use crate::planner::core::PlannerConfig;
 use crate::planner::search::SimAction;
 use crate::sim::{GraphState, NodeId, UnitNodeState};
 use crate::units::{UnitKind, Units};
@@ -57,7 +58,12 @@ impl SelectionPools {
     /// active, whose target is not yet owned or under construction, and for
     /// which a capable idle builder exists. Assist options are added for every
     /// active project when at least one idle engineer is available.
-    pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+    pub fn new(
+        plan: &PlanGraph,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+    ) -> Self {
         let mut options: Vec<SelectionOption> = Vec::new();
         let mut seen: HashSet<SelectionOption> = HashSet::new();
 
@@ -79,7 +85,9 @@ impl SelectionPools {
             match edge.weight() {
                 PlanEdgeKind::Build => {
                     // Source in a build edge is the builder.
-                    if is_idle_builder(state, units, source) {
+                    if is_idle_builder(state, units, source)
+                        && !would_exceed_storage_cap(target, state, config)
+                    {
                         let opt = SelectionOption::Build(target.clone());
                         if seen.insert(opt.clone()) {
                             options.push(opt);
@@ -128,6 +136,23 @@ impl SelectionPools {
     /// True if there are no options at all.
     pub fn is_empty(&self) -> bool {
         self.options.is_empty()
+    }
+}
+
+/// True if building `target` would exceed the configured storage cap.
+fn would_exceed_storage_cap(
+    target: &UnitKind,
+    state: &GraphState,
+    config: &PlannerConfig,
+) -> bool {
+    match target {
+        UnitKind::MassStorage => {
+            state.count_active_mass_storage() >= config.max_mass_storage_count
+        }
+        UnitKind::EnergyStorage => {
+            state.count_active_energy_storage() >= config.max_energy_storage_count
+        }
+        _ => false,
     }
 }
 
@@ -276,7 +301,8 @@ mod tests {
         let plan = units.plan_graph(&UnitKind::Pgen(TechLevel::T1)).unwrap();
         let state = GraphState::new(&units, &[UnitKind::Commander]);
 
-        let pools = SelectionPools::new(&plan, &state, &units);
+        let config = PlannerConfig::default();
+        let pools = SelectionPools::new(&plan, &state, &units, &config);
 
         // ACU can build T1 factory, mex, and pgen.
         assert!(pools
@@ -309,7 +335,8 @@ mod tests {
             ],
         );
 
-        let pools = SelectionPools::new(&plan, &state, &units);
+        let config = PlannerConfig::default();
+        let pools = SelectionPools::new(&plan, &state, &units, &config);
 
         // We own Mex_T1 and have an idle engineer, so mex upgrade is a candidate.
         assert!(pools.options().contains(&SelectionOption::Upgrade {

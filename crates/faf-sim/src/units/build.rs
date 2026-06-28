@@ -67,6 +67,14 @@ pub(crate) fn classify_unit(unit: &Unit) -> Option<UnitKind> {
         return Some(UnitKind::Pgen(tech));
     }
 
+    if unit.has_category("MASSSTORAGE") {
+        return Some(UnitKind::MassStorage);
+    }
+
+    if unit.has_category("ENERGYSTORAGE") {
+        return Some(UnitKind::EnergyStorage);
+    }
+
     Some(UnitKind::Unique(UnitId(unit.id.to_ascii_uppercase())))
 }
 
@@ -182,6 +190,8 @@ pub(crate) fn canonical_blueprint_id(kind: &UnitKind) -> Option<&'static str> {
         Pgen(T1) => Some("UEB1101"),
         Pgen(T2) => Some("UEB1201"),
         Pgen(T3) => Some("UEB1301"),
+        MassStorage => Some("UEB1106"),
+        EnergyStorage => Some("UEB1105"),
         _ => None,
     }
 }

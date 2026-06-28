@@ -193,6 +193,10 @@ pub struct PlannerConfig {
     pub max_mex_count: usize,
     /// Maximum number of power generators to build.
     pub max_pgen_count: usize,
+    /// Maximum number of mass storage buildings to build.
+    pub max_mass_storage_count: usize,
+    /// Maximum number of energy storage buildings to build.
+    pub max_energy_storage_count: usize,
 }
 
 impl Default for PlannerConfig {
@@ -203,6 +207,8 @@ impl Default for PlannerConfig {
             max_depth: 400,
             max_mex_count: 8,
             max_pgen_count: 20,
+            max_mass_storage_count: 32,
+            max_energy_storage_count: 80,
         }
     }
 }

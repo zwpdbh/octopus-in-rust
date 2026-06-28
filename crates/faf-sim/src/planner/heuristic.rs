@@ -134,6 +134,7 @@ fn kind_tech(kind: &UnitKind) -> Option<TechLevel> {
         UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => {
             Some(*t)
         }
+        UnitKind::MassStorage | UnitKind::EnergyStorage => Some(TechLevel::T1),
         _ => None,
     }
 }
@@ -146,6 +147,8 @@ fn kind_matches_category(kind: &UnitKind, category: &UnitKind) -> bool {
             | (UnitKind::Pgen(_), UnitKind::Pgen(_))
             | (UnitKind::Engineer(_), UnitKind::Engineer(_))
             | (UnitKind::Factory(_), UnitKind::Factory(_))
+            | (UnitKind::MassStorage, UnitKind::MassStorage)
+            | (UnitKind::EnergyStorage, UnitKind::EnergyStorage)
     )
 }
 
@@ -160,6 +163,7 @@ fn efficiency(def: &UnitDef, category: &UnitKind) -> f64 {
         UnitKind::Mex(_) => def.mass_income / mass_cost,
         UnitKind::Pgen(_) => def.energy_income / mass_cost,
         UnitKind::Engineer(_) | UnitKind::Factory(_) => def.build_rate / mass_cost,
+        UnitKind::MassStorage | UnitKind::EnergyStorage => 0.0,
         _ => 1.0 / mass_cost,
     }
 }

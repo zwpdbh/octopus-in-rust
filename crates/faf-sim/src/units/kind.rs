@@ -53,6 +53,8 @@ pub enum UnitKind {
     Factory(TechLevel),
     Mex(TechLevel),
     Pgen(TechLevel),
+    MassStorage,
+    EnergyStorage,
     Unique(UnitId),
 }
 

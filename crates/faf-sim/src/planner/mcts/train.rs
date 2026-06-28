@@ -306,7 +306,7 @@ impl Trainer {
                 return Some(state.time);
             }
 
-            let pools = SelectionPools::new(plan, &state, units);
+            let pools = SelectionPools::new(plan, &state, units, planner_config);
             let candidates = pools.options().to_vec();
             if candidates.is_empty() {
                 state.tick(units, self.config.dt);
@@ -365,7 +365,7 @@ impl Trainer {
             }
 
             // 1. Derive the plan-graph-constrained, state-dependent action space.
-            let pools = SelectionPools::new(plan, &state, units);
+            let pools = SelectionPools::new(plan, &state, units, planner_config);
             let candidates = pools.options().to_vec();
 
             if candidates.is_empty() {

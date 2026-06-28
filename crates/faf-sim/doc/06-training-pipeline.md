@@ -59,6 +59,8 @@ pub struct TrainConfig {
 | `target_time` | `None` | Stop early when an episode reaches the goal in at most this many seconds. |
 | `verbose` | `false` | Print per-episode progress to stderr. |
 
+The feature vector also includes storage-saturation signals from `PlannerConfig` (`max_mass_storage_count`, `max_energy_storage_count`), so saved model checkpoints from before storage support will fail to load and must be retrained.
+
 ## Rollout details
 
 Each episode begins with a fresh state:

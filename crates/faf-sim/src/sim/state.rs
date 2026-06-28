@@ -9,7 +9,7 @@
 //!    indivisible (one target at a time). Multiple projects may run concurrently
 //!    as long as they use disjoint builder sets.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -303,6 +303,10 @@ pub struct GraphState {
     pub economy: EconomyState,
     /// Completed build events in chronological order.
     pub events: Vec<BuildEvent>,
+    /// Number of mass storage buildings adjacent to each mass extractor.
+    pub mass_storage_adjacency: HashMap<NodeId, usize>,
+    /// Number of energy storage buildings adjacent to each power generator.
+    pub energy_storage_adjacency: HashMap<NodeId, usize>,
 }
 
 /// True if the node represents an active builder unit.
@@ -350,6 +354,8 @@ impl GraphState {
             graph,
             economy,
             events: Vec::new(),
+            mass_storage_adjacency: HashMap::new(),
+            energy_storage_adjacency: HashMap::new(),
         }
     }
 
@@ -465,6 +471,24 @@ impl GraphState {
             .count()
     }
 
+    /// Count how many active mass storage buildings are in the graph.
+    pub fn count_active_mass_storage(&self) -> usize {
+        self.graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active() && n.unit_id == UnitKind::MassStorage)
+            .count()
+    }
+
+    /// Count how many active energy storage buildings are in the graph.
+    pub fn count_active_energy_storage(&self) -> usize {
+        self.graph
+            .graph
+            .node_weights()
+            .filter(|n| n.is_active() && n.unit_id == UnitKind::EnergyStorage)
+            .count()
+    }
+
     /// Return the definitions for every active unit in the graph.
     pub fn active_unit_blueprints<'a>(&'a self, units: &'a Units) -> Vec<&'a UnitDef> {
         self.graph
@@ -484,16 +508,93 @@ impl GraphState {
             .sum()
     }
 
-    /// Re-derive the economy from all active units.
+    /// Re-derive the economy from all active units, applying storage adjacency
+    /// bonuses to producers.
     pub fn rebuild_economy(&mut self, units: &Units) {
-        let active_kinds: Vec<UnitKind> = self
+        let active_nodes: Vec<NodeId> = self.active_units();
+
+        let mut net_mass = 0.0;
+        let mut net_energy = 0.0;
+        let mut mass_storage_cap = 0.0;
+        let mut energy_storage_cap = 0.0;
+
+        for node_id in active_nodes {
+            let kind = &self.graph[node_id].unit_id;
+            let Some(def) = units.def(kind) else {
+                continue;
+            };
+
+            let mut mass_income = def.mass_income;
+            let mut energy_income = def.energy_income;
+
+            // Apply FAF adjacency bonuses: +12.5% per storage, max 4 (50%).
+            if matches!(kind, UnitKind::Mex(_)) {
+                let caps = self.mass_storage_adjacency.get(&node_id).copied().unwrap_or(0);
+                mass_income *= 1.0 + 0.125 * (caps.min(4) as f64);
+            }
+            if matches!(kind, UnitKind::Pgen(_)) {
+                let caps = self
+                    .energy_storage_adjacency
+                    .get(&node_id)
+                    .copied()
+                    .unwrap_or(0);
+                energy_income *= 1.0 + 0.125 * (caps.min(4) as f64);
+            }
+
+            net_mass += mass_income;
+            net_energy += energy_income - def.maintenance_energy;
+            mass_storage_cap += def.mass_storage;
+            energy_storage_cap += def.energy_storage;
+        }
+
+        self.economy.net_mass_income = net_mass;
+        self.economy.net_energy_income = net_energy;
+        self.economy.mass_storage = mass_storage_cap;
+        self.economy.energy_storage = energy_storage_cap;
+        self.economy.mass_storage_cap = mass_storage_cap;
+        self.economy.energy_storage_cap = energy_storage_cap;
+    }
+
+    /// Assign a newly completed storage building to an active producer of the
+    /// matching resource type. The producer with the fewest existing caps is
+    /// chosen, up to a maximum of four caps per producer.
+    fn assign_storage_cap(&mut self, storage_kind: &UnitKind) {
+        let (target_predicate, adjacency): (
+            fn(&UnitKind) -> bool,
+            &mut HashMap<NodeId, usize>,
+        ) = match storage_kind {
+            UnitKind::MassStorage => (
+                |kind: &UnitKind| matches!(kind, UnitKind::Mex(_)),
+                &mut self.mass_storage_adjacency,
+            ),
+            UnitKind::EnergyStorage => (
+                |kind: &UnitKind| matches!(kind, UnitKind::Pgen(_)),
+                &mut self.energy_storage_adjacency,
+            ),
+            _ => return,
+        };
+
+        let active: Vec<NodeId> = self
             .graph
             .graph
             .node_weights()
-            .filter(|n| n.is_active())
-            .map(|n| n.unit_id.clone())
+            .filter(|n| n.is_active() && target_predicate(&n.unit_id))
+            .map(|n| n.id)
             .collect();
-        self.economy = derive_economy(units, &active_kinds);
+
+        let mut best: Option<NodeId> = None;
+        let mut best_count = usize::MAX;
+        for node_id in active {
+            let count = adjacency.get(&node_id).copied().unwrap_or(0);
+            if count < 4 && count < best_count {
+                best_count = count;
+                best = Some(node_id);
+            }
+        }
+
+        if let Some(target) = best {
+            *adjacency.entry(target).or_insert(0) += 1;
+        }
     }
 
     /// Estimate the remaining time until `goal` is completed from this state.
@@ -919,6 +1020,14 @@ impl GraphState {
 
         self.time += dt;
 
+        // Assign completed storage buildings to the least-capped matching producer.
+        for &target_node in &completed_nodes {
+            let kind = self.graph[target_node].unit_id.clone();
+            if matches!(kind, UnitKind::MassStorage | UnitKind::EnergyStorage) {
+                self.assign_storage_cap(&kind);
+            }
+        }
+
         // Emit build events for completed nodes.
         for &target_node in &completed_nodes {
             let node = &self.graph[target_node];
@@ -1019,6 +1128,83 @@ mod tests {
         );
         assert!(state.time > 0.0);
         assert!(state.idle_builders(&units).contains(&acu_node));
+    }
+
+    #[test]
+    fn mass_storage_boosts_mex_income() {
+        let units = load_units();
+        let mut state = GraphState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Engineer(TechLevel::T1),
+                UnitKind::Mex(TechLevel::T1),
+            ],
+        );
+        let eng_node = NodeId::new(1);
+        let mex_node = NodeId::new(2);
+        let base_mass = state.economy.net_mass_income;
+
+        let storage_node = state
+            .start_project(&UnitKind::MassStorage, &[eng_node], &units)
+            .expect("engineer builds mass storage");
+        for _ in 0..1000 {
+            state.tick(&units, 1.0);
+            if state.is_completed(storage_node) {
+                break;
+            }
+        }
+        assert!(state.is_completed(storage_node));
+
+        let mex_def = units.def(&UnitKind::Mex(TechLevel::T1)).unwrap();
+        let expected_boost = 0.125 * mex_def.mass_income;
+        assert!(
+            (state.economy.net_mass_income - base_mass - expected_boost).abs() < 1e-6,
+            "expected mass income boost of {}, got {}",
+            expected_boost,
+            state.economy.net_mass_income - base_mass
+        );
+        assert_eq!(state.mass_storage_adjacency.get(&mex_node).copied(), Some(1));
+    }
+
+    #[test]
+    fn energy_storage_boosts_pgen_income() {
+        let units = load_units();
+        let mut state = GraphState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Engineer(TechLevel::T1),
+                UnitKind::Pgen(TechLevel::T1),
+            ],
+        );
+        let eng_node = NodeId::new(1);
+        let pgen_node = NodeId::new(2);
+        let base_energy = state.economy.net_energy_income;
+
+        let storage_node = state
+            .start_project(&UnitKind::EnergyStorage, &[eng_node], &units)
+            .expect("engineer builds energy storage");
+        for _ in 0..1000 {
+            state.tick(&units, 1.0);
+            if state.is_completed(storage_node) {
+                break;
+            }
+        }
+        assert!(state.is_completed(storage_node));
+
+        let pgen_def = units.def(&UnitKind::Pgen(TechLevel::T1)).unwrap();
+        let expected_boost = 0.125 * pgen_def.energy_income;
+        assert!(
+            (state.economy.net_energy_income - base_energy - expected_boost).abs() < 1e-6,
+            "expected energy income boost of {}, got {}",
+            expected_boost,
+            state.economy.net_energy_income - base_energy
+        );
+        assert_eq!(
+            state.energy_storage_adjacency.get(&pgen_node).copied(),
+            Some(1)
+        );
     }
 
     #[test]

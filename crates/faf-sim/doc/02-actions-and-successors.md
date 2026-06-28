@@ -43,10 +43,15 @@ pub struct SelectionPools {
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 42 — SelectionPools::new
-pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 60 — SelectionPools::new
+pub fn new(
+    plan: &PlanGraph,
+    state: &GraphState,
+    units: &Units,
+    config: &PlannerConfig,
+) -> Self {
     // ... walks plan-graph edges, emits Build/Upgrade options,
-    //     then adds Assist options for active projects with idle engineers ...
+    //     applies storage caps, then adds Assist options ...
 }
 ```
 
@@ -56,6 +61,7 @@ For each edge `source -> target` in the plan graph:
 - The target must not already be completed or under construction.
 - For a **build** edge, the source must be an idle builder capable of building the target.
 - For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
+- `MassStorage` and `EnergyStorage` build options are suppressed once the configured storage caps are reached.
 
 `Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`. The wrapper exposes the final list through `options`:
 
@@ -95,9 +101,14 @@ pub enum SimAction {
 ```
 
 - `Build` starts a new project for a unit, assigning one idle builder to it.
+  - `Build(MassStorage)` and `Build(EnergyStorage)` are resolved by the simulator: when the storage building completes, it is assigned to the matching producer (mex or pgen) with the fewest existing caps.
 - `Upgrade` starts a new project for the higher-tier unit and retires the source slot.
 - `Assist` adds all idle engineers to an already-started project.
 - `Wait` advances the simulator by one tick.
+
+## Storage caps and adjacency
+
+Storage buildings are first-class `Build` targets. The simulator tracks how many mass/energy storages are adjacent to each mex/pgen and applies the FAF adjacency bonus: `+12.5%` production per storage, up to four storages (`+50%`).
 
 The current MLP planner usually assigns a single builder; future successors may assign multiple builders to a project.
 

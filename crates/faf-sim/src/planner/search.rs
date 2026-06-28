@@ -45,6 +45,10 @@ pub(crate) struct SearchConfig {
     pub max_mex_count: usize,
     /// Maximum number of power generators to build.
     pub max_pgen_count: usize,
+    /// Maximum number of mass storage buildings to build.
+    pub max_mass_storage_count: usize,
+    /// Maximum number of energy storage buildings to build.
+    pub max_energy_storage_count: usize,
 }
 
 impl SearchConfig {
@@ -75,6 +79,8 @@ impl SearchConfig {
         let active_targets = state.active_target_unit_ids();
         let mex_count = state.count_active_mex();
         let pgen_count = state.count_active_pgen();
+        let mass_storage_count = state.count_active_mass_storage();
+        let energy_storage_count = state.count_active_energy_storage();
 
         // Ask the heuristic for a small menu of units worth building next.
         let candidates = candidate_units(units, state, goal_id, goal_chain);
@@ -92,6 +98,8 @@ impl SearchConfig {
             &active_targets,
             mex_count,
             pgen_count,
+            mass_storage_count,
+            energy_storage_count,
         );
         add_upgrade_candidates(&mut successors, state, units, self, &idle_builders);
         add_assist_candidates(&mut successors, state, units, self, &idle_builders);
@@ -118,6 +126,8 @@ fn add_build_candidates(
     active_targets: &HashSet<UnitKind>,
     mex_count: usize,
     pgen_count: usize,
+    mass_storage_count: usize,
+    energy_storage_count: usize,
 ) {
     for unit_id in candidates {
         if state.has_completed_unit(unit_id) {
@@ -130,6 +140,14 @@ fn add_build_candidates(
             continue;
         }
         if matches!(unit_id, UnitKind::Pgen(_)) && pgen_count >= config.max_pgen_count {
+            continue;
+        }
+        if *unit_id == UnitKind::MassStorage && mass_storage_count >= config.max_mass_storage_count {
+            continue;
+        }
+        if *unit_id == UnitKind::EnergyStorage
+            && energy_storage_count >= config.max_energy_storage_count
+        {
             continue;
         }
 

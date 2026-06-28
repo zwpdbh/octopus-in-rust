@@ -140,6 +140,7 @@ fn tech_level(kind: &UnitKind) -> Option<TechLevel> {
             Some(*t)
         }
         UnitKind::Commander => Some(TechLevel::T1),
+        UnitKind::MassStorage | UnitKind::EnergyStorage => Some(TechLevel::T1),
         UnitKind::Unique(_) => None,
     }
 }
@@ -158,6 +159,10 @@ fn relevant_unit_kinds(max_tech: TechLevel, goal: &UnitKind) -> Vec<UnitKind> {
         kinds.push(UnitKind::Mex(tech));
         kinds.push(UnitKind::Pgen(tech));
     }
+
+    // Storage caps are always available once engineers exist.
+    kinds.push(UnitKind::MassStorage);
+    kinds.push(UnitKind::EnergyStorage);
 
     if !kinds.contains(goal) {
         kinds.push(goal.clone());
@@ -262,6 +267,8 @@ fn is_natural_build_edge(builder: &UnitKind, target: &UnitKind) -> bool {
         (UnitKind::Factory(t1), UnitKind::Engineer(t2)) if t1 == t2 => true,
         (UnitKind::Engineer(t1), UnitKind::Mex(t2)) if t1 == t2 => true,
         (UnitKind::Engineer(t1), UnitKind::Pgen(t2)) if t1 == t2 => true,
+        (UnitKind::Engineer(_), UnitKind::MassStorage) => true,
+        (UnitKind::Engineer(_), UnitKind::EnergyStorage) => true,
         _ => false,
     }
 }
@@ -313,6 +320,8 @@ mod tests {
         assert!(node_set.contains(&UnitKind::Engineer(TechLevel::T3)));
         assert!(node_set.contains(&UnitKind::Mex(TechLevel::T2)));
         assert!(node_set.contains(&UnitKind::Pgen(TechLevel::T2)));
+        assert!(node_set.contains(&UnitKind::MassStorage));
+        assert!(node_set.contains(&UnitKind::EnergyStorage));
         assert!(node_set.contains(&goal));
     }
 
@@ -348,6 +357,16 @@ mod tests {
         assert!(edges.contains(&(
             UnitKind::Engineer(TechLevel::T3),
             goal.clone(),
+            PlanEdgeKind::Build
+        )));
+        assert!(edges.contains(&(
+            UnitKind::Engineer(TechLevel::T1),
+            UnitKind::MassStorage,
+            PlanEdgeKind::Build
+        )));
+        assert!(edges.contains(&(
+            UnitKind::Engineer(TechLevel::T1),
+            UnitKind::EnergyStorage,
             PlanEdgeKind::Build
         )));
     }
