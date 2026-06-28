@@ -21,14 +21,11 @@ pub enum SelectionOption {
 A selection option is an abstract choice. Before it can be executed it is converted into a concrete `SimAction`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 124 — candidate_to_action
-pub(crate) fn candidate_to_action(
-    candidate: &SelectionOption,
-    state: &GraphState,
-    units: &Units,
-    _plan: &PlanGraph,
-) -> Option<SimAction> {
-    // ...
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 182 — SelectionOption::to_sim_action
+impl SelectionOption {
+    pub(crate) fn to_sim_action(&self, state: &GraphState, units: &Units) -> Option<SimAction> {
+        // ...
+    }
 }
 ```
 
@@ -39,7 +36,7 @@ The separation is useful because the MLP policy reasons over a small, plan-graph
 `SelectionPools` derives the current legal options by walking the static `PlanGraph`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 72 — SelectionPools
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 36 — SelectionPools
 pub struct SelectionPools {
     /// Units that can be built next.
     pub build: Vec<UnitKind>,
@@ -49,7 +46,7 @@ pub struct SelectionPools {
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 81 — SelectionPools::derive
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 45 — SelectionPools::derive
 pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     let mut build = HashSet::new();
     let mut upgrade = HashSet::new();
@@ -112,7 +109,7 @@ pub fn options(&self, state: &GraphState, units: &Units) -> Vec<SelectionOption>
 
 ## From options to executable actions
 
-`SelectionPools::options` flattens the pools into a `Vec<SelectionOption>` by pairing build/upgrade targets with concrete assist combinations. The policy scores each option, but not every scored option can be executed immediately. The planner filters by `candidate_to_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
+`SelectionPools::options` flattens the pools into a `Vec<SelectionOption>`. The policy scores each option, but not every scored option can be executed immediately. The planner filters by `SelectionOption::to_sim_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
 
 ## Low-level `SimAction`
 
@@ -164,7 +161,7 @@ Not every `SelectionOption` is valid in every state. The simulator rejects actio
 - A builder cannot upgrade a unit that has no registered upgrade target.
 - A builder cannot assist a non-existent project.
 
-The candidate generator pre-filters most illegal actions, and `candidate_to_action` plus the simulator's `start_project`/`assist_project` methods catch the rest. The planner handles rejection by issuing `Wait` and trying again on the next tick.
+The candidate generator pre-filters most illegal actions, and `SelectionOption::to_sim_action` plus the simulator's `start_project`/`assist_project` methods catch the rest. The planner handles rejection by issuing `Wait` and trying again on the next tick.
 
 ## Key design choice: discrete actions, continuous time
 

@@ -19,7 +19,7 @@ use rand::prelude::*;
 use super::features::{candidate_features, state_features, FEATURE_COUNT};
 use super::selections::SelectionPools;
 use super::value_net::ValueNet;
-use super::{candidate_to_action, execute_action};
+use super::execute_action;
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
@@ -216,7 +216,7 @@ impl Trainer {
             };
 
             let selected = &candidates[action_index];
-            let Some(action) = candidate_to_action(selected, &state, units, plan) else {
+            let Some(action) = selected.to_sim_action(&state, units) else {
                 // Chosen candidate is no longer executable; wait a tick.
                 state.tick(units, self.config.dt);
                 continue;

@@ -21,7 +21,7 @@ The network never sees the full unit roster. It sees only the legal candidates d
 `SelectionPools::derive` walks every edge in the plan graph:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 81 — SelectionPools::derive
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 45 — SelectionPools::derive
 pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     // ...
 }
@@ -183,7 +183,7 @@ let scored = net.score_candidates(&state, &candidates, goal_id, units, &plan, co
 let mut executable = Vec::new();
 let mut scores = Vec::new();
 for (candidate, score) in scored {
-    if candidate_to_action(&candidate, &state, units, &plan).is_some() {
+    if candidate.to_sim_action(&state, units).is_some() {
         executable.push(candidate);
         scores.push(score);
     }

@@ -7,12 +7,11 @@
 //! added on top of the same value network later.
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
-use crate::planner::plan_graph::PlanGraph;
 use crate::planner::search::SimAction;
-use crate::sim::{GraphSimError, GraphState, NodeId, UnitNodeState};
+use crate::sim::{GraphSimError, GraphState};
 use crate::units::{UnitKind, Units};
 
-use self::selections::{SelectionOption, SelectionPools};
+use self::selections::SelectionPools;
 use self::train::TrainBackend;
 use self::value_net::ValueNet;
 use burn::tensor::Device;
@@ -90,7 +89,7 @@ fn mlp_policy_plan(
     let mut executable = Vec::new();
     let mut scores = Vec::new();
     for (candidate, score) in scored {
-        if candidate_to_action(&candidate, &state, units, &plan).is_some() {
+        if candidate.to_sim_action(&state, units).is_some() {
             executable.push(candidate);
             scores.push(score);
         }
@@ -106,7 +105,8 @@ fn mlp_policy_plan(
     let mut rng = thread_rng();
     let idx = dist.sample(&mut rng);
     let chosen = &executable[idx];
-    let action = candidate_to_action(chosen, &state, units, &plan)
+    let action = chosen
+        .to_sim_action(&state, units)
         .expect("executable candidates must map to actions");
     Ok(plan_result_with_action(state, action))
 }
@@ -118,86 +118,6 @@ fn softmax(scores: &[f32], temperature: f32) -> Vec<f32> {
     let exps: Vec<f32> = scores.iter().map(|s| ((s - max) / temp).exp()).collect();
     let sum: f32 = exps.iter().sum();
     exps.into_iter().map(|e| e / sum).collect()
-}
-
-/// Convert a selection option into a concrete simulator command if it is executable.
-pub(crate) fn candidate_to_action(
-    candidate: &SelectionOption,
-    state: &GraphState,
-    units: &Units,
-    _plan: &PlanGraph,
-) -> Option<SimAction> {
-    match candidate {
-        SelectionOption::Build(target) => {
-            let builder_id = find_idle_builder(state, units, target)?;
-            Some(SimAction::Build {
-                unit_id: target.clone(),
-                builder: builder_id,
-            })
-        }
-        SelectionOption::Upgrade { from, to } => {
-            let (old_node, builder_id) = find_upgrade_parts(state, units, from, to)?;
-            Some(SimAction::Upgrade {
-                target_unit_id: to.clone(),
-                old_node,
-                builder: builder_id,
-            })
-        }
-        SelectionOption::Assist(target) => {
-            // Verify the target is still an active project.
-            if !matches!(
-                state.graph[*target].state,
-                UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
-            ) {
-                return None;
-            }
-            // Assign all idle engineers to the project.
-            let builders: Vec<NodeId> = state
-                .idle_builders(units)
-                .into_iter()
-                .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
-                .collect();
-            if builders.is_empty() {
-                return None;
-            }
-            Some(SimAction::Assist {
-                project_node: *target,
-                builders,
-            })
-        }
-    }
-}
-
-/// Find an idle builder node capable of building `target`.
-fn find_idle_builder(state: &GraphState, units: &Units, target: &UnitKind) -> Option<NodeId> {
-    state
-        .idle_builders(units)
-        .into_iter()
-        .find(|&id| units.can_build(&state.graph[id].unit_id, target))
-}
-
-/// Find an active source unit and an idle builder for an upgrade.
-fn find_upgrade_parts(
-    state: &GraphState,
-    units: &Units,
-    from: &UnitKind,
-    to: &UnitKind,
-) -> Option<(NodeId, NodeId)> {
-    let recipe = units.upgrade_recipes(from).iter().find(|r| r.to == *to)?;
-
-    let old_node = state
-        .graph
-        .graph
-        .node_weights()
-        .find(|n| n.is_active() && n.unit_id == *from)
-        .map(|n| n.id)?;
-
-    let builder_id = state
-        .idle_builders(units)
-        .into_iter()
-        .find(|&id| recipe.builder_options.contains(&state.graph[id].unit_id))?;
-
-    Some((old_node, builder_id))
 }
 
 /// Apply a [`SimAction`] to a mutable simulator state.

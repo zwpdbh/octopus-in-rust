@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use petgraph::visit::EdgeRef;
 
 use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
+use crate::planner::search::SimAction;
 use crate::sim::{GraphState, NodeId, UnitNodeState};
 use crate::units::{UnitKind, Units};
 
@@ -176,6 +177,83 @@ fn has_idle_engineer(state: &GraphState, units: &Units) -> bool {
         .idle_builders(units)
         .iter()
         .any(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
+}
+
+impl SelectionOption {
+    /// Convert this option into a concrete simulator command if it is executable.
+    pub(crate) fn to_sim_action(&self, state: &GraphState, units: &Units) -> Option<SimAction> {
+        match self {
+            SelectionOption::Build(target) => {
+                let builder = find_idle_builder(state, units, target)?;
+                Some(SimAction::Build {
+                    unit_id: target.clone(),
+                    builder,
+                })
+            }
+            SelectionOption::Upgrade { from, to } => {
+                let (old_node, builder) = find_upgrade_parts(state, units, from, to)?;
+                Some(SimAction::Upgrade {
+                    target_unit_id: to.clone(),
+                    old_node,
+                    builder,
+                })
+            }
+            SelectionOption::Assist(target) => {
+                // Verify the target is still an active project.
+                if !matches!(
+                    state.graph[*target].state,
+                    UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+                ) {
+                    return None;
+                }
+                // Assign all idle engineers to the project.
+                let builders: Vec<NodeId> = state
+                    .idle_builders(units)
+                    .into_iter()
+                    .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
+                    .collect();
+                if builders.is_empty() {
+                    return None;
+                }
+                Some(SimAction::Assist {
+                    project_node: *target,
+                    builders,
+                })
+            }
+        }
+    }
+}
+
+/// Find an idle builder node capable of building `target`.
+fn find_idle_builder(state: &GraphState, units: &Units, target: &UnitKind) -> Option<NodeId> {
+    state
+        .idle_builders(units)
+        .into_iter()
+        .find(|&id| units.can_build(&state.graph[id].unit_id, target))
+}
+
+/// Find an active source unit and an idle builder for an upgrade.
+fn find_upgrade_parts(
+    state: &GraphState,
+    units: &Units,
+    from: &UnitKind,
+    to: &UnitKind,
+) -> Option<(NodeId, NodeId)> {
+    let recipe = units.upgrade_recipes(from).iter().find(|r| r.to == *to)?;
+
+    let old_node = state
+        .graph
+        .graph
+        .node_weights()
+        .find(|n| n.is_active() && n.unit_id == *from)
+        .map(|n| n.id)?;
+
+    let builder = state
+        .idle_builders(units)
+        .into_iter()
+        .find(|&id| recipe.builder_options.contains(&state.graph[id].unit_id))?;
+
+    Some((old_node, builder))
 }
 
 #[cfg(test)]
