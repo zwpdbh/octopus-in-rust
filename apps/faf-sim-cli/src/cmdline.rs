@@ -72,6 +72,9 @@ pub struct TrainArgs {
     /// Maximum simulator steps per episode.
     #[arg(short = 'm', long, default_value = "500")]
     pub max_steps: usize,
+    /// Resume training from an existing model for this target, if one exists.
+    #[arg(short = 'r', long, default_value = "false")]
+    pub resume: bool,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

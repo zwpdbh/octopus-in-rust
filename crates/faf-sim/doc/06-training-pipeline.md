@@ -38,6 +38,7 @@ pub struct TrainConfig {
     pub gamma: f32,
     pub epsilon: f32,
     pub entropy_coef: f32,
+    pub verbose: bool,
 }
 ```
 
@@ -50,6 +51,7 @@ pub struct TrainConfig {
 | `gamma` | 0.99 | Discount factor (reserved for future n-step returns). |
 | `epsilon` | 0.1 | Probability of taking a random action. |
 | `entropy_coef` | 0.01 | Entropy bonus strength. |
+| `verbose` | `false` | Print per-episode progress to stderr. |
 
 ## Rollout details
 

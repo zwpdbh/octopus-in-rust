@@ -310,7 +310,7 @@ Train a model programmatically:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train.rs ~line 413 — train_policy
-let (model, stats) = train_policy(&units, &goal, TrainConfig::default());
+let (model, best_model, stats) = train_policy(&units, &goal, TrainConfig::default());
 save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 ```
 

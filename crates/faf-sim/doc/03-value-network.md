@@ -266,6 +266,7 @@ pub struct TrainConfig {
     pub gamma: f32,
     pub epsilon: f32,
     pub entropy_coef: f32,
+    pub verbose: bool,
 }
 ```
 
@@ -287,11 +288,12 @@ pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
-) -> (ValueNet<TrainBackend>, TrainStats) {
+) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
     let mut trainer = Trainer::new(config);
     let stats = trainer.train(units, goal);
+    let best_model = trainer.best_model.take();
     let model = trainer.into_model();
-    (model, stats)
+    (model, best_model, stats)
 }
 ```
 

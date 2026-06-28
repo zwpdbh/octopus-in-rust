@@ -50,6 +50,8 @@ pub struct TrainConfig {
     /// Entropy bonus coefficient. Higher values encourage more exploration by
     /// keeping the policy distribution spread out.
     pub entropy_coef: f32,
+    /// Print per-episode progress to stderr.
+    pub verbose: bool,
 }
 
 impl Default for TrainConfig {
@@ -62,6 +64,7 @@ impl Default for TrainConfig {
             gamma: 0.99,
             epsilon: 0.1,
             entropy_coef: 0.01,
+            verbose: false,
         }
     }
 }
@@ -80,23 +83,34 @@ pub struct TrainStats {
 }
 
 /// One recorded step in a training episode.
+///
+/// A step corresponds to a single decision tick in the simulator: the policy
+/// scored all legal options, sampled one, and the simulator advanced by `dt`.
 #[derive(Debug, Clone)]
 struct EpisodeStep {
-    /// Feature vector for each candidate at this step.
+    /// Feature matrix with one row per legal option at this step.
     candidate_features: Vec<Vec<f32>>,
-    /// Index of the candidate that was selected.
+    /// Index of the option that was selected from the feature matrix.
     action_index: usize,
-    /// Discounted return from this step onward.
+    /// Normalized return for this step, filled in after the episode ends.
     return_value: f32,
 }
 
 /// One complete training episode.
+///
+/// An episode is a single rollout: it starts from the ACU state, runs the
+/// current policy for up to `max_steps` decision ticks, and ends when the goal
+/// is reached or the step budget is exhausted. The recorded trajectory is used
+/// for one REINFORCE policy-gradient update.
 #[derive(Debug, Default, Clone)]
 struct Episode {
+    /// Sequence of decision steps recorded during the rollout.
     steps: Vec<EpisodeStep>,
+    /// True if the goal unit was reached before `max_steps`.
     reached_goal: bool,
+    /// Simulator time when the goal was reached, meaningful only if `reached_goal` is true.
     completion_time: f64,
-    /// Shaped reward computed from the final state.
+    /// Shaped reward computed from the final state of the rollout.
     final_reward: f32,
 }
 
@@ -106,6 +120,8 @@ type AdamOptimizer = OptimizerAdaptor<Adam, ValueNet<TrainBackend>, TrainBackend
 
 pub struct Trainer {
     model: ValueNet<TrainBackend>,
+    /// Best model seen so far, captured whenever a new best completion time is found.
+    best_model: Option<ValueNet<TrainBackend>>,
     optimizer: AdamOptimizer,
     config: TrainConfig,
     device: TrainDevice,
@@ -123,9 +139,16 @@ impl Trainer {
     pub fn new(config: TrainConfig) -> Self {
         let device: TrainDevice = Default::default();
         let model = ValueNet::new(&device);
+        Self::from_model(config, model)
+    }
+
+    /// Create a trainer that continues from an existing model.
+    pub fn from_model(config: TrainConfig, model: ValueNet<TrainBackend>) -> Self {
+        let device: TrainDevice = Default::default();
         let optimizer = AdamConfig::new().init();
         Self {
             model,
+            best_model: None,
             optimizer,
             config,
             device,
@@ -143,19 +166,45 @@ impl Trainer {
             .expect("goal must be reachable for training");
         let planner_config = PlannerConfig::default();
         let mut stats = TrainStats::default();
+        let mut best_time: Option<f64> = None;
 
-        for _ in 0..self.config.episodes {
+        for ep in 0..self.config.episodes {
             let episode = self.run_episode(units, goal, &plan, &planner_config);
 
-            if !episode.steps.is_empty() {
+            let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);
                 stats.losses.push(loss);
-            }
+                Some(loss)
+            } else {
+                None
+            };
 
             stats.episode_lengths.push(episode.steps.len());
             if episode.reached_goal {
                 stats.goal_reaches += 1;
                 stats.completion_times.push(episode.completion_time);
+                let is_new_best = best_time.map_or(true, |t| episode.completion_time < t);
+                if is_new_best {
+                    best_time = Some(episode.completion_time);
+                    self.best_model = Some(self.model.clone());
+                }
+            }
+
+            if self.config.verbose {
+                let time_str = format_time(episode.completion_time, episode.reached_goal);
+                let best_str = format_time(best_time.unwrap_or(0.0), best_time.is_some());
+                let loss_str = loss
+                    .map(|l| format!("{:.4}", l))
+                    .unwrap_or_else(|| "-".to_string());
+                eprintln!(
+                    "ep={:>4} steps={:>4} reached={:>5} time={:>14} best={:>14} loss={:>10}",
+                    ep + 1,
+                    episode.steps.len(),
+                    episode.reached_goal,
+                    time_str,
+                    best_str,
+                    loss_str
+                );
             }
         }
 
@@ -163,6 +212,16 @@ impl Trainer {
     }
 
     /// Run one episode and record the trajectory.
+    ///
+    /// This is the core simulator/network loop:
+    ///
+    /// 1. Start from the ACU state.
+    /// 2. Derive the legal selection options for the current state.
+    /// 3. Score them with the current policy network and sample one.
+    /// 4. Convert it into a concrete simulator command and execute it.
+    /// 5. Record the feature matrix and chosen action for training.
+    /// 6. Repeat until the goal is reached or the step budget runs out.
+    /// 7. Compute the final reward and normalize returns across episodes.
     fn run_episode(
         &mut self,
         units: &Units,
@@ -170,6 +229,7 @@ impl Trainer {
         plan: &PlanGraph,
         planner_config: &PlannerConfig,
     ) -> Episode {
+        // Every episode begins with only the commander.
         let mut state = GraphState::new(units, &[UnitKind::Commander]);
         let mut episode = Episode {
             reached_goal: false,
@@ -178,22 +238,27 @@ impl Trainer {
             steps: Vec::new(),
         };
 
+        // Main decision loop: one iteration per decision tick (dt seconds).
         for _ in 0..self.config.max_steps {
+            // Stop early if the goal has already been achieved.
             if state.goal_reached(goal) {
                 episode.reached_goal = true;
                 episode.completion_time = state.time;
                 break;
             }
 
+            // 1. Derive the plan-graph-constrained, state-dependent action space.
             let pools = SelectionPools::new(plan, &state, units);
             let candidates = pools.options().to_vec();
 
             if candidates.is_empty() {
-                // No legal action; let time advance.
+                // No legal action available; let the simulator advance and try again.
                 state.tick(units, self.config.dt);
                 continue;
             }
 
+            // 2. Build a feature matrix with one row per legal option.
+            //    Each row is [state_features | candidate_features].
             let state_feats = state_features(&state, units, planner_config);
             let candidate_features: Vec<Vec<f32>> = candidates
                 .iter()
@@ -204,6 +269,8 @@ impl Trainer {
                 })
                 .collect();
 
+            // 3. Sample an option: random exploration with probability epsilon,
+            //    otherwise sample from the softmax over MLP scores.
             let action_index = if self.rng.gen::<f32>() < self.config.epsilon {
                 self.rng.gen_range(0..candidates.len())
             } else {
@@ -215,26 +282,31 @@ impl Trainer {
                 )
             };
 
+            // 4. Convert the abstract option into a concrete simulator command.
             let selected = &candidates[action_index];
             let Some(action) = selected.to_sim_action(&state, units) else {
-                // Chosen candidate is no longer executable; wait a tick.
+                // The option is no longer executable (e.g., builder became busy);
+                // advance time and continue.
                 state.tick(units, self.config.dt);
                 continue;
             };
 
+            // 5. Execute the command. If the simulator rejects it, just wait.
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
-                // Illegal action (e.g., builder became busy); wait a tick.
                 state.tick(units, self.config.dt);
                 continue;
             }
 
+            // 6. Record the trajectory step. The return is filled in once the
+            //    episode ends and the final reward is known.
             episode.steps.push(EpisodeStep {
                 candidate_features,
                 action_index,
-                return_value: 0.0, // filled in after the episode ends
+                return_value: 0.0,
             });
         }
 
+        // 7. Reward shaping from the final state, then normalize returns.
         episode.final_reward = compute_progress_reward(&state, units, goal, plan);
         self.compute_returns(&mut episode);
         episode
@@ -409,16 +481,35 @@ fn sample_action_index<B: AutodiffBackend>(
     dist.sample(rng)
 }
 
-/// Train a policy for `goal` and return the trained model.
+/// Train a policy for `goal` and return the final and best-seen models.
+///
+/// The returned `best_model` is the model checkpoint captured when the fastest
+/// completion time was observed during training. If no episode reached the
+/// goal, it is `None`.
 pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
-) -> (ValueNet<TrainBackend>, TrainStats) {
+) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
     let mut trainer = Trainer::new(config);
     let stats = trainer.train(units, goal);
+    let best_model = trainer.best_model.take();
     let model = trainer.into_model();
-    (model, stats)
+    (model, best_model, stats)
+}
+
+/// Continue training an existing policy for `goal`.
+pub fn train_policy_from(
+    model: ValueNet<TrainBackend>,
+    units: &Units,
+    goal: &UnitKind,
+    config: TrainConfig,
+) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
+    let mut trainer = Trainer::from_model(config, model);
+    let stats = trainer.train(units, goal);
+    let best_model = trainer.best_model.take();
+    let model = trainer.into_model();
+    (model, best_model, stats)
 }
 
 /// Save a trained model to disk.
@@ -440,6 +531,16 @@ pub fn load_model(path: &std::path::Path) -> Result<ValueNet<TrainBackend>, Stri
         .load(path.to_path_buf(), &device)
         .map_err(|e| format!("failed to load model: {e}"))?;
     Ok(ValueNet::new(&device).load_record(record))
+}
+
+/// Format a duration in seconds as "Xm Y.Ys", or "-" if `valid` is false.
+fn format_time(seconds: f64, valid: bool) -> String {
+    if !valid {
+        return "-".to_string();
+    }
+    let minutes = (seconds / 60.0).floor();
+    let secs = seconds - minutes * 60.0;
+    format!("{:.0}m {:.1}s", minutes, secs)
 }
 
 #[cfg(test)]

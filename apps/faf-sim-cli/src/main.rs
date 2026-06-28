@@ -17,7 +17,9 @@
 use std::collections::{HashMap, HashSet};
 
 use clap::Parser;
-use faf_sim::planner::mcts::train::{load_model, save_model, train_policy, TrainConfig};
+use faf_sim::planner::mcts::train::{
+    load_model, save_model, train_policy, train_policy_from, TrainConfig,
+};
 use faf_sim::{
     run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, PlanGraph, Planner,
     SimulationConfig, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
@@ -110,9 +112,19 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let config = TrainConfig {
         episodes: args.episodes,
         max_steps: args.max_steps,
+        verbose: true,
         ..Default::default()
     };
-    let (model, stats) = train_policy(units, &goal_kind, config);
+
+    let path = model_path(&target);
+    let model_file = path.with_extension("mpk");
+    let (model, best_model, stats) = if args.resume && model_file.exists() {
+        println!("Resuming training from {}", model_file.display());
+        let model = load_model(&path).expect("load existing model");
+        train_policy_from(model, units, &goal_kind, config)
+    } else {
+        train_policy(units, &goal_kind, config)
+    };
 
     println!(
         "Training complete: {}/{} episodes reached the goal",
@@ -126,9 +138,14 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         println!("Best completion time: {}", format_time(best));
     }
 
-    let path = model_path(&target);
-    save_model(&model, &path).expect("save trained model");
-    println!("Model saved to {}", path.display());
+    // Save the best-seen model if there is one, otherwise the final model.
+    let model_to_save = best_model.as_ref().unwrap_or(&model);
+    save_model(model_to_save, &path).expect("save trained model");
+    if best_model.is_some() {
+        println!("Saved best-seen model to {}", path.display());
+    } else {
+        println!("Model saved to {}", path.display());
+    }
 }
 
 async fn run_simulate(
