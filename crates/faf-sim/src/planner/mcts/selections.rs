@@ -146,9 +146,6 @@ fn would_exceed_storage_cap(
     config: &PlannerConfig,
 ) -> bool {
     match target {
-        UnitKind::MassStorage => {
-            state.count_active_mass_storage() >= config.max_mass_storage_count
-        }
         UnitKind::EnergyStorage => {
             state.count_active_energy_storage() >= config.max_energy_storage_count
         }

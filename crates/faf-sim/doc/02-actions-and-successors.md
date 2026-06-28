@@ -61,7 +61,7 @@ For each edge `source -> target` in the plan graph:
 - The target must not already be completed or under construction.
 - For a **build** edge, the source must be an idle builder capable of building the target.
 - For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
-- `MassStorage` and `EnergyStorage` build options are suppressed once the configured storage caps are reached.
+- `EnergyStorage` build options are suppressed once the configured cap is reached; capped mex upgrades (`CapT2Mex`, `CapT3Mex`) are limited by the number of eligible T2/T3 mexes.
 
 `Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`. The wrapper exposes the final list through `options`:
 
@@ -101,14 +101,22 @@ pub enum SimAction {
 ```
 
 - `Build` starts a new project for a unit, assigning one idle builder to it.
-  - `Build(MassStorage)` and `Build(EnergyStorage)` are resolved by the simulator: when the storage building completes, it is assigned to the matching producer (mex or pgen) with the fewest existing caps.
+  - `Build(EnergyStorage)` is resolved by the simulator: when the energy storage building completes, it is assigned to the power generator with the fewest existing caps.
+  - `Upgrade` to `CapT2Mex` or `CapT3Mex` models capping a mex with four mass storages as an atomic action; the +50% adjacency bonus is built into the capped unit's income.
 - `Upgrade` starts a new project for the higher-tier unit and retires the source slot.
 - `Assist` adds all idle engineers to an already-started project.
 - `Wait` advances the simulator by one tick.
 
 ## Storage caps and adjacency
 
-Storage buildings are first-class `Build` targets. The simulator tracks how many mass/energy storages are adjacent to each mex/pgen and applies the FAF adjacency bonus: `+12.5%` production per storage, up to four storages (`+50%`).
+`EnergyStorage` remains a first-class `Build` target. The simulator tracks how many energy storages are adjacent to each pgen and applies the FAF adjacency bonus: `+12.5%` energy production per storage, up to four storages (`+50%`).
+
+Mass storage is no longer an independent build target. Instead, capping a T2 or T3 mex with four mass storages is modeled as an upgrade:
+- `Mex(T2) -> CapT2Mex`
+- `Mex(T3) -> CapT3Mex`
+- `CapT2Mex -> CapT3Mex`
+
+The `CapT2Mex` and `CapT3Mex` unit definitions include the +50% mass adjacency bonus directly in their mass income, so no per-mex adjacency map is needed for mass storage.
 
 The current MLP planner usually assigns a single builder; future successors may assign multiple builders to a project.
 

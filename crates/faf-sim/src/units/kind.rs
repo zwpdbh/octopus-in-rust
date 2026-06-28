@@ -53,7 +53,10 @@ pub enum UnitKind {
     Factory(TechLevel),
     Mex(TechLevel),
     Pgen(TechLevel),
-    MassStorage,
+    /// T2 mass extractor surrounded by four mass storages.
+    CapT2Mex,
+    /// T3 mass extractor surrounded by four mass storages.
+    CapT3Mex,
     EnergyStorage,
     Unique(UnitId),
 }

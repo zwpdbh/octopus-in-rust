@@ -13,7 +13,7 @@ use crate::sim::GraphState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Number of state features.
-pub const STATE_FEATURE_COUNT: usize = 14;
+pub const STATE_FEATURE_COUNT: usize = 13;
 
 /// Number of candidate features.
 pub const CANDIDATE_FEATURE_COUNT: usize = 14;
@@ -36,12 +36,11 @@ pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
 /// 5. simulation time (scaled by 3600 s)
 /// 6. active mex fraction of cap
 /// 7. active pgen fraction of cap
-/// 8. active mass storage fraction of cap
-/// 9. active energy storage fraction of cap
-/// 10. active project count (scaled by 10)
-/// 11. has T2 factory
-/// 12. has T3 factory
-/// 13. has T3 engineer
+/// 8. active energy storage fraction of cap
+/// 9. active project count (scaled by 10)
+/// 10. has T2 factory
+/// 11. has T3 factory
+/// 12. has T3 engineer
 pub fn state_features(
     state: &GraphState,
     units: &Units,
@@ -84,9 +83,6 @@ pub fn state_features(
     ));
     features.push(clamp(
         state.count_active_pgen() as f32 / config.max_pgen_count as f32,
-    ));
-    features.push(clamp(
-        state.count_active_mass_storage() as f32 / config.max_mass_storage_count as f32,
     ));
     features.push(clamp(
         state.count_active_energy_storage() as f32 / config.max_energy_storage_count as f32,
@@ -152,7 +148,7 @@ pub fn candidate_features(
     features[5] = bool_f32(matches!(target_kind, UnitKind::Pgen(_)));
     features[6] = bool_f32(matches!(target_kind, UnitKind::Factory(_)));
     features[7] = bool_f32(matches!(target_kind, UnitKind::Engineer(_)));
-    features[8] = bool_f32(*target_kind == UnitKind::MassStorage);
+    features[8] = bool_f32(matches!(target_kind, UnitKind::CapT2Mex | UnitKind::CapT3Mex));
     features[9] = bool_f32(*target_kind == UnitKind::EnergyStorage);
     features[10] = bool_f32(matches!(target_kind, UnitKind::Unique(_)));
 
@@ -226,7 +222,9 @@ fn tier_of(kind: &UnitKind) -> TechLevel {
     match kind {
         UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => *t,
         UnitKind::Commander => TechLevel::T1,
-        UnitKind::MassStorage | UnitKind::EnergyStorage => TechLevel::T1,
+        UnitKind::CapT2Mex => TechLevel::T2,
+        UnitKind::CapT3Mex => TechLevel::T3,
+        UnitKind::EnergyStorage => TechLevel::T1,
         UnitKind::Unique(_) => TechLevel::T4,
     }
 }

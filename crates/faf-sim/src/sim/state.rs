@@ -303,8 +303,6 @@ pub struct GraphState {
     pub economy: EconomyState,
     /// Completed build events in chronological order.
     pub events: Vec<BuildEvent>,
-    /// Number of mass storage buildings adjacent to each mass extractor.
-    pub mass_storage_adjacency: HashMap<NodeId, usize>,
     /// Number of energy storage buildings adjacent to each power generator.
     pub energy_storage_adjacency: HashMap<NodeId, usize>,
 }
@@ -354,7 +352,6 @@ impl GraphState {
             graph,
             economy,
             events: Vec::new(),
-            mass_storage_adjacency: HashMap::new(),
             energy_storage_adjacency: HashMap::new(),
         }
     }
@@ -471,15 +468,6 @@ impl GraphState {
             .count()
     }
 
-    /// Count how many active mass storage buildings are in the graph.
-    pub fn count_active_mass_storage(&self) -> usize {
-        self.graph
-            .graph
-            .node_weights()
-            .filter(|n| n.is_active() && n.unit_id == UnitKind::MassStorage)
-            .count()
-    }
-
     /// Count how many active energy storage buildings are in the graph.
     pub fn count_active_energy_storage(&self) -> usize {
         self.graph
@@ -524,14 +512,11 @@ impl GraphState {
                 continue;
             };
 
-            let mut mass_income = def.mass_income;
+            let mass_income = def.mass_income;
             let mut energy_income = def.energy_income;
 
-            // Apply FAF adjacency bonuses: +12.5% per storage, max 4 (50%).
-            if matches!(kind, UnitKind::Mex(_)) {
-                let caps = self.mass_storage_adjacency.get(&node_id).copied().unwrap_or(0);
-                mass_income *= 1.0 + 0.125 * (caps.min(4) as f64);
-            }
+            // Apply FAF adjacency bonus for energy storage (+12.5% per storage,
+            // max 4). Mass storage adjacency is now built into CapT2Mex/CapT3Mex.
             if matches!(kind, UnitKind::Pgen(_)) {
                 let caps = self
                     .energy_storage_adjacency
@@ -555,37 +540,26 @@ impl GraphState {
         self.economy.energy_storage_cap = energy_storage_cap;
     }
 
-    /// Assign a newly completed storage building to an active producer of the
-    /// matching resource type. The producer with the fewest existing caps is
-    /// chosen, up to a maximum of four caps per producer.
+    /// Assign a newly completed energy storage building to an active power
+    /// generator. The generator with the fewest existing caps is chosen, up to a
+    /// maximum of four caps per generator.
     fn assign_storage_cap(&mut self, storage_kind: &UnitKind) {
-        let (target_predicate, adjacency): (
-            fn(&UnitKind) -> bool,
-            &mut HashMap<NodeId, usize>,
-        ) = match storage_kind {
-            UnitKind::MassStorage => (
-                |kind: &UnitKind| matches!(kind, UnitKind::Mex(_)),
-                &mut self.mass_storage_adjacency,
-            ),
-            UnitKind::EnergyStorage => (
-                |kind: &UnitKind| matches!(kind, UnitKind::Pgen(_)),
-                &mut self.energy_storage_adjacency,
-            ),
-            _ => return,
-        };
+        if *storage_kind != UnitKind::EnergyStorage {
+            return;
+        }
 
         let active: Vec<NodeId> = self
             .graph
             .graph
             .node_weights()
-            .filter(|n| n.is_active() && target_predicate(&n.unit_id))
+            .filter(|n| n.is_active() && matches!(n.unit_id, UnitKind::Pgen(_)))
             .map(|n| n.id)
             .collect();
 
         let mut best: Option<NodeId> = None;
         let mut best_count = usize::MAX;
         for node_id in active {
-            let count = adjacency.get(&node_id).copied().unwrap_or(0);
+            let count = self.energy_storage_adjacency.get(&node_id).copied().unwrap_or(0);
             if count < 4 && count < best_count {
                 best_count = count;
                 best = Some(node_id);
@@ -593,7 +567,7 @@ impl GraphState {
         }
 
         if let Some(target) = best {
-            *adjacency.entry(target).or_insert(0) += 1;
+            *self.energy_storage_adjacency.entry(target).or_insert(0) += 1;
         }
     }
 
@@ -1023,7 +997,7 @@ impl GraphState {
         // Assign completed storage buildings to the least-capped matching producer.
         for &target_node in &completed_nodes {
             let kind = self.graph[target_node].unit_id.clone();
-            if matches!(kind, UnitKind::MassStorage | UnitKind::EnergyStorage) {
+            if matches!(kind, UnitKind::EnergyStorage) {
                 self.assign_storage_cap(&kind);
             }
         }
@@ -1131,40 +1105,41 @@ mod tests {
     }
 
     #[test]
-    fn mass_storage_boosts_mex_income() {
+    fn capped_t2_mex_boosts_income() {
         let units = load_units();
         let mut state = GraphState::new(
             &units,
             &[
                 UnitKind::Commander,
                 UnitKind::Engineer(TechLevel::T1),
-                UnitKind::Mex(TechLevel::T1),
+                UnitKind::Mex(TechLevel::T2),
             ],
         );
         let eng_node = NodeId::new(1);
         let mex_node = NodeId::new(2);
         let base_mass = state.economy.net_mass_income;
 
-        let storage_node = state
-            .start_project(&UnitKind::MassStorage, &[eng_node], &units)
-            .expect("engineer builds mass storage");
+        let cap_node = state
+            .start_upgrade_project(&UnitKind::CapT2Mex, mex_node, &[eng_node], &units)
+            .expect("engineer caps t2 mex");
         for _ in 0..1000 {
             state.tick(&units, 1.0);
-            if state.is_completed(storage_node) {
+            if state.is_completed(cap_node) {
                 break;
             }
         }
-        assert!(state.is_completed(storage_node));
+        assert!(state.is_completed(cap_node));
 
-        let mex_def = units.def(&UnitKind::Mex(TechLevel::T1)).unwrap();
-        let expected_boost = 0.125 * mex_def.mass_income;
+        let t2_mex_def = units.def(&UnitKind::Mex(TechLevel::T2)).unwrap();
+        // The T2 mex is retired and replaced by a CapT2Mex, so the delta is the
+        // +50% adjacency bonus over the base T2 mex income.
+        let expected_boost = t2_mex_def.mass_income * 0.5;
         assert!(
             (state.economy.net_mass_income - base_mass - expected_boost).abs() < 1e-6,
             "expected mass income boost of {}, got {}",
             expected_boost,
             state.economy.net_mass_income - base_mass
         );
-        assert_eq!(state.mass_storage_adjacency.get(&mex_node).copied(), Some(1));
     }
 
     #[test]

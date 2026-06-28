@@ -134,7 +134,9 @@ fn kind_tech(kind: &UnitKind) -> Option<TechLevel> {
         UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => {
             Some(*t)
         }
-        UnitKind::MassStorage | UnitKind::EnergyStorage => Some(TechLevel::T1),
+        UnitKind::CapT2Mex => Some(TechLevel::T2),
+        UnitKind::CapT3Mex => Some(TechLevel::T3),
+        UnitKind::EnergyStorage => Some(TechLevel::T1),
         _ => None,
     }
 }
@@ -147,8 +149,9 @@ fn kind_matches_category(kind: &UnitKind, category: &UnitKind) -> bool {
             | (UnitKind::Pgen(_), UnitKind::Pgen(_))
             | (UnitKind::Engineer(_), UnitKind::Engineer(_))
             | (UnitKind::Factory(_), UnitKind::Factory(_))
-            | (UnitKind::MassStorage, UnitKind::MassStorage)
             | (UnitKind::EnergyStorage, UnitKind::EnergyStorage)
+            | (UnitKind::CapT2Mex, UnitKind::Mex(_))
+            | (UnitKind::CapT3Mex, UnitKind::Mex(_))
     )
 }
 
@@ -163,7 +166,8 @@ fn efficiency(def: &UnitDef, category: &UnitKind) -> f64 {
         UnitKind::Mex(_) => def.mass_income / mass_cost,
         UnitKind::Pgen(_) => def.energy_income / mass_cost,
         UnitKind::Engineer(_) | UnitKind::Factory(_) => def.build_rate / mass_cost,
-        UnitKind::MassStorage | UnitKind::EnergyStorage => 0.0,
+        UnitKind::CapT2Mex | UnitKind::CapT3Mex => def.mass_income / mass_cost,
+        UnitKind::EnergyStorage => 0.0,
         _ => 1.0 / mass_cost,
     }
 }
@@ -187,8 +191,9 @@ mod tests {
         let t3 = pick_most_efficient(&units, TechLevel::T3, UnitKind::Mex(TechLevel::T3));
 
         assert_eq!(t1, Some(UnitKind::Mex(TechLevel::T1)));
-        assert_eq!(t2, Some(UnitKind::Mex(TechLevel::T2)));
-        assert_eq!(t3, Some(UnitKind::Mex(TechLevel::T3)));
+        // Capped mexes are the most efficient mex-like investment at T2/T3.
+        assert_eq!(t2, Some(UnitKind::CapT2Mex));
+        assert_eq!(t3, Some(UnitKind::CapT3Mex));
     }
 
     #[test]

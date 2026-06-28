@@ -98,6 +98,48 @@ impl Units {
             defs.insert(def.kind.clone(), def);
         }
 
+        // Synthetic definitions for capped mass extractors. These do not exist
+        // as raw blueprints; they represent a T2/T3 mex surrounded by four mass
+        // storages, giving +50% mass income and 2000 mass storage capacity.
+        defs.insert(
+            UnitKind::CapT2Mex,
+            UnitDef {
+                kind: UnitKind::CapT2Mex,
+                faction: Faction::Common,
+                display_name: "Capped T2 Mass Extractor".to_string(),
+                cost: UnitCost {
+                    mass: 800.0,
+                    energy: 6000.0,
+                    build_time: 1000.0,
+                },
+                build_rate: 0.0,
+                mass_income: 9.0,
+                energy_income: 0.0,
+                maintenance_energy: 9.0,
+                mass_storage: 2000.0,
+                energy_storage: 0.0,
+            },
+        );
+        defs.insert(
+            UnitKind::CapT3Mex,
+            UnitDef {
+                kind: UnitKind::CapT3Mex,
+                faction: Faction::Common,
+                display_name: "Capped T3 Mass Extractor".to_string(),
+                cost: UnitCost {
+                    mass: 800.0,
+                    energy: 6000.0,
+                    build_time: 1000.0,
+                },
+                build_rate: 0.0,
+                mass_income: 27.0,
+                energy_income: 0.0,
+                maintenance_energy: 54.0,
+                mass_storage: 2000.0,
+                energy_storage: 0.0,
+            },
+        );
+
         // Generate build recipes for unique units from the raw index.
         for unit in &index.units {
             let Some(UnitKind::Unique(id)) = build::classify_unit(unit) else {
@@ -313,21 +355,19 @@ impl Units {
             }
         }
 
-        // Storage caps can be built by any engineer tier once an engineer exists.
-        for kind in [UnitKind::MassStorage, UnitKind::EnergyStorage] {
-            m.insert(
-                kind.clone(),
-                BuildRecipe {
-                    target: kind.clone(),
-                    prereq: None,
-                    builder_options: vec![
-                        UnitKind::Engineer(TechLevel::T1),
-                        UnitKind::Engineer(TechLevel::T2),
-                        UnitKind::Engineer(TechLevel::T3),
-                    ],
-                },
-            );
-        }
+        // Energy storage can be built by any engineer tier once an engineer exists.
+        m.insert(
+            UnitKind::EnergyStorage,
+            BuildRecipe {
+                target: UnitKind::EnergyStorage,
+                prereq: None,
+                builder_options: vec![
+                    UnitKind::Engineer(TechLevel::T1),
+                    UnitKind::Engineer(TechLevel::T2),
+                    UnitKind::Engineer(TechLevel::T3),
+                ],
+            },
+        );
 
         m
     }
@@ -348,7 +388,7 @@ impl Units {
             UnitKind::Engineer(TechLevel::T3),
         ];
 
-        // Mass extractors: T1 -> T2 -> T3.
+        // Mass extractors: T1 -> T2 -> T3, plus capped variants.
         m.insert(
             UnitKind::Mex(TechLevel::T1),
             vec![UpgradeRecipe {
@@ -364,9 +404,48 @@ impl Units {
         );
         m.insert(
             UnitKind::Mex(TechLevel::T2),
+            vec![
+                UpgradeRecipe {
+                    from: UnitKind::Mex(TechLevel::T2),
+                    to: UnitKind::Mex(TechLevel::T3),
+                    cost: UnitCost {
+                        mass: 4600.0,
+                        energy: 31625.0,
+                        build_time: 6000.0,
+                    },
+                    builder_options: t2_plus_engineer.clone(),
+                },
+                // Cap a T2 mex with four mass storages.
+                UpgradeRecipe {
+                    from: UnitKind::Mex(TechLevel::T2),
+                    to: UnitKind::CapT2Mex,
+                    cost: UnitCost {
+                        mass: 800.0,
+                        energy: 6000.0,
+                        build_time: 1000.0,
+                    },
+                    builder_options: any_engineer.clone(),
+                },
+            ],
+        );
+        m.insert(
+            UnitKind::Mex(TechLevel::T3),
             vec![UpgradeRecipe {
-                from: UnitKind::Mex(TechLevel::T2),
-                to: UnitKind::Mex(TechLevel::T3),
+                from: UnitKind::Mex(TechLevel::T3),
+                to: UnitKind::CapT3Mex,
+                cost: UnitCost {
+                    mass: 800.0,
+                    energy: 6000.0,
+                    build_time: 1000.0,
+                },
+                builder_options: t2_plus_engineer.clone(),
+            }],
+        );
+        m.insert(
+            UnitKind::CapT2Mex,
+            vec![UpgradeRecipe {
+                from: UnitKind::CapT2Mex,
+                to: UnitKind::CapT3Mex,
                 cost: UnitCost {
                     mass: 4600.0,
                     energy: 31625.0,
@@ -475,18 +554,32 @@ mod tests {
     }
 
     #[test]
-    fn storage_units_are_classified_and_buildable() {
+    fn storage_and_capped_mex_units_are_defined() {
         let units = load_units();
 
-        let mass_storage_def = units.def(&UnitKind::MassStorage).expect("mass storage def");
-        assert_eq!(mass_storage_def.kind, UnitKind::MassStorage);
-        assert!(mass_storage_def.mass_storage > 0.0);
+        let cap_t2_def = units.def(&UnitKind::CapT2Mex).expect("capped t2 mex def");
+        assert_eq!(cap_t2_def.kind, UnitKind::CapT2Mex);
+        assert!(cap_t2_def.mass_storage > 0.0);
+        assert!(cap_t2_def.mass_income > 6.0); // boosted by adjacency
+
+        let cap_t3_def = units.def(&UnitKind::CapT3Mex).expect("capped t3 mex def");
+        assert_eq!(cap_t3_def.kind, UnitKind::CapT3Mex);
+        assert!(cap_t3_def.mass_storage > 0.0);
+        assert!(cap_t3_def.mass_income > 18.0); // boosted by adjacency
 
         let energy_storage_def = units.def(&UnitKind::EnergyStorage).expect("energy storage def");
         assert_eq!(energy_storage_def.kind, UnitKind::EnergyStorage);
         assert!(energy_storage_def.energy_storage > 0.0);
 
-        assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::MassStorage));
         assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::EnergyStorage));
+        assert!(units.is_upgradeable(&UnitKind::Mex(TechLevel::T2)));
+        assert!(units
+            .upgrade_recipes(&UnitKind::Mex(TechLevel::T2))
+            .iter()
+            .any(|r| r.to == UnitKind::CapT2Mex));
+        assert!(units
+            .upgrade_recipes(&UnitKind::CapT2Mex)
+            .iter()
+            .any(|r| r.to == UnitKind::CapT3Mex));
     }
 }
