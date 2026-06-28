@@ -7,7 +7,7 @@ The MLP planner expands a state by choosing from the legal **selection options**
 The planner makes decisions at the level of **selection options**:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 18 — SelectionOption enum
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 19 — SelectionOption enum
 pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
@@ -21,7 +21,7 @@ pub enum SelectionOption {
 A selection option is an abstract choice. Before it can be executed it is converted into a concrete `SimAction`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 182 — SelectionOption::to_sim_action
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 170 — SelectionOption::to_sim_action
 impl SelectionOption {
     pub(crate) fn to_sim_action(&self, state: &GraphState, units: &Units) -> Option<SimAction> {
         // ...
@@ -33,59 +33,20 @@ The separation is useful because the MLP policy reasons over a small, plan-graph
 
 ## Generating options from the plan graph
 
-`SelectionPools` derives the current legal options by walking the static `PlanGraph`:
+`SelectionPools` is a wrapper around the legal `SelectionOption`s for the current state. It derives them by walking the static `PlanGraph`:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/selections.rs ~line 36 — SelectionPools
 pub struct SelectionPools {
-    /// Units that can be built next.
-    pub build: Vec<UnitKind>,
-    /// Upgrades that can be started next.
-    pub upgrade: Vec<(UnitKind, UnitKind)>,
+    options: Vec<SelectionOption>,
 }
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 45 — SelectionPools::derive
-pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
-    let mut build = HashSet::new();
-    let mut upgrade = HashSet::new();
-
-    let active_targets = state.active_target_unit_ids();
-
-    for edge in plan.graph().edge_references() {
-        let source = &plan.graph()[edge.source()];
-        let target = &plan.graph()[edge.target()];
-
-        // Source must be owned and active; target must not be owned or
-        // already under construction.
-        if !state.has_completed_unit(source)
-            || state.has_completed_unit(target)
-            || active_targets.contains(target)
-        {
-            continue;
-        }
-
-        match edge.weight() {
-            PlanEdgeKind::Build => {
-                // Source in a build edge is the builder.
-                if is_idle_builder(state, units, source) {
-                    build.insert(target.clone());
-                }
-            }
-            PlanEdgeKind::Upgrade => {
-                // Source in an upgrade edge is the unit being upgraded.
-                if can_upgrade(state, units, source, target) {
-                    upgrade.insert((source.clone(), target.clone()));
-                }
-            }
-        }
-    }
-
-    Self {
-        build: build.into_iter().collect(),
-        upgrade: upgrade.into_iter().collect(),
-    }
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 42 — SelectionPools::new
+pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+    // ... walks plan-graph edges, emits Build/Upgrade options,
+    //     then adds Assist options for active projects with idle engineers ...
 }
 ```
 
@@ -96,20 +57,18 @@ For each edge `source -> target` in the plan graph:
 - For a **build** edge, the source must be an idle builder capable of building the target.
 - For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
 
-`Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`:
+`Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`. The wrapper exposes the final list through `options`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 90 — SelectionPools::options
-pub fn options(&self, state: &GraphState, units: &Units) -> Vec<SelectionOption> {
-    // ... build -> SelectionOption::Build,
-    //     upgrade -> SelectionOption::Upgrade,
-    //     active project -> SelectionOption::Assist
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 106 — SelectionPools::options
+pub fn options(&self) -> &[SelectionOption] {
+    &self.options
 }
 ```
 
 ## From options to executable actions
 
-`SelectionPools::options` flattens the pools into a `Vec<SelectionOption>`. The policy scores each option, but not every scored option can be executed immediately. The planner filters by `SelectionOption::to_sim_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
+The policy scores each option returned by `SelectionPools::options`, but not every scored option can be executed immediately. The planner filters by `SelectionOption::to_sim_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
 
 ## Low-level `SimAction`
 
@@ -146,7 +105,7 @@ The current MLP planner usually assigns a single builder; future successors may 
 
 The option list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal options. The policy network keeps the decision cheap:
 
-1. Generate options once with `SelectionPools::derive` and flatten them with `SelectionPools::options`.
+1. Generate options once with `SelectionPools::new` and read them with `SelectionPools::options`.
 2. Score all options in a single batched forward pass.
 3. Sample one option and convert it to a `SimAction`.
 

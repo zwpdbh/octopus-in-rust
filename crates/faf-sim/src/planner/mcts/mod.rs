@@ -76,8 +76,8 @@ fn mlp_policy_plan(
     let device: Device<TrainBackend> = Default::default();
     let net: ValueNet<TrainBackend> = value_net.unwrap_or_else(|| ValueNet::new(&device));
 
-    let pools = SelectionPools::derive(&plan, &state, units);
-    let candidates = pools.options(&state, units);
+    let pools = SelectionPools::new(&plan, &state, units);
+    let candidates = pools.options().to_vec();
 
     if candidates.is_empty() {
         return Ok(plan_result_with_action(state, SimAction::Wait));

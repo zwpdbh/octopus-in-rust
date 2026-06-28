@@ -70,8 +70,8 @@ At each tick:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train.rs ~line 188 — action selection
-let pools = SelectionPools::derive(plan, &state, units);
-let candidates = pools.options(&state, units);
+let pools = SelectionPools::new(plan, &state, units);
+let candidates = pools.options().to_vec();
 
 // ... feature matrix ...
 

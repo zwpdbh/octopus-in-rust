@@ -16,10 +16,10 @@ use burn::tensor::{Tensor, TensorData};
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
+use super::execute_action;
 use super::features::{candidate_features, state_features, FEATURE_COUNT};
 use super::selections::SelectionPools;
 use super::value_net::ValueNet;
-use super::execute_action;
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
@@ -185,8 +185,8 @@ impl Trainer {
                 break;
             }
 
-            let pools = SelectionPools::derive(plan, &state, units);
-            let candidates = pools.options(&state, units);
+            let pools = SelectionPools::new(plan, &state, units);
+            let candidates = pools.options().to_vec();
 
             if candidates.is_empty() {
                 // No legal action; let time advance.

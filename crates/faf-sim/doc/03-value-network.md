@@ -18,11 +18,11 @@ A policy network avoids random rollouts by directly predicting which candidate a
 
 The network never sees the full unit roster. It sees only the legal candidates derived from the static `PlanGraph` and the current `GraphState`.
 
-`SelectionPools::derive` walks every edge in the plan graph:
+`SelectionPools::new` walks every edge in the plan graph and returns the legal options:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 45 — SelectionPools::derive
-pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 42 — SelectionPools::new
+pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     // ...
 }
 ```
@@ -30,7 +30,7 @@ pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
 An option is produced when the edge source is owned/active, the target is not yet owned or under construction, and a capable idle builder exists. The three option types are:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 18 — SelectionOption enum
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 19 — SelectionOption enum
 pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
@@ -85,7 +85,7 @@ The features include:
 `candidate_features` describes the action itself and its relationship to the goal:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 76 — candidate_features
+// crates/faf-sim/src/planner/mcts/features.rs ~line 82 — candidate_features
 pub fn candidate_features(
     candidate: &SelectionOption,
     state: &GraphState,
@@ -111,7 +111,7 @@ This distance feature is the main way graph topology enters the model: candidate
 For each candidate the planner concatenates the state vector and the candidate vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 129 — featurize
+// crates/faf-sim/src/planner/mcts/features.rs ~line 135 — featurize
 pub fn featurize(
     state: &GraphState,
     candidate: &SelectionOption,

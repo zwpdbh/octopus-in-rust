@@ -1,9 +1,17 @@
 //! Selectable action options for MCTS rollouts.
 //!
-//! A rollout decision is a choice from a set of [`SelectionOption`]s derived from
-//! the static [`PlanGraph`] and the current [`GraphState`]. The options change
-//! only when ownership or builder availability changes, not on every economy
-//! tick.
+//! A rollout decision is a choice from a set of [`SelectionOption`]s. The full
+//! space of possible options at any state is huge (every buildable unit, every
+//! upgrade pair, every active project), so this module narrows it down to the
+//! subset that is both:
+//!
+//! 1. Reachable on the static [`PlanGraph`] from units the state currently owns.
+//! 2. Executable given the current [`GraphState`] (idle builders, active
+//!    projects, etc.).
+//!
+//! The resulting [`SelectionPools`] is therefore a plan-graph-constrained,
+//! state-dependent subset of all possible [`SelectionOption`]s. It changes only
+//! when ownership or builder availability changes, not on every economy tick.
 
 use std::collections::HashSet;
 
@@ -31,20 +39,27 @@ pub enum SelectionOption {
     Assist(NodeId),
 }
 
-/// The selectable option pools used by the MLP-guided rollout.
+/// A wrapper around the legal [`SelectionOption`]s for the current state.
+///
+/// This is not the full set of all possible [`SelectionOption`]s. It is the
+/// subset reachable on the [`PlanGraph`] from the units currently owned in
+/// `state`, combined with assist options for projects that are actively being
+/// built or upgraded.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionPools {
-    /// Units that can be built next.
-    pub build: Vec<UnitKind>,
-    /// Upgrades that can be started next.
-    pub upgrade: Vec<(UnitKind, UnitKind)>,
+    options: Vec<SelectionOption>,
 }
 
 impl SelectionPools {
-    /// Derive the current option pools from the plan graph and state.
-    pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
-        let mut build = HashSet::new();
-        let mut upgrade = HashSet::new();
+    /// Derive the current legal selection options from the plan graph and state.
+    ///
+    /// Walks every edge in `plan` and keeps only those whose source is owned and
+    /// active, whose target is not yet owned or under construction, and for
+    /// which a capable idle builder exists. Assist options are added for every
+    /// active project when at least one idle engineer is available.
+    pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+        let mut options: Vec<SelectionOption> = Vec::new();
+        let mut seen: HashSet<SelectionOption> = HashSet::new();
 
         let active_targets = state.active_target_unit_ids();
 
@@ -65,42 +80,26 @@ impl SelectionPools {
                 PlanEdgeKind::Build => {
                     // Source in a build edge is the builder.
                     if is_idle_builder(state, units, source) {
-                        build.insert(target.clone());
+                        let opt = SelectionOption::Build(target.clone());
+                        if seen.insert(opt.clone()) {
+                            options.push(opt);
+                        }
                     }
                 }
                 PlanEdgeKind::Upgrade => {
                     // Source in an upgrade edge is the unit being upgraded.
                     if can_upgrade(state, units, source, target) {
-                        upgrade.insert((source.clone(), target.clone()));
+                        let opt = SelectionOption::Upgrade {
+                            from: source.clone(),
+                            to: target.clone(),
+                        };
+                        if seen.insert(opt.clone()) {
+                            options.push(opt);
+                        }
                     }
                 }
             }
         }
-
-        Self {
-            build: build.into_iter().collect(),
-            upgrade: upgrade.into_iter().collect(),
-        }
-    }
-
-    /// Return all selection options as a flat list.
-    ///
-    /// Assist options mention only the project node; the builders that will be
-    /// assigned are resolved when the option is converted into a `SimAction`.
-    pub fn options(&self, state: &GraphState, units: &Units) -> Vec<SelectionOption> {
-        let mut options: Vec<SelectionOption> = self
-            .build
-            .iter()
-            .cloned()
-            .map(SelectionOption::Build)
-            .collect();
-
-        options.extend(
-            self.upgrade
-                .iter()
-                .cloned()
-                .map(|(from, to)| SelectionOption::Upgrade { from, to }),
-        );
 
         if has_idle_engineer(state, units) {
             options.extend(
@@ -118,12 +117,17 @@ impl SelectionPools {
             );
         }
 
-        options
+        Self { options }
+    }
+
+    /// All legal selection options.
+    pub fn options(&self) -> &[SelectionOption] {
+        &self.options
     }
 
     /// True if there are no options at all.
-    pub fn is_empty(&self, state: &GraphState, units: &Units) -> bool {
-        self.build.is_empty() && self.upgrade.is_empty() && !has_idle_engineer(state, units)
+    pub fn is_empty(&self) -> bool {
+        self.options.is_empty()
     }
 }
 
@@ -272,14 +276,23 @@ mod tests {
         let plan = units.plan_graph(&UnitKind::Pgen(TechLevel::T1)).unwrap();
         let state = GraphState::new(&units, &[UnitKind::Commander]);
 
-        let pools = SelectionPools::derive(&plan, &state, &units);
+        let pools = SelectionPools::new(&plan, &state, &units);
 
         // ACU can build T1 factory, mex, and pgen.
-        assert!(pools.build.contains(&UnitKind::Factory(TechLevel::T1)));
-        assert!(pools.build.contains(&UnitKind::Mex(TechLevel::T1)));
-        assert!(pools.build.contains(&UnitKind::Pgen(TechLevel::T1)));
-        assert!(pools.upgrade.is_empty());
-        assert!(!pools.is_empty(&state, &units));
+        assert!(pools
+            .options()
+            .contains(&SelectionOption::Build(UnitKind::Factory(TechLevel::T1))));
+        assert!(pools
+            .options()
+            .contains(&SelectionOption::Build(UnitKind::Mex(TechLevel::T1))));
+        assert!(pools
+            .options()
+            .contains(&SelectionOption::Build(UnitKind::Pgen(TechLevel::T1))));
+        assert!(!pools
+            .options()
+            .iter()
+            .any(|o| matches!(o, SelectionOption::Upgrade { .. })));
+        assert!(!pools.is_empty());
     }
 
     #[test]
@@ -296,11 +309,12 @@ mod tests {
             ],
         );
 
-        let pools = SelectionPools::derive(&plan, &state, &units);
+        let pools = SelectionPools::new(&plan, &state, &units);
 
         // We own Mex_T1 and have an idle engineer, so mex upgrade is a candidate.
-        assert!(pools
-            .upgrade
-            .contains(&(UnitKind::Mex(TechLevel::T1), UnitKind::Mex(TechLevel::T2))));
+        assert!(pools.options().contains(&SelectionOption::Upgrade {
+            from: UnitKind::Mex(TechLevel::T1),
+            to: UnitKind::Mex(TechLevel::T2),
+        }));
     }
 }

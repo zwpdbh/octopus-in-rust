@@ -40,7 +40,7 @@ The `_iterations` parameter is ignored because there is no tree yet. Full UCT wi
 When UCT is implemented, each MCTS iteration will repeat four steps:
 
 1. **Select.** Traverse from the root to a leaf using the UCT formula.
-2. **Expand.** Add one or more children to the leaf using `SelectionPools::derive`.
+2. **Expand.** Add one or more children to the leaf using `SelectionPools::new`.
 3. **Evaluate.** Run the policy/value network on each new child (or use the terminal outcome if the state is done).
 4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
 
