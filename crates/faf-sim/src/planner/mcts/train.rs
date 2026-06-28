@@ -44,12 +44,20 @@ pub struct TrainConfig {
     pub learning_rate: f64,
     /// Discount factor for future rewards.
     pub gamma: f32,
-    /// Probability of taking a random action during training (epsilon-greedy
-    /// exploration on top of the softmax policy).
+    /// Initial probability of taking a random action during training
+    /// (epsilon-greedy exploration on top of the softmax policy).
     pub epsilon: f32,
+    /// Final epsilon value after decay. Only used when `epsilon_decay_episodes`
+    /// is non-zero.
+    pub epsilon_final: f32,
+    /// Number of episodes over which to linearly decay `epsilon` to
+    /// `epsilon_final`. `0` means no decay.
+    pub epsilon_decay_episodes: usize,
     /// Entropy bonus coefficient. Higher values encourage more exploration by
     /// keeping the policy distribution spread out.
     pub entropy_coef: f32,
+    /// Stop early when the best completion time is at most this many seconds.
+    pub target_time: Option<f64>,
     /// Print per-episode progress to stderr.
     pub verbose: bool,
 }
@@ -57,13 +65,16 @@ pub struct TrainConfig {
 impl Default for TrainConfig {
     fn default() -> Self {
         Self {
-            episodes: 50,
+            episodes: 200,
             max_steps: 500,
-            dt: 10.0,
+            dt: 1.0,
             learning_rate: 1e-3,
             gamma: 0.99,
             epsilon: 0.1,
+            epsilon_final: 0.1,
+            epsilon_decay_episodes: 0,
             entropy_coef: 0.01,
+            target_time: None,
             verbose: false,
         }
     }
@@ -168,8 +179,14 @@ impl Trainer {
         let mut stats = TrainStats::default();
         let mut best_time: Option<f64> = None;
 
-        for ep in 0..self.config.episodes {
-            let episode = self.run_episode(units, goal, &plan, &planner_config);
+        let mut ep = 0usize;
+        loop {
+            if self.config.episodes != 0 && ep >= self.config.episodes {
+                break;
+            }
+
+            let epsilon = self.current_epsilon(ep);
+            let episode = self.run_episode(units, goal, &plan, &planner_config, epsilon);
 
             let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);
@@ -180,6 +197,7 @@ impl Trainer {
             };
 
             stats.episode_lengths.push(episode.steps.len());
+            let mut target_hit = false;
             if episode.reached_goal {
                 stats.goal_reaches += 1;
                 stats.completion_times.push(episode.completion_time);
@@ -187,6 +205,11 @@ impl Trainer {
                 if is_new_best {
                     best_time = Some(episode.completion_time);
                     self.best_model = Some(self.model.clone());
+                }
+                if let Some(target) = self.config.target_time {
+                    if episode.completion_time <= target {
+                        target_hit = true;
+                    }
                 }
             }
 
@@ -197,14 +220,24 @@ impl Trainer {
                     .map(|l| format!("{:.4}", l))
                     .unwrap_or_else(|| "-".to_string());
                 eprintln!(
-                    "ep={:>4} steps={:>4} reached={:>5} time={:>14} best={:>14} loss={:>10}",
+                    "ep={:>4} steps={:>4} eps={:.4} reached={:>5} time={:>14} best={:>14} loss={:>10}",
                     ep + 1,
                     episode.steps.len(),
+                    epsilon,
                     episode.reached_goal,
                     time_str,
                     best_str,
                     loss_str
                 );
+            }
+
+            ep += 1;
+
+            if target_hit {
+                if self.config.verbose {
+                    eprintln!("Target completion time reached; stopping early.");
+                }
+                break;
             }
         }
 
@@ -222,12 +255,27 @@ impl Trainer {
     /// 5. Record the feature matrix and chosen action for training.
     /// 6. Repeat until the goal is reached or the step budget runs out.
     /// 7. Compute the final reward and normalize returns across episodes.
+    /// Compute the exploration probability for the current episode.
+    ///
+    /// If `epsilon_decay_episodes` is zero, epsilon stays at its initial value.
+    /// Otherwise it linearly decays from `epsilon` to `epsilon_final` over the
+    /// configured number of episodes.
+    fn current_epsilon(&self, ep: usize) -> f32 {
+        let decay = self.config.epsilon_decay_episodes;
+        if decay == 0 || ep >= decay {
+            return self.config.epsilon_final;
+        }
+        let progress = ep as f32 / decay as f32;
+        self.config.epsilon - (self.config.epsilon - self.config.epsilon_final) * progress
+    }
+
     fn run_episode(
         &mut self,
         units: &Units,
         goal: &UnitKind,
         plan: &PlanGraph,
         planner_config: &PlannerConfig,
+        epsilon: f32,
     ) -> Episode {
         // Every episode begins with only the commander.
         let mut state = GraphState::new(units, &[UnitKind::Commander]);
@@ -271,7 +319,7 @@ impl Trainer {
 
             // 3. Sample an option: random exploration with probability epsilon,
             //    otherwise sample from the softmax over MLP scores.
-            let action_index = if self.rng.gen::<f32>() < self.config.epsilon {
+            let action_index = if self.rng.gen::<f32>() < epsilon {
                 self.rng.gen_range(0..candidates.len())
             } else {
                 sample_action_index(
@@ -342,9 +390,14 @@ impl Trainer {
     }
 
     /// Update the network from one episode using REINFORCE.
+    ///
+    /// Gradients are accumulated over every step in the episode and a single
+    /// optimizer step is applied at the end. This is the standard REINFORCE
+    /// pattern and is less noisy than updating after each individual step.
     fn update(&mut self, episode: &Episode) -> f32 {
+        let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
         let mut total_loss = 0.0f32;
-        let mut update_count = 0usize;
+        let mut step_count = 0usize;
 
         for step in &episode.steps {
             let n = step.candidate_features.len();
@@ -378,20 +431,26 @@ impl Trainer {
 
             let loss = policy_loss + entropy_loss;
 
-            let grads = loss.backward();
-            let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-            self.model =
-                self.optimizer
-                    .step(self.config.learning_rate.into(), self.model.clone(), grads);
-
-            total_loss += loss.into_data().as_slice::<f32>().unwrap()[0];
-            update_count += 1;
+            total_loss += loss.clone().into_data().as_slice::<f32>().unwrap()[0];
+            accumulated_loss = Some(match accumulated_loss {
+                Some(acc) => acc + loss,
+                None => loss,
+            });
+            step_count += 1;
         }
 
-        if update_count == 0 {
+        if let Some(loss) = accumulated_loss {
+            let grads = loss.backward();
+            let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
+            self.model = self
+                .optimizer
+                .step(self.config.learning_rate.into(), self.model.clone(), grads);
+        }
+
+        if step_count == 0 {
             0.0
         } else {
-            total_loss / update_count as f32
+            total_loss / step_count as f32
         }
     }
 

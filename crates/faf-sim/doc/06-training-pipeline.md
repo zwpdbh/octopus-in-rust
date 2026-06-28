@@ -37,20 +37,26 @@ pub struct TrainConfig {
     pub learning_rate: f64,
     pub gamma: f32,
     pub epsilon: f32,
+    pub epsilon_final: f32,
+    pub epsilon_decay_episodes: usize,
     pub entropy_coef: f32,
+    pub target_time: Option<f64>,
     pub verbose: bool,
 }
 ```
 
 | Field | Default | Role |
 |---|---|---|
-| `episodes` | 50 | Number of rollouts to run. |
+| `episodes` | 200 | Number of rollouts to run. Use `0` to run until `target_time` is hit or the process is interrupted. |
 | `max_steps` | 500 | Maximum simulator ticks per episode. |
-| `dt` | 10.0 | Fixed simulator timestep for rollouts. |
+| `dt` | 1.0 | Fixed simulator timestep for rollouts. |
 | `learning_rate` | 1e-3 | Adam step size. |
 | `gamma` | 0.99 | Discount factor (reserved for future n-step returns). |
-| `epsilon` | 0.1 | Probability of taking a random action. |
+| `epsilon` | 0.1 | Initial probability of taking a random action. |
+| `epsilon_final` | 0.1 | Final epsilon after decay. Same as `epsilon` when no decay. |
+| `epsilon_decay_episodes` | same as `episodes` | Episodes over which to linearly decay `epsilon` to `epsilon_final`. `0` disables decay. |
 | `entropy_coef` | 0.01 | Entropy bonus strength. |
+| `target_time` | `None` | Stop early when an episode reaches the goal in at most this many seconds. |
 | `verbose` | `false` | Print per-episode progress to stderr. |
 
 ## Rollout details
@@ -177,6 +183,22 @@ The current single-phase REINFORCE training is simple and end-to-end. Future imp
 
 These extensions reuse the same `ValueNet` architecture and feature pipeline; they mainly change the loss function and data source.
 
+## Epsilon decay
+
+High-variance training runs often benefit from starting with more exploration and then gradually exploiting the learned policy. Set `epsilon` to the starting exploration probability, `epsilon_final` to the floor, and `epsilon_decay_episodes` to the number of episodes over which to decay:
+
+```text
+faf-sim train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy
+```
+
+The trainer uses linear decay:
+
+```text
+epsilon(ep) = epsilon - (epsilon - epsilon_final) * (ep / epsilon_decay_episodes)
+```
+
+Once the decay period ends, epsilon stays at `epsilon_final` for the rest of the run. The current epsilon is printed in the per-episode log column.
+
 ## When to stop
 
 Stop iterating when:
@@ -184,5 +206,13 @@ Stop iterating when:
 - The trained policy reaches the goal consistently on the benchmark suite.
 - Episode returns have plateaued for several training rounds.
 - Adding more training data no longer improves completion times.
+
+You can also set a concrete target completion time on the CLI. The trainer will keep running until that time is reached (or the episode budget is exhausted):
+
+```text
+faf-sim train -e 0 -m 10000 -t 20m -r uef fatboy
+```
+
+Here `-e 0` means "run forever", `-t 20m` stops the loop as soon as any episode finishes in 20 minutes or less, and `-r` resumes from the existing model. The best-seen model is saved automatically when training finishes.
 
 At that point the system is ready for wider experimentation: harder goals, multiple goals, or integration into a larger bot.

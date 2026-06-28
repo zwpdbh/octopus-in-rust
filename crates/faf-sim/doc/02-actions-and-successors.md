@@ -129,4 +129,4 @@ Actions are discrete (build this unit, upgrade that unit, assist, wait), but tim
 - A small `dt` gives finer control but issues more decisions.
 - A large `dt` is faster but may miss tight timing windows.
 
-The default `PlannerConfig::dt` is `10.0` seconds.
+The default `PlannerConfig::dt` is `1.0` second.

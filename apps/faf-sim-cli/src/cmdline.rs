@@ -19,6 +19,32 @@ use clap::{Parser, Subcommand};
 
 use crate::target::{AeonUnit, CybranUnit, SeraphimUnit, UefUnit};
 
+/// Parse a human-friendly duration into seconds.
+///
+/// Accepts a plain number (interpreted as seconds) or a value with an `s`,
+/// `m`, or `h` suffix.
+pub fn parse_duration(s: &str) -> Result<f64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("duration must not be empty".to_string());
+    }
+    if let Some(num) = s.strip_suffix('h') {
+        num.parse::<f64>()
+            .map(|v| v * 3600.0)
+            .map_err(|e| format!("invalid hours: {}", e))
+    } else if let Some(num) = s.strip_suffix('m') {
+        num.parse::<f64>()
+            .map(|v| v * 60.0)
+            .map_err(|e| format!("invalid minutes: {}", e))
+    } else if let Some(num) = s.strip_suffix('s') {
+        num.parse::<f64>()
+            .map_err(|e| format!("invalid seconds: {}", e))
+    } else {
+        s.parse::<f64>()
+            .map_err(|e| format!("invalid seconds: {}", e))
+    }
+}
+
 /// Top-level CLI parser.
 #[derive(Parser)]
 #[command(name = "faf-sim")]
@@ -65,9 +91,11 @@ pub struct PlanArgs {
 
 /// Arguments for the `train` subcommand.
 #[derive(Parser)]
+#[command(after_help = "Examples:\n  cargo run --release --bin faf-sim -- train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy")]
 pub struct TrainArgs {
-    /// Number of training episodes.
-    #[arg(short = 'e', long, default_value = "100")]
+    /// Number of training episodes. Must be specified with `-e`. Use `0` to run
+    /// until the target time is reached or the process is interrupted.
+    #[arg(short = 'e', long)]
     pub episodes: usize,
     /// Maximum simulator steps per episode.
     #[arg(short = 'm', long, default_value = "500")]
@@ -75,6 +103,21 @@ pub struct TrainArgs {
     /// Resume training from an existing model for this target, if one exists.
     #[arg(short = 'r', long, default_value = "false")]
     pub resume: bool,
+    /// Stop training early once the best completion time is at most this
+    /// duration. Accepts plain seconds or a suffix (`30m`, `1h`, `1200s`).
+    #[arg(short = 't', long, value_parser = parse_duration)]
+    pub target_time: Option<f64>,
+    /// Initial epsilon-greedy exploration probability.
+    #[arg(long, default_value = "0.1")]
+    pub epsilon: f32,
+    /// Final epsilon value after decay. Only used with `--epsilon-decay-episodes`.
+    #[arg(long, default_value = "0.01")]
+    pub epsilon_final: f32,
+    /// Number of episodes over which to linearly decay epsilon from `--epsilon`
+    /// to `--epsilon-final`. Defaults to the value of `-e`; pass `0` to disable
+    /// decay entirely.
+    #[arg(long)]
+    pub epsilon_decay_episodes: Option<usize>,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

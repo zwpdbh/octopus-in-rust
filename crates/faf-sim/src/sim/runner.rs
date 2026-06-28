@@ -17,7 +17,7 @@ use crate::sim::state::{GraphSimError, GraphState};
 use crate::units::{UnitKind, Units};
 
 /// Default simulation timestep in seconds.
-const DEFAULT_SIM_DT: f64 = 10.0;
+const DEFAULT_SIM_DT: f64 = 1.0;
 /// Default maximum in-game time in seconds (8 hours).
 const DEFAULT_MAX_SIM_TIME: f64 = 8.0 * 60.0 * 60.0;
 
@@ -35,7 +35,7 @@ pub struct SimulationConfig {
 impl SimulationConfig {
     /// Create a default configuration for a given strategy.
     ///
-    /// Uses `Planner::reactive` and a 10-second simulation timestep.
+    /// Uses `Planner::reactive` and a 1-second simulation timestep.
     pub fn for_strategy(strategy: crate::planner::Strategy) -> Self {
         Self {
             planner: Planner::reactive(strategy),

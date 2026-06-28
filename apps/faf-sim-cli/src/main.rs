@@ -112,6 +112,10 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let config = TrainConfig {
         episodes: args.episodes,
         max_steps: args.max_steps,
+        target_time: args.target_time,
+        epsilon: args.epsilon,
+        epsilon_final: args.epsilon_final,
+        epsilon_decay_episodes: args.epsilon_decay_episodes.unwrap_or(args.episodes),
         verbose: true,
         ..Default::default()
     };
@@ -128,7 +132,8 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     println!(
         "Training complete: {}/{} episodes reached the goal",
-        stats.goal_reaches, args.episodes
+        stats.goal_reaches,
+        stats.episode_lengths.len()
     );
     if let Some(&best) = stats
         .completion_times
@@ -177,7 +182,7 @@ async fn run_simulate(
 
     let config = SimulationConfig {
         planner,
-        sim_dt: 10.0,
+        sim_dt: 1.0,
         max_sim_time: 8.0 * 60.0 * 60.0,
     };
     let result = match run_build_order_simulation(units.clone(), goal_kind.clone(), config).await {

@@ -277,7 +277,7 @@ When MCTS is stable, you can make it the default strategy for the CLI and benchm
 // crates/faf-sim/src/planner/core.rs ~line 198 — PlannerConfig default
 fn default() -> Self {
     Self {
-        dt: 10.0,
+        dt: 1.0,
         max_depth: 400,
         max_mex_count: 8,
         max_pgen_count: 20,

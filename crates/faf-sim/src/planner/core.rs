@@ -196,10 +196,10 @@ pub struct PlannerConfig {
 }
 
 impl Default for PlannerConfig {
-    /// Defaults tuned for MCTS.
+    /// Defaults tuned for MCTS with a 1-second decision timestep.
     fn default() -> Self {
         Self {
-            dt: 10.0,
+            dt: 1.0,
             max_depth: 400,
             max_mex_count: 8,
             max_pgen_count: 20,
