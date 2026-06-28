@@ -22,16 +22,41 @@ pub const CANDIDATE_FEATURE_COUNT: usize = 12;
 pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
 
 /// Convert a simulator state into a fixed-length feature vector.
+///
+/// The 12 state features are intentionally economy-centric and small. Build
+/// orders in FAF are driven mainly by income, build power, and tech tier, so
+/// the network gets those directly instead of a huge one-hot unit roster.
+///
+/// Feature order:
+/// 0. net mass income   (scaled by 100)
+/// 1. net energy income (scaled by 1000)
+/// 2. mass storage ratio
+/// 3. energy storage ratio
+/// 4. total active build power (scaled by 100)
+/// 5. simulation time (scaled by 3600 s)
+/// 6. active mex fraction of cap
+/// 7. active pgen fraction of cap
+/// 8. active project count (scaled by 10)
+/// 9. has T2 factory
+/// 10. has T3 factory
+/// 11. has T3 engineer
 pub fn state_features(
     state: &GraphState,
     units: &Units,
     config: &PlannerConfig,
 ) -> Vec<f32> {
     let mut features = Vec::with_capacity(STATE_FEATURE_COUNT);
-
     let economy = &state.economy;
+
+    // Income features: scaled so typical mid/late-game values land near [-1, 1]
+    // before clamping. Energy is scaled by 1000 because it is usually an order
+    // of magnitude larger than mass income.
     features.push(clamp((economy.net_mass_income / 100.0) as f32));
     features.push(clamp((economy.net_energy_income / 1000.0) as f32));
+
+    // Storage ratios: near 0 means an impending stall; near 1 means income is
+    // being wasted. The ratio is more useful than the absolute value because
+    // storage capacity can vary.
     features.push(storage_ratio(
         economy.mass_storage,
         economy.mass_storage_cap,
@@ -40,16 +65,27 @@ pub fn state_features(
         economy.energy_storage,
         economy.energy_storage_cap,
     ));
+
+    // Total build power determines how fast projects finish. Scaled by 100 so
+    // typical values stay small after clamping.
     features.push(clamp(
         (state.total_active_build_power(units) / 100.0) as f32,
     ));
+
+    // Game time gives the network a sense of phase. Scaled by one hour.
     features.push(clamp((state.time / 3600.0) as f32));
+
+    // Eco-structure saturation: fractions of the configured caps. Near 1.0
+    // means building more mexes/pgens is low-value or impossible.
     features.push(clamp(
         state.count_active_mex() as f32 / config.max_mex_count as f32,
     ));
     features.push(clamp(
         state.count_active_pgen() as f32 / config.max_pgen_count as f32,
     ));
+
+    // Parallelism: how many builders are already committed. A high count means
+    // fewer idle builders and fewer immediately executable options.
     let active_project_count = state
         .graph
         .graph
@@ -63,6 +99,10 @@ pub fn state_features(
         })
         .count();
     features.push(clamp(active_project_count as f32 / 10.0));
+
+    // Tech milestones: these gates unlock most of the rest of the goal path,
+    // so the network receives them as explicit booleans instead of having to
+    // infer them from the unit roster.
     features.push(bool_f32(
         state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
     ));
