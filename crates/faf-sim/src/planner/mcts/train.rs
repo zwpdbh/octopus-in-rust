@@ -177,7 +177,25 @@ impl Trainer {
             .expect("goal must be reachable for training");
         let planner_config = PlannerConfig::default();
         let mut stats = TrainStats::default();
-        let mut best_time: Option<f64> = None;
+
+        // When resuming, evaluate the loaded model greedily so the log's `best`
+        // column reflects the baseline and we avoid saving a worse model.
+        let mut best_time: Option<f64> = if self.best_model.is_some() {
+            let baseline = self.evaluate_greedy(units, goal, &plan, &planner_config);
+            if self.config.verbose {
+                if let Some(t) = baseline {
+                    eprintln!(
+                        "Resumed model greedy baseline: {}",
+                        format_time(t, true)
+                    );
+                } else {
+                    eprintln!("Resumed model did not reach the goal in a greedy evaluation.");
+                }
+            }
+            baseline
+        } else {
+            None
+        };
 
         let mut ep = 0usize;
         loop {
@@ -267,6 +285,57 @@ impl Trainer {
         }
         let progress = ep as f32 / decay as f32;
         self.config.epsilon - (self.config.epsilon - self.config.epsilon_final) * progress
+    }
+
+    /// Run a deterministic greedy evaluation of the current model.
+    ///
+    /// This is used when resuming to establish a baseline completion time for
+    /// the loaded model. It always picks the highest-scoring candidate and does
+    /// not record any training data.
+    fn evaluate_greedy(
+        &self,
+        units: &Units,
+        goal: &UnitKind,
+        plan: &PlanGraph,
+        planner_config: &PlannerConfig,
+    ) -> Option<f64> {
+        let mut state = GraphState::new(units, &[UnitKind::Commander]);
+
+        for _ in 0..self.config.max_steps {
+            if state.goal_reached(goal) {
+                return Some(state.time);
+            }
+
+            let pools = SelectionPools::new(plan, &state, units);
+            let candidates = pools.options().to_vec();
+            if candidates.is_empty() {
+                state.tick(units, self.config.dt);
+                continue;
+            }
+
+            let state_feats = state_features(&state, units, planner_config);
+            let feature_matrix: Vec<Vec<f32>> = candidates
+                .iter()
+                .map(|c| {
+                    let mut f = state_feats.clone();
+                    f.extend(candidate_features(c, &state, plan, units));
+                    f
+                })
+                .collect();
+
+            let action_index = argmax_action_index(&self.model, &feature_matrix, &self.device);
+            let selected = &candidates[action_index];
+            let Some(action) = selected.to_sim_action(&state, units) else {
+                state.tick(units, self.config.dt);
+                continue;
+            };
+
+            if execute_action(&mut state, &action, units, self.config.dt).is_err() {
+                state.tick(units, self.config.dt);
+            }
+        }
+
+        None
     }
 
     fn run_episode(
@@ -540,6 +609,28 @@ fn sample_action_index<B: AutodiffBackend>(
     dist.sample(rng)
 }
 
+/// Deterministically pick the candidate with the highest MLP score.
+fn argmax_action_index<B: AutodiffBackend>(
+    model: &ValueNet<B>,
+    candidate_features: &[Vec<f32>],
+    device: &burn::tensor::Device<B>,
+) -> usize {
+    let n = candidate_features.len();
+    let data = TensorData::new(
+        candidate_features.iter().flatten().cloned().collect(),
+        [n, FEATURE_COUNT],
+    );
+    let input = Tensor::<B, 2>::from_data(data, device);
+    let scores = model.forward(input).flatten::<1>(0, 1);
+    let score_vec: Vec<f32> = scores.into_data().as_slice::<f32>().unwrap().to_vec();
+    score_vec
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
 /// Train a policy for `goal` and return the final and best-seen models.
 ///
 /// The returned `best_model` is the model checkpoint captured when the fastest
@@ -565,6 +656,9 @@ pub fn train_policy_from(
     config: TrainConfig,
 ) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
     let mut trainer = Trainer::from_model(config, model);
+    // Treat the loaded model as the initial best so training only replaces it
+    // if it actually improves on the baseline.
+    trainer.best_model = Some(trainer.model.clone());
     let stats = trainer.train(units, goal);
     let best_model = trainer.best_model.take();
     let model = trainer.into_model();
