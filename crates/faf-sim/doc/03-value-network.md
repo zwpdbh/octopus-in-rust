@@ -62,7 +62,6 @@ pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
 // crates/faf-sim/src/planner/mcts/features.rs ~line 25 — state_features
 pub fn state_features(
     state: &GraphState,
-    _goal_id: &UnitKind,
     units: &Units,
     config: &PlannerConfig,
 ) -> Vec<f32> {
@@ -111,16 +110,15 @@ This distance feature is the main way graph topology enters the model: candidate
 For each candidate the planner concatenates the state vector and the candidate vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 135 — featurize
+// crates/faf-sim/src/planner/mcts/features.rs ~line 134 — featurize
 pub fn featurize(
     state: &GraphState,
     candidate: &SelectionOption,
-    goal_id: &UnitKind,
     units: &Units,
     plan: &PlanGraph,
     config: &PlannerConfig,
 ) -> Vec<f32> {
-    let mut features = state_features(state, goal_id, units, config);
+    let mut features = state_features(state, units, config);
     features.extend(candidate_features(candidate, state, plan, units));
     debug_assert_eq!(features.len(), FEATURE_COUNT);
     features
@@ -177,7 +175,7 @@ At decision time the planner builds a feature matrix of shape `[n_candidates, FE
 
 ```rust
 // crates/faf-sim/src/planner/mcts/mod.rs ~line 87 — mlp_policy_plan scoring and sampling
-let scored = net.score_candidates(&state, &candidates, goal_id, units, &plan, config, &device);
+let scored = net.score_candidates(&state, &candidates, units, &plan, config, &device);
 
 // Keep only candidates that can actually be executed now and sample from them.
 let mut executable = Vec::new();

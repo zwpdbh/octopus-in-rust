@@ -24,7 +24,6 @@ pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
 /// Convert a simulator state into a fixed-length feature vector.
 pub fn state_features(
     state: &GraphState,
-    _goal_id: &UnitKind,
     units: &Units,
     config: &PlannerConfig,
 ) -> Vec<f32> {
@@ -135,12 +134,11 @@ fn idle_engineer_power(state: &GraphState, units: &Units) -> f32 {
 pub fn featurize(
     state: &GraphState,
     candidate: &SelectionOption,
-    goal_id: &UnitKind,
     units: &Units,
     plan: &PlanGraph,
     config: &PlannerConfig,
 ) -> Vec<f32> {
-    let mut features = state_features(state, goal_id, units, config);
+    let mut features = state_features(state, units, config);
     features.extend(candidate_features(candidate, state, plan, units));
     debug_assert_eq!(features.len(), FEATURE_COUNT);
     features
@@ -228,7 +226,7 @@ mod tests {
         let config = PlannerConfig::default();
         let candidate = SelectionOption::Build(UnitKind::Mex(TechLevel::T1));
 
-        let features = featurize(&state, &candidate, &goal, &units, &plan, &config);
+        let features = featurize(&state, &candidate, &units, &plan, &config);
         assert_eq!(features.len(), FEATURE_COUNT);
     }
 }

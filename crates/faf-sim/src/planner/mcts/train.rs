@@ -194,7 +194,7 @@ impl Trainer {
                 continue;
             }
 
-            let state_feats = state_features(&state, goal, units, planner_config);
+            let state_feats = state_features(&state, units, planner_config);
             let candidate_features: Vec<Vec<f32>> = candidates
                 .iter()
                 .map(|c| {

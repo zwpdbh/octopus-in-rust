@@ -14,7 +14,7 @@ use super::selections::SelectionOption;
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 /// A small MLP that scores a candidate action in a given state.
 ///
@@ -64,13 +64,12 @@ impl<B: Backend> ValueNet<B> {
         &self,
         state: &GraphState,
         candidate: &SelectionOption,
-        goal_id: &UnitKind,
         units: &Units,
         plan: &PlanGraph,
         config: &PlannerConfig,
         device: &B::Device,
     ) -> f32 {
-        let features = featurize(state, candidate, goal_id, units, plan, config);
+        let features = featurize(state, candidate, units, plan, config);
         self.evaluate_single(features, device)
     }
 
@@ -79,13 +78,12 @@ impl<B: Backend> ValueNet<B> {
         &self,
         state: &GraphState,
         candidates: &[SelectionOption],
-        goal_id: &UnitKind,
         units: &Units,
         plan: &PlanGraph,
         config: &PlannerConfig,
         device: &B::Device,
     ) -> Vec<(SelectionOption, f32)> {
-        let state_feats = state_features(state, goal_id, units, config);
+        let state_feats = state_features(state, units, config);
         candidates
             .iter()
             .map(|c| {

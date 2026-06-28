@@ -83,7 +83,7 @@ fn mlp_policy_plan(
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
-    let scored = net.score_candidates(&state, &candidates, goal_id, units, &plan, config, &device);
+    let scored = net.score_candidates(&state, &candidates, units, &plan, config, &device);
 
     // Keep only candidates that can actually be executed now and sample from them.
     let mut executable = Vec::new();
