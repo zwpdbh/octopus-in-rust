@@ -10,7 +10,7 @@ use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
 
 use super::features::{candidate_features, featurize, state_features, FEATURE_COUNT};
-use super::pools::Candidate;
+use super::selections::SelectionOption;
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
@@ -63,7 +63,7 @@ impl<B: Backend> ValueNet<B> {
     pub fn score(
         &self,
         state: &GraphState,
-        candidate: &Candidate,
+        candidate: &SelectionOption,
         goal_id: &UnitKind,
         units: &Units,
         plan: &PlanGraph,
@@ -78,19 +78,19 @@ impl<B: Backend> ValueNet<B> {
     pub fn score_candidates(
         &self,
         state: &GraphState,
-        candidates: &[Candidate],
+        candidates: &[SelectionOption],
         goal_id: &UnitKind,
         units: &Units,
         plan: &PlanGraph,
         config: &PlannerConfig,
         device: &B::Device,
-    ) -> Vec<(Candidate, f32)> {
+    ) -> Vec<(SelectionOption, f32)> {
         let state_feats = state_features(state, goal_id, units, config);
         candidates
             .iter()
             .map(|c| {
                 let mut features = state_feats.clone();
-                features.extend(candidate_features(c, plan, units));
+                features.extend(candidate_features(c, state, plan, units));
                 let score = self.evaluate_single(features, device);
                 (c.clone(), score)
             })

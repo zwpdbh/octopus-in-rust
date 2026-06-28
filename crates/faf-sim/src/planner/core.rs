@@ -25,7 +25,7 @@ pub struct PlanResult {
     pub final_economy: EconomyState,
     /// First action of the best path. Useful for reactive planners that only
     /// commit to the immediate next step.
-    pub first_action: Option<crate::planner::search::SearchAction>,
+    pub first_action: Option<crate::planner::search::SimAction>,
 }
 
 /// Planner error type.

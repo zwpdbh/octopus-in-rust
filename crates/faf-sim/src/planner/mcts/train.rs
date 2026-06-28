@@ -17,7 +17,7 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
 use super::features::{candidate_features, state_features, FEATURE_COUNT};
-use super::pools::SelectionPools;
+use super::selections::SelectionPools;
 use super::value_net::ValueNet;
 use super::{candidate_to_action, execute_action};
 use crate::planner::core::PlannerConfig;
@@ -186,7 +186,7 @@ impl Trainer {
             }
 
             let pools = SelectionPools::derive(plan, &state, units);
-            let candidates = pools.candidates();
+            let candidates = pools.options(&state, units);
 
             if candidates.is_empty() {
                 // No legal action; let time advance.
@@ -199,7 +199,7 @@ impl Trainer {
                 .iter()
                 .map(|c| {
                     let mut f = state_feats.clone();
-                    f.extend(candidate_features(c, plan, units));
+                    f.extend(candidate_features(c, &state, plan, units));
                     f
                 })
                 .collect();

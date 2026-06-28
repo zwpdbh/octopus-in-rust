@@ -21,23 +21,23 @@ The network never sees the full unit roster. It sees only the legal candidates d
 `SelectionPools::derive` walks every edge in the plan graph:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 82 — SelectionPools::derive
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 81 — SelectionPools::derive
 pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     // ...
 }
 ```
 
-A candidate is produced when the edge source is owned/active, the target is not yet owned or under construction, and a capable idle builder exists. The three candidate types are:
+An option is produced when the edge source is owned/active, the target is not yet owned or under construction, and a capable idle builder exists. The three option types are:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 21 — Candidate enum
-pub enum Candidate {
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 18 — SelectionOption enum
+pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
     /// Upgrade an existing `from` unit into `to`.
     Upgrade { from: UnitKind, to: UnitKind },
-    /// Assign all idle engineers of the given tier to assist an active project.
-    Assist(TechLevel),
+    /// Assist an active project. Builders are resolved at execution time.
+    Assist(NodeId),
 }
 ```
 
@@ -80,13 +80,18 @@ The features include:
 - Number of active projects.
 - Boolean tech milestones: T2 factory, T3 factory, T3 engineer.
 
-### Candidate features
+### Selection-option features
 
 `candidate_features` describes the action itself and its relationship to the goal:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 70 — candidate_features
-pub fn candidate_features(candidate: &Candidate, plan: &PlanGraph, units: &Units) -> Vec<f32> {
+// crates/faf-sim/src/planner/mcts/features.rs ~line 76 — candidate_features
+pub fn candidate_features(
+    candidate: &SelectionOption,
+    state: &GraphState,
+    plan: &PlanGraph,
+    units: &Units,
+) -> Vec<f32> {
     // ... 12 scalar features ...
 }
 ```
@@ -106,17 +111,17 @@ This distance feature is the main way graph topology enters the model: candidate
 For each candidate the planner concatenates the state vector and the candidate vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 107 — featurize
+// crates/faf-sim/src/planner/mcts/features.rs ~line 129 — featurize
 pub fn featurize(
     state: &GraphState,
-    candidate: &Candidate,
+    candidate: &SelectionOption,
     goal_id: &UnitKind,
     units: &Units,
     plan: &PlanGraph,
     config: &PlannerConfig,
 ) -> Vec<f32> {
     let mut features = state_features(state, goal_id, units, config);
-    features.extend(candidate_features(candidate, plan, units));
+    features.extend(candidate_features(candidate, state, plan, units));
     debug_assert_eq!(features.len(), FEATURE_COUNT);
     features
 }

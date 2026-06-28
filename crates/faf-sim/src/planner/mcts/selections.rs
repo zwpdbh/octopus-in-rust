@@ -1,25 +1,21 @@
-//! Candidate action pools for MCTS rollouts.
+//! Selectable action options for MCTS rollouts.
 //!
-//! A rollout decision is a choice from two pools:
-//!
-//! 1. **Building pool** — units or upgrades that can be started now.
-//! 2. **Assist pool** — idle engineers (grouped by tech tier) that can speed up
-//!    an active project.
-//!
-//! The pools are derived from the static [`PlanGraph`] and the current
-//! [`GraphState`]. They change only when ownership or builder availability
-//! changes, not on every economy tick.
+//! A rollout decision is a choice from a set of [`SelectionOption`]s derived from
+//! the static [`PlanGraph`] and the current [`GraphState`]. The options change
+//! only when ownership or builder availability changes, not on every economy
+//! tick.
 
 use std::collections::HashSet;
 
-use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
-use crate::sim::GraphState;
-use crate::units::{TechLevel, UnitKind, Units};
 use petgraph::visit::EdgeRef;
 
-/// A single selectable action.
+use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
+use crate::sim::{GraphState, NodeId, UnitNodeState};
+use crate::units::{UnitKind, Units};
+
+/// A single selectable action option.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Candidate {
+pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
     /// Upgrade an existing `from` unit into `to`.
@@ -29,56 +25,22 @@ pub enum Candidate {
         /// Destination unit kind.
         to: UnitKind,
     },
-    /// Assign all idle engineers of the given tier to assist an active project.
-    Assist(TechLevel),
+    /// Assist an active project. The specific builders are resolved when the
+    /// option is converted into a concrete simulator command.
+    Assist(NodeId),
 }
 
-/// Available idle engineers grouped by tech tier.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AssistCounts {
-    /// Number of idle T1 engineers available to assist.
-    pub t1: u32,
-    /// Number of idle T2 engineers available to assist.
-    pub t2: u32,
-    /// Number of idle T3 engineers available to assist.
-    pub t3: u32,
-}
-
-impl AssistCounts {
-    /// Total idle engineers across all tiers.
-    pub fn total(&self) -> u32 {
-        self.t1 + self.t2 + self.t3
-    }
-
-    /// True if no engineers are available to assist.
-    pub fn is_empty(&self) -> bool {
-        self.total() == 0
-    }
-
-    /// Number of idle engineers for a specific tier.
-    pub fn get(&self, tier: TechLevel) -> u32 {
-        match tier {
-            TechLevel::T1 => self.t1,
-            TechLevel::T2 => self.t2,
-            TechLevel::T3 => self.t3,
-            TechLevel::T4 => 0,
-        }
-    }
-}
-
-/// The two candidate pools used by the MLP-guided rollout.
+/// The selectable option pools used by the MLP-guided rollout.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionPools {
     /// Units that can be built next.
     pub build: Vec<UnitKind>,
     /// Upgrades that can be started next.
     pub upgrade: Vec<(UnitKind, UnitKind)>,
-    /// Idle engineers available to assist, grouped by tier.
-    pub assist: AssistCounts,
 }
 
 impl SelectionPools {
-    /// Derive the current candidate pools from the plan graph and state.
+    /// Derive the current option pools from the plan graph and state.
     pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
         let mut build = HashSet::new();
         let mut upgrade = HashSet::new();
@@ -117,34 +79,50 @@ impl SelectionPools {
         Self {
             build: build.into_iter().collect(),
             upgrade: upgrade.into_iter().collect(),
-            assist: derive_assist_counts(state, units),
         }
     }
 
-    /// Return all candidates as a flat list.
-    pub fn candidates(&self) -> Vec<Candidate> {
-        let mut candidates: Vec<Candidate> =
-            self.build.iter().cloned().map(Candidate::Build).collect();
+    /// Return all selection options as a flat list.
+    ///
+    /// Assist options mention only the project node; the builders that will be
+    /// assigned are resolved when the option is converted into a `SimAction`.
+    pub fn options(&self, state: &GraphState, units: &Units) -> Vec<SelectionOption> {
+        let mut options: Vec<SelectionOption> = self
+            .build
+            .iter()
+            .cloned()
+            .map(SelectionOption::Build)
+            .collect();
 
-        candidates.extend(
+        options.extend(
             self.upgrade
                 .iter()
                 .cloned()
-                .map(|(from, to)| Candidate::Upgrade { from, to }),
+                .map(|(from, to)| SelectionOption::Upgrade { from, to }),
         );
 
-        for tier in [TechLevel::T1, TechLevel::T2, TechLevel::T3] {
-            if self.assist.get(tier) > 0 {
-                candidates.push(Candidate::Assist(tier));
-            }
+        if has_idle_engineer(state, units) {
+            options.extend(
+                state
+                    .graph
+                    .graph
+                    .node_weights()
+                    .filter(|n| {
+                        matches!(
+                            n.state,
+                            UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+                        )
+                    })
+                    .map(|n| SelectionOption::Assist(n.id)),
+            );
         }
 
-        candidates
+        options
     }
 
-    /// True if there are no candidates at all.
-    pub fn is_empty(&self) -> bool {
-        self.build.is_empty() && self.upgrade.is_empty() && self.assist.is_empty()
+    /// True if there are no options at all.
+    pub fn is_empty(&self, state: &GraphState, units: &Units) -> bool {
+        self.build.is_empty() && self.upgrade.is_empty() && !has_idle_engineer(state, units)
     }
 }
 
@@ -192,28 +170,18 @@ fn can_upgrade(state: &GraphState, units: &Units, source: &UnitKind, target: &Un
     })
 }
 
-/// Count idle engineers by tech tier.
-fn derive_assist_counts(state: &GraphState, units: &Units) -> AssistCounts {
-    let mut counts = AssistCounts::default();
-
-    for &id in &state.idle_builders(units) {
-        if let UnitKind::Engineer(tier) = state.graph[id].unit_id {
-            match tier {
-                TechLevel::T1 => counts.t1 += 1,
-                TechLevel::T2 => counts.t2 += 1,
-                TechLevel::T3 => counts.t3 += 1,
-                TechLevel::T4 => {}
-            }
-        }
-    }
-
-    counts
+/// True if there is at least one idle engineer in the state.
+fn has_idle_engineer(state: &GraphState, units: &Units) -> bool {
+    state
+        .idle_builders(units)
+        .iter()
+        .any(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{UnitId, Units};
+    use crate::units::{TechLevel, UnitId, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
@@ -233,7 +201,7 @@ mod tests {
         assert!(pools.build.contains(&UnitKind::Mex(TechLevel::T1)));
         assert!(pools.build.contains(&UnitKind::Pgen(TechLevel::T1)));
         assert!(pools.upgrade.is_empty());
-        assert!(pools.assist.is_empty());
+        assert!(!pools.is_empty(&state, &units));
     }
 
     #[test]

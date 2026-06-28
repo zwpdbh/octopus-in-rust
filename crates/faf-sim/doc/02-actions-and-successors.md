@@ -1,57 +1,55 @@
 # 2. Actions and Successors
 
-The MLP planner expands a state by choosing from the legal **candidates** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level candidates used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
+The MLP planner expands a state by choosing from the legal **selection options** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level options used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
 
 ## Two-level action model
 
-The planner makes decisions at the level of **candidates**:
+The planner makes decisions at the level of **selection options**:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 21 — Candidate enum
-pub enum Candidate {
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 18 — SelectionOption enum
+pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
     /// Upgrade an existing `from` unit into `to`.
     Upgrade { from: UnitKind, to: UnitKind },
-    /// Assign all idle engineers of the given tier to assist an active project.
-    Assist(TechLevel),
+    /// Assist an active project. Builders are resolved at execution time.
+    Assist(NodeId),
 }
 ```
 
-A candidate is an abstract choice. Before it can be executed it is converted into a concrete `SearchAction`:
+A selection option is an abstract choice. Before it can be executed it is converted into a concrete `SimAction`:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/mod.rs ~line 124 — candidate_to_action
 pub(crate) fn candidate_to_action(
-    candidate: &Candidate,
+    candidate: &SelectionOption,
     state: &GraphState,
     units: &Units,
     _plan: &PlanGraph,
-) -> Option<SearchAction> {
+) -> Option<SimAction> {
     // ...
 }
 ```
 
-The separation is useful because the MLP policy reasons over a small, plan-graph-constrained set of candidates, while the simulator still consumes the existing `SearchAction` commands.
+The separation is useful because the MLP policy reasons over a small, plan-graph-constrained set of options, while the simulator still consumes the existing `SimAction` commands.
 
-## Generating candidates from the plan graph
+## Generating options from the plan graph
 
-`SelectionPools` derives the current legal candidates by walking the static `PlanGraph`:
+`SelectionPools` derives the current legal options by walking the static `PlanGraph`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 70 — SelectionPools
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 72 — SelectionPools
 pub struct SelectionPools {
     /// Units that can be built next.
     pub build: Vec<UnitKind>,
     /// Upgrades that can be started next.
     pub upgrade: Vec<(UnitKind, UnitKind)>,
-    /// Idle engineers available to assist, grouped by tier.
-    pub assist: AssistCounts,
 }
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 82 — SelectionPools::derive
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 81 — SelectionPools::derive
 pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     let mut build = HashSet::new();
     let mut upgrade = HashSet::new();
@@ -90,7 +88,6 @@ pub fn derive(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
     Self {
         build: build.into_iter().collect(),
         upgrade: upgrade.into_iter().collect(),
-        assist: derive_assist_counts(state, units),
     }
 }
 ```
@@ -102,38 +99,28 @@ For each edge `source -> target` in the plan graph:
 - For a **build** edge, the source must be an idle builder capable of building the target.
 - For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
 
-`Assist` candidates are derived separately from idle engineers grouped by tech tier:
+`Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 36 — AssistCounts
-pub struct AssistCounts {
-    pub t1: u32,
-    pub t2: u32,
-    pub t3: u32,
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 90 — SelectionPools::options
+pub fn options(&self, state: &GraphState, units: &Units) -> Vec<SelectionOption> {
+    // ... build -> SelectionOption::Build,
+    //     upgrade -> SelectionOption::Upgrade,
+    //     active project -> SelectionOption::Assist
 }
 ```
 
-## From candidates to executable actions
+## From options to executable actions
 
-`SelectionPools::candidates` flattens the pools into a `Vec<Candidate>`:
+`SelectionPools::options` flattens the pools into a `Vec<SelectionOption>` by pairing build/upgrade targets with concrete assist combinations. The policy scores each option, but not every scored option can be executed immediately. The planner filters by `candidate_to_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
 
-```rust
-// crates/faf-sim/src/planner/mcts/pools.rs ~line 125 — SelectionPools::candidates
-pub fn candidates(&self) -> Vec<Candidate> {
-    // ... build -> Candidate::Build, upgrade -> Candidate::Upgrade,
-    //     non-empty assist tiers -> Candidate::Assist
-}
-```
+## Low-level `SimAction`
 
-The policy scores each candidate, but not every scored candidate can be executed immediately. The planner filters by `candidate_to_action` before sampling. For example, a `Build` candidate needs a specific idle builder node; if the only capable builder became busy during the current tick, the candidate is skipped and the planner issues `Wait`.
-
-## Low-level `SearchAction`
-
-The concrete simulator commands are still the existing `SearchAction` enum:
+The concrete simulator commands are still the existing `SimAction` enum:
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 14 — SearchAction enum
-pub enum SearchAction {
+// crates/faf-sim/src/planner/search.rs ~line 21 — SimAction enum
+pub enum SimAction {
     Build {
         unit_id: UnitKind,
         builder: NodeId,
@@ -153,24 +140,24 @@ pub enum SearchAction {
 
 - `Build` starts a new project for a unit, assigning one idle builder to it.
 - `Upgrade` starts a new project for the higher-tier unit and retires the source slot.
-- `Assist` adds all idle engineers of a tier to an already-started project.
+- `Assist` adds all idle engineers to an already-started project.
 - `Wait` advances the simulator by one tick.
 
 The current MLP planner usually assigns a single builder; future successors may assign multiple builders to a project.
 
 ## Why the branching factor matters
 
-The candidate list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal candidates. The policy network keeps the decision cheap:
+The option list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal options. The policy network keeps the decision cheap:
 
-1. Generate candidates once with `SelectionPools::derive`.
-2. Score all candidates in a single batched forward pass.
-3. Sample one candidate and convert it to a `SearchAction`.
+1. Generate options once with `SelectionPools::derive` and flatten them with `SelectionPools::options`.
+2. Score all options in a single batched forward pass.
+3. Sample one option and convert it to a `SimAction`.
 
 This is `O(n_candidates)` forward work per decision, not a tree expansion.
 
 ## Legal move validation
 
-Not every `Candidate` is valid in every state. The simulator rejects actions that violate constraints:
+Not every `SelectionOption` is valid in every state. The simulator rejects actions that violate constraints:
 
 - A busy builder cannot start a new project.
 - A builder cannot build or upgrade a unit it is not capable of building.

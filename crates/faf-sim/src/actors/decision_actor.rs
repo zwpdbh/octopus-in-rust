@@ -6,14 +6,14 @@
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::actors::message::{Command, Observation};
-use crate::planner::search::SearchAction;
+use crate::planner::search::SimAction;
 use crate::planner::Planner;
 use crate::units::{UnitKind, Units};
 
-fn search_action_to_command(action: SearchAction) -> Option<Command> {
+fn sim_action_to_command(action: SimAction) -> Option<Command> {
     match action {
-        SearchAction::Build { unit_id, builder } => Some(Command::Build { unit_id, builder }),
-        SearchAction::Upgrade {
+        SimAction::Build { unit_id, builder } => Some(Command::Build { unit_id, builder }),
+        SimAction::Upgrade {
             target_unit_id,
             old_node,
             builder,
@@ -22,14 +22,14 @@ fn search_action_to_command(action: SearchAction) -> Option<Command> {
             old_node,
             builder,
         }),
-        SearchAction::Assist {
+        SimAction::Assist {
             project_node,
             builders,
         } => Some(Command::Assist {
             project_node,
             builders,
         }),
-        SearchAction::Wait => None,
+        SimAction::Wait => None,
     }
 }
 
@@ -70,7 +70,7 @@ impl DecisionActor {
                 Observation::State(state) => {
                     let plan = self.planner.plan(&self.units, state, &self.goal_id).ok();
                     plan.and_then(|p| p.first_action)
-                        .and_then(search_action_to_command)
+                        .and_then(sim_action_to_command)
                 }
                 // Events alone do not trigger a new decision; wait for the next state snapshot.
                 Observation::Event(_) => None,

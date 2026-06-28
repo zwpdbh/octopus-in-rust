@@ -104,7 +104,7 @@ pub struct PlanResult {
     pub events: Vec<BuildEvent>,
     pub completion_time: f64,
     pub final_economy: EconomyState,
-    pub first_action: Option<crate::planner::search::SearchAction>,
+    pub first_action: Option<crate::planner::search::SimAction>,
 }
 ```
 
@@ -168,7 +168,7 @@ pub async fn run(mut self) {
             Observation::State(state) => {
                 let plan = self.planner.plan(&self.units, state, &self.goal_id).ok();
                 plan.and_then(|p| p.first_action)
-                    .and_then(search_action_to_command)
+                    .and_then(sim_action_to_command)
             }
             Observation::Event(_) => None,
         };

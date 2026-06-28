@@ -7,8 +7,8 @@ The focus is practical: how to frame the simulator as an MCTS search problem, ho
 ## What you will build
 
 1. A state representation that the MCTS can reason about.
-2. A compact, legal candidate generator derived from the `PlanGraph`.
-3. A small neural network that scores `(state, candidate)` pairs and selects actions via softmax sampling.
+2. A compact, legal option generator derived from the `PlanGraph`.
+3. A small neural network that scores `(state, selection_option)` pairs and selects actions via softmax sampling.
 4. A policy-gradient training loop that turns simulator rollouts into network weights.
 5. A UCT search that uses the policy network to choose the next command.
 6. A benchmark suite that compares MCTS against the existing beam-search baseline.
@@ -19,7 +19,7 @@ The focus is practical: how to frame the simulator as an MCTS search problem, ho
 |---|------|----------------|
 | 0 | [`00-why-mcts.md`](./00-why-mcts.md) | Why MCTS + learned policy fits FAF build-order optimization. |
 | 1 | [`01-the-state-graph.md`](./01-the-state-graph.md) | `GraphState` as the MCTS state: units, builders, economy, stall. |
-| 2 | [`02-actions-and-successors.md`](./02-actions-and-successors.md) | `Candidate`, `SelectionPools`, successor generation, action masking. |
+| 2 | [`02-actions-and-successors.md`](./02-actions-and-successors.md) | `SelectionOption`, `SelectionPools`, successor generation, action masking. |
 | 3 | [`03-value-network.md`](./03-value-network.md) | Featurization, policy-network architecture, REINFORCE training with `burn`. |
 | 4 | [`04-mcts-search.md`](./04-mcts-search.md) | Current one-step policy, planned UCT selection, expansion, leaf evaluation, backup, tree reuse. |
 | 5 | [`05-integration.md`](./05-integration.md) | Wiring `Strategy::Mcts` into `Planner` and the CLI. |

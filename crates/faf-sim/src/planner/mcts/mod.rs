@@ -8,11 +8,11 @@
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::plan_graph::PlanGraph;
-use crate::planner::search::SearchAction;
+use crate::planner::search::SimAction;
 use crate::sim::{GraphSimError, GraphState, NodeId, UnitNodeState};
-use crate::units::{TechLevel, UnitKind, Units};
+use crate::units::{UnitKind, Units};
 
-use self::pools::{Candidate, SelectionPools};
+use self::selections::{SelectionOption, SelectionPools};
 use self::train::TrainBackend;
 use self::value_net::ValueNet;
 use burn::tensor::Device;
@@ -20,8 +20,8 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
 pub mod features;
-pub mod pools;
 pub mod search;
+pub mod selections;
 pub mod train;
 pub mod value_net;
 
@@ -78,10 +78,10 @@ fn mlp_policy_plan(
     let net: ValueNet<TrainBackend> = value_net.unwrap_or_else(|| ValueNet::new(&device));
 
     let pools = SelectionPools::derive(&plan, &state, units);
-    let candidates = pools.candidates();
+    let candidates = pools.options(&state, units);
 
     if candidates.is_empty() {
-        return Ok(plan_result_with_action(state, SearchAction::Wait));
+        return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
     let scored = net.score_candidates(&state, &candidates, goal_id, units, &plan, config, &device);
@@ -97,7 +97,7 @@ fn mlp_policy_plan(
     }
 
     if executable.is_empty() {
-        return Ok(plan_result_with_action(state, SearchAction::Wait));
+        return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
     let probs = softmax(&scores, SAMPLE_TEMPERATURE);
@@ -120,37 +120,48 @@ fn softmax(scores: &[f32], temperature: f32) -> Vec<f32> {
     exps.into_iter().map(|e| e / sum).collect()
 }
 
-/// Convert a candidate into a concrete simulator command if it is executable.
+/// Convert a selection option into a concrete simulator command if it is executable.
 pub(crate) fn candidate_to_action(
-    candidate: &Candidate,
+    candidate: &SelectionOption,
     state: &GraphState,
     units: &Units,
     _plan: &PlanGraph,
-) -> Option<SearchAction> {
+) -> Option<SimAction> {
     match candidate {
-        Candidate::Build(target) => {
+        SelectionOption::Build(target) => {
             let builder_id = find_idle_builder(state, units, target)?;
-            Some(SearchAction::Build {
+            Some(SimAction::Build {
                 unit_id: target.clone(),
                 builder: builder_id,
             })
         }
-        Candidate::Upgrade { from, to } => {
+        SelectionOption::Upgrade { from, to } => {
             let (old_node, builder_id) = find_upgrade_parts(state, units, from, to)?;
-            Some(SearchAction::Upgrade {
+            Some(SimAction::Upgrade {
                 target_unit_id: to.clone(),
                 old_node,
                 builder: builder_id,
             })
         }
-        Candidate::Assist(tier) => {
-            let builders = idle_engineers_of_tier(state, units, *tier);
+        SelectionOption::Assist(target) => {
+            // Verify the target is still an active project.
+            if !matches!(
+                state.graph[*target].state,
+                UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+            ) {
+                return None;
+            }
+            // Assign all idle engineers to the project.
+            let builders: Vec<NodeId> = state
+                .idle_builders(units)
+                .into_iter()
+                .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
+                .collect();
             if builders.is_empty() {
                 return None;
             }
-            let project_node = best_project_to_assist(state)?;
-            Some(SearchAction::Assist {
-                project_node,
+            Some(SimAction::Assist {
+                project_node: *target,
                 builders,
             })
         }
@@ -189,52 +200,25 @@ fn find_upgrade_parts(
     Some((old_node, builder_id))
 }
 
-/// Return all idle engineer nodes of the requested tier.
-fn idle_engineers_of_tier(state: &GraphState, units: &Units, tier: TechLevel) -> Vec<NodeId> {
-    state
-        .idle_builders(units)
-        .into_iter()
-        .filter(|&id| state.graph[id].unit_id == UnitKind::Engineer(tier))
-        .collect()
-}
-
-/// Pick the active project that benefits most from assistance.
-///
-/// Current heuristic: assist the project with the most remaining work.
-fn best_project_to_assist(state: &GraphState) -> Option<NodeId> {
-    state
-        .graph
-        .graph
-        .node_weights()
-        .filter(|n| matches!(n.state, UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }))
-        .max_by(|a, b| {
-            a.remaining_work()
-                .unwrap_or(0.0)
-                .partial_cmp(&b.remaining_work().unwrap_or(0.0))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|n| n.id)
-}
-
-/// Apply a [`SearchAction`] to a mutable simulator state.
+/// Apply a [`SimAction`] to a mutable simulator state.
 pub(crate) fn execute_action(
     state: &mut GraphState,
-    action: &SearchAction,
+    action: &SimAction,
     units: &Units,
     dt: f64,
 ) -> Result<(), GraphSimError> {
     match action {
-        SearchAction::Build { unit_id, builder } => {
+        SimAction::Build { unit_id, builder } => {
             state.start_project(unit_id, &[*builder], units)?;
         }
-        SearchAction::Upgrade {
+        SimAction::Upgrade {
             target_unit_id,
             old_node,
             builder,
         } => {
             state.start_upgrade_project(target_unit_id, *old_node, &[*builder], units)?;
         }
-        SearchAction::Assist {
+        SimAction::Assist {
             project_node,
             builders,
         } => {
@@ -243,7 +227,7 @@ pub(crate) fn execute_action(
             }
             state.assist_project(*project_node, builders, units)?;
         }
-        SearchAction::Wait => {
+        SimAction::Wait => {
             state.tick(units, dt);
         }
     }
@@ -251,7 +235,7 @@ pub(crate) fn execute_action(
 }
 
 /// Build a [`PlanResult`] that commits to a single immediate action.
-fn plan_result_with_action(state: GraphState, action: SearchAction) -> PlanResult {
+fn plan_result_with_action(state: GraphState, action: SimAction) -> PlanResult {
     PlanResult {
         events: Vec::new(),
         completion_time: state.time,

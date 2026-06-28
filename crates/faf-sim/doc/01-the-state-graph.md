@@ -55,7 +55,7 @@ Builder behavior creates most of the structure that MCTS must reason about:
 - Other builders may **assist** a project even if they cannot build the target themselves, provided they are real builders (commanders, engineers, factories).
 - For every edge `A -> B`: `finish_time(A) <= start_time(B)`.
 
-These rules determine which candidates and `SearchAction` expansions are legal from a given state.
+These rules determine which candidates and `SimAction` expansions are legal from a given state.
 
 ## Economy and stall
 

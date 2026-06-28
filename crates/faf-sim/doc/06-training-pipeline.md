@@ -65,13 +65,13 @@ At each tick:
 1. Derive `SelectionPools` from the `PlanGraph`.
 2. Build a feature matrix `[n_candidates, FEATURE_COUNT]`.
 3. With probability `epsilon`, pick a random candidate; otherwise sample from the softmax over MLP scores.
-4. Convert the chosen candidate to a `SearchAction` and execute it.
+4. Convert the chosen candidate to a `SimAction` and execute it.
 5. If no candidate is executable, issue `Wait`.
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train.rs ~line 188 — action selection
 let pools = SelectionPools::derive(plan, &state, units);
-let candidates = pools.candidates();
+let candidates = pools.options(&state, units);
 
 // ... feature matrix ...
 

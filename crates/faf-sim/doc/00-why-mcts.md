@@ -48,7 +48,7 @@ The combination looks like this:
         └───────┬───────┘
                 │
                 ▼
-        best SearchAction
+        best SimAction
                 │
                 ▼
         simulator tick

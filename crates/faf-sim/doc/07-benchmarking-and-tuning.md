@@ -59,7 +59,7 @@ Currently the `iterations` field of `Strategy::Mcts` is ignored because the plan
 | MCTS is much slower than beam | Too many expansions or expensive network inference | Reduce iterations, batch inference, or use a smaller network. |
 | MCTS finds worse plans | Policy/value network is inaccurate or undertrained | Add more training data, especially from MCTS states. |
 | MCTS explores silly actions | `c_puct` too high or policy network overconfident | Lower `c_puct`, add candidate pruning, or train a policy prior. |
-| MCTS gets stuck repeating actions | Candidate generation bug or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
+| MCTS gets stuck repeating actions | SelectionOption generation bug or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
 | Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
 | Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |
 

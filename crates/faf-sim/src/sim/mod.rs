@@ -15,6 +15,6 @@ pub mod state;
 
 pub use runner::{run_build_order_simulation, SimulationConfig, SimulationError, SimulationResult};
 pub use state::{
-    derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId,
-    UnitNode, UnitNodeState,
+    derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, GraphState, NodeId, UnitNode,
+    UnitNodeState,
 };

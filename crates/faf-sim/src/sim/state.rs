@@ -171,7 +171,10 @@ impl UnitNode {
 
     /// True if this slot is finished and currently active.
     pub fn is_active(&self) -> bool {
-        matches!(self.state, UnitNodeState::Constructed { .. } | UnitNodeState::Upgraded { .. })
+        matches!(
+            self.state,
+            UnitNodeState::Constructed { .. } | UnitNodeState::Upgraded { .. }
+        )
     }
 
     /// The finish time of this slot, if it has finished or been replaced.
@@ -195,7 +198,10 @@ impl UnitNode {
 
     /// True if this slot was reached by upgrading an earlier unit.
     pub fn is_upgrade(&self) -> bool {
-        matches!(self.state, UnitNodeState::Upgrading { .. } | UnitNodeState::Upgraded { .. })
+        matches!(
+            self.state,
+            UnitNodeState::Upgrading { .. } | UnitNodeState::Upgraded { .. }
+        )
     }
 
     /// The node id this slot was replaced by, if any.
@@ -422,7 +428,12 @@ impl GraphState {
         self.graph
             .graph
             .node_weights()
-            .filter(|n| matches!(n.state, UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }))
+            .filter(|n| {
+                matches!(
+                    n.state,
+                    UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+                )
+            })
             .map(|n| n.unit_id.clone())
             .collect()
     }
@@ -538,7 +549,12 @@ impl GraphState {
         self.graph
             .graph
             .node_weights()
-            .filter(|n| matches!(n.state, UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }))
+            .filter(|n| {
+                matches!(
+                    n.state,
+                    UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+                )
+            })
             .flat_map(|n| self.graph.graph.edges_directed(n.id.0, Direction::Incoming))
             .map(|edge| NodeId::new(edge.source().index()))
             .collect()
@@ -786,7 +802,12 @@ impl GraphState {
             .graph
             .graph
             .node_weights()
-            .filter(|n| matches!(n.state, UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }))
+            .filter(|n| {
+                matches!(
+                    n.state,
+                    UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
+                )
+            })
             .map(|n| n.id)
             .collect();
 

@@ -1,13 +1,13 @@
 //! State and candidate featurization for the value network.
 //!
-//! Converts a variable-size [`GraphState`] and a concrete [`Candidate`] into a
+//! Converts a variable-size [`GraphState`] and a concrete [`SelectionOption`] into a
 //! fixed-size `Vec<f32>` that the MLP can consume.
 
 use petgraph::algo::dijkstra;
 use petgraph::graph::NodeIndex;
 
 use crate::planner::core::PlannerConfig;
-use crate::planner::mcts::pools::Candidate;
+use crate::planner::mcts::selections::SelectionOption;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
 use crate::units::{TechLevel, UnitKind, Units};
@@ -55,7 +55,13 @@ pub fn state_features(
         .graph
         .graph
         .node_weights()
-        .filter(|n| matches!(n.state, crate::sim::UnitNodeState::Constructing { .. } | crate::sim::UnitNodeState::Upgrading { .. }))
+        .filter(|n| {
+            matches!(
+                n.state,
+                crate::sim::UnitNodeState::Constructing { .. }
+                    | crate::sim::UnitNodeState::Upgrading { .. }
+            )
+        })
         .count();
     features.push(clamp(active_project_count as f32 / 10.0));
     features.push(bool_f32(
@@ -72,54 +78,70 @@ pub fn state_features(
     features
 }
 
-/// Convert a candidate action into a fixed-length feature vector.
-pub fn candidate_features(candidate: &Candidate, plan: &PlanGraph, units: &Units) -> Vec<f32> {
+/// Convert a selection option into a fixed-length feature vector.
+pub fn candidate_features(
+    candidate: &SelectionOption,
+    state: &GraphState,
+    plan: &PlanGraph,
+    units: &Units,
+) -> Vec<f32> {
     let mut features = vec![0.0f32; CANDIDATE_FEATURE_COUNT];
 
-    let (target, is_build, is_upgrade, is_assist) = match candidate {
-        Candidate::Build(target) => (target, 1.0f32, 0.0f32, 0.0f32),
-        Candidate::Upgrade { to, .. } => (to, 0.0f32, 1.0f32, 0.0f32),
-        Candidate::Assist(tier) => {
-            features[0] = 0.0;
-            features[1] = 0.0;
-            features[2] = 1.0;
-            features[3] = tier_value(*tier);
-            features[11] = 0.0; // no distance for assist
-            return features;
+    let (target_kind, is_build, is_upgrade, is_assist, builder_power) = match candidate {
+        SelectionOption::Build(target) => (target, 1.0f32, 0.0f32, 0.0f32, 0.0f32),
+        SelectionOption::Upgrade { to, .. } => (to, 0.0f32, 1.0f32, 0.0f32, 0.0f32),
+        SelectionOption::Assist(target) => {
+            let target_kind = &state.graph[*target].unit_id;
+            let power = idle_engineer_power(state, units);
+            (target_kind, 0.0f32, 0.0f32, 1.0f32, power)
         }
     };
 
     features[0] = is_build;
     features[1] = is_upgrade;
     features[2] = is_assist;
-    features[3] = tier_value(tier_of(target));
-    features[4] = bool_f32(matches!(target, UnitKind::Mex(_)));
-    features[5] = bool_f32(matches!(target, UnitKind::Pgen(_)));
-    features[6] = bool_f32(matches!(target, UnitKind::Factory(_)));
-    features[7] = bool_f32(matches!(target, UnitKind::Engineer(_)));
-    features[8] = bool_f32(matches!(target, UnitKind::Unique(_)));
+    features[3] = tier_value(tier_of(target_kind));
+    features[4] = bool_f32(matches!(target_kind, UnitKind::Mex(_)));
+    features[5] = bool_f32(matches!(target_kind, UnitKind::Pgen(_)));
+    features[6] = bool_f32(matches!(target_kind, UnitKind::Factory(_)));
+    features[7] = bool_f32(matches!(target_kind, UnitKind::Engineer(_)));
+    features[8] = bool_f32(matches!(target_kind, UnitKind::Unique(_)));
 
-    if let Some(cost) = units.build_cost(target) {
+    if is_assist > 0.0 {
+        features[9] = clamp(builder_power / 100.0);
+        features[10] = 0.0;
+        features[11] = 0.0; // no distance for assist
+    } else if let Some(cost) = units.build_cost(target_kind) {
         features[9] = clamp(cost.mass as f32 / 10_000.0);
         features[10] = clamp(cost.energy as f32 / 100_000.0);
+        features[11] = clamp(distance_to_goal(plan, target_kind) as f32 / 10.0);
     }
 
-    features[11] = clamp(distance_to_goal(plan, target) as f32 / 10.0);
-
     features
+}
+
+/// Total build power of all idle engineers.
+fn idle_engineer_power(state: &GraphState, units: &Units) -> f32 {
+    state
+        .idle_builders(units)
+        .iter()
+        .filter(|&&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
+        .filter_map(|&id| units.def(&state.graph[id].unit_id))
+        .map(|d| d.build_rate as f32)
+        .sum()
 }
 
 /// Combine state and candidate features into one vector.
 pub fn featurize(
     state: &GraphState,
-    candidate: &Candidate,
+    candidate: &SelectionOption,
     goal_id: &UnitKind,
     units: &Units,
     plan: &PlanGraph,
     config: &PlannerConfig,
 ) -> Vec<f32> {
     let mut features = state_features(state, goal_id, units, config);
-    features.extend(candidate_features(candidate, plan, units));
+    features.extend(candidate_features(candidate, state, plan, units));
     debug_assert_eq!(features.len(), FEATURE_COUNT);
     features
 }
@@ -204,7 +226,7 @@ mod tests {
         let plan = units.plan_graph(&goal).unwrap();
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
-        let candidate = Candidate::Build(UnitKind::Mex(TechLevel::T1));
+        let candidate = SelectionOption::Build(UnitKind::Mex(TechLevel::T1));
 
         let features = featurize(&state, &candidate, &goal, &units, &plan, &config);
         assert_eq!(features.len(), FEATURE_COUNT);
