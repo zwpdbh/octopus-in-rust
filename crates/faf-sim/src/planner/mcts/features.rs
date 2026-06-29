@@ -41,11 +41,7 @@ pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
 /// 10. has T2 factory
 /// 11. has T3 factory
 /// 12. has T3 engineer
-pub fn state_features(
-    state: &GraphState,
-    units: &Units,
-    config: &PlannerConfig,
-) -> Vec<f32> {
+pub fn state_features(state: &GraphState, units: &Units, config: &PlannerConfig) -> Vec<f32> {
     let mut features = Vec::with_capacity(STATE_FEATURE_COUNT);
     let economy = &state.economy;
 
@@ -148,7 +144,10 @@ pub fn candidate_features(
     features[5] = bool_f32(matches!(target_kind, UnitKind::Pgen(_)));
     features[6] = bool_f32(matches!(target_kind, UnitKind::Factory(_)));
     features[7] = bool_f32(matches!(target_kind, UnitKind::Engineer(_)));
-    features[8] = bool_f32(matches!(target_kind, UnitKind::CapT2Mex | UnitKind::CapT3Mex));
+    features[8] = bool_f32(matches!(
+        target_kind,
+        UnitKind::CapT2Mex | UnitKind::CapT3Mex
+    ));
     features[9] = bool_f32(*target_kind == UnitKind::EnergyStorage);
     features[10] = bool_f32(matches!(target_kind, UnitKind::Unique(_)));
 

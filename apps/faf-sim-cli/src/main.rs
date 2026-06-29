@@ -380,22 +380,26 @@ fn build_visual_graph(
 }
 
 fn node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
-    use faf_sim::{TechLevel, UnitKind};
-    let name = units.display_name(kind);
+    use faf_sim::UnitKind;
     match kind {
-        UnitKind::Engineer(tl) | UnitKind::Factory(tl) | UnitKind::Mex(tl) | UnitKind::Pgen(tl) => {
-            let tier = match tl {
-                TechLevel::T1 => 1,
-                TechLevel::T2 => 2,
-                TechLevel::T3 => 3,
-                TechLevel::T4 => 4,
-            };
-            format!("{} (T{})", name, tier)
-        }
-        UnitKind::Commander | UnitKind::Unique(_) => name.to_string(),
-        UnitKind::CapT2Mex => format!("{} (T2 capped)", name),
-        UnitKind::CapT3Mex => format!("{} (T3 capped)", name),
-        UnitKind::EnergyStorage => name.to_string(),
+        UnitKind::Commander => "ACU".to_string(),
+        UnitKind::Engineer(tl) => format!("T{} Eng", tier_number(*tl)),
+        UnitKind::Factory(tl) => format!("T{} Factory", tier_number(*tl)),
+        UnitKind::Mex(tl) => format!("T{} Mex", tier_number(*tl)),
+        UnitKind::Pgen(tl) => format!("T{} PGen", tier_number(*tl)),
+        UnitKind::CapT2Mex => "T2 Mex Capped".to_string(),
+        UnitKind::CapT3Mex => "T3 Mex Capped".to_string(),
+        UnitKind::EnergyStorage => "Energy Storage".to_string(),
+        UnitKind::Unique(_) => units.display_name(kind).to_string(),
+    }
+}
+
+fn tier_number(tl: faf_sim::TechLevel) -> u8 {
+    match tl {
+        faf_sim::TechLevel::T1 => 1,
+        faf_sim::TechLevel::T2 => 2,
+        faf_sim::TechLevel::T3 => 3,
+        faf_sim::TechLevel::T4 => 4,
     }
 }
 

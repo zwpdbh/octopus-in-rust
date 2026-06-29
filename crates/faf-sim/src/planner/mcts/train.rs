@@ -184,10 +184,7 @@ impl Trainer {
             let baseline = self.evaluate_greedy(units, goal, &plan, &planner_config);
             if self.config.verbose {
                 if let Some(t) = baseline {
-                    eprintln!(
-                        "Resumed model greedy baseline: {}",
-                        format_time(t, true)
-                    );
+                    eprintln!("Resumed model greedy baseline: {}", format_time(t, true));
                 } else {
                     eprintln!("Resumed model did not reach the goal in a greedy evaluation.");
                 }
@@ -511,9 +508,9 @@ impl Trainer {
         if let Some(loss) = accumulated_loss {
             let grads = loss.backward();
             let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-            self.model = self
-                .optimizer
-                .step(self.config.learning_rate.into(), self.model.clone(), grads);
+            self.model =
+                self.optimizer
+                    .step(self.config.learning_rate.into(), self.model.clone(), grads);
         }
 
         if step_count == 0 {
@@ -640,7 +637,11 @@ pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
-) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
+) -> (
+    ValueNet<TrainBackend>,
+    Option<ValueNet<TrainBackend>>,
+    TrainStats,
+) {
     let mut trainer = Trainer::new(config);
     let stats = trainer.train(units, goal);
     let best_model = trainer.best_model.take();
@@ -654,7 +655,11 @@ pub fn train_policy_from(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
-) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
+) -> (
+    ValueNet<TrainBackend>,
+    Option<ValueNet<TrainBackend>>,
+    TrainStats,
+) {
     let mut trainer = Trainer::from_model(config, model);
     // Treat the loaded model as the initial best so training only replaces it
     // if it actually improves on the baseline.
@@ -677,13 +682,28 @@ pub fn save_model(model: &ValueNet<TrainBackend>, path: &std::path::Path) -> Res
 }
 
 /// Load a trained model from disk.
+///
+/// Verifies that the saved model's input dimension matches the current
+/// [`FEATURE_COUNT`]. A mismatch means the featurization code changed after the
+/// model was trained, and using the stale weights would cause a runtime matrix
+/// multiplication panic.
 pub fn load_model(path: &std::path::Path) -> Result<ValueNet<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();
     let record = recorder
         .load(path.to_path_buf(), &device)
         .map_err(|e| format!("failed to load model: {e}"))?;
-    Ok(ValueNet::new(&device).load_record(record))
+    let model = ValueNet::new(&device).load_record(record);
+
+    let loaded_input_dim = model.input_dim();
+    if loaded_input_dim != FEATURE_COUNT {
+        return Err(format!(
+            "model input dimension mismatch: saved model expects {loaded_input_dim} features, \
+             but current featurization produces {FEATURE_COUNT} features; retrain the model"
+        ));
+    }
+
+    Ok(model)
 }
 
 /// Format a duration in seconds as "Xm Y.Ys", or "-" if `valid` is false.

@@ -41,6 +41,12 @@ impl<B: Backend> ValueNet<B> {
         }
     }
 
+    /// Expected size of the input feature vector.
+    pub fn input_dim(&self) -> usize {
+        let [d_input, _] = self.linear1.weight.shape().dims();
+        d_input
+    }
+
     /// Evaluate a batch of feature vectors.
     pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.linear1.forward(features);

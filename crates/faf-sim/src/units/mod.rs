@@ -567,7 +567,9 @@ mod tests {
         assert!(cap_t3_def.mass_storage > 0.0);
         assert!(cap_t3_def.mass_income > 18.0); // boosted by adjacency
 
-        let energy_storage_def = units.def(&UnitKind::EnergyStorage).expect("energy storage def");
+        let energy_storage_def = units
+            .def(&UnitKind::EnergyStorage)
+            .expect("energy storage def");
         assert_eq!(energy_storage_def.kind, UnitKind::EnergyStorage);
         assert!(energy_storage_def.energy_storage > 0.0);
 

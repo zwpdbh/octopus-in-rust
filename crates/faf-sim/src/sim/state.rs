@@ -559,7 +559,11 @@ impl GraphState {
         let mut best: Option<NodeId> = None;
         let mut best_count = usize::MAX;
         for node_id in active {
-            let count = self.energy_storage_adjacency.get(&node_id).copied().unwrap_or(0);
+            let count = self
+                .energy_storage_adjacency
+                .get(&node_id)
+                .copied()
+                .unwrap_or(0);
             if count < 4 && count < best_count {
                 best_count = count;
                 best = Some(node_id);

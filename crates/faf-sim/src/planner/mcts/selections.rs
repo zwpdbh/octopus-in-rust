@@ -17,8 +17,8 @@ use std::collections::HashSet;
 
 use petgraph::visit::EdgeRef;
 
-use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
 use crate::planner::core::PlannerConfig;
+use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
 use crate::planner::search::SimAction;
 use crate::sim::{GraphState, NodeId, UnitNodeState};
 use crate::units::{UnitKind, Units};
@@ -140,11 +140,7 @@ impl SelectionPools {
 }
 
 /// True if building `target` would exceed the configured storage cap.
-fn would_exceed_storage_cap(
-    target: &UnitKind,
-    state: &GraphState,
-    config: &PlannerConfig,
-) -> bool {
+fn would_exceed_storage_cap(target: &UnitKind, state: &GraphState, config: &PlannerConfig) -> bool {
     match target {
         UnitKind::EnergyStorage => {
             state.count_active_energy_storage() >= config.max_energy_storage_count

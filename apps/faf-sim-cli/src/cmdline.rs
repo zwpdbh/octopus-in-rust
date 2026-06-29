@@ -91,7 +91,9 @@ pub struct PlanArgs {
 
 /// Arguments for the `train` subcommand.
 #[derive(Parser)]
-#[command(after_help = "Examples:\n  cargo run --release --bin faf-sim -- train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy")]
+#[command(
+    after_help = "Examples:\n  cargo run --release --bin faf-sim -- train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy"
+)]
 pub struct TrainArgs {
     /// Number of training episodes. Must be specified with `-e`. Use `0` to run
     /// until the target time is reached or the process is interrupted.
