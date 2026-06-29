@@ -100,7 +100,8 @@ impl Units {
 
         // Synthetic definitions for capped mass extractors. These do not exist
         // as raw blueprints; they represent a T2/T3 mex surrounded by four mass
-        // storages, giving +50% mass income and 2000 mass storage capacity.
+        // storages. The base mass income matches the underlying mex; the +50%
+        // adjacency bonus is applied at runtime by the adjacency tracker.
         defs.insert(
             UnitKind::CapT2Mex,
             UnitDef {
@@ -113,7 +114,7 @@ impl Units {
                     build_time: 1000.0,
                 },
                 build_rate: 0.0,
-                mass_income: 9.0,
+                mass_income: 6.0,
                 energy_income: 0.0,
                 maintenance_energy: 9.0,
                 mass_storage: 2000.0,
@@ -132,7 +133,7 @@ impl Units {
                     build_time: 1000.0,
                 },
                 build_rate: 0.0,
-                mass_income: 27.0,
+                mass_income: 18.0,
                 energy_income: 0.0,
                 maintenance_energy: 54.0,
                 mass_storage: 2000.0,
@@ -557,15 +558,20 @@ mod tests {
     fn storage_and_capped_mex_units_are_defined() {
         let units = load_units();
 
+        let t2_mex_def = units.def(&UnitKind::Mex(TechLevel::T2)).unwrap();
+        let t3_mex_def = units.def(&UnitKind::Mex(TechLevel::T3)).unwrap();
+
+        // Capped mexes share the base income of the underlying mex; the +50%
+        // adjacency bonus is applied at runtime by the adjacency tracker.
         let cap_t2_def = units.def(&UnitKind::CapT2Mex).expect("capped t2 mex def");
         assert_eq!(cap_t2_def.kind, UnitKind::CapT2Mex);
         assert!(cap_t2_def.mass_storage > 0.0);
-        assert!(cap_t2_def.mass_income > 6.0); // boosted by adjacency
+        assert!((cap_t2_def.mass_income - t2_mex_def.mass_income).abs() < 1e-9);
 
         let cap_t3_def = units.def(&UnitKind::CapT3Mex).expect("capped t3 mex def");
         assert_eq!(cap_t3_def.kind, UnitKind::CapT3Mex);
         assert!(cap_t3_def.mass_storage > 0.0);
-        assert!(cap_t3_def.mass_income > 18.0); // boosted by adjacency
+        assert!((cap_t3_def.mass_income - t3_mex_def.mass_income).abs() < 1e-9);
 
         let energy_storage_def = units
             .def(&UnitKind::EnergyStorage)

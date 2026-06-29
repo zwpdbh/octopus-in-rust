@@ -291,7 +291,7 @@ pub fn summarize_economy(
 }
 
 /// Current economy state at a point in time.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EconomyState {
     /// Mass income per second (can be negative during drains).
     pub net_mass_income: f64,

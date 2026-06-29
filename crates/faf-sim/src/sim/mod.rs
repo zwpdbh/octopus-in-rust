@@ -10,6 +10,7 @@
 //! 3. **Reactive simulation driver** — [`runner::run_build_order_simulation`] wires
 //!    the simulator and planner actors together and drives time forward.
 
+pub mod adjacency;
 pub mod runner;
 pub mod state;
 

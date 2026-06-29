@@ -36,6 +36,7 @@
 use std::collections::HashSet;
 
 use crate::sim::GraphState;
+use crate::sim::adjacency::production_multiplier;
 use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
 /// Candidate units to consider building next.
@@ -166,7 +167,10 @@ fn efficiency(def: &UnitDef, category: &UnitKind) -> f64 {
         UnitKind::Mex(_) => def.mass_income / mass_cost,
         UnitKind::Pgen(_) => def.energy_income / mass_cost,
         UnitKind::Engineer(_) | UnitKind::Factory(_) => def.build_rate / mass_cost,
-        UnitKind::CapT2Mex | UnitKind::CapT3Mex => def.mass_income / mass_cost,
+        UnitKind::CapT2Mex | UnitKind::CapT3Mex => {
+            // Capped mexes receive the max mass-storage adjacency bonus (+50%).
+            (def.mass_income * production_multiplier(4)) / mass_cost
+        }
         UnitKind::EnergyStorage => 0.0,
         _ => 1.0 / mass_cost,
     }

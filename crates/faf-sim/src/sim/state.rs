@@ -9,7 +9,7 @@
 //!    indivisible (one target at a time). Multiple projects may run concurrently
 //!    as long as they use disjoint builder sets.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -19,6 +19,7 @@ use crate::economy::{
     apply_tick_graph, compute_drain, EcoConsumer, EcoFlow, EcoProducer, EconomyState,
     RequestedBuildPower,
 };
+use crate::sim::adjacency::{AdjacencyKind, AdjacencyTracker, production_multiplier};
 use crate::units::{UnitCost, UnitDef, UnitKind, Units};
 
 /// A single event in the simulated build timeline.
@@ -303,8 +304,8 @@ pub struct GraphState {
     pub economy: EconomyState,
     /// Completed build events in chronological order.
     pub events: Vec<BuildEvent>,
-    /// Number of energy storage buildings adjacent to each power generator.
-    pub energy_storage_adjacency: HashMap<NodeId, usize>,
+    /// Adjacency bonuses for mass and energy production.
+    pub adjacency: AdjacencyTracker,
 }
 
 /// True if the node represents an active builder unit.
@@ -345,15 +346,22 @@ impl GraphState {
             });
         }
 
-        let economy = derive_economy(units, starting_units);
+        let mut adjacency = AdjacencyTracker::new();
+        for node in graph.graph.node_weights() {
+            if matches!(node.unit_id, UnitKind::CapT2Mex | UnitKind::CapT3Mex) {
+                adjacency.set(AdjacencyKind::Mass, node.id, crate::sim::adjacency::MAX_ADJACENCY);
+            }
+        }
 
-        Self {
+        let mut state = Self {
             time: 0.0,
             graph,
-            economy,
+            economy: EconomyState::default(),
             events: Vec::new(),
-            energy_storage_adjacency: HashMap::new(),
-        }
+            adjacency,
+        };
+        state.rebuild_economy(units);
+        state
     }
 
     /// Return the builder nodes that are currently idle and available for new
@@ -450,12 +458,17 @@ impl GraphState {
             .count()
     }
 
-    /// Count how many active mass extractors (any tech level) are in the graph.
+    /// Count how many active mass extractors (any tech level, including capped)
+    /// are in the graph.
     pub fn count_active_mex(&self) -> usize {
         self.graph
             .graph
             .node_weights()
-            .filter(|n| n.is_active() && matches!(n.unit_id, UnitKind::Mex(_)))
+            .filter(|n| {
+                n.is_active()
+                    && (matches!(n.unit_id, UnitKind::Mex(_))
+                        || matches!(n.unit_id, UnitKind::CapT2Mex | UnitKind::CapT3Mex))
+            })
             .count()
     }
 
@@ -496,8 +509,8 @@ impl GraphState {
             .sum()
     }
 
-    /// Re-derive the economy from all active units, applying storage adjacency
-    /// bonuses to producers.
+    /// Re-derive the economy from all active units, applying adjacency bonuses
+    /// to producers.
     pub fn rebuild_economy(&mut self, units: &Units) {
         let active_nodes: Vec<NodeId> = self.active_units();
 
@@ -512,18 +525,18 @@ impl GraphState {
                 continue;
             };
 
-            let mass_income = def.mass_income;
+            let mut mass_income = def.mass_income;
             let mut energy_income = def.energy_income;
 
-            // Apply FAF adjacency bonus for energy storage (+12.5% per storage,
-            // max 4). Mass storage adjacency is now built into CapT2Mex/CapT3Mex.
-            if matches!(kind, UnitKind::Pgen(_)) {
-                let caps = self
-                    .energy_storage_adjacency
-                    .get(&node_id)
-                    .copied()
-                    .unwrap_or(0);
-                energy_income *= 1.0 + 0.125 * (caps.min(4) as f64);
+            // Apply the unified FAF adjacency bonus: +12.5% per adjacent storage,
+            // capped at 4 storages (+50% max).
+            if AdjacencyKind::Mass.is_producer(kind) {
+                let caps = self.adjacency.count(AdjacencyKind::Mass, node_id);
+                mass_income *= production_multiplier(caps);
+            }
+            if AdjacencyKind::Energy.is_producer(kind) {
+                let caps = self.adjacency.count(AdjacencyKind::Energy, node_id);
+                energy_income *= production_multiplier(caps);
             }
 
             net_mass += mass_income;
@@ -541,38 +554,21 @@ impl GraphState {
     }
 
     /// Assign a newly completed energy storage building to an active power
-    /// generator. The generator with the fewest existing caps is chosen, up to a
-    /// maximum of four caps per generator.
-    fn assign_storage_cap(&mut self, storage_kind: &UnitKind) {
-        if *storage_kind != UnitKind::EnergyStorage {
-            return;
-        }
-
+    /// generator using the unified adjacency tracker.
+    fn assign_energy_storage_cap(&mut self) {
         let active: Vec<NodeId> = self
             .graph
             .graph
             .node_weights()
-            .filter(|n| n.is_active() && matches!(n.unit_id, UnitKind::Pgen(_)))
+            .filter(|n| n.is_active() && AdjacencyKind::Energy.is_producer(&n.unit_id))
             .map(|n| n.id)
             .collect();
 
-        let mut best: Option<NodeId> = None;
-        let mut best_count = usize::MAX;
-        for node_id in active {
-            let count = self
-                .energy_storage_adjacency
-                .get(&node_id)
-                .copied()
-                .unwrap_or(0);
-            if count < 4 && count < best_count {
-                best_count = count;
-                best = Some(node_id);
-            }
-        }
-
-        if let Some(target) = best {
-            *self.energy_storage_adjacency.entry(target).or_insert(0) += 1;
-        }
+        self.adjacency.assign_to_least_capped(
+            AdjacencyKind::Energy,
+            active.into_iter(),
+            |node_id| AdjacencyKind::Energy.is_producer(&self.graph[node_id].unit_id),
+        );
     }
 
     /// Estimate the remaining time until `goal` is completed from this state.
@@ -998,11 +994,19 @@ impl GraphState {
 
         self.time += dt;
 
-        // Assign completed storage buildings to the least-capped matching producer.
+        // Assign completed storage buildings to the least-capped matching producer,
+        // and record the implicit max mass-storage adjacency for capped mex upgrades.
         for &target_node in &completed_nodes {
             let kind = self.graph[target_node].unit_id.clone();
             if matches!(kind, UnitKind::EnergyStorage) {
-                self.assign_storage_cap(&kind);
+                self.assign_energy_storage_cap();
+            }
+            if matches!(kind, UnitKind::CapT2Mex | UnitKind::CapT3Mex) {
+                self.adjacency.set(
+                    AdjacencyKind::Mass,
+                    target_node,
+                    crate::sim::adjacency::MAX_ADJACENCY,
+                );
             }
         }
 
@@ -1181,8 +1185,8 @@ mod tests {
             state.economy.net_energy_income - base_energy
         );
         assert_eq!(
-            state.energy_storage_adjacency.get(&pgen_node).copied(),
-            Some(1)
+            state.adjacency.count(AdjacencyKind::Energy, pgen_node),
+            1
         );
     }
 
