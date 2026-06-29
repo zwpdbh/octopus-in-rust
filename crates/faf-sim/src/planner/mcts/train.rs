@@ -1,7 +1,7 @@
-//! Policy-gradient training for the MLP value network.
+//! Policy-gradient training for the macro-direction network.
 //!
 //! Uses REINFORCE: roll out episodes with the current policy, then update the
-//! network so that actions leading to higher rewards become more likely.
+//! network so that macro directions leading to higher rewards become more likely.
 
 use std::f32;
 
@@ -11,15 +11,16 @@ use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{Adam, AdamConfig, Optimizer};
 use burn::record::{CompactRecorder, Recorder};
 use burn::tensor::activation::{log_softmax, softmax};
-use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::{Tensor, TensorData};
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
 use super::execute_action;
-use super::features::{candidate_features, state_features, FEATURE_COUNT};
+use super::features::{state_features, STATE_FEATURE_COUNT};
+use super::macro_net::{
+    argmax_direction, resolve_macro_direction, MacroDirection, MacroNet, MACRO_DIRECTION_COUNT,
+};
 use super::selections::SelectionPools;
-use super::value_net::ValueNet;
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
@@ -96,13 +97,14 @@ pub struct TrainStats {
 /// One recorded step in a training episode.
 ///
 /// A step corresponds to a single decision tick in the simulator: the policy
-/// scored all legal options, sampled one, and the simulator advanced by `dt`.
+/// scored the four macro directions, sampled one, resolved it to a concrete
+/// action, and the simulator advanced by `dt`.
 #[derive(Debug, Clone)]
 struct EpisodeStep {
-    /// Feature matrix with one row per legal option at this step.
-    candidate_features: Vec<Vec<f32>>,
-    /// Index of the option that was selected from the feature matrix.
-    action_index: usize,
+    /// State feature vector at this step.
+    state_features: Vec<f32>,
+    /// Index of the macro direction that was selected.
+    direction_index: usize,
     /// Normalized return for this step, filled in after the episode ends.
     return_value: f32,
 }
@@ -111,8 +113,8 @@ struct EpisodeStep {
 ///
 /// An episode is a single rollout: it starts from the ACU state, runs the
 /// current policy for up to `max_steps` decision ticks, and ends when the goal
-/// is reached or the step budget is exhausted. The recorded trajectory is used
-/// for one REINFORCE policy-gradient update.
+/// is reached or the step budget is exhausted. The recorded steps are used for
+/// one REINFORCE policy-gradient update.
 #[derive(Debug, Default, Clone)]
 struct Episode {
     /// Sequence of decision steps recorded during the rollout.
@@ -125,14 +127,14 @@ struct Episode {
     final_reward: f32,
 }
 
-/// Trainer for the MLP policy network.
+/// Trainer for the macro-direction policy network.
 /// Concrete optimizer type returned by `AdamConfig::init`.
-type AdamOptimizer = OptimizerAdaptor<Adam, ValueNet<TrainBackend>, TrainBackend>;
+type AdamOptimizer = OptimizerAdaptor<Adam, MacroNet<TrainBackend>, TrainBackend>;
 
 pub struct Trainer {
-    model: ValueNet<TrainBackend>,
+    model: MacroNet<TrainBackend>,
     /// Best model seen so far, captured whenever a new best completion time is found.
-    best_model: Option<ValueNet<TrainBackend>>,
+    best_model: Option<MacroNet<TrainBackend>>,
     optimizer: AdamOptimizer,
     config: TrainConfig,
     device: TrainDevice,
@@ -149,12 +151,12 @@ impl Trainer {
     /// Create a new trainer with random initialization.
     pub fn new(config: TrainConfig) -> Self {
         let device: TrainDevice = Default::default();
-        let model = ValueNet::new(&device);
+        let model = MacroNet::new(&device);
         Self::from_model(config, model)
     }
 
     /// Create a trainer that continues from an existing model.
-    pub fn from_model(config: TrainConfig, model: ValueNet<TrainBackend>) -> Self {
+    pub fn from_model(config: TrainConfig, model: MacroNet<TrainBackend>) -> Self {
         let device: TrainDevice = Default::default();
         let optimizer = AdamConfig::new().init();
         Self {
@@ -265,76 +267,10 @@ impl Trainer {
     ///
     /// 1. Start from the ACU state.
     /// 2. Derive the legal selection options for the current state.
-    /// 3. Score them with the current policy network and sample one.
-    /// 4. Convert it into a concrete simulator command and execute it.
-    /// 5. Record the feature matrix and chosen action for training.
+    /// 3. Score macro directions with the network and sample one.
+    /// 4. Resolve the direction to a concrete option and execute it.
+    /// 5. Record the state features and chosen direction for training.
     /// 6. Repeat until the goal is reached or the step budget runs out.
-    /// 7. Compute the final reward and normalize returns across episodes.
-    /// Compute the exploration probability for the current episode.
-    ///
-    /// If `epsilon_decay_episodes` is zero, epsilon stays at its initial value.
-    /// Otherwise it linearly decays from `epsilon` to `epsilon_final` over the
-    /// configured number of episodes.
-    fn current_epsilon(&self, ep: usize) -> f32 {
-        let decay = self.config.epsilon_decay_episodes;
-        if decay == 0 || ep >= decay {
-            return self.config.epsilon_final;
-        }
-        let progress = ep as f32 / decay as f32;
-        self.config.epsilon - (self.config.epsilon - self.config.epsilon_final) * progress
-    }
-
-    /// Run a deterministic greedy evaluation of the current model.
-    ///
-    /// This is used when resuming to establish a baseline completion time for
-    /// the loaded model. It always picks the highest-scoring candidate and does
-    /// not record any training data.
-    fn evaluate_greedy(
-        &self,
-        units: &Units,
-        goal: &UnitKind,
-        plan: &PlanGraph,
-        planner_config: &PlannerConfig,
-    ) -> Option<f64> {
-        let mut state = GraphState::new(units, &[UnitKind::Commander]);
-
-        for _ in 0..self.config.max_steps {
-            if state.goal_reached(goal) {
-                return Some(state.time);
-            }
-
-            let pools = SelectionPools::new(plan, &state, units, planner_config);
-            let candidates = pools.options().to_vec();
-            if candidates.is_empty() {
-                state.tick(units, self.config.dt);
-                continue;
-            }
-
-            let state_feats = state_features(&state, units, planner_config);
-            let feature_matrix: Vec<Vec<f32>> = candidates
-                .iter()
-                .map(|c| {
-                    let mut f = state_feats.clone();
-                    f.extend(candidate_features(c, &state, plan, units));
-                    f
-                })
-                .collect();
-
-            let action_index = argmax_action_index(&self.model, &feature_matrix, &self.device);
-            let selected = &candidates[action_index];
-            let Some(action) = selected.to_sim_action(&state, units) else {
-                state.tick(units, self.config.dt);
-                continue;
-            };
-
-            if execute_action(&mut state, &action, units, self.config.dt).is_err() {
-                state.tick(units, self.config.dt);
-            }
-        }
-
-        None
-    }
-
     fn run_episode(
         &mut self,
         units: &Units,
@@ -371,59 +307,132 @@ impl Trainer {
                 continue;
             }
 
-            // 2. Build a feature matrix with one row per legal option.
-            //    Each row is [state_features | candidate_features].
+            // 2. Score macro directions from state features.
             let state_feats = state_features(&state, units, planner_config);
-            let candidate_features: Vec<Vec<f32>> = candidates
-                .iter()
-                .map(|c| {
-                    let mut f = state_feats.clone();
-                    f.extend(candidate_features(c, &state, plan, units));
-                    f
-                })
-                .collect();
+            let scores = self
+                .model
+                .evaluate_single(state_feats.clone(), &self.device);
 
-            // 3. Sample an option: random exploration with probability epsilon,
-            //    otherwise sample from the softmax over MLP scores.
-            let action_index = if self.rng.gen::<f32>() < epsilon {
-                self.rng.gen_range(0..candidates.len())
+            // 3. Sample a macro direction: random exploration with probability epsilon,
+            //    otherwise sample from the softmax over network scores.
+            let direction_index = if self.rng.gen::<f32>() < epsilon {
+                self.rng.gen_range(0..MACRO_DIRECTION_COUNT)
             } else {
-                sample_action_index(
-                    &self.model,
-                    &candidate_features,
-                    &self.device,
-                    &mut self.rng,
-                )
+                sample_direction_index(&scores, &mut self.rng)
+            };
+            let direction =
+                MacroDirection::from_index(direction_index).unwrap_or(MacroDirection::BuildPower);
+
+            // 4. Resolve the macro direction to a concrete executable option.
+            let selected = match resolve_macro_direction(
+                direction,
+                &candidates,
+                &state,
+                units,
+                plan,
+                planner_config,
+            ) {
+                Some(option) => option,
+                None => {
+                    // Chosen direction has no executable candidate; wait and retry.
+                    state.tick(units, self.config.dt);
+                    continue;
+                }
             };
 
-            // 4. Convert the abstract option into a concrete simulator command.
-            let selected = &candidates[action_index];
+            // 5. Convert the abstract option into a concrete simulator command.
             let Some(action) = selected.to_sim_action(&state, units) else {
-                // The option is no longer executable (e.g., builder became busy);
-                // advance time and continue.
                 state.tick(units, self.config.dt);
                 continue;
             };
 
-            // 5. Execute the command. If the simulator rejects it, just wait.
+            // 6. Execute the command. If the simulator rejects it, just wait.
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
                 state.tick(units, self.config.dt);
                 continue;
             }
 
-            // 6. Record the trajectory step. The return is filled in once the
-            //    episode ends and the final reward is known.
+            // 7. Record the training step.
             episode.steps.push(EpisodeStep {
-                candidate_features,
-                action_index,
+                state_features: state_feats,
+                direction_index,
                 return_value: 0.0,
             });
         }
 
-        // 7. Reward shaping from the final state, then normalize returns.
+        // 8. Reward shaping from the final state, then normalize returns.
         episode.final_reward = compute_progress_reward(&state, units, goal, plan);
         self.compute_returns(&mut episode);
         episode
+    }
+
+    /// Compute the exploration probability for the current episode.
+    ///
+    /// If `epsilon_decay_episodes` is zero, epsilon stays at its initial value.
+    /// Otherwise it linearly decays from `epsilon` to `epsilon_final` over the
+    /// configured number of episodes.
+    fn current_epsilon(&self, ep: usize) -> f32 {
+        let decay = self.config.epsilon_decay_episodes;
+        if decay == 0 || ep >= decay {
+            return self.config.epsilon_final;
+        }
+        let progress = ep as f32 / decay as f32;
+        self.config.epsilon - (self.config.epsilon - self.config.epsilon_final) * progress
+    }
+
+    /// Run a deterministic greedy evaluation of the current model.
+    ///
+    /// This is used when resuming to establish a baseline completion time for
+    /// the loaded model. It always picks the highest-scoring direction and does
+    /// not record any training data.
+    fn evaluate_greedy(
+        &self,
+        units: &Units,
+        goal: &UnitKind,
+        plan: &PlanGraph,
+        planner_config: &PlannerConfig,
+    ) -> Option<f64> {
+        let mut state = GraphState::new(units, &[UnitKind::Commander]);
+
+        for _ in 0..self.config.max_steps {
+            if state.goal_reached(goal) {
+                return Some(state.time);
+            }
+
+            let pools = SelectionPools::new(plan, &state, units, planner_config);
+            let candidates = pools.options().to_vec();
+            if candidates.is_empty() {
+                state.tick(units, self.config.dt);
+                continue;
+            }
+
+            let state_feats = state_features(&state, units, planner_config);
+            let scores = self.model.evaluate_single(state_feats, &self.device);
+            let direction = argmax_direction(&scores);
+
+            let Some(selected) = resolve_macro_direction(
+                direction,
+                &candidates,
+                &state,
+                units,
+                plan,
+                planner_config,
+            ) else {
+                state.tick(units, self.config.dt);
+                continue;
+            };
+
+            let Some(action) = selected.to_sim_action(&state, units) else {
+                state.tick(units, self.config.dt);
+                continue;
+            };
+
+            if execute_action(&mut state, &action, units, self.config.dt).is_err() {
+                state.tick(units, self.config.dt);
+            }
+        }
+
+        None
     }
 
     /// Fill in the normalized return for each step from the final reward.
@@ -466,20 +475,13 @@ impl Trainer {
         let mut step_count = 0usize;
 
         for step in &episode.steps {
-            let n = step.candidate_features.len();
-            if n == 0 {
-                continue;
-            }
-
-            let data = TensorData::new(
-                step.candidate_features.iter().flatten().cloned().collect(),
-                [n, FEATURE_COUNT],
-            );
+            let data = TensorData::new(step.state_features.clone(), [1, STATE_FEATURE_COUNT]);
             let input = Tensor::<TrainBackend, 2>::from_data(data, &self.device);
-            let scores = self.model.forward(input).flatten::<1>(0, 1);
-            let log_probs = log_softmax(scores, 0);
+            let logits = self.model.forward(input).flatten::<1>(0, 1);
+            let log_probs = log_softmax(logits, 0);
+
             let index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                TensorData::new(vec![step.action_index as i64], [1]),
+                TensorData::new(vec![step.direction_index as i64], [1]),
                 &self.device,
             );
             let selected_log_prob = log_probs.clone().select(0, index_tensor);
@@ -521,9 +523,23 @@ impl Trainer {
     }
 
     /// Consume the trainer and return the trained model.
-    pub fn into_model(self) -> ValueNet<TrainBackend> {
+    pub fn into_model(self) -> MacroNet<TrainBackend> {
         self.model
     }
+}
+
+/// Sample a macro-direction index from a softmax over raw logits.
+fn sample_direction_index(scores: &[f32], rng: &mut ThreadRng) -> usize {
+    let n = scores.len();
+    let data = TensorData::new(scores.to_vec(), [n]);
+    let device: TrainDevice = Default::default();
+    let tensor = Tensor::<TrainBackend, 1>::from_data(data, &device);
+    let probs = softmax(tensor, 0);
+    let prob_vec: Vec<f32> = probs.into_data().as_slice::<f32>().unwrap().to_vec();
+
+    let dist = WeightedIndex::new(&prob_vec)
+        .unwrap_or_else(|_| WeightedIndex::new(vec![1.0f32; n]).unwrap());
+    dist.sample(rng)
 }
 
 /// Compute a shaped reward from the final state of an episode.
@@ -583,95 +599,8 @@ fn compute_progress_reward(
     reward
 }
 
-/// Sample an action from the softmax over candidate scores.
-fn sample_action_index<B: AutodiffBackend>(
-    model: &ValueNet<B>,
-    candidate_features: &[Vec<f32>],
-    device: &burn::tensor::Device<B>,
-    rng: &mut ThreadRng,
-) -> usize {
-    let n = candidate_features.len();
-    let data = TensorData::new(
-        candidate_features.iter().flatten().cloned().collect(),
-        [n, FEATURE_COUNT],
-    );
-    let input = Tensor::<B, 2>::from_data(data, device);
-    let scores = model.forward(input).flatten::<1>(0, 1);
-    let probs = softmax(scores, 0);
-    let prob_vec: Vec<f32> = probs.into_data().as_slice::<f32>().unwrap().to_vec();
-
-    // WeightedIndex handles numerical normalization better than raw softmax.
-    let dist = WeightedIndex::new(&prob_vec)
-        .unwrap_or_else(|_| WeightedIndex::new(vec![1.0f32; n]).unwrap());
-    dist.sample(rng)
-}
-
-/// Deterministically pick the candidate with the highest MLP score.
-fn argmax_action_index<B: AutodiffBackend>(
-    model: &ValueNet<B>,
-    candidate_features: &[Vec<f32>],
-    device: &burn::tensor::Device<B>,
-) -> usize {
-    let n = candidate_features.len();
-    let data = TensorData::new(
-        candidate_features.iter().flatten().cloned().collect(),
-        [n, FEATURE_COUNT],
-    );
-    let input = Tensor::<B, 2>::from_data(data, device);
-    let scores = model.forward(input).flatten::<1>(0, 1);
-    let score_vec: Vec<f32> = scores.into_data().as_slice::<f32>().unwrap().to_vec();
-    score_vec
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0)
-}
-
-/// Train a policy for `goal` and return the final and best-seen models.
-///
-/// The returned `best_model` is the model checkpoint captured when the fastest
-/// completion time was observed during training. If no episode reached the
-/// goal, it is `None`.
-pub fn train_policy(
-    units: &Units,
-    goal: &UnitKind,
-    config: TrainConfig,
-) -> (
-    ValueNet<TrainBackend>,
-    Option<ValueNet<TrainBackend>>,
-    TrainStats,
-) {
-    let mut trainer = Trainer::new(config);
-    let stats = trainer.train(units, goal);
-    let best_model = trainer.best_model.take();
-    let model = trainer.into_model();
-    (model, best_model, stats)
-}
-
-/// Continue training an existing policy for `goal`.
-pub fn train_policy_from(
-    model: ValueNet<TrainBackend>,
-    units: &Units,
-    goal: &UnitKind,
-    config: TrainConfig,
-) -> (
-    ValueNet<TrainBackend>,
-    Option<ValueNet<TrainBackend>>,
-    TrainStats,
-) {
-    let mut trainer = Trainer::from_model(config, model);
-    // Treat the loaded model as the initial best so training only replaces it
-    // if it actually improves on the baseline.
-    trainer.best_model = Some(trainer.model.clone());
-    let stats = trainer.train(units, goal);
-    let best_model = trainer.best_model.take();
-    let model = trainer.into_model();
-    (model, best_model, stats)
-}
-
 /// Save a trained model to disk.
-pub fn save_model(model: &ValueNet<TrainBackend>, path: &std::path::Path) -> Result<(), String> {
+pub fn save_model(model: &MacroNet<TrainBackend>, path: &std::path::Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("failed to create model dir: {e}"))?;
     }
@@ -684,22 +613,22 @@ pub fn save_model(model: &ValueNet<TrainBackend>, path: &std::path::Path) -> Res
 /// Load a trained model from disk.
 ///
 /// Verifies that the saved model's input dimension matches the current
-/// [`FEATURE_COUNT`]. A mismatch means the featurization code changed after the
-/// model was trained, and using the stale weights would cause a runtime matrix
-/// multiplication panic.
-pub fn load_model(path: &std::path::Path) -> Result<ValueNet<TrainBackend>, String> {
+/// [`STATE_FEATURE_COUNT`]. A mismatch means the featurization code changed
+/// after the model was trained, and using the stale weights would cause a
+/// runtime matrix multiplication panic.
+pub fn load_model(path: &std::path::Path) -> Result<MacroNet<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();
     let record = recorder
         .load(path.to_path_buf(), &device)
         .map_err(|e| format!("failed to load model: {e}"))?;
-    let model = ValueNet::new(&device).load_record(record);
+    let model = MacroNet::new(&device).load_record(record);
 
     let loaded_input_dim = model.input_dim();
-    if loaded_input_dim != FEATURE_COUNT {
+    if loaded_input_dim != STATE_FEATURE_COUNT {
         return Err(format!(
             "model input dimension mismatch: saved model expects {loaded_input_dim} features, \
-             but current featurization produces {FEATURE_COUNT} features; retrain the model"
+             but current featurization produces {STATE_FEATURE_COUNT} features; retrain the model"
         ));
     }
 
@@ -714,6 +643,48 @@ fn format_time(seconds: f64, valid: bool) -> String {
     let minutes = (seconds / 60.0).floor();
     let secs = seconds - minutes * 60.0;
     format!("{:.0}m {:.1}s", minutes, secs)
+}
+
+/// Train a policy for `goal` and return the final model, best-seen model, and
+/// training statistics.
+///
+/// The returned `best_model` is the model checkpoint captured when the fastest
+/// completion time was observed during training.
+pub fn train_policy(
+    units: &Units,
+    goal: &UnitKind,
+    config: TrainConfig,
+) -> (
+    MacroNet<TrainBackend>,
+    Option<MacroNet<TrainBackend>>,
+    TrainStats,
+) {
+    let mut trainer = Trainer::new(config);
+    let stats = trainer.train(units, goal);
+    let best_model = trainer.best_model.take();
+    let model = trainer.into_model();
+    (model, best_model, stats)
+}
+
+/// Continue training an existing policy for `goal`.
+pub fn train_policy_from(
+    model: MacroNet<TrainBackend>,
+    units: &Units,
+    goal: &UnitKind,
+    config: TrainConfig,
+) -> (
+    MacroNet<TrainBackend>,
+    Option<MacroNet<TrainBackend>>,
+    TrainStats,
+) {
+    let mut trainer = Trainer::from_model(config, model);
+    // Treat the loaded model as the initial best so training only replaces it
+    // if it actually improves on the baseline.
+    trainer.best_model = Some(trainer.model.clone());
+    let stats = trainer.train(units, goal);
+    let best_model = trainer.best_model.take();
+    let model = trainer.into_model();
+    (model, best_model, stats)
 }
 
 #[cfg(test)]
@@ -761,12 +732,12 @@ mod tests {
         let loaded = load_model(&path).expect("load should succeed");
 
         let device: TrainDevice = Default::default();
-        let dummy = vec![0.0f32; FEATURE_COUNT];
+        let dummy = vec![0.0f32; STATE_FEATURE_COUNT];
         let before = model.evaluate_single(dummy.clone(), &device);
         let after = loaded.evaluate_single(dummy, &device);
-        assert!(
-            (before - after).abs() < 1e-3,
-            "loaded model should produce approximately the same output as the saved model"
-        );
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(after.iter()) {
+            assert!((a - b).abs() < 1e-3, "loaded model outputs should match");
+        }
     }
 }

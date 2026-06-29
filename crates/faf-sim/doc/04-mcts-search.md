@@ -1,31 +1,34 @@
 # 4. MCTS Search
 
-This chapter describes the **planned** UCT (Upper Confidence Bound applied to Trees) search loop and the current one-step MLP policy that sits underneath it.
+This chapter describes the **planned** UCT (Upper Confidence Bound applied to Trees) search loop and the current one-step macro-direction policy that sits underneath it.
 
-## Current status: one-step policy
+## Current status: one-step macro policy
 
-The `Strategy::Mcts` planner currently runs a **stochastic one-step policy**, not a full UCT tree search. At each decision tick it:
+The `Strategy::Mcts` planner currently runs a **one-step macro-direction policy**, not a full UCT tree search. At each decision tick it:
 
 1. Derives `SelectionPools` from the `PlanGraph` and current `GraphState`.
-2. Scores every legal candidate with the learned MLP.
-3. Filters out candidates that are not immediately executable.
-4. Samples the next action from a softmax over the remaining scores.
+2. Computes state features and runs them through the learned macro network.
+3. Picks the highest-scoring macro direction (greedy) or samples one (stochastic).
+4. Uses the deterministic resolver to turn the direction into a concrete, executable candidate.
 
 This is implemented in `mcts::plan`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 45 — mcts::plan
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 44 — mcts::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
     _iterations: usize,
     value_net_kind: ValueNetKind,
-    value_net: Option<ValueNet<TrainBackend>>,
+    deterministic: bool,
+    value_net: Option<MacroNet<TrainBackend>>,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
-        ValueNetKind::Mlp => mlp_policy_plan(units, initial_state, goal_id, value_net, config),
+        ValueNetKind::Mlp => {
+            macro_policy_plan(units, initial_state, goal_id, value_net, deterministic, config)
+        }
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
             "GNN value net is not yet implemented".to_string(),
         )),
@@ -33,7 +36,7 @@ pub fn plan(
 }
 ```
 
-The `_iterations` parameter is ignored because there is no tree yet. Full UCT will use the same `ValueNet` and the same candidate generation; it will add tree search on top.
+The `_iterations` parameter is ignored because there is no tree yet. Full UCT will use the same `MacroNet` and the same resolver; it will add tree search on top.
 
 ## Planned UCT design
 
@@ -117,7 +120,7 @@ pub fn search(
     _goal_id: &UnitKind,
     _units: &Units,
     _planner_config: &PlannerConfig,
-    _value_net: &ValueNet<NdArray>,
+    _value_net: &MacroNet<NdArray>,
 ) -> Result<PlanResult, PlannerError> {
     let _ = self.config;
     todo!("MCTS search loop is not yet implemented")
@@ -152,7 +155,7 @@ Two common budget modes:
 - **Iteration budget:** run exactly `N` iterations. Simple and reproducible.
 - **Time budget:** run as many iterations as possible within `T` milliseconds. Better for real-time use.
 
-The `Strategy::Mcts` variant exposes the iteration count and the value-net kind:
+The `Strategy::Mcts` variant exposes the iteration count, the value-net kind, and a deterministic flag:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 105 — Strategy::Mcts variant
@@ -161,6 +164,8 @@ Mcts {
     iterations: usize,
     /// Kind of learned value network to use inside MCTS.
     value_net: ValueNetKind,
+    /// If true, always pick the highest-scoring macro direction.
+    deterministic: bool,
 },
 ```
 

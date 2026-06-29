@@ -171,6 +171,7 @@ async fn run_simulate(
 
     let path = model_path(&target);
     let model_file = path.with_extension("mpk");
+
     let planner = if model_file.exists() {
         println!("Loading trained model from {}", model_file.display());
         let model = load_model(&path).expect("load trained model");

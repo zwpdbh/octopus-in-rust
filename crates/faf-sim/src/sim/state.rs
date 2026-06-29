@@ -19,7 +19,7 @@ use crate::economy::{
     apply_tick_graph, compute_drain, EcoConsumer, EcoFlow, EcoProducer, EconomyState,
     RequestedBuildPower,
 };
-use crate::sim::adjacency::{AdjacencyKind, AdjacencyTracker, production_multiplier};
+use crate::sim::adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
 use crate::units::{UnitCost, UnitDef, UnitKind, Units};
 
 /// A single event in the simulated build timeline.
@@ -349,7 +349,11 @@ impl GraphState {
         let mut adjacency = AdjacencyTracker::new();
         for node in graph.graph.node_weights() {
             if matches!(node.unit_id, UnitKind::CapT2Mex | UnitKind::CapT3Mex) {
-                adjacency.set(AdjacencyKind::Mass, node.id, crate::sim::adjacency::MAX_ADJACENCY);
+                adjacency.set(
+                    AdjacencyKind::Mass,
+                    node.id,
+                    crate::sim::adjacency::MAX_ADJACENCY,
+                );
             }
         }
 
@@ -1184,10 +1188,7 @@ mod tests {
             expected_boost,
             state.economy.net_energy_income - base_energy
         );
-        assert_eq!(
-            state.adjacency.count(AdjacencyKind::Energy, pgen_node),
-            1
-        );
+        assert_eq!(state.adjacency.count(AdjacencyKind::Energy, pgen_node), 1);
     }
 
     #[test]

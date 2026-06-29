@@ -1,6 +1,6 @@
 # 6. Training Pipeline
 
-The MLP policy is trained with **REINFORCE**: roll out episodes with the current policy, then update the network so that actions leading to higher rewards become more likely.
+The macro-direction policy is trained with **REINFORCE**: roll out episodes with the current policy, then update the network so that macro directions leading to higher rewards become more likely.
 
 ## Single-phase policy-gradient training
 
@@ -8,14 +8,16 @@ Unlike a supervised warm-start that regresses on completion time, the current tr
 
 1. Start a fresh `GraphState` with only the ACU.
 2. Run the current policy for up to `max_steps` simulator ticks.
-3. At each step, record the candidate feature matrix and the selected action index.
-4. Compute a shaped reward from the final state.
-5. Update the network with REINFORCE plus an entropy bonus.
+3. At each step, compute state features, score the four macro directions, and sample one.
+4. Resolve the sampled direction to a concrete action and execute it.
+5. Record the state features and selected direction at every step.
+6. Compute a shaped reward from the final state.
+7. Update the network with REINFORCE plus an entropy bonus.
 
 This is implemented in `Trainer::train`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 139 — Trainer::train
+// crates/faf-sim/src/planner/mcts/train.rs ~line 135 — Trainer::train
 pub fn train(&mut self, units: &Units, goal: &UnitKind) -> TrainStats {
     let plan = units
         .plan_graph(goal)
@@ -29,7 +31,7 @@ pub fn train(&mut self, units: &Units, goal: &UnitKind) -> TrainStats {
 `TrainConfig` controls the training run:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 35 — TrainConfig
+// crates/faf-sim/src/planner/mcts/train.rs ~line 36 — TrainConfig
 pub struct TrainConfig {
     pub episodes: usize,
     pub max_steps: usize,
@@ -52,43 +54,59 @@ pub struct TrainConfig {
 | `dt` | 1.0 | Fixed simulator timestep for rollouts. |
 | `learning_rate` | 1e-3 | Adam step size. |
 | `gamma` | 0.99 | Discount factor (reserved for future n-step returns). |
-| `epsilon` | 0.1 | Initial probability of taking a random action. |
+| `epsilon` | 0.1 | Initial probability of taking a random macro direction. |
 | `epsilon_final` | 0.1 | Final epsilon after decay. Same as `epsilon` when no decay. |
 | `epsilon_decay_episodes` | same as `episodes` | Episodes over which to linearly decay `epsilon` to `epsilon_final`. `0` disables decay. |
 | `entropy_coef` | 0.01 | Entropy bonus strength. |
 | `target_time` | `None` | Stop early when an episode reaches the goal in at most this many seconds. |
 | `verbose` | `false` | Print per-episode progress to stderr. |
 
-The feature vector includes an energy-storage-saturation signal from `PlannerConfig` (`max_energy_storage_count`), so saved model checkpoints from before storage support will fail to load and must be retrained.
+The network input is `STATE_FEATURE_COUNT` economy/state features. Saved model checkpoints from before the macro-direction redesign will fail to load and must be retrained.
 
 ## Rollout details
 
 Each episode begins with a fresh state:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 173 — Trainer::run_episode
+// crates/faf-sim/src/planner/mcts/train.rs ~line 290 — Trainer::run_episode
 let mut state = GraphState::new(units, &[UnitKind::Commander]);
 ```
 
 At each tick:
 
 1. Derive `SelectionPools` from the `PlanGraph`.
-2. Build a feature matrix `[n_candidates, FEATURE_COUNT]`.
-3. With probability `epsilon`, pick a random candidate; otherwise sample from the softmax over MLP scores.
-4. Convert the chosen candidate to a `SimAction` and execute it.
-5. If no candidate is executable, issue `Wait`.
+2. Compute `state_features`.
+3. With probability `epsilon`, pick a random macro direction; otherwise sample from the softmax over network scores.
+4. Resolve the chosen direction to a concrete `SelectionOption`.
+5. Convert the option to a `SimAction` and execute it.
+6. If the resolver cannot find an executable candidate, issue `Wait`.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 188 — action selection
-let pools = SelectionPools::new(plan, &state, units);
-let candidates = pools.options().to_vec();
+// crates/faf-sim/src/planner/mcts/train.rs ~line 310 — direction selection and resolution
+let state_feats = state_features(&state, units, planner_config);
+let scores = self.model.evaluate_single(state_feats.clone(), &self.device);
 
-// ... feature matrix ...
-
-let action_index = if self.rng.gen::<f32>() < self.config.epsilon {
-    self.rng.gen_range(0..candidates.len())
+let direction_index = if self.rng.gen::<f32>() < epsilon {
+    self.rng.gen_range(0..MACRO_DIRECTION_COUNT)
 } else {
-    sample_action_index(&self.model, &candidate_features, &self.device, &mut self.rng)
+    sample_direction_index(&scores, &mut self.rng)
+};
+let direction = MacroDirection::from_index(direction_index)
+    .unwrap_or(MacroDirection::BuildPower);
+
+let selected = match resolve_macro_direction(
+    direction,
+    &candidates,
+    &state,
+    units,
+    plan,
+    planner_config,
+) {
+    Some(option) => option,
+    None => {
+        state.tick(units, self.config.dt);
+        continue;
+    }
 };
 ```
 
@@ -97,7 +115,7 @@ let action_index = if self.rng.gen::<f32>() < self.config.epsilon {
 Because the raw reward — reaching the goal — is sparse, the trainer uses a shaped reward computed from the final state of each episode:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 338 — compute_progress_reward
+// crates/faf-sim/src/planner/mcts/train.rs ~line 525 — compute_progress_reward
 fn compute_progress_reward(
     state: &GraphState,
     units: &Units,
@@ -123,7 +141,7 @@ This shaped reward is the same for every step in the episode because the final s
 REINFORCE needs a baseline to reduce variance. Because the reward is computed from the final state only, a per-episode mean would collapse to zero. Instead, the trainer maintains a **running mean and variance** of episode returns across training:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 249 — Trainer::compute_returns
+// crates/faf-sim/src/planner/mcts/train.rs ~line 420 — Trainer::compute_returns
 fn compute_returns(&mut self, episode: &mut Episode) {
     // Welford's online algorithm
     self.return_count += 1.0;
@@ -140,19 +158,23 @@ fn compute_returns(&mut self, episode: &mut Episode) {
 
 Each step's target is the normalized return, which tells the policy whether this episode was better or worse than the trainer's historical average.
 
+If variance remains high, a future extension is to add a learned state-value baseline `V(state)` and train it with MSE against observed returns. The policy gradient would then use advantage `return − V(state)`.
+
 ## Policy update
 
 For each recorded step, the trainer:
 
-1. Forwards the candidate feature matrix through the MLP.
-2. Selects the log-probability of the action that was taken.
-3. Multiplies by the normalized return.
-4. Adds an entropy bonus to encourage exploration.
-5. Backpropagates and applies Adam.
+1. Forwards the state feature vector through the macro network.
+2. Applies `log_softmax` over the four direction logits.
+3. Selects the log-probability of the direction that was taken.
+4. Multiplies by the normalized return.
+5. Adds an entropy bonus to encourage exploration.
+6. Backpropagates and applies Adam.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 273 — Trainer::update
-let log_probs = log_softmax(scores, 0);
+// crates/faf-sim/src/planner/mcts/train.rs ~line 450 — Trainer::update
+let logits = self.model.forward(input).flatten::<1>(0, 1);
+let log_probs = log_softmax(logits, 0);
 let selected_log_prob = log_probs.clone().select(0, index_tensor);
 
 let policy_loss = selected_log_prob.neg().mul(return_tensor);
@@ -175,15 +197,17 @@ The policy can overfit to the exact goals and starting conditions it trains on. 
 - Use a non-zero `epsilon` throughout training so the policy continues to explore.
 - Periodically retrain from scratch on a growing dataset of rollouts.
 
+Because the learned layer is now a small macro-direction network, it should transfer more easily across goals than the previous per-candidate network.
+
 ## Future: supervised warm-start and self-play
 
 The current single-phase REINFORCE training is simple and end-to-end. Future improvements may include:
 
 1. **Supervised warm-start.** Train a value head on rollout completion times before policy-gradient training.
-2. **Policy prior for UCT.** When full tree search is implemented, reuse the MLP output as the action prior inside UCB1.
+2. **Policy prior for UCT.** When full tree search is implemented, reuse the macro network output as the action prior inside UCB1.
 3. **Self-play loop.** Run MCTS with the current network, store `(state, policy_target, value_target)` tuples, and retrain both heads.
 
-These extensions reuse the same `ValueNet` architecture and feature pipeline; they mainly change the loss function and data source.
+These extensions reuse the same `MacroNet` architecture and state-featurization pipeline; they mainly change the loss function and data source.
 
 ## Epsilon decay
 

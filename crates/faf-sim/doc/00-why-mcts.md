@@ -34,7 +34,7 @@ In classic MCTS, a leaf is evaluated by playing random moves to the end and aver
 - The reward is sparse (you only know the result when the goal finishes).
 - Random rollouts produce mostly terrible build orders, so the signal is noisy.
 
-A **learned policy network** replaces the random rollout. It is a function `π(action | state)` that, in a single forward pass, scores every legal candidate action and samples the next move. MCTS still explores the tree, but it selects moves with the network instead of simulating random sequences to the end.
+A **learned macro-direction policy** replaces the random rollout. It is a function `π(direction | state)` that, in a single forward pass, decides which high-level priority to pursue next: build more build power, more mass income, more power income, or unlock the next tech tier. A small deterministic resolver then turns that direction into a concrete build/upgrade/assist command. MCTS still explores the tree, but it selects directions with the network instead of simulating random sequences to the end.
 
 The combination looks like this:
 
@@ -57,7 +57,7 @@ The combination looks like this:
         next GraphState
 ```
 
-The current implementation uses the policy network as a one-step stochastic planner. Full UCT tree search will be layered on top later while reusing the same network.
+The current implementation uses the policy network as a one-step planner. Full UCT tree search will be layered on top later while reusing the same macro-direction network and resolver.
 
 ## Why FAF is a good testbed for this
 
@@ -74,4 +74,4 @@ The current implementation uses the policy network as a one-step stochastic plan
 
 ## The roadmap in one paragraph
 
-We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, train a small network to score `(state, candidate)` pairs, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.
+We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, train a small network to map state features to one of four macro directions, resolve each direction into a concrete command, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.

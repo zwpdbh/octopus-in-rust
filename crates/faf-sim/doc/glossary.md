@@ -9,9 +9,11 @@ Short names and acronyms used across this documentation track.
 | CUDA | Compute Unified Device Architecture | Optional `burn` backend for GPU inference. |
 | FAF | Forged Alliance Forever | The game whose build orders this project optimizes. |
 | MCTS | Monte Carlo Tree Search | The search algorithm at the core of this track. |
-| MLP | Multi-Layer Perceptron | The current learned policy network. |
+| MLP | Multi-Layer Perceptron | The learned macro-direction policy network. |
+| Macro direction | High-level build priority | One of `BuildPower`, `MoreMass`, `MorePower`, or `TechUp`. |
+| Micro resolver | Rule-based action selector | Turns a macro direction into a concrete `SelectionOption`. |
 | PlanGraph | Goal-specific dependency graph | Subgraph of the tech graph containing only nodes and edges relevant to the goal. |
-| Policy network | Network that outputs action preferences | Scores `(state, candidate)` pairs and samples the next action. |
+| Policy network | Network that outputs action preferences | Maps state features to a distribution over macro directions. |
 | ReLU | Rectified Linear Unit | Activation function used in the policy network. |
 | REINFORCE | Policy-gradient algorithm | Used to train the MLP from its own rollouts. |
 | TechGraph | Capability-level dependency graph | `Units` layer that answers "who can build whom?" |

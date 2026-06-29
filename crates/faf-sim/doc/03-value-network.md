@@ -1,36 +1,42 @@
-# 3. The Policy Network
+# 3. The Macro-Direction Policy Network
 
-The learned network is a **policy network**, not a value network. It does not predict remaining time. Instead, it scores every legal `(state, candidate)` pair and the planner samples the next action from a softmax over those scores.
+The learned network is a **macro-direction policy**. It does not score individual build commands. Instead, it looks at the current economy and tech state and decides which of four high-level priorities to pursue next. A small deterministic resolver then turns that priority into a concrete `SelectionOption`.
 
-This chapter explains why we use a policy, how `GraphState` and a `PlanGraph` candidate are converted into network inputs, and how the network is trained in Rust with `burn`.
+This chapter explains why we use a two-level design, how `GraphState` is converted into network inputs, how the resolver works, and how the network is trained in Rust with `burn`.
 
-## Why a policy network?
+## Why a macro-direction policy?
 
-Classic MCTS evaluates a leaf by playing random moves to the end of the episode and averaging the outcome. For FAF this is wasteful:
+The previous design scored every legal `(state, candidate)` pair. That made the action space large and unit-specific: the same economy state could produce different scores depending on which exact mex or pgen happened to be a legal candidate. It also made greedy inference unstable, because a small change in candidate availability could flip the chosen action.
 
-- The horizon is long; a single rollout may take thousands of ticks.
-- Random build orders are almost always terrible, so the average is noisy.
-- The reward is sparse: you learn nothing until the goal finishes.
+A macro-direction policy fixes this by splitting the decision:
 
-A policy network avoids random rollouts by directly predicting which candidate action is promising in the current state. The current planner uses it as a one-step stochastic policy; full UCT search can be layered on top later while reusing the same network.
+1. **Learned layer:** given eco/state features, output a distribution over `{BuildPower, MoreMass, MorePower, TechUp}`.
+2. **Rule-based resolver:** given the chosen direction and the current legal candidates, pick the most sensible concrete action.
+
+The learned layer captures the economy-driven rhythm that transfers across units. The resolver handles the goal-specific details of which mex, which pgen, or which factory upgrade to use.
 
 ## From `PlanGraph` to candidates
 
-The network never sees the full unit roster. It sees only the legal candidates derived from the static `PlanGraph` and the current `GraphState`.
+The resolver still uses the legal candidates derived from the static `PlanGraph` and the current `GraphState`.
 
 `SelectionPools::new` walks every edge in the plan graph and returns the legal options:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 42 — SelectionPools::new
-pub fn new(plan: &PlanGraph, state: &GraphState, units: &Units) -> Self {
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 61 — SelectionPools::new
+pub fn new(
+    plan: &PlanGraph,
+    state: &GraphState,
+    units: &Units,
+    config: &PlannerConfig,
+) -> Self {
     // ...
 }
 ```
 
-An option is produced when the edge source is owned/active, the target is not yet owned or under construction, and a capable idle builder exists. The three option types are:
+The three option types are:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 19 — SelectionOption enum
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 27 — SelectionOption enum
 pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
@@ -41,31 +47,27 @@ pub enum SelectionOption {
 }
 ```
 
-The plan graph therefore constrains the action space: the model learns to choose among graph-reachable next steps, not among arbitrary units.
+The plan graph constrains the action space; the resolver chooses among graph-reachable next steps.
 
-## Featurizing the state and candidate
+## Featurizing the state
 
-The network consumes a fixed-size vector of length `FEATURE_COUNT`:
+The network consumes a fixed-size vector of length `STATE_FEATURE_COUNT`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature counts
-pub const STATE_FEATURE_COUNT: usize = 12;
-pub const CANDIDATE_FEATURE_COUNT: usize = 12;
-pub const FEATURE_COUNT: usize = STATE_FEATURE_COUNT + CANDIDATE_FEATURE_COUNT;
+// crates/faf-sim/src/planner/mcts/features.rs ~line 16 — state feature count
+pub const STATE_FEATURE_COUNT: usize = 13;
 ```
-
-### State features
 
 `state_features` extracts an economy and tech snapshot:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 25 — state_features
+// crates/faf-sim/src/planner/mcts/features.rs ~line 44 — state_features
 pub fn state_features(
     state: &GraphState,
     units: &Units,
     config: &PlannerConfig,
 ) -> Vec<f32> {
-    // ... 12 scalar features ...
+    // ... 13 scalar features ...
 }
 ```
 
@@ -75,66 +77,20 @@ The features include:
 - Mass/energy storage ratios.
 - Total active build power.
 - Current simulation time.
-- Fraction of max mex/pgen count already built.
+- Fraction of max mex/pgen/energy-storage count already built.
 - Number of active projects.
 - Boolean tech milestones: T2 factory, T3 factory, T3 engineer.
 
-### Selection-option features
-
-`candidate_features` describes the action itself and its relationship to the goal:
-
-```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 82 — candidate_features
-pub fn candidate_features(
-    candidate: &SelectionOption,
-    state: &GraphState,
-    plan: &PlanGraph,
-    units: &Units,
-) -> Vec<f32> {
-    // ... 12 scalar features ...
-}
-```
-
-The features include:
-
-- One-hot-ish flags for action type: build / upgrade / assist.
-- Tech tier of the target, normalized to `[0, 1]`.
-- Boolean unit-category flags: Mex, Pgen, Factory, Engineer, Unique.
-- Build cost (mass/energy), scaled.
-- Shortest-path distance from the candidate target to the goal in the `PlanGraph`.
-
-This distance feature is the main way graph topology enters the model: candidates closer to the goal receive a less-penalized input value.
-
-### Combined input
-
-For each candidate the planner concatenates the state vector and the candidate vector:
-
-```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 134 — featurize
-pub fn featurize(
-    state: &GraphState,
-    candidate: &SelectionOption,
-    units: &Units,
-    plan: &PlanGraph,
-    config: &PlannerConfig,
-) -> Vec<f32> {
-    let mut features = state_features(state, units, config);
-    features.extend(candidate_features(candidate, state, plan, units));
-    debug_assert_eq!(features.len(), FEATURE_COUNT);
-    features
-}
-```
-
-All values are clamped to a reasonable range so the network trains reliably without extreme inputs.
+Candidate-specific features are no longer fed into the network. The policy learns to prefer "more power" when energy is low, not to prefer "this specific pgen over that specific pgen."
 
 ## Network architecture
 
 The policy network is a small MLP:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/value_net.rs ~line 23 — ValueNet
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 74 — MacroNet
 #[derive(Module, Debug)]
-pub struct ValueNet<B: Backend> {
+pub struct MacroNet<B: Backend> {
     linear1: Linear<B>,
     activation: Relu,
     linear2: Linear<B>,
@@ -142,65 +98,123 @@ pub struct ValueNet<B: Backend> {
 }
 ```
 
-It maps `FEATURE_COUNT -> 256 -> ReLU -> 128 -> ReLU -> 1`:
+It maps `STATE_FEATURE_COUNT -> 128 -> ReLU -> 64 -> ReLU -> MACRO_DIRECTION_COUNT`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/value_net.rs ~line 35 — ValueNet::new
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 93 — MacroNet::new
 pub fn new(device: &B::Device) -> Self {
     Self {
-        linear1: LinearConfig::new(FEATURE_COUNT, 256).init(device),
+        linear1: LinearConfig::new(STATE_FEATURE_COUNT, 128).init(device),
         activation: Relu::new(),
-        linear2: LinearConfig::new(256, 128).init(device),
-        output: LinearConfig::new(128, 1).init(device),
+        linear2: LinearConfig::new(128, 64).init(device),
+        output: LinearConfig::new(64, MACRO_DIRECTION_COUNT).init(device),
     }
 }
 ```
 
-`forward` accepts a `[batch, FEATURE_COUNT]` tensor and returns a `[batch, 1]` tensor — one scalar preference score for each candidate.
+`MACRO_DIRECTION_COUNT` is 4:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/value_net.rs ~line 45 — ValueNet::forward
-pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
-    let x = self.linear1.forward(features);
-    let x = self.activation.forward(x);
-    let x = self.linear2.forward(x);
-    let x = self.activation.forward(x);
-    self.output.forward(x)
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 34 — MacroDirection enum
+pub enum MacroDirection {
+    BuildPower = 0,
+    MoreMass = 1,
+    MorePower = 2,
+    TechUp = 3,
 }
 ```
+
+`forward` accepts a `[batch, STATE_FEATURE_COUNT]` tensor and returns a `[batch, 4]` tensor — one logit for each macro direction.
 
 ## Turning scores into a policy
 
-At decision time the planner builds a feature matrix of shape `[n_candidates, FEATURE_COUNT]`, runs one forward pass, and samples from the softmax distribution over scores:
+At decision time the planner computes state features, runs one forward pass, and either takes the argmax (greedy) or samples from the softmax over direction scores (stochastic):
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 87 — mlp_policy_plan scoring and sampling
-let scored = net.score_candidates(&state, &candidates, units, &plan, config, &device);
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 85 — macro_policy_plan scoring and resolution
+let scores = net.score_directions(&state, units, config, &device);
 
-// Keep only candidates that can actually be executed now and sample from them.
-let mut executable = Vec::new();
-let mut scores = Vec::new();
-for (candidate, score) in scored {
-    if candidate.to_sim_action(&state, units).is_some() {
-        executable.push(candidate);
-        scores.push(score);
-    }
+// Try directions in order of network preference until the resolver finds an
+// executable candidate.
+let mut direction_order: Vec<usize> = (0..scores.len()).collect();
+if deterministic {
+    direction_order.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+} else {
+    direction_order = stochastic_direction_order(&scores);
 }
 
-let probs = softmax(&scores, SAMPLE_TEMPERATURE);
-let dist = WeightedIndex::new(&probs)
-    .map_err(|e| PlannerError::Other(format!("invalid policy distribution: {}", e)))?;
-let idx = dist.sample(&mut rng);
-let chosen = &executable[idx];
+for &dir_idx in &direction_order {
+    let direction = MacroDirection::from_index(dir_idx).unwrap_or(MacroDirection::BuildPower);
+    if let Some(option) = resolve_macro_direction(direction, &candidates, &state, units, &plan, config) {
+        if let Some(action) = option.to_sim_action(&state, units) {
+            return Ok(plan_result_with_action(state, action));
+        }
+    }
+}
 ```
 
 So the policy is:
 
 ```text
-π(candidate_i | state) = softmax(MLP(state, candidate_i))_i
+π(direction_i | state) = softmax(MacroNet(state))_i
+action = resolve(direction_i, candidates, state)
 ```
 
-Only candidates that survive the executable filter are sampled; if none are executable the planner issues `Wait`.
+If the top direction has no executable candidate, the planner falls back to the next-best direction. If no direction resolves, it issues `Wait`.
+
+## The micro resolver
+
+The resolver is deterministic and rule-based. It classifies each candidate by macro direction and then picks the best concrete action within the chosen direction.
+
+```rust
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 190 — resolve_macro_direction
+pub fn resolve_macro_direction(
+    direction: MacroDirection,
+    candidates: &[SelectionOption],
+    state: &GraphState,
+    units: &Units,
+    plan: &PlanGraph,
+    config: &PlannerConfig,
+) -> Option<SelectionOption> {
+    // ...
+}
+```
+
+### Direction classification
+
+```rust
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 52 — macro_direction_of
+pub fn macro_direction_of(option: &SelectionOption, _state: &GraphState) -> MacroDirection {
+    match option {
+        SelectionOption::Assist(_) => MacroDirection::BuildPower,
+        SelectionOption::Build(target) | SelectionOption::Upgrade { to: target, .. } => {
+            macro_direction_of_kind(target)
+        }
+    }
+}
+```
+
+`Assist` is always `BuildPower`. Builds and upgrades are classified by their target unit kind:
+
+| Target kind | Direction |
+|---|---|
+| `Mex(_)`, `CapT2Mex`, `CapT3Mex` | `MoreMass` |
+| `Pgen(_)`, `EnergyStorage` | `MorePower` |
+| `Engineer(_)`, `Factory(T1)`, `Commander` | `BuildPower` |
+| `Factory(T2)`, `Factory(T3)` | `TechUp` |
+
+### Resolver rules
+
+- `BuildPower`: if there are active projects and idle engineers, assist the most valuable active project; otherwise build the highest build-rate-per-mass engineer or factory.
+- `MoreMass`: prefer the candidate with the highest incremental mass income per mass cost (mex upgrades, then new mexes, then capped mexes).
+- `MorePower`: prefer the candidate with the highest incremental energy income per mass cost.
+- `TechUp`: pick the cheapest factory build or upgrade that unlocks the next tier.
+
+Tie-breakers are higher tier first, then shorter plan-graph distance to the goal.
 
 ## Training the network
 
@@ -209,15 +223,16 @@ The network is trained with **REINFORCE**, not supervised regression on completi
 For each episode the trainer:
 
 1. Starts from the ACU state.
-2. Repeatedly derives `SelectionPools`, scores candidates, and samples an action.
-3. Records the chosen action and the feature matrix at every step.
-4. Runs until the goal is reached or the step budget is exhausted.
-5. Computes a shaped reward from the final state.
+2. Repeatedly computes state features, scores the four directions, and samples one.
+3. Resolves the sampled direction to a concrete action and executes it.
+4. Records the state features and chosen direction at every step.
+5. Runs until the goal is reached or the step budget is exhausted.
+6. Computes a shaped reward from the final state.
 
 The reward encourages progress toward the goal:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 338 — compute_progress_reward
+// crates/faf-sim/src/planner/mcts/train.rs ~line 525 — compute_progress_reward
 fn compute_progress_reward(
     state: &GraphState,
     units: &Units,
@@ -239,25 +254,32 @@ It includes:
 Because the reward is computed from the final state only, every step in the episode receives the same raw return. A running mean and variance baseline is maintained across episodes for normalization:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 249 — Trainer::compute_returns
+// crates/faf-sim/src/planner/mcts/train.rs ~line 420 — Trainer::compute_returns
 fn compute_returns(&mut self, episode: &mut Episode) {
     // Welford's online algorithm for running mean/variance
 }
 ```
 
-The policy gradient update maximizes the log-probability of the selected candidate weighted by the normalized return, plus an entropy bonus:
+The policy gradient update maximizes the log-probability of the selected macro direction weighted by the normalized return, plus an entropy bonus:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 273 — Trainer::update
-fn update(&mut self, episode: &Episode) -> f32 {
-    // ... log_probs.select(action_index) * return + entropy bonus ...
-}
+// crates/faf-sim/src/planner/mcts/train.rs ~line 450 — Trainer::update
+let logits = self.model.forward(input).flatten::<1>(0, 1);
+let log_probs = log_softmax(logits, 0);
+let selected_log_prob = log_probs.clone().select(0, index_tensor);
+
+let policy_loss = selected_log_prob.neg().mul(return_tensor);
+
+let entropy = (probs * log_probs).neg().sum();
+let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
+
+let loss = policy_loss + entropy_loss;
 ```
 
 Configuration is controlled by `TrainConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 35 — TrainConfig
+// crates/faf-sim/src/planner/mcts/train.rs ~line 36 — TrainConfig
 pub struct TrainConfig {
     pub episodes: usize,
     pub max_steps: usize,
@@ -265,7 +287,10 @@ pub struct TrainConfig {
     pub learning_rate: f64,
     pub gamma: f32,
     pub epsilon: f32,
+    pub epsilon_final: f32,
+    pub epsilon_decay_episodes: usize,
     pub entropy_coef: f32,
+    pub target_time: Option<f64>,
     pub verbose: bool,
 }
 ```
@@ -275,7 +300,7 @@ pub struct TrainConfig {
 - `dt` — fixed timestep for rollouts.
 - `learning_rate` — Adam step size.
 - `gamma` — discount factor (reserved for future n-step returns; currently every step uses the final return).
-- `epsilon` — probability of a random action for exploration.
+- `epsilon` — probability of a random macro direction for exploration.
 - `entropy_coef` — entropy bonus strength; higher values keep the policy spread out.
 
 ## Saving and loading
@@ -283,12 +308,12 @@ pub struct TrainConfig {
 Trained weights are serialized with `burn`'s `CompactRecorder`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 413 — train_policy
+// crates/faf-sim/src/planner/mcts/train.rs ~line 650 — train_policy
 pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
-) -> (ValueNet<TrainBackend>, Option<ValueNet<TrainBackend>>, TrainStats) {
+) -> (MacroNet<TrainBackend>, Option<MacroNet<TrainBackend>>, TrainStats) {
     let mut trainer = Trainer::new(config);
     let stats = trainer.train(units, goal);
     let best_model = trainer.best_model.take();
@@ -298,28 +323,30 @@ pub fn train_policy(
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 425 — save_model
-pub fn save_model(model: &ValueNet<TrainBackend>, path: &std::path::Path) -> Result<(), String> {
+// crates/faf-sim/src/planner/mcts/train.rs ~line 671 — save_model
+pub fn save_model(model: &MacroNet<TrainBackend>, path: &std::path::Path) -> Result<(), String> {
     // ...
 }
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 436 — load_model
-pub fn load_model(path: &std::path::Path) -> Result<ValueNet<TrainBackend>, String> {
+// crates/faf-sim/src/planner/mcts/train.rs ~line 686 — load_model
+pub fn load_model(path: &std::path::Path) -> Result<MacroNet<TrainBackend>, String> {
     // ...
 }
 ```
 
-The same `ValueNet` struct is used for training (`Autodiff<NdArray>`) and inference (`NdArray` once converted), so no conversion is needed.
+`load_model` validates that the saved model's input dimension matches `STATE_FEATURE_COUNT`. A mismatch means the featurization code changed and the model must be retrained.
+
+The same `MacroNet` struct is used for training (`Autodiff<NdArray>`) and inference (`NdArray` once converted), so no conversion is needed.
 
 ## Future: value head and UCT
 
-The current network is a pure policy. A future extension is to add a second output head that estimates state value `V(state)` for use inside UCT:
+The current network is a pure policy over macro directions. A future extension is to add a second output head that estimates state value `V(state)` for use inside UCT:
 
 ```text
 UCT(child) = (child.total_value / child.visits)
              + c_puct * prior(child) * sqrt(parent.visits) / (1 + child.visits)
 ```
 
-The policy output would become the prior and the value output would replace the hand-shaped reward for leaf evaluation. That change keeps the same input featurization and network body; only the final layer and loss change.
+The policy output would become the prior over macro directions and the value output would replace the hand-shaped reward for leaf evaluation. The resolver would still turn the chosen direction into a concrete action.

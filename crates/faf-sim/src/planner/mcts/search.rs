@@ -8,8 +8,9 @@ use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
 use crate::sim::GraphState;
 use crate::units::{UnitKind, Units};
 
-use super::value_net::ValueNet;
+use super::macro_net::MacroNet;
 use burn::backend::NdArray;
+
 /// Configuration for an MCTS search.
 #[derive(Debug, Clone, Copy)]
 pub struct MctsConfig {
@@ -52,14 +53,14 @@ impl MctsSearch {
     /// * `goal_id` - The blueprint id of the unit we are trying to build.
     /// * `units` - Unified unit knowledge repository.
     /// * `planner_config` - Shared planner configuration.
-    /// * `value_net` - The learned value network used for leaf evaluation.
+    /// * `value_net` - The learned macro-direction network used for leaf evaluation.
     pub fn search(
         &self,
         _initial_state: GraphState,
         _goal_id: &UnitKind,
         _units: &Units,
         _planner_config: &PlannerConfig,
-        _value_net: &ValueNet<NdArray>,
+        _value_net: &MacroNet<NdArray>,
     ) -> Result<PlanResult, PlannerError> {
         let _ = self.config;
         todo!("MCTS search loop is not yet implemented")

@@ -9,8 +9,8 @@ use std::str::FromStr;
 
 use crate::economy::EconomyState;
 use crate::planner::mcts;
+use crate::planner::mcts::macro_net::MacroNet;
 use crate::planner::mcts::train::TrainBackend;
-use crate::planner::mcts::value_net::ValueNet;
 use crate::sim::{BuildEvent, GraphState};
 use crate::units::{UnitKind, Units};
 
@@ -65,7 +65,7 @@ impl Error for PlannerError {}
 /// Architecture of the learned value network used inside MCTS.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ValueNetKind {
-    /// Multi-layer perceptron that scores candidates independently.
+    /// Macro-direction policy network.
     #[default]
     Mlp,
     /// Graph neural network that reasons over the plan graph structure.
@@ -109,6 +109,10 @@ pub enum Strategy {
         iterations: usize,
         /// Kind of learned value network to use inside MCTS.
         value_net: ValueNetKind,
+        /// If true, the policy always picks the highest-scoring macro direction
+        /// instead of sampling from the softmax. This makes simulation
+        /// deterministic and reproducible.
+        deterministic: bool,
     },
 }
 
@@ -116,6 +120,21 @@ impl Strategy {
     /// Human-readable strategy name.
     pub fn display_name(&self) -> &'static str {
         "mcts"
+    }
+
+    /// Return a copy of this strategy with deterministic selection enabled.
+    pub fn with_deterministic(self) -> Self {
+        match self {
+            Strategy::Mcts {
+                iterations,
+                value_net,
+                ..
+            } => Strategy::Mcts {
+                iterations,
+                value_net,
+                deterministic: true,
+            },
+        }
     }
 }
 
@@ -128,6 +147,7 @@ impl FromStr for Strategy {
             return Ok(Strategy::Mcts {
                 iterations: 100,
                 value_net: ValueNetKind::Mlp,
+                deterministic: false,
             });
         }
 
@@ -138,36 +158,30 @@ impl FromStr for Strategy {
         // Supported forms:
         //   mcts:<iter>
         //   mcts:<iter>:<net>
-        //   mcts::<net>   (default iterations)
+        //   mcts::<net>              (default iterations)
+        //   mcts:<iter>:<net>:greedy (deterministic argmax)
+        //   mcts:greedy              (deterministic, defaults)
         let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
 
-        match parts.len() {
-            1 => {
-                if let Ok(iterations) = parts[0].parse::<usize>() {
-                    Ok(Strategy::Mcts {
-                        iterations,
-                        value_net: ValueNetKind::Mlp,
-                    })
-                } else {
-                    let value_net = ValueNetKind::from_str(parts[0])?;
-                    Ok(Strategy::Mcts {
-                        iterations: 100,
-                        value_net,
-                    })
-                }
+        let mut iterations = 100usize;
+        let mut value_net = ValueNetKind::Mlp;
+        let mut deterministic = false;
+
+        for part in parts {
+            if part == "greedy" || part == "deterministic" {
+                deterministic = true;
+            } else if let Ok(iters) = part.parse::<usize>() {
+                iterations = iters;
+            } else {
+                value_net = ValueNetKind::from_str(part)?;
             }
-            2 => {
-                let iterations = parts[0]
-                    .parse::<usize>()
-                    .map_err(|_| PlannerError::UnsupportedStrategy(s.to_string()))?;
-                let value_net = ValueNetKind::from_str(parts[1])?;
-                Ok(Strategy::Mcts {
-                    iterations,
-                    value_net,
-                })
-            }
-            _ => Err(PlannerError::UnsupportedStrategy(s.to_string())),
         }
+
+        Ok(Strategy::Mcts {
+            iterations,
+            value_net,
+            deterministic,
+        })
     }
 }
 
@@ -177,7 +191,14 @@ impl fmt::Display for Strategy {
             Strategy::Mcts {
                 iterations,
                 value_net,
-            } => write!(f, "mcts:{}:{}", iterations, value_net),
+                deterministic,
+            } => {
+                if *deterministic {
+                    write!(f, "mcts:{}:{}:greedy", iterations, value_net)
+                } else {
+                    write!(f, "mcts:{}:{}", iterations, value_net)
+                }
+            }
         }
     }
 }
@@ -217,9 +238,9 @@ pub struct Planner {
     pub strategy: Strategy,
     /// Shared search configuration.
     pub config: PlannerConfig,
-    /// Optional trained value network. If present, MCTS uses it instead of a
+    /// Optional trained macro network. If present, MCTS uses it instead of a
     /// fresh random initialization.
-    pub value_net: Option<ValueNet<TrainBackend>>,
+    pub value_net: Option<MacroNet<TrainBackend>>,
 }
 
 impl Planner {
@@ -246,7 +267,7 @@ impl Planner {
     pub fn with_value_net(
         strategy: Strategy,
         config: PlannerConfig,
-        value_net: ValueNet<TrainBackend>,
+        value_net: MacroNet<TrainBackend>,
     ) -> Self {
         Self {
             strategy,
@@ -256,9 +277,6 @@ impl Planner {
     }
 
     /// Run the planner from `initial_state` until `goal_id` is completed.
-    ///
-    /// The planner uses `units` to look up unit blueprints and capability
-    /// relationships.
     pub fn plan(
         &self,
         units: &Units,
@@ -269,12 +287,14 @@ impl Planner {
             Strategy::Mcts {
                 iterations,
                 value_net: value_net_kind,
+                deterministic,
             } => mcts::plan(
                 units,
                 initial_state,
                 goal_id,
                 iterations,
                 value_net_kind,
+                deterministic,
                 self.value_net.clone(),
                 &self.config,
             ),
@@ -292,28 +312,48 @@ mod tests {
             Strategy::from_str("mcts").unwrap(),
             Strategy::Mcts {
                 iterations: 100,
-                value_net: ValueNetKind::Mlp
+                value_net: ValueNetKind::Mlp,
+                deterministic: false,
             }
         );
         assert_eq!(
             Strategy::from_str("Mcts:500").unwrap(),
             Strategy::Mcts {
                 iterations: 500,
-                value_net: ValueNetKind::Mlp
+                value_net: ValueNetKind::Mlp,
+                deterministic: false,
             }
         );
         assert_eq!(
             Strategy::from_str("mcts:500:gnn").unwrap(),
             Strategy::Mcts {
                 iterations: 500,
-                value_net: ValueNetKind::Gnn
+                value_net: ValueNetKind::Gnn,
+                deterministic: false,
             }
         );
         assert_eq!(
             Strategy::from_str("mcts::gnn").unwrap(),
             Strategy::Mcts {
                 iterations: 100,
-                value_net: ValueNetKind::Gnn
+                value_net: ValueNetKind::Gnn,
+                deterministic: false,
+            }
+        );
+        assert_eq!(
+            Strategy::from_str("mcts:500:gnn:greedy").unwrap(),
+            Strategy::Mcts {
+                iterations: 500,
+                value_net: ValueNetKind::Gnn,
+                deterministic: true,
+            }
+        );
+        assert_eq!(
+            Strategy::from_str("mcts:greedy").unwrap(),
+            Strategy::Mcts {
+                iterations: 100,
+                value_net: ValueNetKind::Mlp,
+                deterministic: true,
             }
         );
     }
@@ -323,7 +363,8 @@ mod tests {
         assert_eq!(
             Strategy::Mcts {
                 iterations: 200,
-                value_net: ValueNetKind::Mlp
+                value_net: ValueNetKind::Mlp,
+                deterministic: false,
             }
             .to_string(),
             "mcts:200:mlp"
@@ -331,10 +372,20 @@ mod tests {
         assert_eq!(
             Strategy::Mcts {
                 iterations: 200,
-                value_net: ValueNetKind::Gnn
+                value_net: ValueNetKind::Gnn,
+                deterministic: false,
             }
             .to_string(),
             "mcts:200:gnn"
+        );
+        assert_eq!(
+            Strategy::Mcts {
+                iterations: 200,
+                value_net: ValueNetKind::Mlp,
+                deterministic: true,
+            }
+            .to_string(),
+            "mcts:200:mlp:greedy"
         );
     }
 

@@ -128,8 +128,9 @@ pub struct TrainArgs {
 /// Arguments for the `simulate` subcommand.
 #[derive(Parser)]
 pub struct SimulateArgs {
-    /// Planner strategy (`mcts`, `mcts:<iterations>`, or `mcts:<iterations>:<mlp|gnn>`).
-    #[arg(short = 's', long, default_value = "mcts:100:mlp")]
+    /// Planner strategy (`mcts`, `mcts:<iterations>`, `mcts:<iterations>:<mlp|gnn>`,
+    /// or append `:greedy` for deterministic argmax selection).
+    #[arg(short = 's', long, default_value = "mcts:100:mlp:greedy")]
     pub strategy: faf_sim::Strategy,
     /// Write the SVG build-order diagram to this file instead of a temporary file.
     #[arg(short = 'o', long)]

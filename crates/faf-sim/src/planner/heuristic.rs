@@ -35,8 +35,8 @@
 
 use std::collections::HashSet;
 
-use crate::sim::GraphState;
 use crate::sim::adjacency::production_multiplier;
+use crate::sim::GraphState;
 use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
 /// Candidate units to consider building next.

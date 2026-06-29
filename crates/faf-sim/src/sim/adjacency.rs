@@ -162,6 +162,9 @@ mod tests {
             tracker.add(AdjacencyKind::Energy, producer);
         }
 
-        assert_eq!(tracker.count(AdjacencyKind::Energy, producer), MAX_ADJACENCY);
+        assert_eq!(
+            tracker.count(AdjacencyKind::Energy, producer),
+            MAX_ADJACENCY
+        );
     }
 }

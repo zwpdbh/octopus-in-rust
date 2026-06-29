@@ -1,32 +1,32 @@
-//! Monte Carlo Tree Search planner guided by a learned value network.
+//! Monte Carlo Tree Search planner guided by a learned macro-direction policy.
 //!
 //! This module is the entry point for the `Strategy::Mcts` planner. The current
-//! implementation is a stochastic, MLP-guided one-step planner: it scores every
-//! legal candidate action with the value network and samples the next action
-//! from a softmax distribution over those scores. Full UCT tree search will be
-//! added on top of the same value network later.
+//! implementation is a one-step planner: the network scores four macro
+//! directions (build power, mass, power, tech) from economy/state features, and
+//! a deterministic resolver turns the chosen direction into a concrete build
+//! command.
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::search::SimAction;
 use crate::sim::{GraphSimError, GraphState};
 use crate::units::{UnitKind, Units};
 
+use self::macro_net::{resolve_macro_direction, MacroDirection, MacroNet};
 use self::selections::SelectionPools;
 use self::train::TrainBackend;
-use self::value_net::ValueNet;
 use burn::tensor::Device;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
 pub mod features;
+pub mod macro_net;
 pub mod search;
 pub mod selections;
 pub mod train;
-pub mod value_net;
 
-pub use value_net::ValueNet as MlpValueNet;
+pub use macro_net::MacroNet as MlpValueNet;
 
-/// Run MCTS (currently: stochastic MLP policy) from `initial_state` toward `goal_id`.
+/// Run MCTS (currently: one-step macro policy) from `initial_state` toward `goal_id`.
 ///
 /// # Arguments
 ///
@@ -35,7 +35,7 @@ pub use value_net::ValueNet as MlpValueNet;
 /// * `goal_id` - Unit kind to build.
 /// * `iterations` - Number of MCTS iterations (ignored by the one-step policy).
 /// * `value_net_kind` - Which value-network architecture to use.
-/// * `value_net` - Optional trained value network to use for inference.
+/// * `value_net` - Optional trained macro network to use for inference.
 /// * `config` - Shared planner configuration.
 ///
 /// # Returns
@@ -47,26 +47,36 @@ pub fn plan(
     goal_id: &UnitKind,
     _iterations: usize,
     value_net_kind: ValueNetKind,
-    value_net: Option<ValueNet<TrainBackend>>,
+    deterministic: bool,
+    value_net: Option<MacroNet<TrainBackend>>,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
-        ValueNetKind::Mlp => mlp_policy_plan(units, initial_state, goal_id, value_net, config),
+        ValueNetKind::Mlp => macro_policy_plan(
+            units,
+            initial_state,
+            goal_id,
+            value_net,
+            deterministic,
+            config,
+        ),
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
             "GNN value net is not yet implemented".to_string(),
         )),
     }
 }
 
-/// Temperature for the softmax policy used during inference.
-const SAMPLE_TEMPERATURE: f32 = 1.0;
-
-/// Stochastic one-step planner that samples a candidate according to the MLP.
-fn mlp_policy_plan(
+/// One-step planner guided by the macro-direction network.
+///
+/// In deterministic mode the highest-scoring macro direction is chosen and
+/// resolved into a concrete action. In stochastic mode the direction is sampled
+/// from a softmax distribution, which is useful during training.
+fn macro_policy_plan(
     units: &Units,
     state: GraphState,
     goal_id: &UnitKind,
-    value_net: Option<ValueNet<TrainBackend>>,
+    value_net: Option<MacroNet<TrainBackend>>,
+    deterministic: bool,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     let plan = units
@@ -74,7 +84,7 @@ fn mlp_policy_plan(
         .map_err(|e| PlannerError::UnsupportedStrategy(e.to_string()))?;
 
     let device: Device<TrainBackend> = Default::default();
-    let net: ValueNet<TrainBackend> = value_net.unwrap_or_else(|| ValueNet::new(&device));
+    let net: MacroNet<TrainBackend> = value_net.unwrap_or_else(|| MacroNet::new(&device));
 
     let pools = SelectionPools::new(&plan, &state, units, config);
     let candidates = pools.options().to_vec();
@@ -83,41 +93,59 @@ fn mlp_policy_plan(
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
-    let scored = net.score_candidates(&state, &candidates, units, &plan, config, &device);
+    let scores = net.score_directions(&state, units, config, &device);
 
-    // Keep only candidates that can actually be executed now and sample from them.
-    let mut executable = Vec::new();
-    let mut scores = Vec::new();
-    for (candidate, score) in scored {
-        if candidate.to_sim_action(&state, units).is_some() {
-            executable.push(candidate);
-            scores.push(score);
+    // Try directions in order of network preference until the resolver finds an
+    // executable candidate. This handles cases where the top direction has no
+    // legal concrete action (e.g., pgen cap reached).
+    let mut direction_order: Vec<usize> = (0..scores.len()).collect();
+    if deterministic {
+        direction_order.sort_by(|&a, &b| {
+            scores[b]
+                .partial_cmp(&scores[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        direction_order = stochastic_direction_order(&scores);
+    }
+
+    for &dir_idx in &direction_order {
+        let direction = MacroDirection::from_index(dir_idx).unwrap_or(MacroDirection::BuildPower);
+        if let Some(option) =
+            resolve_macro_direction(direction, &candidates, &state, units, &plan, config)
+        {
+            if let Some(action) = option.to_sim_action(&state, units) {
+                return Ok(plan_result_with_action(state, action));
+            }
         }
     }
 
-    if executable.is_empty() {
-        return Ok(plan_result_with_action(state, SimAction::Wait));
-    }
-
-    let probs = softmax(&scores, SAMPLE_TEMPERATURE);
-    let dist = WeightedIndex::new(&probs)
-        .map_err(|e| PlannerError::Other(format!("invalid policy distribution: {}", e)))?;
-    let mut rng = thread_rng();
-    let idx = dist.sample(&mut rng);
-    let chosen = &executable[idx];
-    let action = chosen
-        .to_sim_action(&state, units)
-        .expect("executable candidates must map to actions");
-    Ok(plan_result_with_action(state, action))
+    // No direction produced an executable action; wait one tick.
+    Ok(plan_result_with_action(state, SimAction::Wait))
 }
 
-/// Numerically stable softmax over raw candidate scores.
-fn softmax(scores: &[f32], temperature: f32) -> Vec<f32> {
-    let temp = temperature.max(1e-6);
-    let max = scores.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-    let exps: Vec<f32> = scores.iter().map(|s| ((s - max) / temp).exp()).collect();
-    let sum: f32 = exps.iter().sum();
-    exps.into_iter().map(|e| e / sum).collect()
+/// Return direction indices for stochastic inference.
+///
+/// The first index is sampled from the softmax over scores. The rest are
+/// sorted by score descending so they act as a deterministic fallback if the
+/// sampled direction has no executable candidate.
+fn stochastic_direction_order(scores: &[f32]) -> Vec<usize> {
+    let mut rng = thread_rng();
+    let probs = macro_net::softmax_probs(scores);
+    let dist = WeightedIndex::new(&probs)
+        .unwrap_or_else(|_| WeightedIndex::new(vec![1.0f32; scores.len()]).unwrap());
+    let sampled = dist.sample(&mut rng);
+
+    let mut rest: Vec<usize> = (0..scores.len()).filter(|&i| i != sampled).collect();
+    rest.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut order = vec![sampled];
+    order.extend(rest);
+    order
 }
 
 /// Apply a [`SimAction`] to a mutable simulator state.
@@ -175,14 +203,14 @@ mod tests {
     }
 
     #[test]
-    fn mlp_plan_selects_build_action_from_acu() {
+    fn macro_plan_selects_build_action_from_acu() {
         let units = load_units();
         let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
 
-        let result =
-            mlp_policy_plan(&units, state, &goal, None, &config).expect("plan should succeed");
+        let result = macro_policy_plan(&units, state, &goal, None, false, &config)
+            .expect("plan should succeed");
 
         assert!(
             result.first_action.is_some(),

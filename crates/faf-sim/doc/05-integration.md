@@ -9,7 +9,7 @@ The `Planner` dispatches to a single strategy, MCTS, but the network that guides
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 67 — ValueNetKind
 pub enum ValueNetKind {
-    /// Multi-layer perceptron that scores candidates independently.
+    /// Macro-direction policy network.
     #[default]
     Mlp,
     /// Graph neural network that reasons over the plan graph structure.
@@ -24,18 +24,20 @@ pub enum Strategy {
         iterations: usize,
         /// Kind of learned value network to use inside MCTS.
         value_net: ValueNetKind,
+        /// If true, always pick the highest-scoring macro direction.
+        deterministic: bool,
     },
 }
 ```
 
-Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected.
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` now refers to the macro-direction policy network.
 
 ## Entry point
 
 `Planner::plan` matches on the strategy and forwards to the corresponding module:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 259 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 238 — Planner::plan dispatch
 pub fn plan(
     &self,
     units: &Units,
@@ -46,12 +48,14 @@ pub fn plan(
         Strategy::Mcts {
             iterations,
             value_net: value_net_kind,
+            deterministic,
         } => mcts::plan(
             units,
             initial_state,
             goal_id,
             iterations,
             value_net_kind,
+            deterministic,
             self.value_net.clone(),
             &self.config,
         ),
@@ -59,21 +63,24 @@ pub fn plan(
 }
 ```
 
-The MCTS entry point is currently a stochastic one-step MLP policy:
+The MCTS entry point is currently a one-step macro policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 45 — mcts::plan
+// crates/faf-sim/src/planner/mcts/mod.rs ~line 44 — mcts::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
     _iterations: usize,
     value_net_kind: ValueNetKind,
-    value_net: Option<ValueNet<TrainBackend>>,
+    deterministic: bool,
+    value_net: Option<MacroNet<TrainBackend>>,
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
-        ValueNetKind::Mlp => mlp_policy_plan(units, initial_state, goal_id, value_net, config),
+        ValueNetKind::Mlp => {
+            macro_policy_plan(units, initial_state, goal_id, value_net, deterministic, config)
+        }
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
             "GNN value net is not yet implemented".to_string(),
         )),
@@ -81,7 +88,7 @@ pub fn plan(
 }
 ```
 
-It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `ValueNet`.
+It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `MacroNet` and resolver.
 
 ## Reactive planning
 
@@ -215,46 +222,25 @@ All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so call
 The strategy can be parsed from a string:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 127 — Strategy::from_str MCTS parsing
+// crates/faf-sim/src/planner/core.rs ~line 142 — Strategy::from_str MCTS parsing
 if lower == "mcts" {
     return Ok(Strategy::Mcts {
         iterations: 100,
         value_net: ValueNetKind::Mlp,
+        deterministic: false,
     });
 }
 
-let Some(rest) = lower.strip_prefix("mcts") else {
-    return Err(PlannerError::UnsupportedStrategy(s.to_string()));
-};
-
 let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
 
-match parts.len() {
-    1 => {
-        if let Ok(iterations) = parts[0].parse::<usize>() {
-            Ok(Strategy::Mcts {
-                iterations,
-                value_net: ValueNetKind::Mlp,
-            })
-        } else {
-            let value_net = ValueNetKind::from_str(parts[0])?;
-            Ok(Strategy::Mcts {
-                iterations: 100,
-                value_net,
-            })
-        }
+for part in parts {
+    if part == "greedy" || part == "deterministic" {
+        deterministic = true;
+    } else if let Ok(iters) = part.parse::<usize>() {
+        iterations = iters;
+    } else {
+        value_net = ValueNetKind::from_str(part)?;
     }
-    2 => {
-        let iterations = parts[0]
-            .parse::<usize>()
-            .map_err(|_| PlannerError::UnsupportedStrategy(s.to_string()))?;
-        let value_net = ValueNetKind::from_str(parts[1])?;
-        Ok(Strategy::Mcts {
-            iterations,
-            value_net,
-        })
-    }
-    _ => Err(PlannerError::UnsupportedStrategy(s.to_string())),
 }
 ```
 
@@ -264,7 +250,7 @@ So the CLI can accept arguments such as:
 faf-sim simulate --strategy mcts cybran monkeylord
 faf-sim simulate --strategy mcts:500 cybran monkeylord
 faf-sim simulate --strategy mcts:500:gnn cybran monkeylord
-faf-sim simulate --strategy mcts::gnn cybran monkeylord
+faf-sim simulate --strategy mcts:500:mlp:greedy cybran monkeylord
 ```
 
 When MCTS is stable, you can make it the default strategy for the CLI and benchmarks.
@@ -274,13 +260,14 @@ When MCTS is stable, you can make it the default strategy for the CLI and benchm
 `PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 198 — PlannerConfig default
+// crates/faf-sim/src/planner/core.rs ~line 222 — PlannerConfig default
 fn default() -> Self {
     Self {
         dt: 1.0,
         max_depth: 400,
         max_mex_count: 8,
         max_pgen_count: 20,
+        max_energy_storage_count: 80,
     }
 }
 ```
@@ -293,10 +280,15 @@ A minimal integration test looks like this:
 
 ```rust
 // docref: example
-let planner = Planner::new(Strategy::Mcts {
-    iterations: 100,
-    value_net: ValueNetKind::Mlp,
-});
+let planner = Planner::with_value_net(
+    Strategy::Mcts {
+        iterations: 100,
+        value_net: ValueNetKind::Mlp,
+        deterministic: true,
+    },
+    PlannerConfig::default(),
+    model,
+);
 let result = planner.plan(&units, initial_state, &UnitKind::Unique(UnitId("URL0402".to_string())))?;
 
 if let Some(action) = result.first_action {
@@ -309,7 +301,7 @@ if let Some(action) = result.first_action {
 Train a model programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 413 — train_policy
+// crates/faf-sim/src/planner/mcts/train.rs ~line 650 — train_policy
 let (model, best_model, stats) = train_policy(&units, &goal, TrainConfig::default());
 save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 ```
@@ -317,9 +309,13 @@ save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap()
 And load it later:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 436 — load_model
+// crates/faf-sim/src/planner/mcts/train.rs ~line 686 — load_model
 let model = load_model(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 let planner = Planner::with_value_net(strategy, PlannerConfig::default(), model);
 ```
 
-The CLI may wrap these calls with subcommands such as `train` and `simulate`; the programmatic API is the source of truth.
+The CLI wraps these calls with `train` and `simulate` subcommands. The programmatic API is the source of truth.
+
+## Model compatibility
+
+The macro-direction network uses `STATE_FEATURE_COUNT` inputs and produces `MACRO_DIRECTION_COUNT` outputs. Older per-candidate models have a different input dimension and will fail to load. Delete stale checkpoints or retrain when the network shape changes.

@@ -7,6 +7,7 @@
 //! blueprint ids.
 
 use faf_units::BuildTargetStats;
+use serde::{Deserialize, Serialize};
 
 use crate::economy::{EcoConsumer, EcoFlow, EcoProducer};
 
@@ -25,7 +26,7 @@ pub enum Faction {
 }
 
 /// Technology tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TechLevel {
     T1,
     T2,
@@ -39,14 +40,14 @@ pub enum TechLevel {
 /// Internally this is just the original uppercase blueprint id. It exists as a
 /// newtype so that unique and common units are never confused at the type
 /// level.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UnitId(pub String);
 
 /// Abstract unit kind used throughout the optimizer.
 ///
 /// Common economic and builder units are first-class variants. Everything else
 /// is a `Unique` unit identified by its original blueprint id.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UnitKind {
     Commander,
     Engineer(TechLevel),
