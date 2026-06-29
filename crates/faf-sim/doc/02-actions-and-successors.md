@@ -1,96 +1,143 @@
 # 2. Actions and Successors
 
-The MLP planner expands a state by choosing from the legal **selection options** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level options used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
+The planner expands a state by choosing from the legal **plan-graph edges** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level edges used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
 
 ## Two-level action model
 
-The planner makes decisions at the level of **selection options**:
+The planner makes decisions at the level of **plan-graph edges**:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 19 — SelectionOption enum
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 151 — PlanEdge
+#[derive(Debug, Clone)]
+pub struct PlanEdge {
+    /// Source node of the edge (builder for Build, unit being upgraded for Upgrade).
+    pub source: UnitKind,
+    /// Target node of the edge.
+    pub target: UnitKind,
+    /// Edge kind.
+    pub kind: PlanEdgeKind,
+}
+```
+
+An edge is still an abstract choice: it says *what* to build or upgrade, but not *which* idle engineers will execute it. Before the edge can be applied, the policy runs two more networks to decide the build power and the `[T1, T2, T3]` engineer squad, and then the squad is resolved into concrete `NodeId`s.
+
+The abstraction is useful because the macro network reasons over a small, stable, plan-graph-constrained set of edges, while the simulator still consumes the existing concrete `SimAction` commands.
+
+## Stable edge indexing
+
+The macro network outputs one logit per edge, so the edge list must have a stable order. `PlanEdgeIndex` builds that list once from a `PlanGraph`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 162 — PlanEdgeIndex
+#[derive(Debug, Clone)]
+pub struct PlanEdgeIndex {
+    edges: Vec<PlanEdge>,
+}
+
+impl PlanEdgeIndex {
+    pub fn new(plan: &PlanGraph) -> Self;
+    pub fn len(&self) -> usize;
+    pub fn get(&self, idx: usize) -> Option<&PlanEdge>;
+    pub fn legal_mask(&self, state: &GraphState, units: &Units, config: &PlannerConfig) -> Vec<bool>;
+    pub fn to_selection_option(&self, idx: usize, state: &GraphState, units: &Units, config: &PlannerConfig) -> Option<SelectionOption>;
+}
+```
+
+`legal_mask` returns a boolean vector the same length as the edge list. A position is `true` only if:
+
+- the edge's source unit is completed and active in `state`,
+- the edge's target is not already completed or under construction,
+- for build edges, there is an idle builder capable of building the target and the target does not exceed a storage cap,
+- for upgrade edges, there is a finished source unit and an idle builder capable of performing the upgrade.
+
+The mask is what makes the macro network's `argmax` safe: illegal edges are forced to a very negative logit before the softmax or argmax.
+
+## From edges to selection options
+
+A legal edge index can be converted back to a `SelectionOption` for execution:
+
+```rust
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 27 — SelectionOption
 pub enum SelectionOption {
-    /// Build a new unit of the given kind.
     Build(UnitKind),
-    /// Upgrade an existing `from` unit into `to`.
     Upgrade { from: UnitKind, to: UnitKind },
-    /// Assist an active project. Builders are resolved at execution time.
     Assist(NodeId),
 }
 ```
 
-A selection option is an abstract choice. Before it can be executed it is converted into a concrete `SimAction`:
-
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 170 — SelectionOption::to_sim_action
-impl SelectionOption {
-    pub(crate) fn to_sim_action(&self, state: &GraphState, units: &Units) -> Option<SimAction> {
-        // ...
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 219 — PlanEdgeIndex::to_selection_option
+pub fn to_selection_option(
+    &self,
+    idx: usize,
+    state: &GraphState,
+    units: &Units,
+    config: &PlannerConfig,
+) -> Option<SelectionOption> {
+    let edge = self.edges.get(idx)?;
+    if !is_edge_legal(edge, state, units, config) {
+        return None;
+    }
+    match edge.kind {
+        PlanEdgeKind::Build => Some(SelectionOption::Build(edge.target.clone())),
+        PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
+            from: edge.source.clone(),
+            to: edge.target.clone(),
+        }),
     }
 }
 ```
 
-The separation is useful because the MLP policy reasons over a small, plan-graph-constrained set of options, while the simulator still consumes the existing `SimAction` commands.
+`Assist` is part of the `SelectionOption` vocabulary but is not generated from plan-graph edges; it is reserved for future expansions that assign idle engineers to already-started projects.
 
-## Generating options from the plan graph
+## Resolving the engineer squad
 
-`SelectionPools` is a wrapper around the legal `SelectionOption`s for the current state. It derives them by walking the static `PlanGraph`:
-
-```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 36 — SelectionPools
-pub struct SelectionPools {
-    options: Vec<SelectionOption>,
-}
-```
+After the macro network selects an edge, the build-power network outputs a scalar target build power and the engineer-squad network outputs desired `[T1, T2, T3]` counts. Those counts are clamped to the actual idle engineers of each tech level and then mapped to real builder nodes by `select_squad_for_edge`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 60 — SelectionPools::new
-pub fn new(
-    plan: &PlanGraph,
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 418 — select_squad_for_edge
+pub fn select_squad_for_edge(
+    edge: &PlanEdge,
+    desired: [usize; ENGINEER_TECH_LEVELS],
     state: &GraphState,
     units: &Units,
-    config: &PlannerConfig,
-) -> Self {
-    // ... walks plan-graph edges, emits Build/Upgrade options,
-    //     applies storage caps, then adds Assist options ...
+) -> Vec<NodeId> {
+    let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
+        PlanEdgeKind::Build => {
+            Box::new(|id: NodeId| units.can_build(&state.graph[id].unit_id, &edge.target))
+        }
+        PlanEdgeKind::Upgrade => { /* ... */ }
+    };
+
+    let buckets = idle_engineers_by_tech(state, units, predicate);
+    let mut squad = Vec::new();
+    for (i, bucket) in buckets.iter().enumerate() {
+        let take = desired[i].min(bucket.len());
+        squad.extend_from_slice(&bucket[..take]);
+    }
+    squad
 }
 ```
 
-For each edge `source -> target` in the plan graph:
+The function prefers the highest build-rate engineers within each tech level, so a T2 engineer with a higher build rate is chosen before a slower one.
 
-- The source must be a completed, active unit in the current state.
-- The target must not already be completed or under construction.
-- For a **build** edge, the source must be an idle builder capable of building the target.
-- For an **upgrade** edge, there must be a finished source unit and an idle builder capable of performing the upgrade.
-- `EnergyStorage` build options are suppressed once the configured cap is reached; capped mex upgrades (`CapT2Mex`, `CapT3Mex`) are limited by the number of eligible T2/T3 mexes.
-
-`Assist` options mention only the active project node. The engineers that will assist it are chosen when the option is converted into a `SimAction`. The wrapper exposes the final list through `options`:
-
-```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 106 — SelectionPools::options
-pub fn options(&self) -> &[SelectionOption] {
-    &self.options
-}
-```
-
-## From options to executable actions
-
-The policy scores each option returned by `SelectionPools::options`, but not every scored option can be executed immediately. The planner filters by `SelectionOption::to_sim_action` before sampling. For example, a `Build` option needs a specific idle builder node; if the only capable builder became busy during the current tick, the option is skipped and the planner issues `Wait`.
+If the desired squad exceeds the available idle engineers, the difference is recorded as **shortfall** and fed back into the macro network on the next tick. This feedback loop lets the policy learn to build or upgrade engineers before retrying an edge that previously starved.
 
 ## Low-level `SimAction`
 
-The concrete simulator commands are still the existing `SimAction` enum:
+The concrete simulator commands are the existing `SimAction` enum, now extended to carry multiple builders:
 
 ```rust
 // crates/faf-sim/src/planner/search.rs ~line 21 — SimAction enum
 pub enum SimAction {
     Build {
         unit_id: UnitKind,
-        builder: NodeId,
+        builders: Vec<NodeId>,
     },
     Upgrade {
         target_unit_id: UnitKind,
         old_node: NodeId,
-        builder: NodeId,
+        builders: Vec<NodeId>,
     },
     Assist {
         project_node: NodeId,
@@ -100,46 +147,62 @@ pub enum SimAction {
 }
 ```
 
-- `Build` starts a new project for a unit, assigning one idle builder to it.
-  - `Build(EnergyStorage)` is resolved by the simulator: when the energy storage building completes, it is assigned to the power generator with the fewest existing caps.
-  - `Upgrade` to `CapT2Mex` or `CapT3Mex` models capping a mex with four mass storages as an atomic action; the +50% adjacency bonus is built into the capped unit's income.
-- `Upgrade` starts a new project for the higher-tier unit and retires the source slot.
-- `Assist` adds all idle engineers to an already-started project.
+- `Build` starts a new project for a unit, assigning one or more idle builders to it.
+- `Upgrade` starts a new project for the higher-tier unit, retires the source slot, and assigns a squad of builders.
+- `Assist` adds all specified idle engineers to an already-started project.
 - `Wait` advances the simulator by one tick.
+
+`Build` and `Upgrade` accept a `Vec<NodeId>` so that a squad of engineers can be committed immediately. The simulator assigns the total build power of all listed builders to the project.
+
+## Execution in the one-step policy
+
+The current one-step planner ties the pieces together in `macro_policy_plan`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 54 — macro_policy_plan (abbreviated)
+fn macro_policy_plan(...) -> Result<PlanResult, PlannerError> {
+    // 1. forward through macro network, masked argmax over legal edges
+    // 2. forward through build-power network for the selected edge
+    // 3. forward through engineer-squad network
+    // 4. resolve squad, build SimAction::Build/Upgrade, execute
+    // 5. update shortfall feedback
+}
+```
+
+If no legal edge exists, or the resolved squad is empty, the planner issues `SimAction::Wait` for one tick and records the shortfall.
 
 ## Storage caps and adjacency
 
 `EnergyStorage` remains a first-class `Build` target. The simulator tracks how many energy storages are adjacent to each pgen and applies the FAF adjacency bonus: `+12.5%` energy production per storage, up to four storages (`+50%`).
 
 Mass storage is no longer an independent build target. Instead, capping a T2 or T3 mex with four mass storages is modeled as an upgrade:
+
 - `Mex(T2) -> CapT2Mex`
 - `Mex(T3) -> CapT3Mex`
 - `CapT2Mex -> CapT3Mex`
 
 The `CapT2Mex` and `CapT3Mex` unit definitions include the +50% mass adjacency bonus directly in their mass income, so no per-mex adjacency map is needed for mass storage.
 
-The current MLP planner usually assigns a single builder; future successors may assign multiple builders to a project.
-
 ## Why the branching factor matters
 
-The option list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal options. The policy network keeps the decision cheap:
+The edge list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal edges. The policy bundle keeps the decision cheap:
 
-1. Generate options once with `SelectionPools::new` and read them with `SelectionPools::options`.
-2. Score all options in a single batched forward pass.
-3. Sample one option and convert it to a `SimAction`.
+1. Compute the legal mask once with `PlanEdgeIndex::legal_mask`.
+2. Run the three networks in three small forward passes.
+3. Resolve the selected edge into a concrete `SimAction`.
 
-This is `O(n_candidates)` forward work per decision, not a tree expansion.
+This is `O(num_edges)` forward work per decision, not a tree expansion.
 
 ## Legal move validation
 
-Not every `SelectionOption` is valid in every state. The simulator rejects actions that violate constraints:
+Not every edge is valid in every state. The simulator rejects actions that violate constraints:
 
 - A busy builder cannot start a new project.
 - A builder cannot build or upgrade a unit it is not capable of building.
 - A builder cannot upgrade a unit that has no registered upgrade target.
 - A builder cannot assist a non-existent project.
 
-The candidate generator pre-filters most illegal actions, and `SelectionOption::to_sim_action` plus the simulator's `start_project`/`assist_project` methods catch the rest. The planner handles rejection by issuing `Wait` and trying again on the next tick.
+The edge legality check pre-filters most illegal actions, and `PlanEdgeIndex::to_selection_option` plus the simulator's `start_project`/`start_upgrade_project` methods catch the rest. The planner handles rejection by issuing `Wait` and trying again on the next tick.
 
 ## Key design choice: discrete actions, continuous time
 

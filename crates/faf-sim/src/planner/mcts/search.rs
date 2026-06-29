@@ -53,7 +53,7 @@ impl MctsSearch {
     /// * `goal_id` - The blueprint id of the unit we are trying to build.
     /// * `units` - Unified unit knowledge repository.
     /// * `planner_config` - Shared planner configuration.
-    /// * `value_net` - The learned macro-direction network used for leaf evaluation.
+    /// * `value_net` - The learned macro-edge network used for leaf evaluation.
     pub fn search(
         &self,
         _initial_state: GraphState,

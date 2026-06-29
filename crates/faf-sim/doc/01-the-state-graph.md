@@ -87,7 +87,7 @@ GraphState
 └── events
 ```
 
-The policy network receives a featurized version of this snapshot paired with each legal candidate (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
+The macro network receives a featurized version of this snapshot plus previous-tick engineer shortfall (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
 
 ## Objectives
 

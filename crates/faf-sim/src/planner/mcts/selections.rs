@@ -19,9 +19,9 @@ use petgraph::visit::EdgeRef;
 
 use crate::planner::core::PlannerConfig;
 use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
-use crate::planner::search::SimAction;
+
 use crate::sim::{GraphState, NodeId, UnitNodeState};
-use crate::units::{UnitKind, Units};
+use crate::units::{TechLevel, UnitKind, Units};
 
 /// A single selectable action option.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,6 +139,156 @@ impl SelectionPools {
     }
 }
 
+/// Number of tech levels tracked by the engineer-squad network.
+pub const ENGINEER_TECH_LEVELS: usize = 3;
+
+/// Stable, ordered list of plan-graph edges used by the macro-edge network.
+///
+/// Each edge corresponds to one index in the macro network's output. Build
+/// edges share a target but may differ by source builder; the network selects
+/// a concrete edge, and the source requirement is checked when testing legality.
+#[derive(Debug, Clone)]
+pub struct PlanEdge {
+    /// Source node of the edge (builder for [`PlanEdgeKind::Build`], unit being
+    /// upgraded for [`PlanEdgeKind::Upgrade`]).
+    pub source: UnitKind,
+    /// Target node of the edge.
+    pub target: UnitKind,
+    /// Edge kind.
+    pub kind: PlanEdgeKind,
+}
+
+/// Indexable edge list derived from a [`PlanGraph`].
+#[derive(Debug, Clone)]
+pub struct PlanEdgeIndex {
+    edges: Vec<PlanEdge>,
+}
+
+impl PlanEdgeIndex {
+    /// Build a stable edge list from the plan graph.
+    pub fn new(plan: &PlanGraph) -> Self {
+        let edges: Vec<PlanEdge> = plan
+            .graph()
+            .edge_references()
+            .map(|e| PlanEdge {
+                source: plan.graph()[e.source()].clone(),
+                target: plan.graph()[e.target()].clone(),
+                kind: *e.weight(),
+            })
+            .collect();
+        Self { edges }
+    }
+
+    /// Number of edges (and therefore macro-output dimensions).
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// True if the plan graph contains no edges.
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    /// Access the edge at `idx`.
+    pub fn get(&self, idx: usize) -> Option<&PlanEdge> {
+        self.edges.get(idx)
+    }
+
+    /// All edges.
+    pub fn edges(&self) -> &[PlanEdge] {
+        &self.edges
+    }
+
+    /// Return a boolean mask indicating which edges are legal in `state`.
+    pub fn legal_mask(
+        &self,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+    ) -> Vec<bool> {
+        self.edges
+            .iter()
+            .map(|e| is_edge_legal(e, state, units, config))
+            .collect()
+    }
+
+    /// Convert a legal edge index into a [`SelectionOption`].
+    ///
+    /// Returns `None` if the edge is illegal or the concrete source/builder is
+    /// no longer available.
+    pub fn to_selection_option(
+        &self,
+        idx: usize,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+    ) -> Option<SelectionOption> {
+        let edge = self.edges.get(idx)?;
+        if !is_edge_legal(edge, state, units, config) {
+            return None;
+        }
+        match edge.kind {
+            PlanEdgeKind::Build => Some(SelectionOption::Build(edge.target.clone())),
+            PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
+                from: edge.source.clone(),
+                to: edge.target.clone(),
+            }),
+        }
+    }
+
+    /// Find the index of the first edge that resolves to the given selection
+    /// option and is currently legal.
+    pub fn find_edge_for_option(
+        &self,
+        option: &SelectionOption,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+    ) -> Option<usize> {
+        self.edges
+            .iter()
+            .enumerate()
+            .find(|(_, e)| {
+                let same = match (option, e.kind) {
+                    (SelectionOption::Build(t), PlanEdgeKind::Build) => *t == e.target,
+                    (SelectionOption::Upgrade { from, to }, PlanEdgeKind::Upgrade) => {
+                        *from == e.source && *to == e.target
+                    }
+                    _ => false,
+                };
+                same && is_edge_legal(e, state, units, config)
+            })
+            .map(|(i, _)| i)
+    }
+}
+
+/// True if `edge` can be executed in `state`.
+fn is_edge_legal(
+    edge: &PlanEdge,
+    state: &GraphState,
+    units: &Units,
+    config: &PlannerConfig,
+) -> bool {
+    let active_targets = state.active_target_unit_ids();
+
+    // Source must be owned and active; target must not already be owned or
+    // under construction.
+    if !state.has_completed_unit(&edge.source)
+        || state.has_completed_unit(&edge.target)
+        || active_targets.contains(&edge.target)
+    {
+        return false;
+    }
+
+    match edge.kind {
+        PlanEdgeKind::Build => {
+            is_idle_builder(state, units, &edge.source)
+                && !would_exceed_storage_cap(&edge.target, state, config)
+        }
+        PlanEdgeKind::Upgrade => can_upgrade(state, units, &edge.source, &edge.target),
+    }
+}
+
 /// True if building `target` would exceed the configured storage cap.
 fn would_exceed_storage_cap(target: &UnitKind, state: &GraphState, config: &PlannerConfig) -> bool {
     match target {
@@ -201,81 +351,128 @@ fn has_idle_engineer(state: &GraphState, units: &Units) -> bool {
         .any(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
 }
 
-impl SelectionOption {
-    /// Convert this option into a concrete simulator command if it is executable.
-    pub(crate) fn to_sim_action(&self, state: &GraphState, units: &Units) -> Option<SimAction> {
-        match self {
-            SelectionOption::Build(target) => {
-                let builder = find_idle_builder(state, units, target)?;
-                Some(SimAction::Build {
-                    unit_id: target.clone(),
-                    builder,
-                })
-            }
-            SelectionOption::Upgrade { from, to } => {
-                let (old_node, builder) = find_upgrade_parts(state, units, from, to)?;
-                Some(SimAction::Upgrade {
-                    target_unit_id: to.clone(),
-                    old_node,
-                    builder,
-                })
-            }
-            SelectionOption::Assist(target) => {
-                // Verify the target is still an active project.
-                if !matches!(
-                    state.graph[*target].state,
-                    UnitNodeState::Constructing { .. } | UnitNodeState::Upgrading { .. }
-                ) {
-                    return None;
-                }
-                // Assign all idle engineers to the project.
-                let builders: Vec<NodeId> = state
-                    .idle_builders(units)
-                    .into_iter()
-                    .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(_)))
-                    .collect();
-                if builders.is_empty() {
-                    return None;
-                }
-                Some(SimAction::Assist {
-                    project_node: *target,
-                    builders,
-                })
+/// Count idle engineers per tech level [T1, T2, T3].
+pub fn idle_engineer_counts(state: &GraphState, units: &Units) -> [usize; ENGINEER_TECH_LEVELS] {
+    let mut counts = [0usize; ENGINEER_TECH_LEVELS];
+    for &id in &state.idle_builders(units) {
+        if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
+            if let Some(i) = tech_index(*t) {
+                counts[i] += 1;
             }
         }
     }
+    counts
 }
 
-/// Find an idle builder node capable of building `target`.
-fn find_idle_builder(state: &GraphState, units: &Units, target: &UnitKind) -> Option<NodeId> {
-    state
-        .idle_builders(units)
-        .into_iter()
-        .find(|&id| units.can_build(&state.graph[id].unit_id, target))
+/// Return the tech-level bucket used by the squad network.
+fn tech_index(t: TechLevel) -> Option<usize> {
+    match t {
+        TechLevel::T1 => Some(0),
+        TechLevel::T2 => Some(1),
+        TechLevel::T3 => Some(2),
+        _ => None,
+    }
 }
 
-/// Find an active source unit and an idle builder for an upgrade.
-fn find_upgrade_parts(
+/// Collect idle engineer nodes grouped by tech level, highest build-rate first.
+fn idle_engineers_by_tech(
     state: &GraphState,
     units: &Units,
-    from: &UnitKind,
-    to: &UnitKind,
-) -> Option<(NodeId, NodeId)> {
-    let recipe = units.upgrade_recipes(from).iter().find(|r| r.to == *to)?;
+    predicate: impl Fn(NodeId) -> bool,
+) -> [Vec<NodeId>; ENGINEER_TECH_LEVELS] {
+    let mut buckets: [Vec<NodeId>; ENGINEER_TECH_LEVELS] = [Vec::new(), Vec::new(), Vec::new()];
 
-    let old_node = state
+    for &id in &state.idle_builders(units) {
+        if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
+            if let Some(i) = tech_index(*t) {
+                if predicate(id) {
+                    buckets[i].push(id);
+                }
+            }
+        }
+    }
+
+    for bucket in &mut buckets {
+        bucket.sort_by(|&a, &b| {
+            let rate_a = units
+                .def(&state.graph[a].unit_id)
+                .map(|d| d.build_rate)
+                .unwrap_or(0.0);
+            let rate_b = units
+                .def(&state.graph[b].unit_id)
+                .map(|d| d.build_rate)
+                .unwrap_or(0.0);
+            rate_b.total_cmp(&rate_a)
+        });
+    }
+
+    buckets
+}
+
+/// Select a concrete squad of idle engineers for `edge` matching the desired
+/// per-tech counts.
+///
+/// The returned builders are clamped to the number of idle engineers that are
+/// actually available and capable of working on this edge. The caller is
+/// responsible for updating the shortfall feedback from `desired - assigned`.
+pub fn select_squad_for_edge(
+    edge: &PlanEdge,
+    desired: [usize; ENGINEER_TECH_LEVELS],
+    state: &GraphState,
+    units: &Units,
+) -> Vec<NodeId> {
+    let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
+        PlanEdgeKind::Build => {
+            Box::new(|id: NodeId| units.can_build(&state.graph[id].unit_id, &edge.target))
+        }
+        PlanEdgeKind::Upgrade => {
+            let recipe = units
+                .upgrade_recipes(&edge.source)
+                .iter()
+                .find(|r| r.to == edge.target)
+                .cloned();
+            match recipe {
+                Some(recipe) => Box::new(move |id: NodeId| {
+                    recipe.builder_options.contains(&state.graph[id].unit_id)
+                }),
+                None => return Vec::new(),
+            }
+        }
+    };
+
+    let buckets = idle_engineers_by_tech(state, units, predicate);
+    let mut squad = Vec::new();
+    for (i, bucket) in buckets.iter().enumerate() {
+        let take = desired[i].min(bucket.len());
+        squad.extend_from_slice(&bucket[..take]);
+    }
+    squad
+}
+
+/// Find an active source node of the given kind for an upgrade edge.
+pub(crate) fn find_upgrade_source(state: &GraphState, source_kind: &UnitKind) -> Option<NodeId> {
+    state
         .graph
         .graph
         .node_weights()
-        .find(|n| n.is_active() && n.unit_id == *from)
-        .map(|n| n.id)?;
+        .find(|n| n.is_active() && n.unit_id == *source_kind)
+        .map(|n| n.id)
+}
 
-    let builder = state
-        .idle_builders(units)
-        .into_iter()
-        .find(|&id| recipe.builder_options.contains(&state.graph[id].unit_id))?;
-
-    Some((old_node, builder))
+/// Count assigned engineers per tech level from a list of builder node ids.
+pub(crate) fn assigned_squad_counts(state: &GraphState, builders: &[NodeId]) -> [usize; 3] {
+    let mut counts = [0usize; 3];
+    for &id in builders {
+        if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
+            match *t {
+                TechLevel::T1 => counts[0] += 1,
+                TechLevel::T2 => counts[1] += 1,
+                TechLevel::T3 => counts[2] += 1,
+                _ => {}
+            }
+        }
+    }
+    counts
 }
 
 #[cfg(test)]

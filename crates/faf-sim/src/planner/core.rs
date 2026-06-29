@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use crate::economy::EconomyState;
 use crate::planner::mcts;
-use crate::planner::mcts::macro_net::MacroNet;
+use crate::planner::mcts::macro_net::PolicyBundle;
 use crate::planner::mcts::train::TrainBackend;
 use crate::sim::{BuildEvent, GraphState};
 use crate::units::{UnitKind, Units};
@@ -65,7 +65,7 @@ impl Error for PlannerError {}
 /// Architecture of the learned value network used inside MCTS.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ValueNetKind {
-    /// Macro-direction policy network.
+    /// Hierarchical policy bundle (macro + build-power + engineer-squad).
     #[default]
     Mlp,
     /// Graph neural network that reasons over the plan graph structure.
@@ -109,8 +109,8 @@ pub enum Strategy {
         iterations: usize,
         /// Kind of learned value network to use inside MCTS.
         value_net: ValueNetKind,
-        /// If true, the policy always picks the highest-scoring macro direction
-        /// instead of sampling from the softmax. This makes simulation
+        /// If true, the policy always picks the highest-scoring legal plan-graph
+        /// edge instead of sampling from the softmax. This makes simulation
         /// deterministic and reproducible.
         deterministic: bool,
     },
@@ -238,15 +238,22 @@ pub struct Planner {
     pub strategy: Strategy,
     /// Shared search configuration.
     pub config: PlannerConfig,
-    /// Optional trained macro network. If present, MCTS uses it instead of a
-    /// fresh random initialization.
-    pub value_net: Option<MacroNet<TrainBackend>>,
+    /// Optional trained hierarchical policy bundle. If present, MCTS uses it
+    /// instead of a fresh random initialization.
+    pub value_net: Option<PolicyBundle<TrainBackend>>,
+    /// Previous-tick engineer shortfall feedback passed to the macro network.
+    pub last_shortfall: [f32; 3],
 }
 
 impl Planner {
     /// Create a planner with the default configuration.
     pub fn new(strategy: Strategy) -> Self {
         Self::with_config(strategy, PlannerConfig::default())
+    }
+
+    /// Reset transient planner state such as engineer shortfall feedback.
+    pub fn reset_state(&mut self) {
+        self.last_shortfall = [0.0f32; 3];
     }
 
     /// Create a planner tuned for the reactive actor loop.
@@ -260,25 +267,27 @@ impl Planner {
             strategy,
             config,
             value_net: None,
+            last_shortfall: [0.0f32; 3],
         }
     }
 
-    /// Create a planner that uses a trained value network.
+    /// Create a planner that uses a trained policy bundle.
     pub fn with_value_net(
         strategy: Strategy,
         config: PlannerConfig,
-        value_net: MacroNet<TrainBackend>,
+        value_net: PolicyBundle<TrainBackend>,
     ) -> Self {
         Self {
             strategy,
             config,
             value_net: Some(value_net),
+            last_shortfall: [0.0f32; 3],
         }
     }
 
     /// Run the planner from `initial_state` until `goal_id` is completed.
     pub fn plan(
-        &self,
+        &mut self,
         units: &Units,
         initial_state: GraphState,
         goal_id: &UnitKind,
@@ -296,6 +305,7 @@ impl Planner {
                 value_net_kind,
                 deterministic,
                 self.value_net.clone(),
+                &mut self.last_shortfall,
                 &self.config,
             ),
         }

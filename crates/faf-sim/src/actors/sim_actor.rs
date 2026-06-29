@@ -134,9 +134,11 @@ impl SimActor {
     /// Apply a planner command to the simulation state.
     fn apply_command(&mut self, command: Command) -> Result<(), GraphSimError> {
         match command {
-            Command::Build { unit_id, builder } => {
-                self.state
-                    .start_project(&unit_id, &[builder], &self.units)?;
+            Command::Build { unit_id, builders } => {
+                if builders.is_empty() {
+                    return Ok(());
+                }
+                self.state.start_project(&unit_id, &builders, &self.units)?;
             }
             Command::Assist {
                 project_node,
@@ -151,12 +153,15 @@ impl SimActor {
             Command::Upgrade {
                 target_unit_id,
                 old_node,
-                builder,
+                builders,
             } => {
+                if builders.is_empty() {
+                    return Ok(());
+                }
                 self.state.start_upgrade_project(
                     &target_unit_id,
                     old_node,
-                    &[builder],
+                    &builders,
                     &self.units,
                 )?;
             }

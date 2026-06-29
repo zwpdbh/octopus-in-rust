@@ -19,13 +19,16 @@ use crate::units::{UnitKind, Units};
 /// the best ranked state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimAction {
-    /// Build a unit with the given builder.
-    Build { unit_id: UnitKind, builder: NodeId },
+    /// Build a unit with the given builders.
+    Build {
+        unit_id: UnitKind,
+        builders: Vec<NodeId>,
+    },
     /// Upgrade an existing unit in-place to a higher-tier blueprint.
     Upgrade {
         target_unit_id: UnitKind,
         old_node: NodeId,
-        builder: NodeId,
+        builders: Vec<NodeId>,
     },
     /// Assist an active project with additional builders.
     Assist {
@@ -151,7 +154,7 @@ fn add_build_candidates(
                     next,
                     SimAction::Build {
                         unit_id: unit_id.clone(),
-                        builder,
+                        builders: vec![builder],
                     },
                 ));
             }
@@ -187,7 +190,7 @@ fn add_upgrade_candidates(
                     SimAction::Upgrade {
                         target_unit_id: target.clone(),
                         old_node,
-                        builder,
+                        builders: vec![builder],
                     },
                 ));
             }

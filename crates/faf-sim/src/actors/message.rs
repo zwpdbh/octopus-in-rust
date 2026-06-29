@@ -13,12 +13,12 @@ use crate::units::UnitKind;
 /// to build or assist. The simulation advances fixed ticks and reports back.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Start building a unit with the given idle builder.
+    /// Start building a unit with the given idle builders.
     Build {
         /// Blueprint id of the unit to build.
         unit_id: UnitKind,
-        /// Builder node that will work on the project.
-        builder: NodeId,
+        /// Builder nodes that will work on the project.
+        builders: Vec<NodeId>,
     },
     /// Assign additional idle builders to an active project.
     Assist {
@@ -33,8 +33,8 @@ pub enum Command {
         target_unit_id: UnitKind,
         /// Node id of the unit being upgraded.
         old_node: NodeId,
-        /// Builder node that will work on the upgrade.
-        builder: NodeId,
+        /// Builder nodes that will work on the upgrade.
+        builders: Vec<NodeId>,
     },
 }
 

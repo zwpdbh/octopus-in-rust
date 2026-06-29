@@ -1,244 +1,300 @@
 # 6. Training Pipeline
 
-The macro-direction policy is trained with **REINFORCE**: roll out episodes with the current policy, then update the network so that macro directions leading to higher rewards become more likely.
+This chapter describes how the hierarchical policy bundle is trained. The pipeline uses REINFORCE with epsilon-greedy exploration and entropy regularization, periodically evaluates the policy greedily, and fine-tunes the best discovered trajectory at the end.
 
-## Single-phase policy-gradient training
+## Overview
 
-Unlike a supervised warm-start that regresses on completion time, the current trainer learns directly from its own rollouts. The loop is:
-
-1. Start a fresh `GraphState` with only the ACU.
-2. Run the current policy for up to `max_steps` simulator ticks.
-3. At each step, compute state features, score the four macro directions, and sample one.
-4. Resolve the sampled direction to a concrete action and execute it.
-5. Record the state features and selected direction at every step.
-6. Compute a shaped reward from the final state.
-7. Update the network with REINFORCE plus an entropy bonus.
-
-This is implemented in `Trainer::train`:
+The training entry point is `train_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 135 — Trainer::train
-pub fn train(&mut self, units: &Units, goal: &UnitKind) -> TrainStats {
-    let plan = units
-        .plan_graph(goal)
-        .expect("goal must be reachable for training");
-    // ... run episodes and update ...
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
+pub fn train_policy(
+    units: &Units,
+    goal: &UnitKind,
+    config: TrainConfig,
+) -> (
+    PolicyBundle<TrainBackend>,
+    Option<PolicyBundle<TrainBackend>>,
+    TrainStats,
+) {
+    let num_edges = plan_edge_index(units, goal)
+        .expect("goal must have a plan graph")
+        .len();
+    let mut trainer = Trainer::new(config, num_edges);
+    let stats = trainer.train(units, goal);
+    fine_tune_best_model(trainer, units, goal, &config, stats)
 }
 ```
 
+It returns the final model, an optional best-seen model, and statistics. The optional best model comes from greedy evaluation: whenever the greedy rollout beats the previous best time, the current parameters are stored. After training, the best stored model is fine-tuned on the best trajectory and returned as the final model.
+
 ## Configuration
 
-`TrainConfig` controls the training run:
+Training is controlled by `TrainConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 36 — TrainConfig
+// crates/faf-sim/src/planner/mcts/train/config.rs ~line 4 — TrainConfig
 pub struct TrainConfig {
+    /// Number of episodes to run.
     pub episodes: usize,
+    /// Maximum simulator steps per episode.
     pub max_steps: usize,
+    /// Fixed simulator timestep for rollouts.
     pub dt: f64,
+    /// Learning rate for Adam.
     pub learning_rate: f64,
+    /// Discount factor for future rewards.
     pub gamma: f32,
+    /// Initial probability of taking a random action during training.
     pub epsilon: f32,
+    /// Final epsilon value after decay.
     pub epsilon_final: f32,
+    /// Number of episodes over which to linearly decay `epsilon`.
     pub epsilon_decay_episodes: usize,
+    /// Entropy bonus coefficient.
     pub entropy_coef: f32,
+    /// Stop early when the best completion time is at most this many seconds.
     pub target_time: Option<f64>,
+    /// Evaluate greedily every N episodes and keep the best model.
+    pub greedy_eval_interval: usize,
+    /// Supervised fine-tuning epochs on the best trajectory.
+    pub fine_tune_epochs: usize,
+    /// Standard deviation for build-power sampling.
+    pub power_std: f32,
+    /// Standard deviation for engineer-count sampling.
+    pub squad_std: f32,
+    /// Print per-episode progress to stderr.
     pub verbose: bool,
 }
 ```
 
-| Field | Default | Role |
-|---|---|---|
-| `episodes` | 200 | Number of rollouts to run. Use `0` to run until `target_time` is hit or the process is interrupted. |
-| `max_steps` | 500 | Maximum simulator ticks per episode. |
-| `dt` | 1.0 | Fixed simulator timestep for rollouts. |
-| `learning_rate` | 1e-3 | Adam step size. |
-| `gamma` | 0.99 | Discount factor (reserved for future n-step returns). |
-| `epsilon` | 0.1 | Initial probability of taking a random macro direction. |
-| `epsilon_final` | 0.1 | Final epsilon after decay. Same as `epsilon` when no decay. |
-| `epsilon_decay_episodes` | same as `episodes` | Episodes over which to linearly decay `epsilon` to `epsilon_final`. `0` disables decay. |
-| `entropy_coef` | 0.01 | Entropy bonus strength. |
-| `target_time` | `None` | Stop early when an episode reaches the goal in at most this many seconds. |
-| `verbose` | `false` | Print per-episode progress to stderr. |
-
-The network input is `STATE_FEATURE_COUNT` economy/state features. Saved model checkpoints from before the macro-direction redesign will fail to load and must be retrained.
-
-## Rollout details
-
-Each episode begins with a fresh state:
+The default configuration is conservative and CPU-friendly:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 290 — Trainer::run_episode
-let mut state = GraphState::new(units, &[UnitKind::Commander]);
-```
-
-At each tick:
-
-1. Derive `SelectionPools` from the `PlanGraph`.
-2. Compute `state_features`.
-3. With probability `epsilon`, pick a random macro direction; otherwise sample from the softmax over network scores.
-4. Resolve the chosen direction to a concrete `SelectionOption`.
-5. Convert the option to a `SimAction` and execute it.
-6. If the resolver cannot find an executable candidate, issue `Wait`.
-
-```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 310 — direction selection and resolution
-let state_feats = state_features(&state, units, planner_config);
-let scores = self.model.evaluate_single(state_feats.clone(), &self.device);
-
-let direction_index = if self.rng.gen::<f32>() < epsilon {
-    self.rng.gen_range(0..MACRO_DIRECTION_COUNT)
-} else {
-    sample_direction_index(&scores, &mut self.rng)
-};
-let direction = MacroDirection::from_index(direction_index)
-    .unwrap_or(MacroDirection::BuildPower);
-
-let selected = match resolve_macro_direction(
-    direction,
-    &candidates,
-    &state,
-    units,
-    plan,
-    planner_config,
-) {
-    Some(option) => option,
-    None => {
-        state.tick(units, self.config.dt);
-        continue;
+// crates/faf-sim/src/planner/mcts/train/config.rs ~line 44 — TrainConfig::default
+fn default() -> Self {
+    Self {
+        episodes: 200,
+        max_steps: 500,
+        dt: 1.0,
+        learning_rate: 1e-3,
+        gamma: 0.99,
+        epsilon: 0.1,
+        epsilon_final: 0.1,
+        epsilon_decay_episodes: 0,
+        entropy_coef: 0.01,
+        target_time: None,
+        greedy_eval_interval: 100,
+        fine_tune_epochs: 100,
+        power_std: 2.0,
+        squad_std: 0.5,
+        verbose: false,
     }
-};
+}
 ```
 
-## Reward shaping
+You can increase `episodes`, `max_steps`, and the network sizes for harder goals. The default is intended for quick experiments and unit tests.
 
-Because the raw reward — reaching the goal — is sparse, the trainer uses a shaped reward computed from the final state of each episode:
+## Trainer structure
+
+The `Trainer` owns the model, optimizer, and running return statistics used to center the REINFORCE advantage:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 525 — compute_progress_reward
-fn compute_progress_reward(
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 37 — Trainer (abbreviated)
+pub struct Trainer {
+    pub(crate) model: PolicyBundle<TrainBackend>,
+    pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
+    pub(crate) best_trajectory: Option<BuildTrajectory>,
+    pub(crate) optimizer: AdamOptimizer,
+    pub(crate) config: TrainConfig,
+    pub(crate) device: TrainDevice,
+    pub(crate) rng: ThreadRng,
+    pub(crate) return_mean: f32,
+    pub(crate) return_var: f32,
+    pub(crate) return_count: f32,
+}
+```
+
+`Trainer::new` builds a fresh bundle and an Adam optimizer. `Trainer::from_model` continues from an existing bundle, which is useful for resuming training or fine-tuning.
+
+## Episode generation
+
+Each episode rolls out the current policy in the simulator. The trainer gathers a trajectory of recorded steps:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/episode.rs ~line 5 — EpisodeStep
+pub(crate) struct EpisodeStep {
+    pub(crate) base_features: Vec<f32>,
+    pub(crate) shortfall: [f32; 3],
+    pub(crate) legal_mask: Vec<bool>,
+    pub(crate) edge_index: usize,
+    pub(crate) target_power: f32,
+    pub(crate) desired_squad: [f32; 3],
+    pub(crate) return_value: f32,
+}
+```
+
+At each step the trainer:
+
+1. Computes the legal edge mask.
+2. Featurizes the state with shortfall feedback.
+3. Samples an edge from the macro network (or a random legal edge with probability `epsilon`).
+4. Samples target build power and engineer counts from the power and squad networks.
+5. Resolves the squad into concrete builder nodes and executes the action.
+6. Records the step.
+
+If the episode exceeds `max_steps` without reaching the goal, it terminates.
+
+## Reward signal
+
+The reward is computed once per episode from the final state:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/reward.rs ~line 8 — compute_progress_reward
+pub(crate) fn compute_progress_reward(
     state: &GraphState,
     units: &Units,
     goal: &UnitKind,
     plan: &PlanGraph,
 ) -> f32 {
-    // ...
+    // reward for owning nodes on the plan graph, tech milestones,
+    // economy scale, and a large bonus for reaching the goal quickly
 }
 ```
 
-The reward includes:
+The current reward combines:
 
-- Points for owning nodes on the plan graph, weighted inversely by distance to the goal.
-- Bonuses for unlocking higher factory and engineer tech tiers.
-- Rewards for economy scale (build power, mass/energy income).
-- A large bonus for reaching the goal, plus a time premium for faster completion.
-- A small penalty for failing to reach the goal within the step budget.
+- **Graph-node ownership.** A reward for every completed node on the plan graph, weighted inversely by its distance to the goal.
+- **Tech milestones.** Bonuses for unlocking T1/T2/T3 factories and engineers.
+- **Economy scale.** Clipped bonuses for total build power, mass income, and energy income.
+- **Goal bonus.** A large positive reward when the goal is reached, plus a time premium for faster completion.
+- **Failure penalty.** A fixed penalty if the episode does not reach the goal within the step budget.
 
-This shaped reward is the same for every step in the episode because the final state captures the entire trajectory's outcome.
+The reward is dense enough to give a learning signal before the goal is reached, but the largest component is still the goal-completion bonus.
 
-## Baseline normalization
+## REINFORCE update
 
-REINFORCE needs a baseline to reduce variance. Because the reward is computed from the final state only, a per-episode mean would collapse to zero. Instead, the trainer maintains a **running mean and variance** of episode returns across training:
+After each episode, the trainer computes the discounted return for every timestep and subtracts a running-mean baseline to reduce variance. Then it updates all three networks jointly.
+
+The combined loss has three parts:
+
+1. **Macro loss.** Categorical log-likelihood of the selected edge, weighted by advantage, plus an entropy bonus.
+2. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
+3. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
+
+All three losses share the same advantage, so a single scalar drives the gradient through the macro net, the power net, and the squad net.
+
+## Greedy evaluation
+
+Every `greedy_eval_interval` episodes, the trainer runs a deterministic greedy rollout with the current parameters. If the greedy rollout reaches the goal faster than any previous greedy rollout, the current model is saved as `best_model`.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 420 — Trainer::compute_returns
-fn compute_returns(&mut self, episode: &mut Episode) {
-    // Welford's online algorithm
-    self.return_count += 1.0;
-    let delta = raw_return - self.return_mean;
-    self.return_mean += delta / self.return_count;
-    // ...
-    let normalized = (raw_return - self.return_mean) / std;
-
-    for step in &mut episode.steps {
-        step.return_value = normalized;
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 158 — greedy evaluation
+if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
+    if let Some(greedy_time) =
+        self.evaluate_greedy(units, goal, &plan, &edge_index, &planner_config)
+    {
+        let is_new_best = best_time.map_or(true, |t| greedy_time < t);
+        if is_new_best {
+            best_time = Some(greedy_time);
+            self.best_model = Some(self.model.clone());
+            self.best_trajectory = None;
+        }
     }
 }
 ```
 
-Each step's target is the normalized return, which tells the policy whether this episode was better or worse than the trainer's historical average.
+Greedy evaluation is the source of the best model; REINFORCE alone does not guarantee that the final parameters are the best ones seen.
 
-If variance remains high, a future extension is to add a learned state-value baseline `V(state)` and train it with MSE against observed returns. The policy gradient would then use advantage `return − V(state)`.
+## Fine-tuning on the best trajectory
 
-## Policy update
-
-For each recorded step, the trainer:
-
-1. Forwards the state feature vector through the macro network.
-2. Applies `log_softmax` over the four direction logits.
-3. Selects the log-probability of the direction that was taken.
-4. Multiplies by the normalized return.
-5. Adds an entropy bonus to encourage exploration.
-6. Backpropagates and applies Adam.
+After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes the same three losses with the recorded `(edge_index, target_power, desired_squad, shortfall)` targets.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 450 — Trainer::update
-let logits = self.model.forward(input).flatten::<1>(0, 1);
-let log_probs = log_softmax(logits, 0);
-let selected_log_prob = log_probs.clone().select(0, index_tensor);
-
-let policy_loss = selected_log_prob.neg().mul(return_tensor);
-
-let entropy = (probs * log_probs).neg().sum();
-let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
-
-let loss = policy_loss + entropy_loss;
-
-let grads = loss.backward();
-// ... optimizer step ...
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 94 — fine_tune_best_model
+fn fine_tune_best_model(
+    mut trainer: Trainer,
+    units: &Units,
+    goal: &UnitKind,
+    config: &TrainConfig,
+    stats: TrainStats,
+) -> (PolicyBundle<TrainBackend>, Option<PolicyBundle<TrainBackend>>, TrainStats) {
+    // ... run fine_tune_epochs of supervised updates on the best trajectory ...
+}
 ```
 
-## Curriculum and data diversity
+The function returns the fine-tuned model as both the final model and the best model. If no trajectory was recorded, it returns the final REINFORCE model and whatever `best_model` was stored.
 
-The policy can overfit to the exact goals and starting conditions it trains on. To improve generalization:
+## Saving and loading
 
-- Train on a curriculum of goals: T1 pgen, T1 factory + engineer, T2 factory, T3 engineer, Monkeylord.
-- Vary `max_steps` and `dt` between runs.
-- Use a non-zero `epsilon` throughout training so the policy continues to explore.
-- Periodically retrain from scratch on a growing dataset of rollouts.
+Save the full bundle with `save_policy`:
 
-Because the learned layer is now a small macro-direction network, it should transfer more easily across goals than the previous per-candidate network.
+```rust
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 13 — save_policy
+pub fn save_policy(
+    model: &PolicyBundle<TrainBackend>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    // uses CompactRecorder
+}
+```
 
-## Future: supervised warm-start and self-play
+Load it with `load_policy`, passing the number of plan-graph edges so the macro network dimensions can be validated:
 
-The current single-phase REINFORCE training is simple and end-to-end. Future improvements may include:
+```rust
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 27 — load_policy
+pub fn load_policy(
+    path: &std::path::Path,
+    num_edges: usize,
+) -> Result<PolicyBundle<TrainBackend>, String> {
+    // checks macro input/output dimensions and reports an error if mismatched
+}
+```
 
-1. **Supervised warm-start.** Train a value head on rollout completion times before policy-gradient training.
-2. **Policy prior for UCT.** When full tree search is implemented, reuse the macro network output as the action prior inside UCB1.
-3. **Self-play loop.** Run MCTS with the current network, store `(state, policy_target, value_target)` tuples, and retrain both heads.
+Old `.mpk` models saved before the hierarchical architecture change will not load; delete them and retrain.
 
-These extensions reuse the same `MacroNet` architecture and state-featurization pipeline; they mainly change the loss function and data source.
+## Monitoring progress
 
-## Epsilon decay
-
-High-variance training runs often benefit from starting with more exploration and then gradually exploiting the learned policy. Set `epsilon` to the starting exploration probability, `epsilon_final` to the floor, and `epsilon_decay_episodes` to the number of episodes over which to decay:
+When `verbose` is enabled, the trainer prints one line per episode and progress during greedy evaluations:
 
 ```text
-faf-sim train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy
+ep=   1 steps=  42 eps=0.1000 reached=false time=             - best=             - loss=    2.3456
+ep= 100 steps=  38 eps=0.1000 reached= true time=      1243.50 best=      1243.50 loss=    1.8765
+  greedy eval at ep=100: time=1234.00 best=1234.00
 ```
 
-The trainer uses linear decay:
+If progress stalls, try:
+
+- Increasing `episodes` or `max_steps`.
+- Raising or lowering `learning_rate`.
+- Changing `gamma`.
+- Adjusting `epsilon` or `entropy_coef`.
+- Tuning the reward weights in `train::reward`.
+
+## CLI training
+
+The CLI wraps the programmatic API:
 
 ```text
-epsilon(ep) = epsilon - (epsilon - epsilon_final) * (ep / epsilon_decay_episodes)
+faf-sim train -e 5000 -m 10000 uef novaxcenter
 ```
 
-Once the decay period ends, epsilon stays at `epsilon_final` for the rest of the run. The current epsilon is printed in the per-episode log column.
+This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novaxcenter`.
 
-## When to stop
+## Testing
 
-Stop iterating when:
+Unit tests for training live in `crates/faf-sim/src/planner/mcts/train/tests.rs`. They cover:
 
-- The trained policy reaches the goal consistently on the benchmark suite.
-- Episode returns have plateaued for several training rounds.
-- Adding more training data no longer improves completion times.
+- Episode rollout shape and reward accumulation.
+- `find_upgrade_source` helper.
+- `assigned_squad_counts` helper.
+- Tensor helper functions.
+- Saving and loading a round-tripped bundle.
 
-You can also set a concrete target completion time on the CLI. The trainer will keep running until that time is reached (or the episode budget is exhausted):
+Run them with:
 
 ```text
-faf-sim train -e 0 -m 10000 -t 20m -r uef fatboy
+cargo test -p faf-sim
 ```
 
-Here `-e 0` means "run forever", `-t 20m` stops the loop as soon as any episode finishes in 20 minutes or less, and `-r` resumes from the existing model. The best-seen model is saved automatically when training finishes.
-
-At that point the system is ready for wider experimentation: harder goals, multiple goals, or integration into a larger bot.
+There is no end-to-end integration test for a full training run because it is too slow for the normal test suite.

@@ -12,15 +12,15 @@ use crate::units::{UnitKind, Units};
 
 fn sim_action_to_command(action: SimAction) -> Option<Command> {
     match action {
-        SimAction::Build { unit_id, builder } => Some(Command::Build { unit_id, builder }),
+        SimAction::Build { unit_id, builders } => Some(Command::Build { unit_id, builders }),
         SimAction::Upgrade {
             target_unit_id,
             old_node,
-            builder,
+            builders,
         } => Some(Command::Upgrade {
             target_unit_id,
             old_node,
-            builder,
+            builders,
         }),
         SimAction::Assist {
             project_node,

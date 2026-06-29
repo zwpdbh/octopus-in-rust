@@ -1,20 +1,21 @@
 # 4. MCTS Search
 
-This chapter describes the **planned** UCT (Upper Confidence Bound applied to Trees) search loop and the current one-step macro-direction policy that sits underneath it.
+This chapter describes the **planned** UCT (Upper Confidence Bound applied to Trees) search loop and the current one-step hierarchical policy that sits underneath it.
 
-## Current status: one-step macro policy
+## Current status: one-step hierarchical policy
 
-The `Strategy::Mcts` planner currently runs a **one-step macro-direction policy**, not a full UCT tree search. At each decision tick it:
+The `Strategy::Mcts` planner currently runs a **one-step hierarchical policy**, not a full UCT tree search. At each decision tick it:
 
-1. Derives `SelectionPools` from the `PlanGraph` and current `GraphState`.
-2. Computes state features and runs them through the learned macro network.
-3. Picks the highest-scoring macro direction (greedy) or samples one (stochastic).
-4. Uses the deterministic resolver to turn the direction into a concrete, executable candidate.
+1. Derives the legal edge mask from the `PlanGraph` and current `GraphState`.
+2. Computes state features plus previous-tick engineer shortfall feedback.
+3. Runs the macro network to choose a concrete plan-graph edge.
+4. Runs the build-power network and engineer-squad network to decide how to execute that edge.
+5. Resolves the edge + squad into a concrete, executable `SimAction`.
 
-This is implemented in `mcts::plan`:
+This is implemented in `mcts::policy::plan`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 44 — mcts::plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 25 — mcts::policy::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
@@ -22,13 +23,20 @@ pub fn plan(
     _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
-    value_net: Option<MacroNet<TrainBackend>>,
+    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
-        ValueNetKind::Mlp => {
-            macro_policy_plan(units, initial_state, goal_id, value_net, deterministic, config)
-        }
+        ValueNetKind::Mlp => macro_policy_plan(
+            units,
+            initial_state,
+            goal_id,
+            policy_bundle,
+            deterministic,
+            shortfall,
+            config,
+        ),
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
             "GNN value net is not yet implemented".to_string(),
         )),
@@ -36,14 +44,14 @@ pub fn plan(
 }
 ```
 
-The `_iterations` parameter is ignored because there is no tree yet. Full UCT will use the same `MacroNet` and the same resolver; it will add tree search on top.
+The `_iterations` parameter is ignored because there is no tree yet. Full UCT will use the same `PolicyBundle`; it will add tree search on top.
 
 ## Planned UCT design
 
 When UCT is implemented, each MCTS iteration will repeat four steps:
 
 1. **Select.** Traverse from the root to a leaf using the UCT formula.
-2. **Expand.** Add one or more children to the leaf using `SelectionPools::new`.
+2. **Expand.** Add one or more children to the leaf using the legal plan-graph edges.
 3. **Evaluate.** Run the policy/value network on each new child (or use the terminal outcome if the state is done).
 4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
 
@@ -92,11 +100,12 @@ A larger `c_puct` makes the search explore more aggressively. A smaller `c_puct`
 
 ### Expansion
 
-When the selected node is not fully expanded, generate one of its untried legal candidates:
+When the selected node is not fully expanded, generate one of its untried legal plan-graph edges:
 
 ```text
-action = pop untried candidate
-next_state = apply(candidate, state)
+edge_index = pop untried legal edge
+action = resolve(edge_index, squad_from_networks(state, edge_index))
+next_state = apply(action, state)
 child = MctsNode { state: next_state, total_value: 0.0, visits: 0, children: [] }
 add child to node.children
 ```
@@ -108,7 +117,7 @@ If the node is already fully expanded, selection continues deeper.
 After expansion, evaluate the new child:
 
 - If the state has reached the goal, the value is the exact terminal value.
-- Otherwise, featurize the state and run the learned network.
+- Otherwise, featurize the state and run the learned value head (once implemented).
 
 The scaffold currently leaves the search loop unimplemented:
 
@@ -120,7 +129,7 @@ pub fn search(
     _goal_id: &UnitKind,
     _units: &Units,
     _planner_config: &PlannerConfig,
-    _value_net: &MacroNet<NdArray>,
+    _value_net: &PolicyBundle<NdArray>,
 ) -> Result<PlanResult, PlannerError> {
     let _ = self.config;
     todo!("MCTS search loop is not yet implemented")
@@ -164,7 +173,7 @@ Mcts {
     iterations: usize,
     /// Kind of learned value network to use inside MCTS.
     value_net: ValueNetKind,
-    /// If true, always pick the highest-scoring macro direction.
+    /// If true, always pick the highest-scoring legal plan-graph edge.
     deterministic: bool,
 },
 ```

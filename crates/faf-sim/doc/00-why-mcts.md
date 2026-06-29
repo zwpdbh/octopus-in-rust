@@ -2,7 +2,7 @@
 
 A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal unit is finished. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
-This chapter explains why **Monte Carlo Tree Search (MCTS)** guided by a **learned policy network** is a good fit, and why the existing greedy and beam strategies hit a ceiling.
+This chapter explains why **Monte Carlo Tree Search (MCTS)** guided by a **learned hierarchical policy** is a good fit, and why the existing greedy and beam strategies hit a ceiling.
 
 ## The search space is enormous and sequential
 
@@ -34,7 +34,13 @@ In classic MCTS, a leaf is evaluated by playing random moves to the end and aver
 - The reward is sparse (you only know the result when the goal finishes).
 - Random rollouts produce mostly terrible build orders, so the signal is noisy.
 
-A **learned macro-direction policy** replaces the random rollout. It is a function `π(direction | state)` that, in a single forward pass, decides which high-level priority to pursue next: build more build power, more mass income, more power income, or unlock the next tech tier. A small deterministic resolver then turns that direction into a concrete build/upgrade/assist command. MCTS still explores the tree, but it selects directions with the network instead of simulating random sequences to the end.
+A **learned hierarchical policy** replaces the random rollout. It is a function bundle that, in a small number of forward passes, decides:
+
+1. Which concrete plan-graph edge to satisfy next.
+2. How much build power to allocate to that edge.
+3. Which `[T1, T2, T3]` engineers should provide that build power.
+
+MCTS still explores the tree, but it selects concrete edges with the policy instead of simulating random sequences to the end.
 
 The combination looks like this:
 
@@ -42,22 +48,24 @@ The combination looks like this:
         current GraphState
                 │
                 ▼
-        ┌───────────────┐
-        │  MCTS search  │◄────── action preferences
-        │  (UCT tree)   │        from policy net
-        └───────┬───────┘
-                │
-                ▼
-        best SimAction
-                │
-                ▼
-        simulator tick
-                │
-                ▼
-        next GraphState
+        ┌─────────────────────────────────┐
+        │  Hierarchical policy bundle     │
+        │  • macro edge                   │
+        │  • build power                  │
+        │  • engineer squad               │
+        └────────────────┬────────────────┘
+                         │
+                         ▼
+                best SimAction
+                         │
+                         ▼
+                simulator tick
+                         │
+                         ▼
+                next GraphState
 ```
 
-The current implementation uses the policy network as a one-step planner. Full UCT tree search will be layered on top later while reusing the same macro-direction network and resolver.
+The current implementation uses the policy bundle as a one-step planner. Full UCT tree search will be layered on top later while reusing the same three networks.
 
 ## Why FAF is a good testbed for this
 
@@ -74,4 +82,4 @@ The current implementation uses the policy network as a one-step planner. Full U
 
 ## The roadmap in one paragraph
 
-We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, train a small network to map state features to one of four macro directions, resolve each direction into a concrete command, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.
+We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, train a small hierarchical network bundle to map state features to a concrete edge plus build power plus engineer squad, resolve each decision into a concrete command, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this track walks through each piece.

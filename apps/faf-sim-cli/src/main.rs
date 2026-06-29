@@ -17,8 +17,9 @@
 use std::collections::{HashMap, HashSet};
 
 use clap::Parser;
+use faf_sim::planner::mcts::macro_net::num_plan_edges;
 use faf_sim::planner::mcts::train::{
-    load_model, save_model, train_policy, train_policy_from, TrainConfig,
+    load_policy, save_policy, train_policy, train_policy_from, TrainConfig,
 };
 use faf_sim::{
     run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, PlanGraph, Planner,
@@ -122,9 +123,11 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     let path = model_path(&target);
     let model_file = path.with_extension("mpk");
+    let num_edges = num_plan_edges(units, &goal_kind).expect("goal must have a plan graph");
+
     let (model, best_model, stats) = if args.resume && model_file.exists() {
         println!("Resuming training from {}", model_file.display());
-        let model = load_model(&path).expect("load existing model");
+        let model = load_policy(&path, num_edges).expect("load existing model");
         train_policy_from(model, units, &goal_kind, config)
     } else {
         train_policy(units, &goal_kind, config)
@@ -145,7 +148,7 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     // Save the best-seen model if there is one, otherwise the final model.
     let model_to_save = best_model.as_ref().unwrap_or(&model);
-    save_model(model_to_save, &path).expect("save trained model");
+    save_policy(model_to_save, &path).expect("save trained model");
     if best_model.is_some() {
         println!("Saved best-seen model to {}", path.display());
     } else {
@@ -174,7 +177,8 @@ async fn run_simulate(
 
     let planner = if model_file.exists() {
         println!("Loading trained model from {}", model_file.display());
-        let model = load_model(&path).expect("load trained model");
+        let num_edges = num_plan_edges(units, &goal_kind).expect("goal must have a plan graph");
+        let model = load_policy(&path, num_edges).expect("load trained model");
         Planner::with_value_net(strategy, PlannerConfig::default(), model)
     } else {
         println!("No trained model found; using random initialization");

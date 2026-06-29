@@ -24,22 +24,22 @@ pub enum Strategy {
         iterations: usize,
         /// Kind of learned value network to use inside MCTS.
         value_net: ValueNetKind,
-        /// If true, always pick the highest-scoring macro direction.
+        /// If true, always pick the highest-scoring plan-graph edge.
         deterministic: bool,
     },
 }
 ```
 
-Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` now refers to the macro-direction policy network.
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` now refers to the full hierarchical policy bundle (macro + build-power + engineer-squad networks).
 
 ## Entry point
 
-`Planner::plan` matches on the strategy and forwards to the corresponding module:
+`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner now maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 238 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 289 — Planner::plan dispatch
 pub fn plan(
-    &self,
+    &mut self,
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
@@ -57,16 +57,17 @@ pub fn plan(
             value_net_kind,
             deterministic,
             self.value_net.clone(),
+            &mut self.last_shortfall,
             &self.config,
         ),
     }
 }
 ```
 
-The MCTS entry point is currently a one-step macro policy:
+The MCTS entry point is currently a one-step hierarchical policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/mod.rs ~line 44 — mcts::plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 25 — mcts::policy::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
@@ -74,13 +75,20 @@ pub fn plan(
     _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
-    value_net: Option<MacroNet<TrainBackend>>,
+    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
-        ValueNetKind::Mlp => {
-            macro_policy_plan(units, initial_state, goal_id, value_net, deterministic, config)
-        }
+        ValueNetKind::Mlp => macro_policy_plan(
+            units,
+            initial_state,
+            goal_id,
+            policy_bundle,
+            deterministic,
+            shortfall,
+            config,
+        ),
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
             "GNN value net is not yet implemented".to_string(),
         )),
@@ -88,7 +96,7 @@ pub fn plan(
 }
 ```
 
-It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `MacroNet` and resolver.
+It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `PolicyBundle`.
 
 ## Reactive planning
 
@@ -130,9 +138,9 @@ The message protocol is intentionally small:
 ```rust
 // crates/faf-sim/src/actors/message.rs ~line 15 — Command
 pub enum Command {
-    Build { unit_id: UnitKind, builder: NodeId },
+    Build { unit_id: UnitKind, builders: Vec<NodeId> },
     Assist { project_node: NodeId, builders: Vec<NodeId> },
-    Upgrade { target_unit_id: UnitKind, old_node: NodeId, builder: NodeId },
+    Upgrade { target_unit_id: UnitKind, old_node: NodeId, builders: Vec<NodeId> },
 }
 
 // crates/faf-sim/src/actors/message.rs ~line 46 — Observation
@@ -141,6 +149,8 @@ pub enum Observation {
     State(GraphState),
 }
 ```
+
+`Build` and `Upgrade` now carry a `Vec<NodeId>` so the planner can assign a squad of engineers to a project immediately, rather than only one builder.
 
 `SimActor::run` advances the simulation and emits observations:
 
@@ -287,7 +297,7 @@ let planner = Planner::with_value_net(
         deterministic: true,
     },
     PlannerConfig::default(),
-    model,
+    bundle,
 );
 let result = planner.plan(&units, initial_state, &UnitKind::Unique(UnitId("URL0402".to_string())))?;
 
@@ -298,24 +308,29 @@ if let Some(action) = result.first_action {
 
 ## Training and model persistence
 
-Train a model programmatically:
+Train a policy bundle programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 650 — train_policy
-let (model, best_model, stats) = train_policy(&units, &goal, TrainConfig::default());
-save_model(&model, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
+let (bundle, best_bundle, stats) = train_policy(&units, &goal, TrainConfig::default());
+save_policy(
+    best_bundle.as_ref().unwrap_or(&bundle),
+    &PathBuf::from("data/models/mlp-cybran-monkeylord"),
+)
+.unwrap();
 ```
 
 And load it later:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train.rs ~line 686 — load_model
-let model = load_model(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
-let planner = Planner::with_value_net(strategy, PlannerConfig::default(), model);
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 30 — load_policy
+let num_edges = plan_edge_index(&units, &goal).unwrap().len();
+let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord"), num_edges).unwrap();
+let planner = Planner::with_value_net(strategy, PlannerConfig::default(), bundle);
 ```
 
 The CLI wraps these calls with `train` and `simulate` subcommands. The programmatic API is the source of truth.
 
 ## Model compatibility
 
-The macro-direction network uses `STATE_FEATURE_COUNT` inputs and produces `MACRO_DIRECTION_COUNT` outputs. Older per-candidate models have a different input dimension and will fail to load. Delete stale checkpoints or retrain when the network shape changes.
+Saved policy bundles from before the hierarchical-policy redesign will fail to load and must be retrained. `load_policy` checks the macro network dimensions and reports a clear error if they do not match.
