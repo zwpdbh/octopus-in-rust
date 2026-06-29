@@ -120,6 +120,9 @@ pub struct TrainArgs {
     /// decay entirely.
     #[arg(long)]
     pub epsilon_decay_episodes: Option<usize>,
+    /// Keep epsilon constant at `--epsilon` for the whole run (disables decay).
+    #[arg(long, default_value = "false")]
+    pub no_epsilon_decay: bool,
     /// Suppress per-episode and progress output.
     #[arg(long, default_value = "false")]
     pub quiet: bool,

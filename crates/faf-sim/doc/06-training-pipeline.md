@@ -297,6 +297,18 @@ faf-sim train -e 10000 -m 5000 --patience 1000 uef novaxcenter
 
 This is useful for long training runs: instead of committing to a fixed episode budget, you let the trainer run until it stops making progress. You can combine it with `-t` (`target_time`) to stop as soon as a good enough time is reached.
 
+### Disabling epsilon decay
+
+By default epsilon decays from `--epsilon` to `--epsilon-final` over the run. If you want to keep exploring at a constant rate — for example when resuming from a saved model — pass `--no-epsilon-decay`. Epsilon then stays at the value of `--epsilon` for the whole run:
+
+```text
+# constant 10% random actions (default --epsilon)
+faf-sim train -e 10000 -m 5000 --no-epsilon-decay -r uef novaxcenter
+
+# constant 30% random actions
+faf-sim train -e 10000 -m 5000 --epsilon 0.3 --no-epsilon-decay -r uef novaxcenter
+```
+
 ## Testing
 
 Unit tests for training live in `crates/faf-sim/src/planner/mcts/train/tests.rs`. They cover:

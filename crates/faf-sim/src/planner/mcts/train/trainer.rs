@@ -409,7 +409,10 @@ impl Trainer {
 
     fn current_epsilon(&self, ep: usize) -> f32 {
         let decay = self.config.epsilon_decay_episodes;
-        if decay == 0 || ep >= decay {
+        if decay == 0 {
+            return self.config.epsilon;
+        }
+        if ep >= decay {
             return self.config.epsilon_final;
         }
         let progress = ep as f32 / decay as f32;

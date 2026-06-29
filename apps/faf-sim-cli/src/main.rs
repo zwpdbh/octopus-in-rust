@@ -116,7 +116,11 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         target_time: args.target_time,
         epsilon: args.epsilon,
         epsilon_final: args.epsilon_final,
-        epsilon_decay_episodes: args.epsilon_decay_episodes.unwrap_or(args.episodes),
+        epsilon_decay_episodes: if args.no_epsilon_decay {
+            0
+        } else {
+            args.epsilon_decay_episodes.unwrap_or(args.episodes)
+        },
         patience: args.patience,
         verbose: !args.quiet,
         ..Default::default()
@@ -203,6 +207,25 @@ async fn run_simulate(
         "\nGoal completed at {} ({:.1}m)",
         format_time(result.final_state.time),
         result.final_state.time / 60.0
+    );
+    println!("\nFinal economy:");
+    println!(
+        "  Mass income:  {:.1} / s",
+        result.final_state.economy.net_mass_income
+    );
+    println!(
+        "  Energy income: {:.1} / s",
+        result.final_state.economy.net_energy_income
+    );
+    println!(
+        "  Mass storage:  {:.0} / {:.0}",
+        result.final_state.economy.mass_storage,
+        result.final_state.economy.mass_storage_cap
+    );
+    println!(
+        "  Energy storage: {:.0} / {:.0}",
+        result.final_state.economy.energy_storage,
+        result.final_state.economy.energy_storage_cap
     );
     println!("\nTimeline:");
     println!("{:>12}  Unit", "Time");

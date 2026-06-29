@@ -12,9 +12,11 @@ cargo run --release --bin faf-sim -- plan uef novaxcenter
 # --patience <N> : stop early if no new best time for N episodes after the first success
 # --quiet        : suppress per-episode and progress output
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
+# --no-epsilon-decay : keep exploration probability constant (useful for resuming a search)
 cargo run --release --bin faf-sim -- train -e 10000 -m 5000 uef novaxcenter
 cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 uef novaxcenter
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 -r uef novaxcenter
+cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 6000 -r uef novaxcenter
+cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 6000 --no-epsilon-decay -r uef novaxcenter
 
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
 cargo run --bin faf-sim -- simulate uef novaxcenter
@@ -49,6 +51,21 @@ cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 uef 
 
 This counts episodes **after the first successful episode**. If no new best completion time is found for 1000 episodes, training stops and the best-seen model is saved.
 
+## Controlling exploration
+
+Training uses epsilon-greedy exploration. By default epsilon decays from `--epsilon` (default `0.1`) to `--epsilon-final` (default `0.01`) over the full run. If you resume training and want to keep exploring aggressively, disable the decay; epsilon will then stay at the value of `--epsilon`:
+
+```sh
+# Constant 10% random actions for the whole resumed run
+cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --no-epsilon-decay -r uef novaxcenter
+
+# Constant 30% random actions
+# (--epsilon-final is ignored when decay is disabled)
+cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --epsilon 0.3 --no-epsilon-decay uef novaxcenter
+```
+
+You can also keep the default decay but make it slower by setting `--epsilon-decay-episodes` larger than `-e`.
+
 ## Example training output
 
 ```text
@@ -61,6 +78,35 @@ Fine-tuned best model on trajectory: epochs=100 loss=1.0438
 Training complete: 9259/10000 episodes reached the goal
 Best completion time: 35m 23.0s
 Saved best-seen model to data/models/mlp-uef-novax-center
+```
+
+## Example simulate output
+
+`simulate` loads the trained model automatically and prints the completion time, the final economy, and the build timeline:
+
+```text
+Strategy: mcts:100:mlp:greedy
+Simulate target: UEF Novax Center (XEB2402)
+Loading trained model from data/models/mlp-uef-novax-center.mpk
+
+Goal completed at 33m 21.0s (33.4m)
+
+Final economy:
+  Mass income:  63.0 / s
+  Energy income: 2912.0 / s
+  Mass storage:  5280 / 5280
+  Energy storage: 13900 / 13900
+
+Timeline:
+        Time  Unit
+------------  ----
+    0m 31.0s  Land Factory (Factory(T1))
+    ...
+   33m 20.5s  Novax Center (Unique(UnitId("XEB2402")))
+
+Build-order diagram written to:
+  /tmp/faf-sim-simulate-uef-novax-center.svg
+  file:///tmp/faf-sim-simulate-uef-novax-center.svg
 ```
 
 ## Important: model format changed

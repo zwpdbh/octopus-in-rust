@@ -20,7 +20,7 @@ pub struct TrainConfig {
     /// is non-zero.
     pub epsilon_final: f32,
     /// Number of episodes over which to linearly decay `epsilon` to
-    /// `epsilon_final`. `0` means no decay.
+    /// `epsilon_final`. `0` means no decay (epsilon stays at `epsilon`).
     pub epsilon_decay_episodes: usize,
     /// Entropy bonus coefficient. Higher values encourage more exploration by
     /// keeping the policy distribution spread out.
