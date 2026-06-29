@@ -23,7 +23,8 @@ Start with the chapters in order if you are new to the crate:
 - **Model path pattern:** `data/models/mlp-<faction>-<unit>`
 - **Run tests:** `cargo test -p faf-sim`
 - **Check workspace:** `cargo check --workspace`
-- **Train a policy:** `cargo run --release --bin faf-sim -- train -e 5000 -m 10000 uef novaxcenter`
+- **Train a policy:** `cargo run --release --bin faf-sim -- train -e 5000 -m 10000 uef novaxcenter`  
+  Add `--quiet` to suppress output, or `--patience 1000` to stop when no improvement is seen for 1000 episodes.
 - **Simulate with a trained policy:** `cargo run --release --bin faf-sim -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter`
 
 ## Important notes

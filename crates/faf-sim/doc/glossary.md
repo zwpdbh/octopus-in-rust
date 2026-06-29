@@ -33,6 +33,7 @@
 | **Policy bundle** | The three learned networks saved and loaded together: macro net, build-power net, and engineer-squad net. |
 | **PolicyBundle** | Burn module that groups `MacroNet`, `BuildPowerNet`, and `EngineerSquadNet`. |
 | **REINFORCE** | Policy-gradient algorithm used to train the three networks from Monte Carlo returns. |
+| **Patience** | Number of episodes without a new best completion time after which training stops early. |
 | **Return** | Discounted sum of rewards over an episode, used as the target for REINFORCE. |
 | **Selection** | In MCTS, traversing the tree from the root to a leaf using the UCB1 formula. |
 | **Shortfall** | Unmet engineer demand from the previous tick, fed back into the macro network as a three-dimensional feature. |

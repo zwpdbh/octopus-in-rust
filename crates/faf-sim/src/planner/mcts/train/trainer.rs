@@ -1,6 +1,7 @@
 //! Trainer for the hierarchical policy networks.
 
 use std::f32;
+use std::time::{Duration, Instant};
 
 use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{Adam, AdamConfig, Optimizer};
@@ -109,14 +110,27 @@ impl Trainer {
         };
 
         let mut ep = 0usize;
+        let mut episodes_since_best = 0usize;
         loop {
             if self.config.episodes != 0 && ep >= self.config.episodes {
                 break;
             }
 
+            if let Some(patience) = self.config.patience {
+                if best_time.is_some() && episodes_since_best >= patience {
+                    if self.config.verbose {
+                        eprintln!(
+                            "No improvement for {} episodes; stopping early.",
+                            patience
+                        );
+                    }
+                    break;
+                }
+            }
+
             let epsilon = self.current_epsilon(ep);
             let episode =
-                self.run_episode(units, goal, &plan, &edge_index, &planner_config, epsilon);
+                self.run_episode(ep, units, goal, &plan, &edge_index, &planner_config, epsilon);
 
             let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);
@@ -134,6 +148,7 @@ impl Trainer {
                 let is_new_best = best_time.map_or(true, |t| episode.completion_time < t);
                 if is_new_best {
                     best_time = Some(episode.completion_time);
+                    episodes_since_best = 0;
                     self.best_model = Some(self.model.clone());
                     self.best_trajectory = Some(BuildTrajectory {
                         steps: episode
@@ -166,6 +181,7 @@ impl Trainer {
                     let is_new_best = best_time.map_or(true, |t| greedy_time < t);
                     if is_new_best {
                         best_time = Some(greedy_time);
+                        episodes_since_best = 0;
                         self.best_model = Some(self.model.clone());
                         self.best_trajectory = None;
                     }
@@ -201,6 +217,7 @@ impl Trainer {
             }
 
             ep += 1;
+            episodes_since_best += 1;
 
             if target_hit {
                 if self.config.verbose {
@@ -216,6 +233,7 @@ impl Trainer {
     /// Run one episode and record the trajectory.
     fn run_episode(
         &mut self,
+        ep: usize,
         units: &Units,
         goal: &UnitKind,
         plan: &PlanGraph,
@@ -232,7 +250,20 @@ impl Trainer {
         };
         let mut shortfall = [0.0f32; 3];
 
-        for _ in 0..self.config.max_steps {
+        let progress_interval = Duration::from_secs(2);
+        let mut last_progress = Instant::now();
+
+        for step in 0..self.config.max_steps {
+            if self.config.verbose && last_progress.elapsed() >= progress_interval {
+                eprintln!(
+                    "  progress: ep={:>4} step={:>5} sim_time={:>12}",
+                    ep + 1,
+                    step,
+                    format_time(state.time, true)
+                );
+                last_progress = Instant::now();
+            }
+
             if state.goal_reached(goal) {
                 episode.reached_goal = true;
                 episode.completion_time = state.time;

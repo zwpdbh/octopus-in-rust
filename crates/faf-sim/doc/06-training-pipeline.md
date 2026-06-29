@@ -281,6 +281,22 @@ faf-sim train -e 5000 -m 10000 uef novaxcenter
 
 This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novaxcenter`.
 
+By default the CLI prints a line after every episode and a progress line every few seconds during long episodes. Pass `--quiet` to suppress this output:
+
+```text
+faf-sim train -e 5000 -m 10000 --quiet uef novaxcenter
+```
+
+### Early stopping on a plateau
+
+Set `--patience <N>` to stop training if the best completion time has not improved for `N` episodes. Patience is counted only **after the first successful episode**, so the run will keep trying until it finds at least one solution.
+
+```text
+faf-sim train -e 10000 -m 5000 --patience 1000 uef novaxcenter
+```
+
+This is useful for long training runs: instead of committing to a fixed episode budget, you let the trainer run until it stops making progress. You can combine it with `-t` (`target_time`) to stop as soon as a good enough time is reached.
+
 ## Testing
 
 Unit tests for training live in `crates/faf-sim/src/planner/mcts/train/tests.rs`. They cover:

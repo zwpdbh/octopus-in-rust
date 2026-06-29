@@ -30,6 +30,10 @@ pub struct TrainConfig {
     /// Evaluate the current model greedily every N episodes and keep the best
     /// greedy model. `0` disables periodic greedy evaluation.
     pub greedy_eval_interval: usize,
+    /// Stop early if no new best completion time is found for this many
+    /// episodes. Counted only after the first successful episode. `None` disables
+    /// patience-based early stopping.
+    pub patience: Option<usize>,
     /// Number of supervised fine-tuning epochs to run on the best discovered
     /// trajectory after REINFORCE training.
     pub fine_tune_epochs: usize,
@@ -55,6 +59,7 @@ impl Default for TrainConfig {
             entropy_coef: 0.01,
             target_time: None,
             greedy_eval_interval: 100,
+            patience: None,
             fine_tune_epochs: 100,
             power_std: 2.0,
             squad_std: 0.5,

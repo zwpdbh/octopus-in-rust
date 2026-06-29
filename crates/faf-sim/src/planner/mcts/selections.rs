@@ -378,7 +378,7 @@ fn tech_index(t: TechLevel) -> Option<usize> {
 fn idle_engineers_by_tech(
     state: &GraphState,
     units: &Units,
-    predicate: impl Fn(NodeId) -> bool,
+    predicate: &impl Fn(NodeId) -> bool,
 ) -> [Vec<NodeId>; ENGINEER_TECH_LEVELS] {
     let mut buckets: [Vec<NodeId>; ENGINEER_TECH_LEVELS] = [Vec::new(), Vec::new(), Vec::new()];
 
@@ -440,12 +440,42 @@ pub fn select_squad_for_edge(
         }
     };
 
-    let buckets = idle_engineers_by_tech(state, units, predicate);
+    let buckets = idle_engineers_by_tech(state, units, &predicate);
     let mut squad = Vec::new();
     for (i, bucket) in buckets.iter().enumerate() {
         let take = desired[i].min(bucket.len());
         squad.extend_from_slice(&bucket[..take]);
     }
+
+    // Fallback: if no engineers are available, assign a capable idle non-engineer
+    // builder (e.g., the ACU or a factory) so that early-game edges can execute.
+    // The squad network only models [T1, T2, T3] engineers, so this fallback is
+    // needed for edges whose source is not an engineer.
+    if squad.is_empty() {
+        let mut fallback: Vec<NodeId> = state
+            .idle_builders(units)
+            .iter()
+            .copied()
+            .filter(|&id| {
+                predicate(id) && !matches!(state.graph[id].unit_id, UnitKind::Engineer(_))
+            })
+            .collect();
+        fallback.sort_by(|&a, &b| {
+            let rate_a = units
+                .def(&state.graph[a].unit_id)
+                .map(|d| d.build_rate)
+                .unwrap_or(0.0);
+            let rate_b = units
+                .def(&state.graph[b].unit_id)
+                .map(|d| d.build_rate)
+                .unwrap_or(0.0);
+            rate_b.total_cmp(&rate_a)
+        });
+        if let Some(&id) = fallback.first() {
+            squad.push(id);
+        }
+    }
+
     squad
 }
 

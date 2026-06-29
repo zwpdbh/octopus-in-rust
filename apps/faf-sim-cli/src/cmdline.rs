@@ -120,6 +120,13 @@ pub struct TrainArgs {
     /// decay entirely.
     #[arg(long)]
     pub epsilon_decay_episodes: Option<usize>,
+    /// Suppress per-episode and progress output.
+    #[arg(long, default_value = "false")]
+    pub quiet: bool,
+    /// Stop early if no new best completion time is found for this many
+    /// episodes. Counted only after the first successful episode.
+    #[arg(long)]
+    pub patience: Option<usize>,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

@@ -117,7 +117,8 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         epsilon: args.epsilon,
         epsilon_final: args.epsilon_final,
         epsilon_decay_episodes: args.epsilon_decay_episodes.unwrap_or(args.episodes),
-        verbose: true,
+        patience: args.patience,
+        verbose: !args.quiet,
         ..Default::default()
     };
 
