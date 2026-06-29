@@ -166,11 +166,12 @@ The current reward combines:
 
 - **Graph-node ownership.** A reward for every completed node on the plan graph, weighted inversely by its distance to the goal.
 - **Tech milestones.** Bonuses for unlocking T1/T2/T3 factories and engineers.
-- **Economy scale.** Clipped bonuses for total build power, mass income, and energy income.
-- **Goal bonus.** A large positive reward when the goal is reached, plus a time premium for faster completion.
-- **Failure penalty.** A fixed penalty if the episode does not reach the goal within the step budget.
+- **Economic infrastructure.** Per-unit rewards for active mass extractors, power generators, and energy storage buildings, plus the total active build power.
+- **Income throughput.** Direct, high-cap bonuses for net mass income and net energy income, so the policy is rewarded for scaling the economy rather than just unlocking the first instance of each unit.
+- **Goal bonus.** The dominant term: a large positive reward when the goal is reached, minus a time penalty for slower completions.
+- **Failure penalty.** A strong penalty if the episode does not reach the goal within the step budget.
 
-The reward is dense enough to give a learning signal before the goal is reached, but the largest component is still the goal-completion bonus.
+The goal-completion term is still the largest single component, but the economy terms are now strong enough that the policy has a clear incentive to build more mexes, pgens, energy storage, and engineers when that helps finish faster.
 
 ## REINFORCE update
 

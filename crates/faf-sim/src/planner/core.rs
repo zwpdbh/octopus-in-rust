@@ -224,8 +224,8 @@ impl Default for PlannerConfig {
         Self {
             dt: 1.0,
             max_depth: 400,
-            max_mex_count: 8,
-            max_pgen_count: 20,
+            max_mex_count: 12,
+            max_pgen_count: 30,
             max_energy_storage_count: 80,
         }
     }
