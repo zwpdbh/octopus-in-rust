@@ -219,13 +219,11 @@ async fn run_simulate(
     );
     println!(
         "  Mass storage:  {:.0} / {:.0}",
-        result.final_state.economy.mass_storage,
-        result.final_state.economy.mass_storage_cap
+        result.final_state.economy.mass_storage, result.final_state.economy.mass_storage_cap
     );
     println!(
         "  Energy storage: {:.0} / {:.0}",
-        result.final_state.economy.energy_storage,
-        result.final_state.economy.energy_storage_cap
+        result.final_state.economy.energy_storage, result.final_state.economy.energy_storage_cap
     );
     println!("\nTimeline:");
     println!("{:>12}  Unit", "Time");

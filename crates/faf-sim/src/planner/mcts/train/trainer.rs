@@ -119,18 +119,22 @@ impl Trainer {
             if let Some(patience) = self.config.patience {
                 if best_time.is_some() && episodes_since_best >= patience {
                     if self.config.verbose {
-                        eprintln!(
-                            "No improvement for {} episodes; stopping early.",
-                            patience
-                        );
+                        eprintln!("No improvement for {} episodes; stopping early.", patience);
                     }
                     break;
                 }
             }
 
             let epsilon = self.current_epsilon(ep);
-            let episode =
-                self.run_episode(ep, units, goal, &plan, &edge_index, &planner_config, epsilon);
+            let episode = self.run_episode(
+                ep,
+                units,
+                goal,
+                &plan,
+                &edge_index,
+                &planner_config,
+                epsilon,
+            );
 
             let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);

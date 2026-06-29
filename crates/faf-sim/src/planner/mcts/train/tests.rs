@@ -1,8 +1,6 @@
 use crate::planner::mcts::features::STATE_FEATURE_COUNT;
 use crate::planner::mcts::macro_net::plan_edge_index;
-use crate::planner::mcts::train::{
-    load_policy, save_policy, TrainConfig, TrainDevice, Trainer,
-};
+use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
 use crate::units::{UnitId, UnitKind, Units};
 
 fn load_units() -> Units {
