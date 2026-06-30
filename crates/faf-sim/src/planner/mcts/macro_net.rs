@@ -304,6 +304,15 @@ mod tests {
     use crate::sim::GraphState;
     use crate::units::{TechLevel, UnitId, Units};
 
+    /// Inference-only backend for tests. Prefer CPU when available so unit tests
+    /// do not require a GPU, but fall back to CUDA/WGPU if CPU is disabled.
+    #[cfg(feature = "cpu")]
+    type TestBackend = burn::backend::NdArray;
+    #[cfg(all(feature = "cuda", not(feature = "cpu")))]
+    type TestBackend = burn::backend::Cuda;
+    #[cfg(all(feature = "wgpu", not(any(feature = "cpu", feature = "cuda"))))]
+    type TestBackend = burn::backend::Wgpu;
+
     fn load_units() -> Units {
         let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
         Units::new(serde_json::from_str(json).expect("embedded index should parse"))
@@ -312,8 +321,7 @@ mod tests {
     #[test]
     fn hierarchical_net_runs_forward_pass() {
         let device = Default::default();
-        let net: HierarchicalPolicyNet<burn::backend::NdArray> =
-            HierarchicalPolicyNet::new(&device, 25);
+        let net: HierarchicalPolicyNet<TestBackend> = HierarchicalPolicyNet::new(&device, 25);
 
         let features = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];
         let latent = net.latent(tensor_from_vec(&features, &device));
@@ -343,7 +351,7 @@ mod tests {
         let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
         let num_edges = num_plan_edges(&units, &goal).expect("goal has a plan graph");
         let device = Default::default();
-        let bundle: PolicyBundle<burn::backend::NdArray> = PolicyBundle::new(&device, num_edges);
+        let bundle: PolicyBundle<TestBackend> = PolicyBundle::new(&device, num_edges);
         assert_eq!(bundle.num_edges(), num_edges);
     }
 

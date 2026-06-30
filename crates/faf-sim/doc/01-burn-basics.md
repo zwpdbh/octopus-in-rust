@@ -11,7 +11,7 @@ Burn is a Rust deep-learning framework. Its design is heavily typed: tensors car
 ```toml
 # crates/faf-sim/Cargo.toml ~line 9 — backend features
 [features]
-default = ["cuda"]
+default = ["cpu"]
 cpu = ["burn/ndarray"]
 cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
 wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
@@ -20,28 +20,30 @@ wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
 burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
 ```
 
-- `cuda` (default) selects the NVIDIA `Cuda` backend.
-- `cpu` selects the CPU `NdArray` backend.
+- `cpu` (default for the library) selects the CPU `NdArray` backend.
+- `cuda` selects the NVIDIA `Cuda` backend.
 - `wgpu` selects the cross-platform `Wgpu` backend.
+
+The `faf-sim-cli` package overrides this and defaults to `cuda`, so training on your 3090 does not require any extra flags.
 - `autodiff` wraps the selected backend so we can call `.backward()` on tensors.
 
 The crate aliases the training backend for convenience:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/mod.rs ~line 36 — training backend aliases
-#[cfg(feature = "cuda")]
-pub type TrainBackend = Autodiff<Cuda>;
-#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
-pub type TrainBackend = Autodiff<Wgpu>;
-#[cfg(all(feature = "cpu", not(any(feature = "cuda", feature = "wgpu"))))]
+#[cfg(feature = "cpu")]
 pub type TrainBackend = Autodiff<NdArray>;
+#[cfg(all(feature = "cuda", not(feature = "cpu")))]
+pub type TrainBackend = Autodiff<Cuda>;
+#[cfg(all(feature = "wgpu", not(any(feature = "cpu", feature = "cuda"))))]
+pub type TrainBackend = Autodiff<Wgpu>;
 
 pub type TrainDevice = burn::tensor::Device<TrainBackend>;
 ```
 
 Every tensor and model we train uses `TrainBackend`. The same recorded weights can be loaded back onto the same backend for inference inside MCTS.
 
-CUDA is the default backend, so training on your 3090 no longer requires any extra feature flags:
+The `faf-sim-cli` package defaults to the CUDA backend, so training on your 3090 does not require any extra feature flags:
 
 ```text
 cargo run --release -p faf-sim-cli -- train -e 5000 -m 10000 uef novaxcenter
@@ -52,6 +54,8 @@ To use a different backend, disable the default feature and enable the desired o
 ```text
 cargo run --release -p faf-sim-cli --no-default-features --features cpu -- train -e 5000 -m 10000 uef novaxcenter
 ```
+
+When working with the `faf-sim` library directly (for example in tests), the default backend is CPU.
 
 ## Backend and Device
 

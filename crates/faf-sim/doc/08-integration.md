@@ -278,7 +278,7 @@ The default strategy for `simulate` is `mcts:100:mlp:greedy`.
 
 ### GPU builds
 
-CUDA is now the default backend, so no extra feature flags are needed for NVIDIA GPUs:
+The `faf-sim-cli` package defaults to CUDA, so no extra feature flags are needed for NVIDIA GPUs:
 
 ```text
 # NVIDIA GPU (your 3090) — default
