@@ -18,8 +18,10 @@ use burn::module::Module;
 use burn::nn::{Linear, LinearConfig, Relu};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
-use rand::distributions::WeightedIndex;
-use rand::prelude::*;
+use rand::distr::weighted::WeightedIndex;
+use rand::distr::Distribution;
+use rand::rngs::ThreadRng;
+use rand::RngExt;
 
 use super::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
 use super::selections::PlanEdgeIndex;
@@ -238,8 +240,8 @@ pub fn softmax_probs(logits: &[f32]) -> Vec<f32> {
 
 /// Sample a scalar from a Gaussian using the Box-Muller transform.
 pub fn sample_gaussian(mean: f32, std: f32, rng: &mut ThreadRng) -> f32 {
-    let u1: f32 = rng.gen::<f32>().max(1e-7);
-    let u2: f32 = rng.gen();
+    let u1: f32 = rng.random::<f32>().max(1e-7);
+    let u2: f32 = rng.random();
     let r = (-2.0 * u1.ln()).sqrt();
     let theta = 2.0 * std::f32::consts::PI * u2;
     mean + std * r * theta.cos()

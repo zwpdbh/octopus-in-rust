@@ -6,14 +6,29 @@ authors = ["octopus contributors"]
 description = "Simulation and build-order planning for Forged Alliance Forever (FAF)."
 license = "MIT"
 
+[features]
+default = ["cpu"]
+# CPU-only training (default).
+cpu = ["burn/ndarray"]
+# NVIDIA GPU training via the Burn CUDA backend.
+cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
+# Cross-platform GPU training via WebGPU (Vulkan/DirectX/Metal).
+wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
+
 [dependencies]
-burn = { version = "0.21", default-features = false, features = ["std", "ndarray", "autodiff"] }
-faf-units = { path = "../faf-units" }
-petgraph = "0.6"
-rand = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["sync", "rt", "macros", "time", "test-util"] }
+burn = { workspace = true }
+faf-units = { workspace = true }
+petgraph = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+  "sync",
+  "rt",
+  "macros",
+  "time",
+  "test-util",
+] }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }

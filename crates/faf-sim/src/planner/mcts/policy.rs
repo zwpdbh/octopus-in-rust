@@ -4,7 +4,6 @@
 //! three learned networks to pick a concrete plan-graph edge, a target build
 //! power, and a [T1, T2, T3] engineer squad.
 
-use rand::prelude::*;
 
 use burn::tensor::Device;
 
@@ -84,7 +83,7 @@ pub(crate) fn macro_policy_plan(
     let direction_idx = if deterministic {
         masked_argmax(&direction_logits, &direction_mask)
     } else {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         masked_sample_index(&direction_logits, &direction_mask, &mut rng)
     }
     .unwrap_or(0);
@@ -101,7 +100,7 @@ pub(crate) fn macro_policy_plan(
     let edge_idx = if deterministic {
         masked_argmax(&action_logits, &action_mask)
     } else {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         masked_sample_index(&action_logits, &action_mask, &mut rng)
     }
     .unwrap_or(0);

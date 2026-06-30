@@ -273,6 +273,20 @@ faf-sim simulate --strategy mcts:500:mlp:greedy cybran monkeylord
 
 The default strategy for `simulate` is `mcts:100:mlp:greedy`.
 
+### GPU builds
+
+Because the Burn backend is selected by Cargo feature, you must pass the GPU feature when building the CLI:
+
+```text
+# NVIDIA GPU (your 3090)
+cargo run --release -p faf-sim-cli --no-default-features --features cuda -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+
+# Cross-platform WebGPU/Vulkan
+cargo run --release -p faf-sim-cli --no-default-features --features wgpu -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+```
+
+The same `--features cuda` flag applies to the `train` subcommand.
+
 ## Configuration
 
 `PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:

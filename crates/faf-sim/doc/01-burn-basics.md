@@ -6,25 +6,46 @@ Burn is a Rust deep-learning framework. Its design is heavily typed: tensors car
 
 ## Project setup
 
-`faf-sim` depends on Burn with the `ndarray` and `autodiff` features enabled:
+`faf-sim` depends on Burn with the `autodiff` feature enabled, and selects the compute backend through Cargo features:
 
 ```toml
-# crates/faf-sim/Cargo.toml ~line 10 — Burn dependency
-burn = { version = "0.21", default-features = false, features = ["std", "ndarray", "autodiff"] }
+# crates/faf-sim/Cargo.toml ~line 9 — backend features
+[features]
+default = ["cpu"]
+cpu = ["burn/ndarray"]
+cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
+wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
+
+[dependencies]
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
 ```
 
-- `ndarray` selects the CPU tensor backend.
-- `autodiff` wraps that backend so we can call `.backward()` on tensors.
+- `cpu` (default) selects the `NdArray` CPU backend.
+- `cuda` selects the NVIDIA `Cuda` backend.
+- `wgpu` selects the cross-platform `Wgpu` backend.
+- `autodiff` wraps the selected backend so we can call `.backward()` on tensors.
 
 The crate aliases the training backend for convenience:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/mod.rs ~line 24 — training backend aliases
+// crates/faf-sim/src/planner/mcts/train/mod.rs ~line 23 — training backend aliases
+#[cfg(feature = "cuda")]
+pub type TrainBackend = Autodiff<Cuda>;
+#[cfg(feature = "wgpu")]
+pub type TrainBackend = Autodiff<Wgpu>;
+#[cfg(feature = "cpu")]
 pub type TrainBackend = Autodiff<NdArray>;
+
 pub type TrainDevice = burn::tensor::Device<TrainBackend>;
 ```
 
-Every tensor and model we train uses `TrainBackend`. For inference inside MCTS we use the same recorded weights loaded on the non-autodiff `NdArray` backend.
+Every tensor and model we train uses `TrainBackend`. The same recorded weights can be loaded back onto the same backend for inference inside MCTS.
+
+To train on your 3090, disable the default CPU feature and enable CUDA:
+
+```text
+cargo run --release -p faf-sim-cli --no-default-features --features cuda -- train -e 5000 -m 10000 uef novaxcenter
+```
 
 ## Backend and Device
 

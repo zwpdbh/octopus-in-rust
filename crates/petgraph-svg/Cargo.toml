@@ -7,4 +7,4 @@ description = "Render a petgraph directed graph to a static SVG image."
 license = "MIT"
 
 [dependencies]
-petgraph = "0.6"
+petgraph = { workspace = true }

@@ -7,7 +7,8 @@ use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{Adam, AdamConfig, Optimizer};
 use burn::tensor::activation::log_softmax;
 use burn::tensor::{Tensor, TensorData};
-use rand::prelude::*;
+use rand::rngs::ThreadRng;
+use rand::RngExt;
 
 use super::config::TrainConfig;
 use super::episode::{BuildTrajectory, Episode, EpisodeStep, TrajectoryStep};
@@ -65,7 +66,7 @@ impl Trainer {
             optimizer,
             config,
             device,
-            rng: thread_rng(),
+            rng: rand::rng(),
         }
     }
 
@@ -282,7 +283,7 @@ impl Trainer {
                 .model
                 .evaluate_direction(macro_features.clone(), &self.device);
 
-            let (direction_idx, category) = if self.rng.gen::<f32>() < epsilon {
+            let (direction_idx, category) = if self.rng.random::<f32>() < epsilon {
                 let legal_directions: Vec<usize> = direction_mask
                     .iter()
                     .enumerate()
@@ -290,7 +291,7 @@ impl Trainer {
                     .map(|(i, _)| i)
                     .collect();
                 let idx = *legal_directions
-                    .get(self.rng.gen_range(0..legal_directions.len()))
+                    .get(self.rng.random_range(0..legal_directions.len()))
                     .unwrap_or(&0);
                 (idx, EdgeCategory::ALL[idx])
             } else {
@@ -310,7 +311,7 @@ impl Trainer {
                 self.model
                     .evaluate_action(macro_features.clone(), category, &self.device);
 
-            let edge_idx = if self.rng.gen::<f32>() < epsilon {
+            let edge_idx = if self.rng.random::<f32>() < epsilon {
                 let legal_indices: Vec<usize> = action_mask
                     .iter()
                     .enumerate()
@@ -318,7 +319,7 @@ impl Trainer {
                     .map(|(i, _)| i)
                     .collect();
                 *legal_indices
-                    .get(self.rng.gen_range(0..legal_indices.len()))
+                    .get(self.rng.random_range(0..legal_indices.len()))
                     .unwrap_or(&0)
             } else {
                 masked_sample_index(&action_logits, &action_mask, &mut self.rng).unwrap_or(0)

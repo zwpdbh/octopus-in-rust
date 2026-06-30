@@ -7,23 +7,23 @@ description = "Reusable agent core (Brain) for octopus-cli and qqbot-core"
 license = "MIT"
 
 [dependencies]
-kosong = { path = "../kosong" }
+kosong = { workspace = true }
 
-async-trait = "0.1"
-anyhow = "1"
-thiserror = "2"
-tracing = "0.1"
-tokio = { version = "1", features = ["full"] }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-futures = "0.3"
-rand = "0.8"
+futures = { workspace = true }
+rand = { workspace = true }
 
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Plugin sandboxing
-extism = "1"
+extism = { workspace = true }
 dirs = "5"
 
 [dev-dependencies]
-tokio-test = "0.4"
+tokio-test = { workspace = true }
