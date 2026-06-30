@@ -1,14 +1,13 @@
 //! Research CLI for FAF build-order simulation and optimization.
 //!
 //! ```text
-//! faf-sim plan cybran monkeylord
+//! faf-sim plan
 //! faf-sim simulate cybran monkeylord
 //! faf-sim simulate -s mcts:200 cybran monkeylord
 //! ```
 //!
-//! `plan` emits an SVG image of the ACU-rooted plan graph showing the units
-//! that must be built or upgraded to reach the goal, including both the
-//! technology chain and the economic infrastructure. No timing or resource
+//! `plan` emits an SVG image of the universal ACU-rooted plan graph showing the
+//! build/upgrade relationships between all units. No timing or resource
 //! simulation is performed; this is purely symbolic dependency planning.
 //!
 //! `simulate` runs the reactive simulator using the plan graph and a chosen
@@ -22,14 +21,15 @@ use faf_sim::planner::mcts::macro_net::num_plan_edges;
 use faf_sim::planner::mcts::train::{
     load_policy, save_policy, train_policy, train_policy_from, TrainConfig,
 };
+use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::{
-    run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, Planner, SimulationConfig,
+    run_build_order_simulation, Goal, GraphState, NodeId, PlanEdgeKind, Planner, SimulationConfig,
     Strategy, UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
+
 use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, NodeLabel, RenderOptions};
 
 mod cmdline;
@@ -46,9 +46,7 @@ async fn main() {
 
     match cli.command {
         CliCommand::Plan(args) => {
-            let (faction, unit) = resolve_faction_target(&args.target);
-            let target = resolve_target(faction, unit);
-            run_plan(&units, &index, target, args.output);
+            run_plan(&units, &index, args.output);
         }
         CliCommand::Train(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
@@ -101,10 +99,7 @@ fn model_path(target: &ResearchTarget) -> std::path::PathBuf {
 }
 
 fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
-    let goal_kind = target.to_sim_unit_kind();
-    units
-        .def(&goal_kind)
-        .expect("target blueprint must exist in index");
+    let goal = target.to_goal(units);
 
     let use_tui = !args.quiet && !args.no_tui && std::io::stdout().is_terminal();
 
@@ -134,29 +129,29 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     let path = model_path(&target);
     let model_file = path.with_extension("mpk");
-    let num_edges = num_plan_edges(units, &goal_kind).expect("goal must have a plan graph");
+    let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
 
     let (model, best_model, stats) = if use_tui {
         // The training closure runs on its own thread, so it needs owned data.
         let units = units.clone();
-        let goal_kind = goal_kind.clone();
+        let goal = goal;
         let path = path.clone();
         let model_file = model_file.clone();
         let resume = args.resume;
         faf_sim_tui::TrainingDashboard::run(move |observer| {
             if resume && model_file.exists() {
                 let model = load_policy(&path, num_edges).expect("load existing model");
-                train_policy_from(model, &units, &goal_kind, config, observer)
+                train_policy_from(model, &units, &goal, config, observer)
             } else {
-                train_policy(&units, &goal_kind, config, observer)
+                train_policy(&units, &goal, config, observer)
             }
         })
     } else if args.resume && model_file.exists() {
         println!("Resuming training from {}", model_file.display());
         let model = load_policy(&path, num_edges).expect("load existing model");
-        train_policy_from(model, units, &goal_kind, config, ())
+        train_policy_from(model, units, &goal, config, ())
     } else {
-        train_policy(units, &goal_kind, config, ())
+        train_policy(units, &goal, config, ())
     };
 
     println!(
@@ -190,10 +185,7 @@ async fn run_simulate(
 ) {
     use faf_sim::PlannerConfig;
 
-    let goal_kind = target.to_sim_unit_kind();
-    units
-        .def(&goal_kind)
-        .expect("target blueprint must exist in index");
+    let goal = target.to_goal(units);
 
     println!("Strategy: {}", strategy);
     println!("Simulate target: {}", target.display_name());
@@ -203,7 +195,7 @@ async fn run_simulate(
 
     let planner = if model_file.exists() {
         println!("Loading trained model from {}", model_file.display());
-        let num_edges = num_plan_edges(units, &goal_kind).expect("goal must have a plan graph");
+        let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
         let model = load_policy(&path, num_edges).expect("load trained model");
         Planner::with_value_net(strategy, PlannerConfig::default(), model)
     } else {
@@ -216,7 +208,7 @@ async fn run_simulate(
         sim_dt: 1.0,
         max_sim_time: 8.0 * 60.0 * 60.0,
     };
-    let result = match run_build_order_simulation(units.clone(), goal_kind.clone(), config).await {
+    let result = match run_build_order_simulation(units.clone(), goal, config).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Simulation error: {}", e);
@@ -303,44 +295,43 @@ fn format_time(seconds: f64) -> String {
     format!("{:.0}m {:.1}s", minutes, secs)
 }
 
-fn run_plan(
-    units: &SimUnits,
-    index: &DataIndex,
-    target: ResearchTarget,
-    output: Option<std::path::PathBuf>,
-) {
-    let blueprint_id = target.blueprint_id();
-    if index.find_unit(blueprint_id).is_none() {
-        eprintln!("Blueprint id not found in index: {}", blueprint_id);
-        std::process::exit(1);
-    }
-
-    let goal_kind = target.to_sim_unit_kind();
-    let universal = units.universal_plan_graph();
-    let highlighted = ancestor_kinds(universal.graph(), &goal_kind);
-    let visual_graph = build_visual_graph(units, universal.graph(), &highlighted);
+fn run_plan(units: &SimUnits, _index: &DataIndex, output: Option<std::path::PathBuf>) {
+    // Render the universal graph with a placeholder abstract target so the SVG
+    // shows the T3-engineer-only goal edge.
+    let placeholder_goal = Goal {
+        tech_level: faf_sim::units::TechLevel::T4,
+        mass_cost: 0.0,
+        energy_cost: 0.0,
+        build_time: 0.0,
+    };
+    let plan = units.plan_graph(placeholder_goal);
+    let visual_graph = build_visual_graph(units, plan.graph());
 
     let path = match output {
         Some(path) => path,
-        None => {
-            let file_name = format!(
-                "faf-sim-plan-{}-{}.svg",
-                target.faction.display_name().to_ascii_lowercase(),
-                target
-                    .unit
-                    .display_name()
-                    .to_ascii_lowercase()
-                    .replace(' ', "-")
-            );
-            std::env::temp_dir().join(file_name)
-        }
+        None => std::env::temp_dir().join("faf-sim-plan-universal.svg"),
     };
 
     let options = RenderOptions {
-        background_color: Some("#f0f4f8".to_string()),
+        background_color: Some("#f8fafc".to_string()),
+        orientation: petgraph_svg::Orientation::TopToBottom,
+        node_width: 150.0,
+        node_height: 48.0,
+        node_gap_x: 24.0,
+        level_gap_y: 72.0,
+        font_size: 11.0,
+        stroke_width: 1.0,
+        margin_x: 60.0,
+        margin_y: 60.0,
         legend: vec![
             LegendItem::solid("build", "#555555"),
             LegendItem::dashed("upgrade", "#0066cc", "5,5"),
+            LegendItem::solid("ACU", "#e2e8f0"),
+            LegendItem::solid("T1", "#dcfce7"),
+            LegendItem::solid("T2", "#fef9c3"),
+            LegendItem::solid("T3", "#fee2e2"),
+            LegendItem::solid("T4 / unique", "#f3e8ff"),
+            LegendItem::solid("Target", "#f3e8ff"),
         ],
         ..RenderOptions::default()
     };
@@ -369,12 +360,12 @@ impl VisualEdge {
         match kind {
             PlanEdgeKind::Build => Self {
                 label: String::new(),
-                color: "#555555".to_string(),
+                color: "#94a3b8".to_string(),
                 dash: None,
             },
             PlanEdgeKind::Upgrade => Self {
                 label: String::new(),
-                color: "#0066cc".to_string(),
+                color: "#3b82f6".to_string(),
                 dash: Some("5,5".to_string()),
             },
         }
@@ -395,31 +386,7 @@ impl EdgeLabel for VisualEdge {
     }
 }
 
-/// Collect all ancestors of `goal` in `graph` (including the goal itself).
-fn ancestor_kinds(
-    graph: &petgraph::graph::DiGraph<SimUnitKind, PlanEdgeKind>,
-    goal: &SimUnitKind,
-) -> HashSet<SimUnitKind> {
-    let mut ancestors = HashSet::new();
-    let Some(goal_idx) = graph.node_indices().find(|i| &graph[*i] == goal) else {
-        return ancestors;
-    };
-
-    let mut queue = vec![goal_idx];
-    ancestors.insert(goal.clone());
-
-    while let Some(idx) = queue.pop() {
-        for parent in graph.neighbors_directed(idx, Direction::Incoming) {
-            if ancestors.insert(graph[parent].clone()) {
-                queue.push(parent);
-            }
-        }
-    }
-
-    ancestors
-}
-
-/// A rendered node with an optional highlight colour.
+/// A rendered node with a tech-tier fill colour.
 #[derive(Debug, Clone)]
 struct VisualNode {
     label: String,
@@ -439,42 +406,39 @@ impl NodeLabel for VisualNode {
 /// Build a labelled petgraph from the ACU-rooted plan graph for rendering.
 ///
 /// The returned graph preserves the structure of the input graph but attaches
-/// human-readable labels, edge styles, and optional highlighting for the
-/// selected goal path.
+/// human-readable labels, edge styles, and tier-based fill colours.
 fn build_visual_graph(
     units: &SimUnits,
-    plan_graph: &petgraph::graph::DiGraph<SimUnitKind, PlanEdgeKind>,
-    highlighted: &HashSet<SimUnitKind>,
+    plan_graph: &petgraph::graph::DiGraph<PlanNode, PlanEdgeKind>,
 ) -> petgraph::graph::DiGraph<VisualNode, VisualEdge> {
     let mut graph = petgraph::graph::DiGraph::<VisualNode, VisualEdge>::new();
-    let mut indices: HashMap<SimUnitKind, NodeIndex> = HashMap::new();
+    let mut indices: Vec<NodeIndex> = Vec::with_capacity(plan_graph.node_count());
 
     for node in plan_graph.node_indices() {
-        let kind = &plan_graph[node];
-        let color = if highlighted.contains(kind) {
-            Some("#ffeb3b".to_string()) // yellow highlight
-        } else {
-            None
-        };
-        indices.insert(
-            kind.clone(),
-            graph.add_node(VisualNode {
-                label: node_label(units, kind),
-                color,
-            }),
-        );
+        let node_ref = &plan_graph[node];
+        indices.push(graph.add_node(VisualNode {
+            label: node_label(units, node_ref),
+            color: Some(tier_color(node_ref)),
+        }));
     }
 
     for edge in plan_graph.edge_references() {
-        let from = indices[&plan_graph[edge.source()]];
-        let to = indices[&plan_graph[edge.target()]];
+        let from = indices[edge.source().index()];
+        let to = indices[edge.target().index()];
         graph.add_edge(from, to, VisualEdge::for_kind(*edge.weight()));
     }
 
     graph
 }
 
-fn node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
+fn node_label(units: &SimUnits, node: &PlanNode) -> String {
+    match node {
+        PlanNode::Goal(_) => "Target\n(T3 engineer only)".to_string(),
+        PlanNode::Unit(kind) => unit_node_label(units, kind),
+    }
+}
+
+fn unit_node_label(units: &SimUnits, kind: &SimUnitKind) -> String {
     use faf_sim::UnitKind;
     match kind {
         UnitKind::Commander => "ACU".to_string(),
@@ -495,6 +459,33 @@ fn tier_number(tl: faf_sim::TechLevel) -> u8 {
         faf_sim::TechLevel::T2 => 2,
         faf_sim::TechLevel::T3 => 3,
         faf_sim::TechLevel::T4 => 4,
+    }
+}
+
+/// Fill colour for a node based on its tech tier.
+fn tier_color(node: &PlanNode) -> String {
+    match node {
+        PlanNode::Goal(_) => "#f3e8ff".to_string(), // purple-100
+        PlanNode::Unit(kind) => unit_tier_color(kind),
+    }
+}
+
+fn unit_tier_color(kind: &SimUnitKind) -> String {
+    use faf_sim::UnitKind;
+    match kind {
+        UnitKind::Commander => "#e2e8f0".to_string(), // slate-200
+        UnitKind::Engineer(tl) | UnitKind::Factory(tl) | UnitKind::Mex(tl) | UnitKind::Pgen(tl) => {
+            match tl {
+                faf_sim::TechLevel::T1 => "#dcfce7".to_string(), // green-100
+                faf_sim::TechLevel::T2 => "#fef9c3".to_string(), // yellow-100
+                faf_sim::TechLevel::T3 => "#fee2e2".to_string(), // red-100
+                faf_sim::TechLevel::T4 => "#f3e8ff".to_string(), // purple-100
+            }
+        }
+        UnitKind::CapT2Mex => "#fef9c3".to_string(),
+        UnitKind::CapT3Mex => "#fee2e2".to_string(),
+        UnitKind::EnergyStorage => "#e0f2fe".to_string(), // sky-100
+        UnitKind::Unique(_) => "#f3e8ff".to_string(),     // purple-100
     }
 }
 
@@ -586,7 +577,7 @@ fn build_simulation_visual_graph(
         };
 
         let finish_time = slot.finish_time().unwrap_or(created_at);
-        let name = node_label(units, &slot.unit_id);
+        let name = unit_node_label(units, &slot.unit_id);
 
         let mut label = if is_starting {
             format!("[{}] {}\n(start)", seq + 1, name)
@@ -603,7 +594,7 @@ fn build_simulation_visual_graph(
 
         if is_upgraded {
             if let Some(original) = original_unit.get(slot_id) {
-                label.push_str(&format!("\n(was {})", node_label(units, original)));
+                label.push_str(&format!("\n(was {})", unit_node_label(units, original)));
             }
         }
 

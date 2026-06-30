@@ -1,6 +1,6 @@
 # 0. Why RL for Build Orders?
 
-A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal unit is finished. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
+A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal is reached. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
 This tutorial explains why **reinforcement learning (RL)** guided by **Monte Carlo Tree Search (MCTS)** is a good fit for FAF build-order optimization, and why we implement it in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework.
 
@@ -41,7 +41,7 @@ The UCT formula (covered in [chapter 8](07-mcts-search.md)) does this balance ma
 In classic MCTS, a leaf is evaluated by playing random moves to the end and averaging the result. For FAF this is too expensive:
 
 - The horizon is long (minutes of game time, many build steps).
-- The reward is sparse (you only know the result when the goal finishes).
+- The reward is sparse (you only know the result when the goal is reached).
 - Random rollouts produce mostly terrible build orders, so the signal is noisy.
 
 A **learned hierarchical policy** replaces the random rollout. It is a single `burn::module::Module` that, in a small number of forward passes, decides:

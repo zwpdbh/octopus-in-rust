@@ -23,8 +23,8 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use planner::{
-    build_operators, build_plan_graph, Fact, Operator, PlanEdgeKind, PlanGraph, PlanGraphError,
-    PlanResult, Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
+    build_operators, build_plan_graph, Fact, Goal, Operator, PlanEdgeKind, PlanGraph, PlanResult,
+    Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
@@ -73,7 +73,13 @@ mod tests {
     fn monkeylord_prerequisites_contain_factory_and_engineer_chains() {
         let units = load_units();
 
-        let prereqs = units.prerequisite_chain(&UnitKind::Unique(UnitId("URL0402".to_string())));
+        let goal = Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 1.0,
+            energy_cost: 1.0,
+            build_time: 1.0,
+        };
+        let prereqs = units.prerequisite_chain(&goal);
 
         assert!(
             prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
@@ -106,7 +112,13 @@ mod tests {
             "base ACU should not build Fatboy"
         );
 
-        let prereqs = units.prerequisite_chain(&UnitKind::Unique(UnitId("UEL0401".to_string())));
+        let goal = Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 1.0,
+            energy_cost: 1.0,
+            build_time: 1.0,
+        };
+        let prereqs = units.prerequisite_chain(&goal);
         assert!(
             prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
             "T1 factory"

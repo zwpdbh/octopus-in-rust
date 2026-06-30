@@ -21,7 +21,7 @@
 | **Fine-tuning** | Supervised training on the best trajectory found during REINFORCE, run after the main loop. |
 | **GraphState** | The authoritative discrete simulator state: units, projects, economy, completed structures. |
 | **GNN** | Graph Neural Network. A planned alternative value head that reasons directly over the plan graph. Not yet implemented. |
-| **Goal unit** | The target `UnitKind` the planner is trying to build, e.g. `novaxcenter` or `monkeylord`. |
+| **Goal** | The abstract target the planner is trying to reach: `{ tech_level, mass_cost, energy_cost, build_time }`. The CLI resolves a concrete unit such as `novaxcenter` into a `Goal`. |
 | **HierarchicalPolicyNet** | The single Burn `Module` that implements the four-head policy network. |
 | **MCTS** | Monte Carlo Tree Search. Uses UCT selection, expansion, rollout, and backup to choose actions. |
 | **Module** | Burn derive macro that makes a struct recordable, loadable, optimizable, and device-movable. |
@@ -33,7 +33,7 @@
 | **Planner** | The public facade that owns the strategy, configuration, policy bundle, and shortfall state. |
 | **Policy bundle** | The learned hierarchical network saved and loaded together; macro alias for `HierarchicalPolicyNet`. |
 | **Power head** | Learned Burn head that outputs a scalar target build power for the selected edge. |
-| **Progress** | `EdgeCategory` for edges that move toward the goal unit (factories, tech structures, and the goal itself). |
+| **Progress** | `EdgeCategory` for edges that move toward the goal (factories, tech structures, and the synthetic goal node). |
 | **REINFORCE** | Policy-gradient algorithm used to train the four heads from Monte Carlo returns. |
 | **Patience** | Number of episodes without a new best completion time after which training stops early. |
 | **PUCT** | UCT variant that incorporates a learned prior probability into the exploration bonus. |
@@ -45,7 +45,7 @@
 | **Squad head** | Learned Burn head that outputs desired `[T1, T2, T3]` engineer counts. |
 | **Strategy** | The planner enum. Currently only `Strategy::Mcts` exists, with `ValueNetKind::Mlp` or `Gnn`. |
 | **UCT** | Upper Confidence Bound applied to Trees. The selection formula used by MCTS. |
-| **UnitKind** | Type-level identifier for a unit class, e.g. `UnitKind::Unique(UnitId("UEL0301".to_string()))`. |
+| **UnitKind** | Type-level identifier for a unit class, e.g. `UnitKind::Engineer(T3)` or `UnitKind::Unique(UnitId("UEL0301".to_string()))`. |
 | **Units** | The static unit database: stats, build lists, prerequisites, adjacency bonuses. |
 | **Upgrade** | Replacing an existing structure with a higher-tier version, such as T1 mex → T2 mex. |
 | **ValueNetKind** | Enum selecting between `Mlp` and `Gnn` policy heads. |

@@ -12,7 +12,36 @@ use crate::planner::mcts::macro_net::{num_plan_edges, PolicyBundle};
 use crate::planner::mcts::search::{MctsConfig, MctsSearch};
 use crate::planner::mcts::train::{TrainBackend, TrainDevice};
 use crate::sim::{BuildEvent, GraphState};
-use crate::units::{UnitKind, Units};
+use crate::units::{TechLevel, UnitCost, Units};
+
+/// Abstract target for planning and training.
+///
+/// The planner and trainer no longer need to know the specific unit being built.
+/// A goal is fully described by the tech level required to build it and its
+/// resource cost. The concrete unit specified on the CLI is resolved into this
+/// abstraction before training or simulation begins.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Goal {
+    /// Highest tech level required to build the target.
+    pub tech_level: TechLevel,
+    /// Mass cost of the target.
+    pub mass_cost: f64,
+    /// Energy cost of the target.
+    pub energy_cost: f64,
+    /// Build-time cost of the target (in seconds of build power).
+    pub build_time: f64,
+}
+
+impl Goal {
+    /// Convenience accessor for the combined cost.
+    pub fn cost(&self) -> UnitCost {
+        UnitCost {
+            mass: self.mass_cost,
+            energy: self.energy_cost,
+            build_time: self.build_time,
+        }
+    }
+}
 
 /// Result of running a planner to completion.
 #[derive(Debug, Clone, PartialEq)]
@@ -241,6 +270,8 @@ pub struct Planner {
     /// Optional trained hierarchical policy bundle. If present, MCTS uses it
     /// instead of a fresh random initialization.
     pub value_net: Option<PolicyBundle<TrainBackend>>,
+    /// Lazily-created random model used when no trained value net is available.
+    default_model: Option<PolicyBundle<TrainBackend>>,
     /// Previous-tick engineer shortfall feedback passed to the macro network.
     pub last_shortfall: [f32; 3],
 }
@@ -267,6 +298,7 @@ impl Planner {
             strategy,
             config,
             value_net: None,
+            default_model: None,
             last_shortfall: [0.0f32; 3],
         }
     }
@@ -281,16 +313,17 @@ impl Planner {
             strategy,
             config,
             value_net: Some(value_net),
+            default_model: None,
             last_shortfall: [0.0f32; 3],
         }
     }
 
-    /// Run the planner from `initial_state` until `goal_id` is completed.
+    /// Run the planner from `initial_state` until `goal` is completed.
     pub fn plan(
         &mut self,
         units: &Units,
         initial_state: GraphState,
-        goal_id: &UnitKind,
+        goal: &Goal,
     ) -> Result<PlanResult, PlannerError> {
         match self.strategy {
             Strategy::Mcts {
@@ -298,21 +331,20 @@ impl Planner {
                 value_net: _,
                 deterministic: _,
             } => {
+                let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
+                    PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
+                })?;
                 let model = match self.value_net.as_ref() {
-                    Some(m) => m.clone(),
-                    None => {
-                        let device = TrainDevice::default();
-                        let num_edges = num_plan_edges(units, goal_id).ok_or_else(|| {
-                            PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
-                        })?;
-                        PolicyBundle::new(&device, num_edges)
-                    }
+                    Some(m) => m,
+                    None => self.default_model.get_or_insert_with(|| {
+                        PolicyBundle::new(&TrainDevice::default(), num_edges)
+                    }),
                 };
                 MctsSearch::new(MctsConfig {
                     iterations,
                     ..MctsConfig::default()
                 })
-                .search(initial_state, goal_id, units, &self.config, &model)
+                .search(initial_state, goal, units, &self.config, model)
             }
         }
     }

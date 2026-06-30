@@ -6,9 +6,10 @@
 ## Commands
 
 ```sh
-# Generate an SVG plan graph for a target unit.
-cargo run --bin faf-sim -- plan uef novaxcenter
-cargo run --release --bin faf-sim -- plan uef novaxcenter
+# Generate an SVG of the universal plan graph (includes a placeholder Target node
+# that can only be built by a T3 engineer).
+cargo run --bin faf-sim -- plan
+cargo run --release --bin faf-sim -- plan
 
 # Train the hierarchical policy for a target unit.
 # -e  : number of training episodes
@@ -32,19 +33,24 @@ cargo run --release --bin faf-sim -- simulate -s mcts:100:mlp:greedy uef novaxce
 
 ## What is being trained
 
-The `train` command learns a **hierarchical policy bundle** of three small networks:
+The `train` command learns a single **hierarchical policy network** with a shared backbone and four heads:
 
-1. **Macro network** — selects a concrete plan-graph edge.
-2. **Build-power network** — decides how much build power to allocate to that edge.
-3. **Engineer-squad network** — decides the `[T1, T2, T3]` engineer composition.
+1. **Direction head** — picks a strategic focus (`Mass`, `Energy`, `BuildPower`, `Progress`).
+2. **Action head** — selects a concrete plan-graph edge inside that focus.
+3. **Power head** — decides how much build power to allocate to that edge.
+4. **Squad head** — decides the `[T1, T2, T3]` engineer composition.
 
-Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluation, and supervised fine-tuning on the best discovered trajectory. Full UCT tree search is not implemented yet; `simulate` currently runs the trained bundle as a one-step greedy policy.
+Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluation, and supervised fine-tuning on the best discovered trajectory. `simulate` uses the trained network as both the MCTS prior and the leaf rollout policy.
 
 ## Important: give the episode enough horizon
 
-`-m` is a **cap**, not a fixed length. An episode stops immediately when the goal unit finishes. If the cap is too short, every episode will time out before reaching the goal, the trainer will report `0/N reached`, and the policy will miss the large goal-completion reward.
+`-m` is a **cap**, not a fixed length. An episode stops immediately when the goal finishes. If the cap is too short, every episode will time out before reaching the goal, the trainer will report `0/N reached`, and the policy will miss the large goal-completion reward.
 
 For UEF Novax Center, `-m 5000` (≈83 minutes of game time) is enough for a good policy; the saved model from a successful run completes in about **35 minutes**. If you use `-m 2000`, most episodes will time out before the goal can finish.
+
+## Simulate without a trained model
+
+If you run `simulate` before training, the planner falls back to a randomly initialized network and runs MCTS with random priors over an 8-hour horizon. This is expected to be very slow and is useful only as a smoke test. Train first for real results.
 
 ## Plateau-based early stopping
 
@@ -116,7 +122,7 @@ Build-order diagram written to:
 
 ## Important: model format changed
 
-The policy is now a three-network hierarchical bundle. Models saved before this redesign have a different architecture and will fail to load with a dimension-mismatch error. Delete old checkpoints or retrain:
+The policy is now a single hierarchical network with a fixed action-head dimension for the universal plan graph. Models saved before the abstract-goal redesign have a stale architecture and will fail to load with a dimension-mismatch error. Delete old checkpoints or retrain:
 
 ```sh
 rm data/models/mlp-*.mpk

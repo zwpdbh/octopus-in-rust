@@ -6,10 +6,10 @@
 
 use burn::tensor::Device;
 
-use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};
+use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::search::SimAction;
 use crate::sim::{GraphSimError, GraphState, NodeId};
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 use super::features::state_features_with_shortfall;
 use super::macro_net::{
@@ -26,7 +26,7 @@ use crate::planner::plan_graph::EdgeCategory;
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
-    goal_id: &UnitKind,
+    goal: &Goal,
     _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
@@ -38,7 +38,7 @@ pub fn plan(
         ValueNetKind::Mlp => macro_policy_plan(
             units,
             initial_state,
-            goal_id,
+            goal,
             policy_bundle,
             deterministic,
             shortfall,
@@ -54,16 +54,13 @@ pub fn plan(
 pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: GraphState,
-    goal_id: &UnitKind,
+    goal: &Goal,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     deterministic: bool,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    let _plan = units
-        .plan_graph(goal_id)
-        .map_err(|e| PlannerError::UnsupportedStrategy(e.to_string()))?;
-    let edge_index = plan_edge_index(units, goal_id)
+    let edge_index = plan_edge_index(units, goal)
         .ok_or_else(|| PlannerError::UnsupportedStrategy("goal has no plan graph".to_string()))?;
 
     let device: Device<TrainBackend> = Default::default();
@@ -136,13 +133,23 @@ pub(crate) fn macro_policy_plan(
 
     let assigned_counts = assigned_squad_counts(&state, &builders);
     let action = match edge.kind {
-        crate::planner::plan_graph::PlanEdgeKind::Build => SimAction::Build {
-            unit_id: edge.target.clone(),
-            builders: builders.clone(),
-        },
+        crate::planner::plan_graph::PlanEdgeKind::Build => {
+            if let Some(target_goal) = edge.target_goal() {
+                SimAction::BuildGoal {
+                    goal: *target_goal,
+                    builders: builders.clone(),
+                }
+            } else {
+                SimAction::Build {
+                    unit_id: edge.target_unit().expect("build target unit").clone(),
+                    builders: builders.clone(),
+                }
+            }
+        }
         crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-            target_unit_id: edge.target.clone(),
-            old_node: find_upgrade_source(&state, &edge.source).unwrap_or_else(|| NodeId::new(0)),
+            target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+            old_node: find_upgrade_source(&state, edge.source_unit().expect("upgrade source unit"))
+                .unwrap_or_else(|| NodeId::new(0)),
             builders: builders.clone(),
         },
     };
@@ -167,6 +174,9 @@ pub(crate) fn execute_action(
     match action {
         SimAction::Build { unit_id, builders } => {
             state.start_project(unit_id, builders, units)?;
+        }
+        SimAction::BuildGoal { goal, builders } => {
+            state.start_goal_project(*goal, builders, units)?;
         }
         SimAction::Upgrade {
             target_unit_id,
@@ -204,7 +214,7 @@ fn plan_result_with_action(state: GraphState, action: SimAction) -> PlanResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{UnitId, Units};
+    use crate::units::{UnitKind, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
@@ -214,11 +224,16 @@ mod tests {
     #[test]
     fn macro_plan_selects_build_action_from_acu() {
         let units = load_units();
-        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
         let mut shortfall = [0.0f32; 3];
 
+        let goal = Goal {
+            tech_level: crate::units::TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        };
         let result = macro_policy_plan(&units, state, &goal, None, true, &mut shortfall, &config)
             .expect("plan should succeed");
 

@@ -6,7 +6,7 @@ For the full formal model — exact definitions, constraints, and assumptions �
 
 ## From ACU to goal
 
-The simulator starts with a single completed unit: the ACU (Armored Command Unit). Every other unit is built by assigning builders from the existing graph. The state therefore records:
+The simulator starts with a single completed unit: the ACU (Armored Command Unit). Every other unit is built by assigning builders from the existing graph. The goal itself is not a unit node; it is an abstract target represented by `{ tech_level, mass_cost, energy_cost, build_time }`. The state therefore records:
 
 - every unit that exists,
 - when each unit started and finished,
@@ -16,7 +16,7 @@ The simulator starts with a single completed unit: the ACU (Armored Command Unit
 Active construction projects are not stored separately; they are the graph nodes currently in the `Constructing` or `Upgrading` state.
 
 ```rust
-// crates/faf-sim/src/sim/state.rs ~line 298 — GraphState (abbreviated)
+// crates/faf-sim/src/sim/state.rs ~line 317 — GraphState (abbreviated)
 pub struct GraphState {
     pub time: f64,
     pub graph: BuildGraph,
@@ -147,7 +147,7 @@ The search loop uses the legal successors of this snapshot to grow the tree (see
 
 ## Objectives
 
-1. **Primary:** minimize the completion time of the goal unit.
+1. **Primary:** minimize the completion time of the goal.
 2. **Secondary:** among plans with the same primary time, maximize mass income per mass invested in economy up to that completion time. This prevents the optimizer from rewarding extra economy built after the goal is already reached.
 
 ## Assumptions
@@ -156,4 +156,4 @@ The search loop uses the legal successors of this snapshot to grow the tree (see
 - Build power, production, and drain are known per blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.
-- There is exactly one goal unit.
+- There is exactly one goal, represented abstractly by its tech level and resource cost.

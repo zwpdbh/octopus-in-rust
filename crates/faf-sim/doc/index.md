@@ -1,6 +1,6 @@
 # Reinforcement Learning for Build-Order Optimization with Burn
 
-This tutorial walks through building a reinforcement-learning (RL) planner in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework. The concrete domain is Supreme Commander: Forged Alliance (FAF): you start with a single commander unit and must choose what to build, when, and with which engineers so that a high-value goal unit (e.g. a Monkeylord or a Novax Center) finishes as early as possible.
+This tutorial walks through building a reinforcement-learning (RL) planner in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework. The concrete domain is Supreme Commander: Forged Alliance (FAF): you start with a single commander unit and must choose what to build, when, and with which engineers so that a high-value goal (e.g. a Monkeylord or a Novax Center) finishes as early as possible.
 
 `faf-sim` provides:
 
@@ -32,14 +32,16 @@ You should be comfortable with Rust and with the basics of neural networks and p
 ## Quick reference
 
 - **Default strategy:** `mcts:100:mlp:greedy`
-- **Model path pattern:** `data/models/mlp-<faction>-<unit>`
+- **Model path pattern:** `data/models/mlp-<faction>-<unit>` (e.g., `data/models/mlp-uef-novax-center`). Models are saved per target for convenience, but the network shape is fixed for all goals of the same tech level.
 - **Run tests:** `cargo test -p faf-sim`
 - **Check workspace:** `cargo check --workspace`
 - **Train a policy:** `cargo run --release -p faf-sim-cli -- train -e 5000 -m 10000 uef novaxcenter`  
   Add `--quiet` to suppress output, `--patience 1000` to stop when no improvement is seen for 1000 episodes, or `--no-epsilon-decay` to keep exploration constant.
+- **Visualise the plan graph:** `cargo run --release -p faf-sim-cli -- plan`  
+  The SVG includes a placeholder **Target** node representing the T3-engineer-only goal edge.
 - **Simulate with a trained policy:** `cargo run --release -p faf-sim-cli -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter`
 
 ## Important notes
 
-- Old `.mpk` model files saved before the hierarchical-policy redesign are incompatible and must be deleted and retrained.
+- Old `.mpk` model files saved before the abstract-goal redesign are incompatible and must be deleted and retrained. The universal plan graph now has a fixed edge count and a synthetic `Goal` node.
 - Only `ValueNetKind::Mlp` (the hierarchical network) is implemented. `Gnn` returns an error if selected.

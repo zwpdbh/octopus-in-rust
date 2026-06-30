@@ -1,6 +1,6 @@
 # 5. Reward Shaping
 
-A build-order episode can last thousands of simulator ticks, and the only event the ultimate user cares about is the goal unit finishing. If we reward the agent only at the end, training is slow and unstable. This chapter explains how `faf-sim` shapes the reward so the policy gets useful feedback at every step.
+A build-order episode can last thousands of simulator ticks, and the only event the ultimate user cares about is the goal finishing. If we reward the agent only at the end, training is slow and unstable. This chapter explains how `faf-sim` shapes the reward so the policy gets useful feedback at every step.
 
 ## Two reward signals
 
@@ -84,7 +84,7 @@ The terminal bonus is the dominant term in the return for successful episodes, w
 During training, each step's target is the discounted sum of future rewards plus the terminal bonus:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 563 — compute_returns
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 650 — compute_returns
 fn compute_returns(&mut self, episode: &mut Episode) {
     let step_count = episode.steps.len();
     if step_count == 0 {

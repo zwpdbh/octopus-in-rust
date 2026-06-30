@@ -18,6 +18,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, Interval};
 
 use crate::actors::message::{Command, Observation};
+use crate::planner::core::Goal;
 use crate::sim::{BuildEvent, GraphSimError, GraphState, NodeId};
 use crate::units::{UnitKind, Units};
 
@@ -27,8 +28,8 @@ pub struct SimActor {
     pub state: GraphState,
     /// Unified unit knowledge repository.
     pub units: Units,
-    /// Goal unit id that, when completed, stops the simulation.
-    pub goal: Option<UnitKind>,
+    /// Abstract goal that, when completed, stops the simulation.
+    pub goal: Option<Goal>,
     /// Fixed tick duration in seconds.
     pub dt: f64,
     /// Timer that drives the simulation tick loop.
@@ -47,7 +48,7 @@ impl SimActor {
     pub fn new(
         starting_units: &[UnitKind],
         units: Units,
-        goal_id: Option<UnitKind>,
+        goal: Option<Goal>,
         dt: f64,
         obs_tx: Sender<Observation>,
         cmd_rx: Receiver<Command>,
@@ -57,7 +58,7 @@ impl SimActor {
         Self {
             state,
             units,
-            goal: goal_id,
+            goal,
             dt,
             timer,
             obs_tx,
@@ -125,10 +126,10 @@ impl SimActor {
 
     /// Returns true if the configured goal unit has been completed.
     fn goal_reached(&self) -> bool {
-        let Some(goal_id) = &self.goal else {
+        let Some(goal) = &self.goal else {
             return false;
         };
-        self.state.goal_reached(goal_id)
+        self.state.goal_reached(goal)
     }
 
     /// Apply a planner command to the simulation state.
@@ -164,6 +165,13 @@ impl SimActor {
                     &builders,
                     &self.units,
                 )?;
+            }
+            Command::BuildGoal { goal, builders } => {
+                if builders.is_empty() {
+                    return Ok(());
+                }
+                self.state
+                    .start_goal_project(goal, &builders, &self.units)?;
             }
         }
         Ok(())

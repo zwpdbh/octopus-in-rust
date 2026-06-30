@@ -2,7 +2,7 @@
 
 ## Core idea
 
-A FAF build order is a directed graph that grows over time. Nodes are built units; edges record which existing units contributed build power to create a new unit. The optimization problem is to grow this graph from the starting ACU until it contains the goal unit, while minimizing the time when the goal unit finishes.
+A FAF build order is a directed graph that grows over time. Nodes are built units; edges record which existing units contributed build power to create a new unit. The optimization problem is to grow this graph from the starting ACU until the abstract goal is reached, while minimizing the time when the goal finishes.
 
 ## Definitions
 
@@ -17,7 +17,7 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 ### Node lifecycle
 
 ```rust
-// crates/faf-sim/src/sim/state.rs ~line 96 — UnitNodeState (abbreviated)
+// crates/faf-sim/src/sim/state.rs ~line 97 — UnitNodeState (abbreviated)
 pub enum UnitNodeState {
     Constructing { start: f64, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
     Upgrading { start: f64, from_unit_id: UnitKind, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
@@ -85,8 +85,8 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
 
 ## Objectives
 
-1. **Primary**: minimize the completion time of the goal unit.
-2. **Secondary**: among plans with the same primary completion time, maximize mass income per mass invested in economy up to the moment the goal unit finishes.
+1. **Primary**: minimize the completion time of the goal.
+2. **Secondary**: among plans with the same primary completion time, maximize mass income per mass invested in economy up to the moment the goal finishes.
 
 ## Unit knowledge repository
 
@@ -109,7 +109,7 @@ This keeps the FAF community data format isolated in one place and lets `faf-sim
 - Build power, production, and drain are known per unit blueprint.
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.
-- There is exactly one goal unit.
+- There is exactly one goal, represented by its tech level and resource cost.
 - Energy stall reduces mass income linearly with available energy. (This is a working assumption; verify against FAF Lua/source when possible.)
 
 ## Notes

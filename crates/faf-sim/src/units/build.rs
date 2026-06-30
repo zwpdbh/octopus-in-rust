@@ -4,11 +4,9 @@
 //! abstract `UnitKind`s and derive build recipes for faction-unique units. After
 //! construction the optimizer no longer needs the raw index.
 
-use std::collections::{HashMap, HashSet};
-
 use faf_units::Unit;
 
-use crate::units::kind::{BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind};
+use crate::units::kind::{Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind};
 
 /// Build a `UnitDef` from a raw `Unit`, if the unit is relevant to the
 /// optimizer.
@@ -103,93 +101,6 @@ pub(crate) fn faction_from_unit(unit: &Unit) -> Faction {
 /// True for unit kinds that are shared across factions.
 pub(crate) fn is_common_kind(kind: &UnitKind) -> bool {
     !matches!(kind, UnitKind::Unique(_))
-}
-
-/// Derive a build recipe for a unique unit from the raw index.
-///
-/// This is the only place where we still inspect raw `BUILTBY*` categories.
-/// It runs once during construction so that `Units` can remain self-contained.
-pub(crate) fn derive_unique_recipe(
-    unit: &Unit,
-    _id_to_kind: &HashMap<String, UnitKind>,
-) -> Option<BuildRecipe> {
-    let kind = UnitKind::Unique(UnitId(unit.id.to_ascii_uppercase()));
-    let mut builder_options: Vec<UnitKind> = Vec::new();
-
-    for category in &unit.categories {
-        let c = category.to_ascii_uppercase();
-        match c.as_str() {
-            "BUILTBYCOMMANDER" | "BUILTBYTIER1COMMANDER" => {
-                push_unique(&mut builder_options, UnitKind::Commander);
-            }
-            "BUILTBYTIER1ENGINEER" => {
-                push_unique(&mut builder_options, UnitKind::Engineer(TechLevel::T1))
-            }
-            "BUILTBYTIER2ENGINEER" => {
-                push_unique(&mut builder_options, UnitKind::Engineer(TechLevel::T2))
-            }
-            "BUILTBYTIER3ENGINEER" => {
-                push_unique(&mut builder_options, UnitKind::Engineer(TechLevel::T3))
-            }
-            "BUILTBYTIER1FACTORY" => {
-                push_unique(&mut builder_options, UnitKind::Factory(TechLevel::T1))
-            }
-            "BUILTBYTIER2FACTORY" => {
-                push_unique(&mut builder_options, UnitKind::Factory(TechLevel::T2))
-            }
-            "BUILTBYTIER3FACTORY" => {
-                push_unique(&mut builder_options, UnitKind::Factory(TechLevel::T3))
-            }
-            _ => {}
-        }
-    }
-
-    if builder_options.is_empty() {
-        return None;
-    }
-
-    let prereq = tech_level(unit).and_then(|tech| match tech {
-        TechLevel::T1 => None,
-        TechLevel::T2 => Some(UnitKind::Factory(TechLevel::T1)),
-        TechLevel::T3 | TechLevel::T4 => Some(UnitKind::Factory(TechLevel::T3)),
-    });
-
-    Some(BuildRecipe {
-        target: kind,
-        prereq,
-        builder_options,
-    })
-}
-
-pub(crate) fn push_unique(vec: &mut Vec<UnitKind>, kind: UnitKind) {
-    if !vec.contains(&kind) {
-        vec.push(kind);
-    }
-}
-
-/// True for unique units that should appear as candidate goals in the
-/// universal plan graph.
-pub(crate) fn is_goal_candidate(unit: &Unit) -> bool {
-    let cats: HashSet<String> = unit
-        .categories
-        .iter()
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-
-    if cats.contains("TECH4") || cats.contains("EXPERIMENTAL") {
-        return true;
-    }
-
-    if cats.contains("TECH3") && cats.contains("STRUCTURE") {
-        if cats.contains("ARTILLERY") {
-            return true;
-        }
-        if cats.contains("SILO") && !cats.contains("ANTIMISSILE") {
-            return true;
-        }
-    }
-
-    false
 }
 
 /// The canonical UEF blueprint id used as the representative for a common

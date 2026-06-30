@@ -12,6 +12,7 @@ use tokio::time;
 use crate::actors::decision_actor::DecisionActor;
 use crate::actors::message::{Command, Observation};
 use crate::actors::sim_actor::SimActor;
+use crate::planner::core::Goal;
 use crate::planner::Planner;
 use crate::sim::state::{GraphSimError, GraphState};
 use crate::units::{UnitKind, Units};
@@ -112,7 +113,7 @@ impl From<tokio::task::JoinError> for SimulationError {
 /// Panics if `config.sim_dt` is not positive.
 pub async fn run_build_order_simulation(
     units: Units,
-    goal: UnitKind,
+    goal: Goal,
     config: SimulationConfig,
 ) -> Result<SimulationResult, SimulationError> {
     assert!(config.sim_dt > 0.0, "sim_dt must be positive");
@@ -130,7 +131,7 @@ pub async fn run_build_order_simulation(
     let sim = SimActor::new(
         &[UnitKind::Commander],
         units.clone(),
-        Some(goal.clone()),
+        Some(goal),
         config.sim_dt,
         obs_tx,
         cmd_rx,

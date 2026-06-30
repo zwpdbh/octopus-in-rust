@@ -19,8 +19,9 @@ use crate::economy::{
     apply_tick_graph, compute_drain, EcoConsumer, EcoFlow, EcoProducer, EconomyState,
     RequestedBuildPower,
 };
+use crate::planner::core::Goal;
 use crate::sim::adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
-use crate::units::{UnitCost, UnitDef, UnitKind, Units};
+use crate::units::{TechLevel, UnitCost, UnitDef, UnitKind, Units};
 
 /// A single event in the simulated build timeline.
 #[derive(Debug, Clone, PartialEq)]
@@ -262,6 +263,21 @@ impl std::ops::IndexMut<NodeId> for BuildGraph {
     }
 }
 
+/// An active abstract-goal project.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoalProject {
+    /// The abstract target being built.
+    pub goal: Goal,
+    /// Remaining work in blueprint build-time units.
+    pub remaining_work: f64,
+    /// Builders capable of building the goal.
+    pub started_by: Vec<NodeId>,
+    /// Additional builders assisting construction.
+    pub assisted_by: Vec<NodeId>,
+    /// True once the remaining work reaches zero.
+    pub completed: bool,
+}
+
 /// Errors that can occur when manipulating a `GraphState`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphSimError {
@@ -275,6 +291,8 @@ pub enum GraphSimError {
     NotBuildable(UnitKind),
     /// The requested active project was not found.
     ProjectNotFound,
+    /// An abstract goal project is already active.
+    GoalProjectActive,
 }
 
 impl std::fmt::Display for GraphSimError {
@@ -287,6 +305,7 @@ impl std::fmt::Display for GraphSimError {
             }
             GraphSimError::NotBuildable(id) => write!(f, "unit {:?} is not buildable", id),
             GraphSimError::ProjectNotFound => write!(f, "active project not found"),
+            GraphSimError::GoalProjectActive => write!(f, "goal project is already active"),
         }
     }
 }
@@ -306,6 +325,8 @@ pub struct GraphState {
     pub events: Vec<BuildEvent>,
     /// Adjacency bonuses for mass and energy production.
     pub adjacency: AdjacencyTracker,
+    /// The active abstract-goal project, if one has been started.
+    pub goal_project: Option<GoalProject>,
 }
 
 /// True if the node represents an active builder unit.
@@ -363,6 +384,7 @@ impl GraphState {
             economy: EconomyState::default(),
             events: Vec::new(),
             adjacency,
+            goal_project: None,
         };
         state.rebuild_economy(units);
         state
@@ -433,9 +455,16 @@ impl GraphState {
             .any(|n| n.is_active() && n.unit_id == *unit_id)
     }
 
-    /// True if the given goal unit has been completed.
-    pub fn goal_reached(&self, goal_id: &UnitKind) -> bool {
-        self.has_completed_unit(goal_id)
+    /// True if the given abstract goal has been completed.
+    pub fn goal_reached(&self, goal: &Goal) -> bool {
+        self.goal_project
+            .as_ref()
+            .is_some_and(|p| p.completed && p.goal == *goal)
+    }
+
+    /// True if an abstract goal project is currently under construction.
+    pub fn goal_project_active(&self) -> bool {
+        self.goal_project.as_ref().is_some_and(|p| !p.completed)
     }
 
     /// Return the kinds of all units currently under construction.
@@ -585,7 +614,7 @@ impl GraphState {
     /// This is a heuristic, not an exact simulation. Lower is better.
     pub fn estimate_remaining_time_to_goal(
         &self,
-        goal: &UnitKind,
+        goal: &Goal,
         chain: &[UnitKind],
         units: &Units,
     ) -> f64 {
@@ -604,12 +633,11 @@ impl GraphState {
             }
         }
 
-        if !self.has_completed_unit(goal) {
-            if let Some(cost) = units.build_cost(goal) {
-                total_mass += cost.mass;
-                total_energy += cost.energy;
-                total_work += cost.build_time;
-            }
+        if !self.goal_reached(goal) {
+            let cost = goal.cost();
+            total_mass += cost.mass;
+            total_energy += cost.energy;
+            total_work += cost.build_time;
         }
 
         self.economy.estimate_remaining_time(
@@ -625,7 +653,8 @@ impl GraphState {
 
     /// Return the set of builders currently assigned to an active project.
     fn busy_builders(&self) -> HashSet<NodeId> {
-        self.graph
+        let mut busy: HashSet<NodeId> = self
+            .graph
             .graph
             .node_weights()
             .filter(|n| {
@@ -636,7 +665,15 @@ impl GraphState {
             })
             .flat_map(|n| self.graph.graph.edges_directed(n.id.0, Direction::Incoming))
             .map(|edge| NodeId::new(edge.source().index()))
-            .collect()
+            .collect();
+
+        if let Some(ref gp) = self.goal_project {
+            if !gp.completed {
+                busy.extend(gp.started_by.iter());
+                busy.extend(gp.assisted_by.iter());
+            }
+        }
+        busy
     }
 
     /// Validate that every builder in `builders` is idle and is a real builder.
@@ -717,6 +754,55 @@ impl GraphState {
         }
 
         Ok(node_id)
+    }
+
+    /// Start a new abstract-goal project using the given idle `builders`.
+    ///
+    /// At least one builder must be a T3 engineer. The remaining builders assist.
+    pub fn start_goal_project(
+        &mut self,
+        goal: Goal,
+        builders: &[NodeId],
+        units: &Units,
+    ) -> Result<(), GraphSimError> {
+        if self.goal_project_active() {
+            return Err(GraphSimError::GoalProjectActive);
+        }
+
+        self.validate_builders(builders, &UnitKind::Commander, units)?;
+
+        let mut started_by = Vec::new();
+        let mut assisted_by = Vec::new();
+        for &builder in builders {
+            if matches!(
+                self.graph[builder].unit_id,
+                UnitKind::Engineer(TechLevel::T3)
+            ) {
+                started_by.push(builder);
+            } else {
+                assisted_by.push(builder);
+            }
+        }
+
+        if started_by.is_empty() {
+            return Err(GraphSimError::CannotBuild {
+                builder: builders
+                    .first()
+                    .map(|b| self.graph[*b].unit_id.clone())
+                    .unwrap_or_else(|| UnitKind::Commander),
+                target: UnitKind::Commander,
+            });
+        }
+
+        self.goal_project = Some(GoalProject {
+            goal,
+            remaining_work: goal.cost().build_time,
+            started_by,
+            assisted_by,
+            completed: false,
+        });
+
+        Ok(())
     }
 
     /// Split builders into those capable of building the target and assistants.
@@ -890,7 +976,9 @@ impl GraphState {
             .map(|n| n.id)
             .collect();
 
-        if active_projects.is_empty() {
+        let goal_active = self.goal_project_active();
+
+        if active_projects.is_empty() && !goal_active {
             self.apply_idle_income(dt);
             self.time += dt;
             return Vec::new();
@@ -920,6 +1008,28 @@ impl GraphState {
             };
             total_mass_drain += drain.mass_per_second;
             total_energy_drain += drain.energy_per_second;
+        }
+
+        let mut goal_power = 0.0;
+        if let Some(ref gp) = self.goal_project {
+            if !gp.completed {
+                let power: f64 = gp
+                    .started_by
+                    .iter()
+                    .chain(gp.assisted_by.iter())
+                    .map(|&id| builder_power(id, &self.graph, units))
+                    .sum();
+                goal_power = power;
+                if let Some(drain) = compute_drain(
+                    &gp.goal.cost().to_target_stats(),
+                    RequestedBuildPower(power),
+                ) {
+                    total_mass_drain += drain.mass_per_second;
+                    total_energy_drain += drain.energy_per_second;
+                } else {
+                    goal_power = 0.0;
+                }
+            }
         }
 
         let tick_result = apply_tick_graph(total_mass_drain, total_energy_drain, &self.economy, dt);
@@ -988,6 +1098,21 @@ impl GraphState {
                 }
 
                 completed_nodes.push(target_node);
+            }
+        }
+
+        // Apply progress to the abstract goal project, if active.
+        let mut _goal_completed = false;
+        if goal_power > 0.0 {
+            if let Some(ref mut gp) = self.goal_project {
+                if !gp.completed {
+                    let progress = tick_result.effective_factor * goal_power * dt;
+                    gp.remaining_work -= progress;
+                    if gp.remaining_work <= 0.0 {
+                        gp.completed = true;
+                        _goal_completed = true;
+                    }
+                }
             }
         }
 
@@ -1237,6 +1362,34 @@ mod tests {
             edge.finish_time,
             state.graph[pgen_node].finish_time().expect("pgen finished")
         );
+    }
+
+    #[test]
+    fn t3_engineer_builds_abstract_goal() {
+        let units = load_units();
+        let mut state = GraphState::new(
+            &units,
+            &[UnitKind::Commander, UnitKind::Engineer(TechLevel::T3)],
+        );
+        let eng_node = NodeId::new(1);
+        let goal = Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 100.0,
+            energy_cost: 1000.0,
+            build_time: 100.0,
+        };
+        state
+            .start_goal_project(goal, &[eng_node], &units)
+            .expect("T3 engineer can start goal project");
+        assert!(state.goal_project_active());
+
+        for _ in 0..1000 {
+            state.tick(&units, 1.0);
+            if state.goal_reached(&goal) {
+                break;
+            }
+        }
+        assert!(state.goal_reached(&goal));
     }
 
     #[test]

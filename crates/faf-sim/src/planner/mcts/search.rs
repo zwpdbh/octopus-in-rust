@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use crate::planner::core::{PlanResult, PlannerConfig, PlannerError};
+use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::mcts::features::state_features_with_shortfall;
 use crate::planner::mcts::macro_net::{
     apply_mask, clamp_squad, ensure_minimum_squad, PolicyBundle,
@@ -20,7 +20,7 @@ use crate::planner::mcts::train::{TrainBackend, TrainDevice};
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::search::SimAction;
 use crate::sim::GraphState;
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 /// Configuration for an MCTS search.
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +65,7 @@ impl MctsNode {
     /// Create a new node and compute edge priors from the policy network.
     fn new(
         state: GraphState,
-        goal: &UnitKind,
+        goal: &Goal,
         units: &Units,
         config: &PlannerConfig,
         edge_index: &PlanEdgeIndex,
@@ -108,28 +108,24 @@ impl MctsSearch {
     /// # Arguments
     ///
     /// * `initial_state` - The current simulator state (root of the tree).
-    /// * `goal_id` - The blueprint id of the unit we are trying to build.
+    /// * `goal` - The abstract target being planned or trained for.
     /// * `units` - Unified unit knowledge repository.
     /// * `planner_config` - Shared planner configuration.
     /// * `model` - The learned hierarchical policy used for priors and rollouts.
     pub fn search(
         &self,
         initial_state: GraphState,
-        goal_id: &UnitKind,
+        goal: &Goal,
         units: &Units,
         planner_config: &PlannerConfig,
         model: &PolicyBundle<TrainBackend>,
     ) -> Result<PlanResult, PlannerError> {
-        let edge_index = PlanEdgeIndex::new(
-            &units
-                .plan_graph(goal_id)
-                .map_err(|e| PlannerError::UnsupportedStrategy(e.to_string()))?,
-        );
+        let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
 
         let device: TrainDevice = Default::default();
         let mut root = MctsNode::new(
             initial_state,
-            goal_id,
+            goal,
             units,
             planner_config,
             &edge_index,
@@ -159,7 +155,7 @@ impl MctsSearch {
                 // Fully expanded leaf: run a rollout from this state.
                 rollout_value(
                     &leaf.state,
-                    goal_id,
+                    goal,
                     units,
                     planner_config,
                     model,
@@ -185,7 +181,7 @@ impl MctsSearch {
                 match expand_edge(
                     &leaf.state,
                     edge_idx,
-                    goal_id,
+                    goal,
                     units,
                     planner_config,
                     &edge_index,
@@ -193,12 +189,12 @@ impl MctsSearch {
                     &device,
                 ) {
                     Some(child_state) => {
-                        let child_value = if child_state.goal_reached(goal_id) {
+                        let child_value = if child_state.goal_reached(goal) {
                             compute_terminal_bonus(&child_state, true) as f64
                         } else {
                             rollout_value(
                                 &child_state,
-                                goal_id,
+                                goal,
                                 units,
                                 planner_config,
                                 model,
@@ -254,7 +250,7 @@ impl MctsSearch {
             match expand_edge(
                 &root.state,
                 edge_idx,
-                goal_id,
+                goal,
                 units,
                 planner_config,
                 &edge_index,
@@ -380,7 +376,7 @@ fn softmax_probs(logits: &[f32]) -> Vec<f32> {
 fn expand_edge(
     state: &GraphState,
     edge_idx: usize,
-    _goal: &UnitKind,
+    _goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
@@ -409,13 +405,22 @@ fn expand_edge(
     }
 
     let action = match edge.kind {
-        crate::planner::plan_graph::PlanEdgeKind::Build => SimAction::Build {
-            unit_id: edge.target.clone(),
-            builders: builders.clone(),
-        },
+        crate::planner::plan_graph::PlanEdgeKind::Build => {
+            if let Some(target_goal) = edge.target_goal() {
+                SimAction::BuildGoal {
+                    goal: *target_goal,
+                    builders: builders.clone(),
+                }
+            } else {
+                SimAction::Build {
+                    unit_id: edge.target_unit().expect("build target unit").clone(),
+                    builders: builders.clone(),
+                }
+            }
+        }
         crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-            target_unit_id: edge.target.clone(),
-            old_node: find_upgrade_source(state, &edge.source)
+            target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+            old_node: find_upgrade_source(state, edge.source_unit().expect("upgrade source unit"))
                 .unwrap_or_else(|| crate::sim::NodeId::new(0)),
             builders: builders.clone(),
         },
@@ -433,7 +438,7 @@ fn expand_edge(
 /// discounted sum of step rewards plus a terminal bonus.
 fn rollout_value(
     state: &GraphState,
-    goal: &UnitKind,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
     model: &PolicyBundle<TrainBackend>,
@@ -497,6 +502,25 @@ fn infer_action_from_states(
         return SimAction::Wait;
     };
 
+    if let Some(goal) = edge.target_goal() {
+        if !before.goal_project_active() && after.goal_project_active() {
+            let builders = after
+                .goal_project
+                .as_ref()
+                .map(|gp| gp.started_by.clone())
+                .unwrap_or_default();
+            return SimAction::BuildGoal {
+                goal: *goal,
+                builders,
+            };
+        }
+        return SimAction::Wait;
+    }
+
+    let Some(target_unit) = edge.target_unit() else {
+        return SimAction::Wait;
+    };
+
     let before_active: HashSet<_> = before
         .graph
         .graph
@@ -508,9 +532,9 @@ fn infer_action_from_states(
     // Find a newly active node that matches the edge target.
     for node in after.graph.graph.node_weights() {
         if node.is_active() && !before_active.contains(&node.id) {
-            if node.unit_id == edge.target {
+            if node.unit_id == *target_unit {
                 return SimAction::Build {
-                    unit_id: edge.target.clone(),
+                    unit_id: target_unit.clone(),
                     builders: Vec::new(),
                 };
             }

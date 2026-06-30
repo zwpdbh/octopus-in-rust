@@ -20,9 +20,8 @@ use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
-use crate::planner::plan_graph::{
-    build_universal_plan_graph, PlanGraph, PlanGraphError, UniversalPlanGraph,
-};
+use crate::planner::core::Goal;
+use crate::planner::plan_graph::{build_universal_plan_graph, PlanGraph, UniversalPlanGraph};
 use crate::planner::strips::{build_operators, Operator};
 
 pub use kind::{
@@ -42,7 +41,6 @@ pub struct Units {
     defs: HashMap<UnitKind, UnitDef>,
     builds: HashMap<UnitKind, BuildRecipe>,
     upgrades: HashMap<UnitKind, Vec<UpgradeRecipe>>,
-    goal_candidates: Vec<UnitKind>,
     universal_plan_graph: UniversalPlanGraph,
 }
 
@@ -61,15 +59,6 @@ impl Units {
         let mut defs: HashMap<UnitKind, UnitDef> = HashMap::new();
         let mut builds = Self::hardcoded_builds();
         let upgrades = Self::hardcoded_upgrades();
-
-        // Build a lookup from raw unit id to its abstract kind. This is only
-        // needed during construction to resolve unique-unit builder options.
-        let mut id_to_kind: HashMap<String, UnitKind> = HashMap::new();
-        for unit in &index.units {
-            if let Some(kind) = build::classify_unit(unit) {
-                id_to_kind.insert(unit.id.to_ascii_uppercase(), kind.clone());
-            }
-        }
 
         // Track which common kinds have already been fixed to their canonical
         // UEF blueprint. Non-canonical duplicates are ignored once the canonical
@@ -145,42 +134,25 @@ impl Units {
             },
         );
 
-        // Generate build recipes for unique units from the raw index.
-        for unit in &index.units {
-            let Some(UnitKind::Unique(id)) = build::classify_unit(unit) else {
-                continue;
-            };
-            let kind = UnitKind::Unique(id.clone());
-            if builds.contains_key(&kind) {
-                continue;
-            }
-            let Some(recipe) = build::derive_unique_recipe(unit, &id_to_kind) else {
-                continue;
-            };
-            builds.insert(kind, recipe);
-        }
-
-        // Collect candidate goal units (T4 experimentals and selected T3
-        // structures) for the universal plan graph.
-        let mut goal_candidates_set: HashSet<UnitKind> = HashSet::new();
-        for unit in &index.units {
-            if let Some(UnitKind::Unique(id)) = build::classify_unit(unit) {
-                if build::is_goal_candidate(unit) {
-                    goal_candidates_set.insert(UnitKind::Unique(id.clone()));
-                }
+        // Faction-unique units (experimentals, game-enders, strategic weapons) are
+        // built by T3 engineers. Derive their build recipes from the loaded defs.
+        for kind in defs.keys() {
+            if matches!(kind, UnitKind::Unique(_)) {
+                builds.insert(
+                    kind.clone(),
+                    BuildRecipe {
+                        target: kind.clone(),
+                        prereq: None,
+                        builder_options: vec![UnitKind::Engineer(TechLevel::T3)],
+                    },
+                );
             }
         }
-        let mut goal_candidates: Vec<UnitKind> = goal_candidates_set
-            .into_iter()
-            .filter(|k| builds.contains_key(k))
-            .collect();
-        goal_candidates.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));
 
         let mut units = Self {
             defs,
             builds,
             upgrades,
-            goal_candidates,
             universal_plan_graph: UniversalPlanGraph::default(),
         };
         units.universal_plan_graph = build_universal_plan_graph(&units);
@@ -258,51 +230,27 @@ impl Units {
         build_operators(self)
     }
 
-    /// Return the candidate goal units included in the universal plan graph.
-    pub fn goal_candidates(&self) -> &[UnitKind] {
-        &self.goal_candidates
-    }
-
     /// Borrow the universal plan graph shared across all goals.
     pub fn universal_plan_graph(&self) -> &UniversalPlanGraph {
         &self.universal_plan_graph
     }
 
-    /// Build a simplified, ACU-rooted plan graph for the requested unit.
-    ///
-    /// The returned graph is a goal-specific view into the cached universal
-    /// plan graph, containing only the units and edges that are ancestors of
-    /// the chosen goal.
-    pub fn plan_graph(&self, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
-        self.universal_plan_graph.for_goal(self, goal)
+    /// Build a simplified, ACU-rooted plan graph for the requested goal.
+    pub fn plan_graph(&self, goal: Goal) -> PlanGraph {
+        self.universal_plan_graph.with_goal(goal)
     }
 
-    /// Return the prerequisite chain from the starting commander to a goal.
+    /// Return the fixed prerequisite chain for an abstract goal.
     ///
-    /// The chain is the ordered list of unit kinds that must be completed
-    /// before the goal can be built, excluding the commander itself and the
-    /// goal.
-    pub fn prerequisite_chain(&self, goal: &UnitKind) -> Vec<UnitKind> {
-        let mut chain = Vec::new();
-        let mut current = goal;
-
-        // Walk backwards through prereqs until we hit a unit with no prereq
-        // (typically the commander or a T1 factory built by the commander).
-        while let Some(recipe) = self.build_recipe(current) {
-            if let Some(prereq) = &recipe.prereq {
-                // Stop when we reach the commander; it is given at game start.
-                if *prereq == UnitKind::Commander {
-                    break;
-                }
-                chain.push(prereq.clone());
-                current = prereq;
-            } else {
-                break;
-            }
-        }
-
-        chain.reverse();
-        chain
+    /// The chain lists the technology milestones that must be completed before
+    /// the T3 engineer can start the goal project.
+    pub fn prerequisite_chain(&self, _goal: &Goal) -> Vec<UnitKind> {
+        vec![
+            UnitKind::Factory(TechLevel::T1),
+            UnitKind::Factory(TechLevel::T2),
+            UnitKind::Factory(TechLevel::T3),
+            UnitKind::Engineer(TechLevel::T3),
+        ]
     }
 
     /// Hardcoded build recipes for the common economic/builder units.

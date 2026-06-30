@@ -18,7 +18,7 @@ Run each goal with each strategy multiple times and report the mean and standard
 
 ## Primary metrics
 
-1. **Completion time.** The in-game seconds when the goal unit finishes. Lower is better.
+1. **Completion time.** The in-game seconds when the goal finishes. Lower is better.
 2. **Goal reach rate.** The fraction of episodes that reach the goal within the step budget. Higher is better.
 3. **Wall-clock planning time per decision.** How long the planner takes to choose an action. MCTS should not be orders of magnitude slower than the one-step policy.
 4. **Number of simulator ticks per decision.** How much of the simulator budget the search consumes. This correlates with wall-clock time but is independent of hardware.
@@ -86,6 +86,7 @@ Because the return is standardized per-episode, the relative scale of coefficien
 | MCTS gets stuck repeating actions | SelectionOption generation bug or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
 | Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
 | Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |
+| MCTS with random weights is very slow | No trained model was found; MCTS explores a huge horizon with random priors | Train a policy first, or use a tiny iteration budget for smoke tests. |
 
 ## Robustness checks
 

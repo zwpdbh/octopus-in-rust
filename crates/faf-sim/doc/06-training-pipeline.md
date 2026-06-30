@@ -7,10 +7,10 @@ This chapter describes how the hierarchical policy is trained. The pipeline uses
 The training entry point is `train_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 51 — train_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 55 — train_policy
 pub fn train_policy(
     units: &Units,
-    goal: &UnitKind,
+    goal: &Goal,
     config: TrainConfig,
     observer: impl TrainingObserver + 'static,
 ) -> (
@@ -34,7 +34,7 @@ It returns the final model, an optional best-seen model, and statistics. The opt
 Training is controlled by `TrainConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/config.rs ~line 4 — TrainConfig
+// crates/faf-sim/src/planner/mcts/train/config.rs ~line 5 — TrainConfig
 pub struct TrainConfig {
     /// Number of episodes to run.
     pub episodes: usize,
@@ -74,7 +74,7 @@ pub struct TrainConfig {
 The default configuration is conservative and CPU-friendly:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/config.rs ~line 44 — TrainConfig::default
+// crates/faf-sim/src/planner/mcts/train/config.rs ~line 48 — TrainConfig::default
 fn default() -> Self {
     Self {
         episodes: 200,
@@ -104,7 +104,7 @@ You can increase `episodes`, `max_steps`, and the network sizes for harder goals
 The `Trainer` owns the model, optimizer, and best-seen state:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 40 — Trainer (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 43 — Trainer (abbreviated)
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
@@ -162,7 +162,7 @@ After each episode, the trainer calls `update` to perform one gradient step on a
 All four losses share the same advantage, so a single scalar drives the gradient through every head.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 592 — update (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 678 — update (abbreviated)
 pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
     for step in &episode.steps {
         // ... build macro input, run latent backbone once ...
@@ -213,7 +213,7 @@ This is the standard REINFORCE pattern, extended to a hierarchical policy. The d
 Every `greedy_eval_interval` episodes, the trainer runs a deterministic greedy rollout with the current parameters. If the greedy rollout reaches the goal faster than any previous greedy rollout, the current model is saved as `best_model`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 445 — greedy evaluation
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 520 — greedy evaluation
 if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
     if let Some(greedy_time) =
         self.evaluate_greedy(units, goal, &plan, &edge_index, &planner_config)
@@ -240,7 +240,7 @@ After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-t
 fn fine_tune_best_model(
     mut trainer: Trainer,
     units: &Units,
-    goal: &UnitKind,
+    goal: &Goal,
     config: &TrainConfig,
     stats: TrainStats,
 ) -> (PolicyBundle<TrainBackend>, Option<PolicyBundle<TrainBackend>>, TrainStats) {
@@ -255,7 +255,7 @@ The function returns the fine-tuned model as the final model. If no trajectory w
 Save the full bundle with `save_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 14 — save_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 15 — save_policy
 pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
@@ -273,7 +273,7 @@ pub fn save_policy(
 Load it with `load_policy`, passing the number of plan-graph edges so the network dimensions can be validated:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 28 — load_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 29 — load_policy
 pub fn load_policy(
     path: &std::path::Path,
     num_edges: usize,
@@ -296,7 +296,7 @@ pub fn load_policy(
 }
 ```
 
-Old `.mpk` models saved before the hierarchical architecture change will not load; delete them and retrain.
+Old `.mpk` models saved before the abstract-goal change will not load; the universal plan graph now has a fixed edge count and a synthetic `Goal` node. Delete old checkpoints and retrain.
 
 ## Monitoring progress
 
@@ -324,7 +324,7 @@ The CLI wraps the programmatic API:
 faf-sim train -e 5000 -m 10000 uef novaxcenter
 ```
 
-This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novaxcenter`.
+This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novax-center`. The same network shape is used for every target because the plan graph is universal; only the synthetic `Goal` node carries target-specific cost and build time.
 
 By default the CLI prints a line after every episode and a progress line every few seconds during long episodes. Pass `--quiet` to suppress this output:
 

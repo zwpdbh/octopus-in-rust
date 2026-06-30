@@ -4,7 +4,7 @@ The raw action space of a build-order game is huge: at every tick you could buil
 
 ## The universal plan graph
 
-`faf-sim` builds one **universal plan graph** that contains all common faction units plus candidate T4/T3 goal units. A goal-specific view is then derived by taking the ancestors of the goal node.
+`faf-sim` builds one **universal plan graph** that contains all common units up to T3 (commander, factories, engineers, mexes, pgens, storages) plus the prerequisite factory and engineer upgrades. A goal-specific view is created by attaching a single synthetic `Goal` node to the T3 engineer. The same fixed graph shape is used for every target of the same tech level; only the synthetic goal's cost and build time change. The `faf-sim plan` command renders this graph with a placeholder **Target** node so the T3-engineer-only goal edge is visible.
 
 ```rust
 // crates/faf-sim/src/planner/plan_graph.rs ~line 40 — EdgeCategory
@@ -22,7 +22,7 @@ Every edge in the plan graph is tagged with one of these four categories. The ca
 - `Mass` — edges that increase mass income (extractors and storage caps).
 - `Energy` — edges that increase energy income (power generators and energy storage).
 - `BuildPower` — edges that increase total build rate (engineers and engineer upgrades).
-- `Progress` — edges that move toward the goal unit (factories, tech structures, and the goal itself).
+- `Progress` — edges that move toward the goal (factories, tech structures, and the synthetic goal node).
 
 The network first picks a direction, then scores only the edges inside that direction. This factorization keeps the action head small and interpretable.
 
@@ -31,25 +31,38 @@ The network first picks a direction, then scores only the edges inside that dire
 A `PlanEdge` is a stable, typed action candidate:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 151 — PlanEdge
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 197 — PlanEdge
 #[derive(Debug, Clone)]
 pub struct PlanEdge {
-    pub source: UnitKind,
-    pub target: UnitKind,
+    /// Source node (builder for builds, unit being upgraded for upgrades).
+    pub source: PlanNode,
+    /// Target node (unit to build/upgrade into, or the abstract goal).
+    pub target: PlanNode,
+    /// Edge kind.
     pub kind: PlanEdgeKind,
+    /// Strategic focus of this edge.
     category: EdgeCategory,
+}
+
+impl PlanEdge {
+    /// Source unit kind, if the source is a concrete unit.
+    pub fn source_unit(&self) -> Option<&UnitKind> { self.source.as_unit() }
+    /// Target unit kind, if the target is a concrete unit.
+    pub fn target_unit(&self) -> Option<&UnitKind> { self.target.as_unit() }
+    /// Target goal, if the target is the abstract goal.
+    pub fn target_goal(&self) -> Option<&Goal> { self.target.as_goal() }
 }
 ```
 
 - `source` is the builder required for a build edge, or the unit being upgraded for an upgrade edge.
-- `target` is the unit that will be created or upgraded into.
+- `target` is either a concrete unit or the abstract `Goal` node.
 - `kind` is either `Build` or `Upgrade`.
-- `category` is the strategic focus.
+- `category` is the strategic focus. `EdgeCategory::categorize` treats a `Goal` target as `Progress`.
 
 The macro network outputs one logit per edge, so the edge list must have a stable order. `PlanEdgeIndex` builds that list once from a `PlanGraph`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 172 — PlanEdgeIndex
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 232 — PlanEdgeIndex
 #[derive(Debug, Clone)]
 pub struct PlanEdgeIndex {
     edges: Vec<PlanEdge>,
@@ -82,14 +95,19 @@ A legal edge index can be converted back to a `SelectionOption` for execution:
 ```rust
 // crates/faf-sim/src/planner/mcts/selections.rs ~line 28 — SelectionOption
 pub enum SelectionOption {
+    /// Build a new unit of the given kind.
     Build(UnitKind),
+    /// Upgrade an existing `from` unit into `to`.
     Upgrade { from: UnitKind, to: UnitKind },
+    /// Build the abstract goal directly (once the required builder is owned).
+    BuildGoal(Goal),
+    /// Assist an active project.
     Assist(NodeId),
 }
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 274 — PlanEdgeIndex::to_selection_option
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 335 — PlanEdgeIndex::to_selection_option
 pub fn to_selection_option(
     &self,
     idx: usize,
@@ -102,23 +120,26 @@ pub fn to_selection_option(
         return None;
     }
     match edge.kind {
-        PlanEdgeKind::Build => Some(SelectionOption::Build(edge.target.clone())),
+        PlanEdgeKind::Build => match edge.target_goal() {
+            Some(goal) => Some(SelectionOption::BuildGoal(*goal)),
+            None => Some(SelectionOption::Build(edge.target_unit()?.clone())),
+        },
         PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
-            from: edge.source.clone(),
-            to: edge.target.clone(),
+            from: edge.source_unit()?.clone(),
+            to: edge.target_unit()?.clone(),
         }),
     }
 }
 ```
 
-`Assist` is part of the `SelectionOption` vocabulary but is not generated from plan-graph edges; it is reserved for future expansions that assign idle engineers to already-started projects. The current MCTS rollout and policy use build and upgrade edges only.
+`Assist` is part of the `SelectionOption` vocabulary and is generated for every active project when an idle engineer is available. `BuildGoal` is generated from the synthetic goal edge once the required builder (currently a T3 engineer) is owned and no goal project is already active. The current MCTS rollout and policy use build, upgrade, and goal edges.
 
 ## Resolving the engineer squad
 
 After the macro network selects an edge, the build-power head outputs a scalar target build power and the engineer-squad head outputs desired `[T1, T2, T3]` counts. Those counts are clamped to the actual idle engineers of each tech level and then mapped to real builder nodes by `select_squad_for_edge`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 473 — select_squad_for_edge
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 565 — select_squad_for_edge
 pub fn select_squad_for_edge(
     edge: &PlanEdge,
     desired: [usize; ENGINEER_TECH_LEVELS],
@@ -127,7 +148,12 @@ pub fn select_squad_for_edge(
 ) -> Vec<NodeId> {
     let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
         PlanEdgeKind::Build => {
-            Box::new(|id: NodeId| units.can_build(&state.graph[id].unit_id, &edge.target))
+            if let Some(goal) = edge.target_goal() {
+                Box::new(move |id: NodeId| can_build_goal(&state.graph[id].unit_id, goal))
+            } else {
+                let target = edge.target_unit().expect("build target must be unit or goal").clone();
+                Box::new(move |id: NodeId| units.can_build(&state.graph[id].unit_id, &target))
+            }
         }
         PlanEdgeKind::Upgrade => { /* ... */ }
     };
@@ -153,19 +179,25 @@ The concrete simulator commands are the existing `SimAction` enum, extended to c
 ```rust
 // crates/faf-sim/src/planner/search.rs ~line 21 — SimAction enum
 pub enum SimAction {
+    /// Build a unit with the given builders.
     Build {
         unit_id: UnitKind,
         builders: Vec<NodeId>,
     },
+    /// Upgrade an existing unit in-place to a higher-tier blueprint.
     Upgrade {
         target_unit_id: UnitKind,
         old_node: NodeId,
         builders: Vec<NodeId>,
     },
+    /// Build the abstract goal with the given builders.
+    BuildGoal { goal: Goal, builders: Vec<NodeId> },
+    /// Assist an active project with additional builders.
     Assist {
         project_node: NodeId,
         builders: Vec<NodeId>,
     },
+    /// Advance time without issuing a command.
     Wait,
 }
 ```
@@ -187,7 +219,7 @@ fn macro_policy_plan(...) -> Result<PlanResult, PlannerError> {
     // 1. forward through direction head and pick a legal direction
     // 2. forward through action head for that direction and pick a legal edge
     // 3. forward through power and squad heads
-    // 4. resolve squad, build SimAction::Build/Upgrade, execute
+    // 4. resolve squad, build SimAction::Build/Upgrade/BuildGoal, execute
     // 5. update shortfall feedback
 }
 ```
@@ -208,7 +240,7 @@ The `CapT2Mex` and `CapT3Mex` unit definitions include the +50% mass adjacency b
 
 ## Why the branching factor matters
 
-The edge list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal edges. The hierarchical policy keeps the decision cheap:
+The edge list is much smaller than the raw successor list would be because the universal `PlanGraph` contains only the common prerequisite chain and a single synthetic goal node. Even so, a state with several idle engineers and factories may have many legal edges. The hierarchical policy keeps the decision cheap:
 
 1. Compute the legal category mask once with `PlanEdgeIndex::legal_category_mask`.
 2. Run the direction head.

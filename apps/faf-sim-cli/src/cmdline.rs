@@ -58,12 +58,11 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Subcommand)]
 pub enum Command {
-    /// Generate a rule-based build plan for a target unit.
+    /// Generate an SVG of the universal build/upgrade plan graph.
     ///
-    /// The output is an SVG image of the dependency graph showing the units
-    /// that must be built (or upgraded) to reach the goal. No timing or
-    /// resource simulation is performed; this is purely symbolic dependency
-    /// planning.
+    /// The output is an SVG image of the ACU-rooted dependency graph showing all
+    /// units and their build/upgrade relationships. No timing or resource
+    /// simulation is performed; this is purely symbolic dependency planning.
     Plan(PlanArgs),
     /// Train an MLP value network for a target unit.
     ///
@@ -81,9 +80,6 @@ pub enum Command {
 /// Arguments for the `plan` subcommand.
 #[derive(Parser)]
 pub struct PlanArgs {
-    /// Faction and unit to target.
-    #[command(subcommand)]
-    pub target: FactionTarget,
     /// Write the SVG plan to this file instead of a temporary file.
     #[arg(short = 'o', long)]
     pub output: Option<std::path::PathBuf>,

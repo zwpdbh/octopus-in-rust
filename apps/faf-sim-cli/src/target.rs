@@ -1,16 +1,19 @@
 //! Faction-scoped research targets for the FAF build-order CLI.
 //!
-//! Instead of a flat list of blueprint ids, the CLI is organized as:
+//! Instead of a flat list of blueprint ids, the `simulate` and `train`
+//! subcommands are organized as:
 //!
 //! ```text
-//! faf-sim plan cybran monkeylord
 //! faf-sim simulate -s mcts cybran monkeylord
+//! faf-sim train -e 1000 cybran monkeylord
 //! ```
 //!
 //! Each faction has its own unit enum so that clap can constrain the possible
 //! values of `<UNIT>` to the units actually available for that faction.
 
 use clap::ValueEnum;
+
+use faf_sim::{Goal, TechLevel, Units};
 
 /// One of the four playable factions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -76,6 +79,14 @@ pub enum UnitKind {
 
 impl UnitKind {
     /// English display name.
+    /// Technology tier of this target.
+    pub fn tech_level(&self) -> TechLevel {
+        match self {
+            UnitKind::Nuke | UnitKind::Arty => TechLevel::T3,
+            _ => TechLevel::T4,
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             UnitKind::Monkeylord => "Monkeylord",
@@ -283,6 +294,23 @@ impl ResearchTarget {
     /// blueprint id wrapped in `UnitKind::Unique`.
     pub fn to_sim_unit_kind(&self) -> faf_sim::UnitKind {
         faf_sim::UnitKind::Unique(faf_sim::UnitId(self.blueprint_id().to_string()))
+    }
+
+    /// Convert this CLI target to the optimizer's abstract `Goal`.
+    ///
+    /// The goal captures the tech level and resource cost of the concrete unit
+    /// while discarding faction-specific identity.
+    pub fn to_goal(&self, units: &Units) -> Goal {
+        let kind = self.to_sim_unit_kind();
+        let def = units
+            .def(&kind)
+            .expect("target blueprint must exist in index");
+        Goal {
+            tech_level: self.unit.tech_level(),
+            mass_cost: def.cost.mass,
+            energy_cost: def.cost.energy,
+            build_time: def.cost.build_time,
+        }
     }
 
     /// Validate that the chosen unit exists for the chosen faction.

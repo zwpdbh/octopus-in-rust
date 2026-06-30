@@ -17,14 +17,14 @@ use std::collections::HashSet;
 
 use petgraph::visit::EdgeRef;
 
-use crate::planner::core::PlannerConfig;
-use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind, PlanGraph};
+use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind, PlanGraph, PlanNode};
 
 use crate::sim::{GraphState, NodeId, UnitNodeState};
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// A single selectable action option.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SelectionOption {
     /// Build a new unit of the given kind.
     Build(UnitKind),
@@ -35,9 +35,29 @@ pub enum SelectionOption {
         /// Destination unit kind.
         to: UnitKind,
     },
+    /// Build the abstract goal directly (once the required builder is owned).
+    BuildGoal(Goal),
     /// Assist an active project. The specific builders are resolved when the
     /// option is converted into a concrete simulator command.
     Assist(NodeId),
+}
+
+/// Key used to deduplicate unit/upgrade options while collecting pools.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum UnitOptionKey {
+    Build(UnitKind),
+    Upgrade { from: UnitKind, to: UnitKind },
+}
+
+fn unit_option_key(option: &SelectionOption) -> Option<UnitOptionKey> {
+    match option {
+        SelectionOption::Build(u) => Some(UnitOptionKey::Build(u.clone())),
+        SelectionOption::Upgrade { from, to } => Some(UnitOptionKey::Upgrade {
+            from: from.clone(),
+            to: to.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// A wrapper around the legal [`SelectionOption`]s for the current state.
@@ -65,7 +85,8 @@ impl SelectionPools {
         config: &PlannerConfig,
     ) -> Self {
         let mut options: Vec<SelectionOption> = Vec::new();
-        let mut seen: HashSet<SelectionOption> = HashSet::new();
+        let mut seen: HashSet<UnitOptionKey> = HashSet::new();
+        let mut goal_added = false;
 
         let active_targets = state.active_target_unit_ids();
 
@@ -73,36 +94,61 @@ impl SelectionPools {
             let source = &plan.graph()[edge.source()];
             let target = &plan.graph()[edge.target()];
 
-            // Source must be owned and active; target must not be owned or
-            // already under construction.
-            if !state.has_completed_unit(source)
-                || state.has_completed_unit(target)
-                || active_targets.contains(target)
-            {
+            // Source must be a unit that is owned and active.
+            let Some(source_kind) = source.as_unit() else {
+                continue;
+            };
+            if !state.has_completed_unit(source_kind) {
                 continue;
             }
 
-            match edge.weight() {
-                PlanEdgeKind::Build => {
-                    // Source in a build edge is the builder.
-                    if is_idle_builder(state, units, source)
-                        && !would_exceed_storage_cap(target, state, config)
-                    {
-                        let opt = SelectionOption::Build(target.clone());
-                        if seen.insert(opt.clone()) {
-                            options.push(opt);
-                        }
+            // The target is either the abstract goal or a concrete unit.
+            match target {
+                PlanNode::Goal(goal) => {
+                    if state.goal_reached(goal) || state.goal_project_active() || goal_added {
+                        continue;
+                    }
+                    if !can_build_goal(source_kind, goal) {
+                        continue;
+                    }
+                    if is_idle_builder(state, units, source_kind) {
+                        goal_added = true;
+                        options.push(SelectionOption::BuildGoal(*goal));
                     }
                 }
-                PlanEdgeKind::Upgrade => {
-                    // Source in an upgrade edge is the unit being upgraded.
-                    if can_upgrade(state, units, source, target) {
-                        let opt = SelectionOption::Upgrade {
-                            from: source.clone(),
-                            to: target.clone(),
-                        };
-                        if seen.insert(opt.clone()) {
-                            options.push(opt);
+                PlanNode::Unit(target_kind) => {
+                    if state.has_completed_unit(target_kind) || active_targets.contains(target_kind)
+                    {
+                        continue;
+                    }
+
+                    match edge.weight() {
+                        PlanEdgeKind::Build => {
+                            // Source in a build edge is the builder.
+                            if is_idle_builder(state, units, source_kind)
+                                && !would_exceed_storage_cap(target_kind, state, config)
+                            {
+                                let opt = SelectionOption::Build(target_kind.clone());
+                                if let Some(key) = unit_option_key(&opt) {
+                                    if seen.insert(key) {
+                                        options.push(opt);
+                                    }
+                                }
+                            }
+                        }
+                        PlanEdgeKind::Upgrade => {
+                            // Source in an upgrade edge is the unit being upgraded.
+                            if can_upgrade(state, units, source_kind, target_kind) {
+                                let opt = SelectionOption::Upgrade {
+                                    from: source_kind.clone(),
+                                    to: target_kind.clone(),
+                                };
+                                if let Some(key) = unit_option_key(&opt) {
+                                    if seen.insert(key) {
+                                        options.push(opt);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -151,9 +197,9 @@ pub const ENGINEER_TECH_LEVELS: usize = 3;
 pub struct PlanEdge {
     /// Source node of the edge (builder for [`PlanEdgeKind::Build`], unit being
     /// upgraded for [`PlanEdgeKind::Upgrade`]).
-    pub source: UnitKind,
+    pub source: PlanNode,
     /// Target node of the edge.
-    pub target: UnitKind,
+    pub target: PlanNode,
     /// Edge kind.
     pub kind: PlanEdgeKind,
     /// Strategic focus of this edge.
@@ -164,6 +210,21 @@ impl PlanEdge {
     /// Strategic focus of this edge.
     pub fn category(&self) -> EdgeCategory {
         self.category
+    }
+
+    /// Source unit kind, if the source is a concrete unit.
+    pub fn source_unit(&self) -> Option<&UnitKind> {
+        self.source.as_unit()
+    }
+
+    /// Target unit kind, if the target is a concrete unit.
+    pub fn target_unit(&self) -> Option<&UnitKind> {
+        self.target.as_unit()
+    }
+
+    /// Target goal, if the target is the abstract goal.
+    pub fn target_goal(&self) -> Option<&Goal> {
+        self.target.as_goal()
     }
 }
 
@@ -186,7 +247,7 @@ impl PlanEdgeIndex {
                     source: source.clone(),
                     target: target.clone(),
                     kind: *e.weight(),
-                    category: EdgeCategory::categorize(&source, &target),
+                    category: EdgeCategory::categorize(&target),
                 }
             })
             .collect();
@@ -283,10 +344,13 @@ impl PlanEdgeIndex {
             return None;
         }
         match edge.kind {
-            PlanEdgeKind::Build => Some(SelectionOption::Build(edge.target.clone())),
+            PlanEdgeKind::Build => match edge.target_goal() {
+                Some(goal) => Some(SelectionOption::BuildGoal(*goal)),
+                None => Some(SelectionOption::Build(edge.target_unit()?.clone())),
+            },
             PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
-                from: edge.source.clone(),
-                to: edge.target.clone(),
+                from: edge.source_unit()?.clone(),
+                to: edge.target_unit()?.clone(),
             }),
         }
     }
@@ -305,9 +369,15 @@ impl PlanEdgeIndex {
             .enumerate()
             .find(|(_, e)| {
                 let same = match (option, e.kind) {
-                    (SelectionOption::Build(t), PlanEdgeKind::Build) => *t == e.target,
+                    (SelectionOption::Build(t), PlanEdgeKind::Build) => {
+                        e.target_unit().map_or(false, |u| *t == *u)
+                    }
+                    (SelectionOption::BuildGoal(g), PlanEdgeKind::Build) => {
+                        e.target_goal().map_or(false, |tg| *g == *tg)
+                    }
                     (SelectionOption::Upgrade { from, to }, PlanEdgeKind::Upgrade) => {
-                        *from == e.source && *to == e.target
+                        e.source_unit().map_or(false, |u| *from == *u)
+                            && e.target_unit().map_or(false, |u| *to == *u)
                     }
                     _ => false,
                 };
@@ -324,24 +394,46 @@ fn is_edge_legal(
     units: &Units,
     config: &PlannerConfig,
 ) -> bool {
-    let active_targets = state.active_target_unit_ids();
+    let Some(source_kind) = edge.source_unit() else {
+        return false;
+    };
 
-    // Source must be owned and active; target must not already be owned or
-    // under construction.
-    if !state.has_completed_unit(&edge.source)
-        || state.has_completed_unit(&edge.target)
-        || active_targets.contains(&edge.target)
-    {
+    if !state.has_completed_unit(source_kind) {
         return false;
     }
 
     match edge.kind {
         PlanEdgeKind::Build => {
-            is_idle_builder(state, units, &edge.source)
-                && !would_exceed_storage_cap(&edge.target, state, config)
+            let can_build = match edge.target_goal() {
+                Some(goal) => {
+                    !state.goal_reached(goal)
+                        && !state.goal_project_active()
+                        && can_build_goal(source_kind, goal)
+                }
+                None => {
+                    let target = edge
+                        .target_unit()
+                        .expect("build target must be unit or goal");
+                    !state.has_completed_unit(target)
+                        && !state.active_target_unit_ids().contains(target)
+                        && !would_exceed_storage_cap(target, state, config)
+                }
+            };
+            can_build && is_idle_builder(state, units, source_kind)
         }
-        PlanEdgeKind::Upgrade => can_upgrade(state, units, &edge.source, &edge.target),
+        PlanEdgeKind::Upgrade => {
+            let source = edge.source_unit().expect("upgrade source must be a unit");
+            let target = edge.target_unit().expect("upgrade target must be a unit");
+            can_upgrade(state, units, source, target)
+        }
     }
+}
+
+/// True if `builder` is allowed to start the abstract `goal` project.
+///
+/// For now all goals are built by a T3 engineer.
+fn can_build_goal(builder: &UnitKind, _goal: &Goal) -> bool {
+    matches!(builder, UnitKind::Engineer(TechLevel::T3))
 }
 
 /// True if building `target` would exceed the configured storage cap.
@@ -478,13 +570,29 @@ pub fn select_squad_for_edge(
 ) -> Vec<NodeId> {
     let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
         PlanEdgeKind::Build => {
-            Box::new(|id: NodeId| units.can_build(&state.graph[id].unit_id, &edge.target))
+            if let Some(goal) = edge.target_goal() {
+                Box::new(move |id: NodeId| can_build_goal(&state.graph[id].unit_id, goal))
+            } else {
+                let target = edge
+                    .target_unit()
+                    .expect("build target must be unit or goal")
+                    .clone();
+                Box::new(move |id: NodeId| units.can_build(&state.graph[id].unit_id, &target))
+            }
         }
         PlanEdgeKind::Upgrade => {
+            let source = edge
+                .source_unit()
+                .expect("upgrade source must be a unit")
+                .clone();
+            let target = edge
+                .target_unit()
+                .expect("upgrade target must be a unit")
+                .clone();
             let recipe = units
-                .upgrade_recipes(&edge.source)
+                .upgrade_recipes(&source)
                 .iter()
-                .find(|r| r.to == edge.target)
+                .find(|r| r.to == target)
                 .cloned();
             match recipe {
                 Some(recipe) => Box::new(move |id: NodeId| {
@@ -563,17 +671,35 @@ pub(crate) fn assigned_squad_counts(state: &GraphState, builders: &[NodeId]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{TechLevel, UnitId, Units};
+    use crate::units::{TechLevel, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
         Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
+    fn t1_goal() -> Goal {
+        Goal {
+            tech_level: TechLevel::T1,
+            mass_cost: 1.0,
+            energy_cost: 1.0,
+            build_time: 1.0,
+        }
+    }
+
+    fn t4_goal() -> Goal {
+        Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        }
+    }
+
     #[test]
     fn initial_pools_from_acu() {
         let units = load_units();
-        let plan = units.plan_graph(&UnitKind::Pgen(TechLevel::T1)).unwrap();
+        let plan = units.plan_graph(t1_goal());
         let state = GraphState::new(&units, &[UnitKind::Commander]);
 
         let config = PlannerConfig::default();
@@ -599,8 +725,7 @@ mod tests {
     #[test]
     fn upgrade_pool_appears_when_source_exists() {
         let units = load_units();
-        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
-        let plan = units.plan_graph(&goal).unwrap();
+        let plan = units.plan_graph(t4_goal());
         let state = GraphState::new(
             &units,
             &[
@@ -613,7 +738,7 @@ mod tests {
         let config = PlannerConfig::default();
         let pools = SelectionPools::new(&plan, &state, &units, &config);
 
-        // We own Mex_T1 and have an idle engineer, so mex upgrade is a candidate.
+        // We own Mex_T1 and have an idle builder, so mex upgrade is a candidate.
         assert!(pools.options().contains(&SelectionOption::Upgrade {
             from: UnitKind::Mex(TechLevel::T1),
             to: UnitKind::Mex(TechLevel::T2),

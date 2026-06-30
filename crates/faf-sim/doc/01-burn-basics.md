@@ -144,7 +144,7 @@ backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 A forward method is ordinary Rust. The only Burn-specific part is the tensor operations:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 83 — latent backbone forward
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 84 — latent backbone forward
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -156,7 +156,7 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 The head methods take the latent vector and optional conditioning inputs (a one-hot direction, a one-hot edge, or a scalar power) and produce logits or regression outputs:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 96 — action head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 97 — action head
 pub(crate) fn action_logits(
     &self,
     latent: Tensor<B, 2>,
@@ -174,7 +174,7 @@ pub(crate) fn action_logits(
 To train, we need gradients. Burn provides them through the `Autodiff<B>` backend wrapper. A tensor on `Autodiff<NdArray>` remembers how it was computed, so calling `.backward()` produces a gradient tape.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 720 — backward pass inside an update
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 806 — backward pass inside an update
 let grads = loss.backward();
 let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
 self.model = self.optimizer
@@ -195,14 +195,14 @@ Burn's `Optimizer::step` takes the model by value and returns a new model. There
 Burn's `Adam` optimizer is configured with `AdamConfig` and initialized with a model reference so it knows the parameter shapes:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 61 — Adam optimizer setup
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 70 — Adam optimizer setup
 let optimizer = AdamConfig::new().init();
 ```
 
 The optimizer is stored alongside the model in the `Trainer`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 38 — optimizer type alias
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 41 — optimizer type alias
 type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
 ```
 
@@ -213,7 +213,7 @@ At each update, the learning rate is passed as a `LearningRate` value converted 
 Burn's `CompactRecorder` writes a model's weights to a `.mpk` file (MessagePack). Loading reconstructs the model from the same file:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 14 — save_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 15 — save_policy
 pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
@@ -229,7 +229,7 @@ pub fn save_policy(
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 28 — load_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 29 — load_policy
 pub fn load_policy(
     path: &std::path::Path,
     num_edges: usize,

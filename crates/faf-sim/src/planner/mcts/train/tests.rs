@@ -1,7 +1,8 @@
+use crate::planner::core::Goal;
 use crate::planner::mcts::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
 use crate::planner::mcts::macro_net::plan_edge_index;
 use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
-use crate::units::{UnitId, UnitKind, Units};
+use crate::units::{TechLevel, Units};
 
 fn load_units() -> Units {
     let json = include_str!("../../../../../../plugins/faf-units/data/faf_units.json");
@@ -11,7 +12,12 @@ fn load_units() -> Units {
 #[test]
 fn trainer_runs_episodes_without_panic() {
     let units = load_units();
-    let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
+    let goal = Goal {
+        tech_level: TechLevel::T4,
+        mass_cost: 28_000.0,
+        energy_cost: 340_000.0,
+        build_time: 46_250.0,
+    };
     let num_edges = plan_edge_index(&units, &goal).unwrap().len();
     let mut trainer = Trainer::new(
         TrainConfig {
@@ -30,7 +36,12 @@ fn trainer_runs_episodes_without_panic() {
 #[test]
 fn save_and_load_policy_round_trip() {
     let units = load_units();
-    let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
+    let goal = Goal {
+        tech_level: TechLevel::T4,
+        mass_cost: 28_000.0,
+        energy_cost: 340_000.0,
+        build_time: 46_250.0,
+    };
     let num_edges = plan_edge_index(&units, &goal).unwrap().len();
     let mut trainer = Trainer::new(
         TrainConfig {

@@ -25,8 +25,9 @@ use rand::RngExt;
 
 use super::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
 use super::selections::PlanEdgeIndex;
+use crate::planner::core::Goal;
 use crate::planner::plan_graph::EdgeCategory;
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 /// Number of strategic directions the direction head can choose from.
 pub const DIRECTION_COUNT: usize = 4;
@@ -285,14 +286,14 @@ pub fn shortfall_from_counts(desired: [usize; 3], available: [usize; 3]) -> [f32
     out
 }
 
-/// Infer the number of plan-graph edges for a goal unit.
-pub fn num_plan_edges(units: &Units, goal: &UnitKind) -> Option<usize> {
-    Some(units.plan_graph(goal).ok()?.graph().edge_count())
+/// Infer the number of plan-graph edges for a goal.
+pub fn num_plan_edges(units: &Units, goal: &Goal) -> Option<usize> {
+    Some(units.plan_graph(*goal).graph().edge_count())
 }
 
-/// Build the stable edge index for a goal unit.
-pub fn plan_edge_index(units: &Units, goal: &UnitKind) -> Option<PlanEdgeIndex> {
-    let plan = units.plan_graph(goal).ok()?;
+/// Build the stable edge index for a goal.
+pub fn plan_edge_index(units: &Units, goal: &Goal) -> Option<PlanEdgeIndex> {
+    let plan = units.plan_graph(*goal);
     Some(PlanEdgeIndex::new(&plan))
 }
 
@@ -302,7 +303,7 @@ mod tests {
     use crate::planner::core::PlannerConfig;
     use crate::planner::mcts::selections::{SelectionOption, SelectionPools};
     use crate::sim::GraphState;
-    use crate::units::{TechLevel, UnitId, Units};
+    use crate::units::{TechLevel, UnitKind, Units};
 
     /// Inference-only backend for tests. Prefer CPU when available so unit tests
     /// do not require a GPU, but fall back to CUDA/WGPU if CPU is disabled.
@@ -348,7 +349,12 @@ mod tests {
     #[test]
     fn policy_bundle_dimensions_match_plan() {
         let units = load_units();
-        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
+        let goal = Goal {
+            tech_level: crate::units::TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        };
         let num_edges = num_plan_edges(&units, &goal).expect("goal has a plan graph");
         let device = Default::default();
         let bundle: PolicyBundle<TestBackend> = PolicyBundle::new(&device, num_edges);
@@ -372,8 +378,13 @@ mod tests {
     #[test]
     fn edge_index_maps_to_selection_option() {
         let units = load_units();
-        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
-        let plan = units.plan_graph(&goal).unwrap();
+        let goal = Goal {
+            tech_level: crate::units::TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        };
+        let plan = units.plan_graph(goal);
         let edge_index = PlanEdgeIndex::new(&plan);
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();

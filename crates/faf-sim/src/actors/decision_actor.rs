@@ -6,9 +6,10 @@
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::actors::message::{Command, Observation};
+use crate::planner::core::Goal;
 use crate::planner::search::SimAction;
 use crate::planner::Planner;
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 fn sim_action_to_command(action: SimAction) -> Option<Command> {
     match action {
@@ -29,6 +30,7 @@ fn sim_action_to_command(action: SimAction) -> Option<Command> {
             project_node,
             builders,
         }),
+        SimAction::BuildGoal { goal, builders } => Some(Command::BuildGoal { goal, builders }),
         SimAction::Wait => None,
     }
 }
@@ -37,7 +39,7 @@ fn sim_action_to_command(action: SimAction) -> Option<Command> {
 pub struct DecisionActor {
     planner: Planner,
     units: Units,
-    goal_id: UnitKind,
+    goal: Goal,
     obs_rx: Receiver<Observation>,
     cmd_tx: Sender<Command>,
 }
@@ -47,14 +49,14 @@ impl DecisionActor {
     pub fn new(
         planner: Planner,
         units: Units,
-        goal_id: UnitKind,
+        goal: Goal,
         obs_rx: Receiver<Observation>,
         cmd_tx: Sender<Command>,
     ) -> Self {
         Self {
             planner,
             units,
-            goal_id,
+            goal,
             obs_rx,
             cmd_tx,
         }
@@ -68,7 +70,7 @@ impl DecisionActor {
         while let Some(observation) = self.obs_rx.recv().await {
             let command = match observation {
                 Observation::State(state) => {
-                    let plan = self.planner.plan(&self.units, state, &self.goal_id).ok();
+                    let plan = self.planner.plan(&self.units, state, &self.goal).ok();
                     plan.and_then(|p| p.first_action)
                         .and_then(sim_action_to_command)
                 }

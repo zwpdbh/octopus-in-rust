@@ -161,7 +161,8 @@ fn storage_ratio(current: f64, cap: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{UnitId, Units};
+    use crate::planner::core::Goal;
+    use crate::units::{TechLevel, UnitKind, Units};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
@@ -171,8 +172,13 @@ mod tests {
     #[test]
     fn state_feature_vector_has_expected_length() {
         let units = load_units();
-        let goal = UnitKind::Unique(UnitId("UEL0401".to_string()));
-        let _plan = units.plan_graph(&goal).unwrap();
+        let goal = Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        };
+        let _plan = units.plan_graph(goal);
         let state = GraphState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
 

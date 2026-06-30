@@ -4,6 +4,7 @@
 //! components that communicate only through these messages. This mirrors how a
 //! human player observes the game and sends discrete commands.
 
+use crate::planner::core::Goal;
 use crate::sim::{BuildEvent, GraphState, NodeId};
 use crate::units::UnitKind;
 
@@ -34,6 +35,13 @@ pub enum Command {
         /// Node id of the unit being upgraded.
         old_node: NodeId,
         /// Builder nodes that will work on the upgrade.
+        builders: Vec<NodeId>,
+    },
+    /// Start building the abstract goal with the given idle builders.
+    BuildGoal {
+        /// The abstract target being built.
+        goal: Goal,
+        /// Builder nodes that will work on the goal project.
         builders: Vec<NodeId>,
     },
 }

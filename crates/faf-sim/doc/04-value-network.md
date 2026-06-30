@@ -36,7 +36,7 @@ pub struct HierarchicalPolicyNet<B: Backend> {
 
 ## Construction
 
-The constructor sizes every layer from the feature count, hidden sizes, number of directions, and number of plan-graph edges:
+The constructor sizes every layer from the feature count, hidden sizes, number of directions, and number of plan-graph edges. Because the universal plan graph is fixed, `num_edges` is the same for every goal of the same tech level; a single trained bundle can be reused across many targets as long as the edge count matches.
 
 ```rust
 // crates/faf-sim/src/planner/mcts/macro_net.rs ~line 63 — HierarchicalPolicyNet::new
@@ -72,7 +72,7 @@ Burn layer configs (`LinearConfig::new(in, out).init(device)`) create the weight
 The backbone turns the 16-D input vector into a 64-D latent vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 83 — latent backbone
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 84 — latent backbone
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -99,7 +99,7 @@ Output shape: `[batch, DIRECTION_COUNT]` where `DIRECTION_COUNT = 4`.
 ### Action head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 96 — action head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 97 — action head
 pub(crate) fn action_logits(
     &self,
     latent: Tensor<B, 2>,
@@ -117,7 +117,7 @@ The action head is conditioned on the chosen direction via concatenation. This m
 ### Power head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 108 — power head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 109 — power head
 pub(crate) fn power_mean(
     &self,
     latent: Tensor<B, 2>,
@@ -135,7 +135,7 @@ Output shape: `[batch, 1]`. At inference the scalar is rounded to the nearest in
 ### Squad head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — squad head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 121 — squad head
 pub(crate) fn squad_means(&self, latent: Tensor<B, 2>, power: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = Tensor::cat(vec![latent, power], 1);
     let x = self.squad_hidden.forward(x);
@@ -151,7 +151,7 @@ Output shape: `[batch, 3]`, representing desired T1, T2, and T3 engineer counts.
 During MCTS and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 128 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 129 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     let tensor = tensor_from_vec(&features, device);
     let logits = self.direction_logits(self.latent(tensor));
@@ -177,7 +177,7 @@ The core inference function is `macro_policy_plan` in `mcts::policy`:
 fn macro_policy_plan(
     units: &Units,
     mut state: GraphState,
-    goal_id: &UnitKind,
+    goal: &Goal,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     deterministic: bool,
     shortfall: &mut [f32; 3],

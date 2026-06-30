@@ -7,9 +7,9 @@ use super::config::{TrainConfig, TrainStats};
 use super::observer::{FineTuneSummary, TrainingObserver};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
-use crate::planner::core::PlannerConfig;
+use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::macro_net::{plan_edge_index, PolicyBundle};
-use crate::units::{UnitKind, Units};
+use crate::units::Units;
 
 /// Save a trained policy bundle to disk.
 pub fn save_policy(
@@ -54,7 +54,7 @@ pub fn load_policy(
 /// a dashboard or logger. Pass `()` if no observer is needed.
 pub fn train_policy(
     units: &Units,
-    goal: &UnitKind,
+    goal: &Goal,
     config: TrainConfig,
     observer: impl TrainingObserver + 'static,
 ) -> (
@@ -74,7 +74,7 @@ pub fn train_policy(
 pub fn train_policy_from(
     model: PolicyBundle<TrainBackend>,
     units: &Units,
-    goal: &UnitKind,
+    goal: &Goal,
     config: TrainConfig,
     observer: impl TrainingObserver + 'static,
 ) -> (
@@ -91,7 +91,7 @@ pub fn train_policy_from(
 fn fine_tune_best_model(
     mut trainer: Trainer,
     units: &Units,
-    goal: &UnitKind,
+    goal: &Goal,
     config: &TrainConfig,
     stats: TrainStats,
 ) -> (

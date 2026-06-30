@@ -20,7 +20,7 @@ use super::math::{
 use super::observer::{EpisodeSummary, GreedyEvalSummary, TrainingObserver};
 use super::reward::{compute_step_reward, compute_terminal_bonus};
 use super::{TrainBackend, TrainDevice};
-use crate::planner::core::PlannerConfig;
+use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::features::{state_features, state_features_with_shortfall};
 use crate::planner::mcts::macro_net::{
     clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, one_hot,
@@ -98,12 +98,10 @@ impl Trainer {
     }
 
     /// Train the policy on the given goal.
-    pub fn train(&mut self, units: &Units, goal: &UnitKind) -> super::config::TrainStats {
+    pub fn train(&mut self, units: &Units, goal: &Goal) -> super::config::TrainStats {
         use super::config::TrainStats;
 
-        let plan = units
-            .plan_graph(goal)
-            .expect("goal must be reachable for training");
+        let plan = units.plan_graph(*goal);
         let edge_index = PlanEdgeIndex::new(&plan);
         let planner_config = PlannerConfig::default();
         let mut stats = TrainStats::default();
@@ -299,7 +297,7 @@ impl Trainer {
         &mut self,
         ep: usize,
         units: &Units,
-        goal: &UnitKind,
+        goal: &Goal,
         _plan: &PlanGraph,
         edge_index: &PlanEdgeIndex,
         planner_config: &PlannerConfig,
@@ -452,14 +450,26 @@ impl Trainer {
             }
 
             let action = match edge.kind {
-                crate::planner::plan_graph::PlanEdgeKind::Build => SimAction::Build {
-                    unit_id: edge.target.clone(),
-                    builders: builders.clone(),
-                },
+                crate::planner::plan_graph::PlanEdgeKind::Build => {
+                    if let Some(target_goal) = edge.target_goal() {
+                        SimAction::BuildGoal {
+                            goal: *target_goal,
+                            builders: builders.clone(),
+                        }
+                    } else {
+                        SimAction::Build {
+                            unit_id: edge.target_unit().expect("build target unit").clone(),
+                            builders: builders.clone(),
+                        }
+                    }
+                }
                 crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-                    target_unit_id: edge.target.clone(),
-                    old_node: find_upgrade_source(&state, &edge.source)
-                        .unwrap_or_else(|| crate::sim::NodeId::new(0)),
+                    target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+                    old_node: find_upgrade_source(
+                        &state,
+                        edge.source_unit().expect("upgrade source unit"),
+                    )
+                    .unwrap_or_else(|| crate::sim::NodeId::new(0)),
                     builders: builders.clone(),
                 },
             };
@@ -510,7 +520,7 @@ impl Trainer {
     fn evaluate_greedy(
         &self,
         units: &Units,
-        goal: &UnitKind,
+        goal: &Goal,
         plan: &PlanGraph,
         edge_index: &PlanEdgeIndex,
         planner_config: &PlannerConfig,
@@ -531,7 +541,7 @@ impl Trainer {
     fn evaluate_greedy_with_model(
         model: &PolicyBundle<TrainBackend>,
         units: &Units,
-        goal: &UnitKind,
+        goal: &Goal,
         _plan: &PlanGraph,
         edge_index: &PlanEdgeIndex,
         planner_config: &PlannerConfig,
@@ -600,14 +610,26 @@ impl Trainer {
             }
 
             let action = match edge.kind {
-                crate::planner::plan_graph::PlanEdgeKind::Build => SimAction::Build {
-                    unit_id: edge.target.clone(),
-                    builders: builders.clone(),
-                },
+                crate::planner::plan_graph::PlanEdgeKind::Build => {
+                    if let Some(target_goal) = edge.target_goal() {
+                        SimAction::BuildGoal {
+                            goal: *target_goal,
+                            builders: builders.clone(),
+                        }
+                    } else {
+                        SimAction::Build {
+                            unit_id: edge.target_unit().expect("build target unit").clone(),
+                            builders: builders.clone(),
+                        }
+                    }
+                }
                 crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-                    target_unit_id: edge.target.clone(),
-                    old_node: find_upgrade_source(&state, &edge.source)
-                        .unwrap_or_else(|| crate::sim::NodeId::new(0)),
+                    target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+                    old_node: find_upgrade_source(
+                        &state,
+                        edge.source_unit().expect("upgrade source unit"),
+                    )
+                    .unwrap_or_else(|| crate::sim::NodeId::new(0)),
                     builders: builders.clone(),
                 },
             };
@@ -800,16 +822,14 @@ impl Trainer {
         &mut self,
         trajectory: &BuildTrajectory,
         units: &Units,
-        goal: &UnitKind,
+        goal: &Goal,
         planner_config: &PlannerConfig,
     ) -> f32 {
         if trajectory.steps.is_empty() {
             return 0.0;
         }
 
-        let plan = units
-            .plan_graph(goal)
-            .expect("goal must be reachable for fine-tuning");
+        let plan = units.plan_graph(*goal);
         let edge_index = PlanEdgeIndex::new(&plan);
         let mut state = GraphState::new(units, &[UnitKind::Commander]);
         let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
@@ -955,6 +975,9 @@ impl Trainer {
                             unit_id: target,
                             builders,
                         }
+                    }
+                    crate::planner::mcts::selections::SelectionOption::BuildGoal(goal) => {
+                        SimAction::BuildGoal { goal, builders }
                     }
                     crate::planner::mcts::selections::SelectionOption::Upgrade { from, to } => {
                         SimAction::Upgrade {

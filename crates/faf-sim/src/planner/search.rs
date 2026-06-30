@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use crate::planner::core::PlanResult;
+use crate::planner::core::{Goal, PlanResult};
 use crate::planner::heuristic::candidate_units;
 use crate::sim::{GraphSimError, GraphState, NodeId};
 use crate::units::{UnitKind, Units};
@@ -30,6 +30,8 @@ pub enum SimAction {
         old_node: NodeId,
         builders: Vec<NodeId>,
     },
+    /// Build the abstract goal with the given builders.
+    BuildGoal { goal: Goal, builders: Vec<NodeId> },
     /// Assist an active project with additional builders.
     Assist {
         project_node: NodeId,
@@ -303,7 +305,8 @@ pub(crate) fn try_start_project(
         | Err(GraphSimError::NoBuilders)
         | Err(GraphSimError::CannotBuild { .. })
         | Err(GraphSimError::NotBuildable(_))
-        | Err(GraphSimError::ProjectNotFound) => None,
+        | Err(GraphSimError::ProjectNotFound)
+        | Err(GraphSimError::GoalProjectActive) => None,
     }
 }
 
@@ -329,7 +332,8 @@ pub(crate) fn try_upgrade_project(
         | Err(GraphSimError::NoBuilders)
         | Err(GraphSimError::CannotBuild { .. })
         | Err(GraphSimError::NotBuildable(_))
-        | Err(GraphSimError::ProjectNotFound) => None,
+        | Err(GraphSimError::ProjectNotFound)
+        | Err(GraphSimError::GoalProjectActive) => None,
     }
 }
 
@@ -354,7 +358,8 @@ pub(crate) fn try_assist_project(
         | Err(GraphSimError::NoBuilders)
         | Err(GraphSimError::CannotBuild { .. })
         | Err(GraphSimError::NotBuildable(_))
-        | Err(GraphSimError::ProjectNotFound) => None,
+        | Err(GraphSimError::ProjectNotFound)
+        | Err(GraphSimError::GoalProjectActive) => None,
     }
 }
 

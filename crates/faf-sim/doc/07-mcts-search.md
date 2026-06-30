@@ -18,14 +18,22 @@ These four steps are implemented in `MctsSearch::search`:
 pub fn search(
     &self,
     initial_state: GraphState,
-    goal_id: &UnitKind,
+    goal: &Goal,
     units: &Units,
     planner_config: &PlannerConfig,
     model: &PolicyBundle<TrainBackend>,
 ) -> Result<PlanResult, PlannerError> {
-    let edge_index = PlanEdgeIndex::new(&units.plan_graph(goal_id)?);
+    let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
     let device: TrainDevice = Default::default();
-    let mut root = MctsNode::new(initial_state, goal_id, units, planner_config, &edge_index, model, &device);
+    let mut root = MctsNode::new(
+        initial_state,
+        goal,
+        units,
+        planner_config,
+        &edge_index,
+        model,
+        &device,
+    );
 
     for _ in 0..self.config.iterations {
         let path = select_path(&root, self.config.c_puct);
@@ -46,12 +54,19 @@ Each MCTS node stores the simulator state at that point in the tree plus statist
 ```rust
 // crates/faf-sim/src/planner/mcts/search.rs ~line 47 — MctsNode
 struct MctsNode {
+    /// Simulator state at this node.
     state: GraphState,
+    /// Total value accumulated from backpropagation.
     total_value: f64,
+    /// Number of times this node has been visited.
     visits: usize,
+    /// Child nodes, keyed by the plan-graph edge used to reach them.
     children: Vec<(usize, Box<MctsNode>)>,
+    /// Legal edges that have not been expanded yet.
     untried_edges: Vec<usize>,
+    /// Prior probability for each plan-graph edge (sparse: legal edges only).
     edge_priors: Vec<f32>,
+    /// True if the state has reached the goal.
     is_terminal: bool,
 }
 ```
@@ -74,7 +89,7 @@ PUCT(child) = (child.total_value / child.visits)
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 282 — select_path
+// crates/faf-sim/src/planner/mcts/search.rs ~line 278 — select_path
 fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
     // ... while not at leaf, pick child with best q + u ...
 }
@@ -89,7 +104,7 @@ A larger `c_puct` makes the search explore more aggressively. A smaller `c_puct`
 The policy network supplies a prior probability for every legal edge. The prior is computed by evaluating the direction head, converting it to a softmax over legal directions, then for each direction evaluating the action head and converting it to a softmax over legal edges in that direction. The direction and action probabilities are multiplied and summed to get a single prior per edge.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 315 — evaluate_edge_priors
+// crates/faf-sim/src/planner/mcts/search.rs ~line 311 — evaluate_edge_priors
 fn evaluate_edge_priors(
     state: &GraphState,
     units: &Units,
@@ -111,7 +126,7 @@ This prior is what makes PUCT explore sensible edges first. Untrained networks s
 When the selected node has untried edges, the search expands the one with the highest prior:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 172 — expansion inside search
+// crates/faf-sim/src/planner/mcts/search.rs ~line 168 — expansion inside search
 let edge_idx = leaf
     .untried_edges
     .iter()
@@ -125,7 +140,16 @@ let edge_idx = leaf
 
 leaf.untried_edges.retain(|&e| e != edge_idx);
 
-match expand_edge(...) {
+match expand_edge(
+    &leaf.state,
+    edge_idx,
+    goal,
+    units,
+    planner_config,
+    &edge_index,
+    model,
+    &device,
+) {
     Some(child_state) => { /* create child node */ }
     None => { /* expansion failed, treat as neutral value */ }
 }
@@ -134,10 +158,11 @@ match expand_edge(...) {
 `expand_edge` resolves the selected edge into a concrete action using the power and squad heads, just like the one-step policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 380 — expand_edge
+// crates/faf-sim/src/planner/mcts/search.rs ~line 376 — expand_edge
 fn expand_edge(
     state: &GraphState,
     edge_idx: usize,
+    _goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
@@ -146,6 +171,7 @@ fn expand_edge(
 ) -> Option<GraphState> {
     let edge = edge_index.get(edge_idx)?;
     // ... evaluate power and squad heads, resolve builders, execute action ...
+    // BuildGoal edges produce SimAction::BuildGoal, unit edges produce SimAction::Build.
 }
 ```
 
@@ -156,13 +182,15 @@ If expansion fails (for example, because no idle builder is available), the sear
 If a node is already fully expanded, or immediately after expanding a new child, the search estimates the leaf's value with a rollout. The rollout plays out the greedy hierarchical policy for up to `max_rollout_steps` simulator ticks, accumulating discounted per-step rewards plus a terminal bonus:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 434 — rollout_value
+// crates/faf-sim/src/planner/mcts/search.rs ~line 439 — rollout_value
 fn rollout_value(
     state: &GraphState,
-    goal: &UnitKind,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
     model: &PolicyBundle<TrainBackend>,
+    _edge_index: &PlanEdgeIndex,
+    _device: &TrainDevice,
     max_steps: usize,
 ) -> f64 {
     // ... run macro_policy_plan greedily, accumulate discounted rewards ...
@@ -176,7 +204,7 @@ The rollout reuses the same `macro_policy_plan` function used by the one-step po
 After expansion and rollout, the search adds the resulting value to `total_value` and increments `visits` for the leaf and every node on the selection path:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 232 — backup
+// crates/faf-sim/src/planner/mcts/search.rs ~line 228 — backup
 leaf.total_value += value;
 leaf.visits += 1;
 let mut current = &mut root;
@@ -196,7 +224,7 @@ This is what makes UCB1/PUCT work: averages are updated, and exploration bonuses
 After the iteration budget is exhausted, the search picks the root child with the **highest visit count**, not necessarily the highest average value. Visit count is a more robust signal because it reflects how much search effort was directed at the move.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 246 — final action selection
+// crates/faf-sim/src/planner/mcts/search.rs ~line 241 — final action selection
 let best_edge = root
     .children
     .iter()
@@ -222,7 +250,7 @@ Two common budget modes:
 The `Strategy::Mcts` variant exposes the iteration count, the value-net kind, and a deterministic flag:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 105 — Strategy::Mcts variant
+// crates/faf-sim/src/planner/core.rs ~line 128 — Strategy::Mcts variant
 Mcts {
     /// Number of MCTS iterations to run per decision.
     iterations: usize,
