@@ -16,7 +16,7 @@ The simulator starts with a single completed unit: the ACU (Armored Command Unit
 Active construction projects are not stored separately; they are the graph nodes currently in the `Constructing` or `Upgrading` state.
 
 ```rust
-// crates/faf-sim/src/sim/state.rs ~line 287 — GraphState (abbreviated)
+// crates/faf-sim/src/sim/state.rs ~line 298 — GraphState (abbreviated)
 pub struct GraphState {
     pub time: f64,
     pub graph: BuildGraph,
@@ -143,7 +143,7 @@ state_features_with_shortfall()  →  [f32; 16]
 HierarchicalPolicyNet
 ```
 
-The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 2](02-actions-and-successors.md)).
+The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)).
 
 ## Objectives
 

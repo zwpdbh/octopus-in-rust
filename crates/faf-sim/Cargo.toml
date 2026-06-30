@@ -7,10 +7,10 @@ description = "Simulation and build-order planning for Forged Alliance Forever (
 license = "MIT"
 
 [features]
-default = ["cpu"]
-# CPU-only training (default).
+default = ["cuda"]
+# CPU-only training.
 cpu = ["burn/ndarray"]
-# NVIDIA GPU training via the Burn CUDA backend.
+# NVIDIA GPU training via the Burn CUDA backend (default).
 cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
 # Cross-platform GPU training via WebGPU (Vulkan/DirectX/Metal).
 wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]

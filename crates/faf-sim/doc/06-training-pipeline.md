@@ -103,7 +103,7 @@ You can increase `episodes`, `max_steps`, and the network sizes for harder goals
 The `Trainer` owns the model, optimizer, and best-seen state:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 39 — Trainer (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 40 — Trainer (abbreviated)
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
@@ -161,7 +161,7 @@ After each episode, the trainer calls `update` to perform one gradient step on a
 All four losses share the same advantage, so a single scalar drives the gradient through every head.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 591 — update (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 592 — update (abbreviated)
 pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
     for step in &episode.steps {
         // ... build macro input, run latent backbone once ...
@@ -259,12 +259,13 @@ pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
 ) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create model dir: {e}"))?;
+    }
     let recorder = CompactRecorder::new();
-    model
-        .clone()
-        .into_record()
-        .save_file(path, &recorder)
-        .map_err(|e| e.to_string())
+    recorder
+        .record(model.clone().into_record(), path.to_path_buf())
+        .map_err(|e| format!("failed to save model: {e}"))
 }
 ```
 
@@ -277,14 +278,20 @@ pub fn load_policy(
     num_edges: usize,
 ) -> Result<PolicyBundle<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
-    let model = PolicyBundle::<TrainBackend>::new(&device, num_edges);
     let recorder = CompactRecorder::new();
-    let record = (
-        &model,
-        recorder.load_file(path, &device).map_err(|e| e.to_string())?,
-    )
-        .load_record(model);
-    Ok(record)
+    let record = recorder
+        .load(path.to_path_buf(), &device)
+        .map_err(|e| format!("failed to load model: {e}"))?;
+    let model = PolicyBundle::new(&device, num_edges).load_record(record);
+
+    if model.num_edges() != num_edges {
+        return Err(format!(
+            "action head output dimension mismatch: expected {num_edges}, got {}; retrain the model",
+            model.num_edges()
+        ));
+    }
+
+    Ok(model)
 }
 ```
 
@@ -340,10 +347,10 @@ By default epsilon decays from `--epsilon` to `--epsilon-final` over the run. If
 
 ```text
 # constant 10% random actions (default --epsilon)
-faf-sim train -e 10000 -m 5000 --no-epsilon-decay -r uef novaxcenter
+faf-sim train -e 10000 -m 5000 --no-epsilon-decay uef novaxcenter
 
 # constant 30% random actions
-faf-sim train -e 10000 -m 5000 --epsilon 0.3 --no-epsilon-decay -r uef novaxcenter
+faf-sim train -e 10000 -m 5000 --epsilon 0.3 --no-epsilon-decay uef novaxcenter
 ```
 
 ## Testing

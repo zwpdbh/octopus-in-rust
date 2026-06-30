@@ -35,9 +35,9 @@ You should be comfortable with Rust and with the basics of neural networks and p
 - **Model path pattern:** `data/models/mlp-<faction>-<unit>`
 - **Run tests:** `cargo test -p faf-sim`
 - **Check workspace:** `cargo check --workspace`
-- **Train a policy:** `cargo run --release --bin faf-sim -- train -e 5000 -m 10000 uef novaxcenter`  
+- **Train a policy:** `cargo run --release -p faf-sim-cli -- train -e 5000 -m 10000 uef novaxcenter`  
   Add `--quiet` to suppress output, `--patience 1000` to stop when no improvement is seen for 1000 episodes, or `--no-epsilon-decay` to keep exploration constant.
-- **Simulate with a trained policy:** `cargo run --release --bin faf-sim -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter`
+- **Simulate with a trained policy:** `cargo run --release -p faf-sim-cli -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter`
 
 ## Important notes
 

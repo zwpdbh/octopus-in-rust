@@ -11,7 +11,7 @@ Burn is a Rust deep-learning framework. Its design is heavily typed: tensors car
 ```toml
 # crates/faf-sim/Cargo.toml ~line 9 — backend features
 [features]
-default = ["cpu"]
+default = ["cuda"]
 cpu = ["burn/ndarray"]
 cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
 wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
@@ -20,20 +20,20 @@ wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
 burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
 ```
 
-- `cpu` (default) selects the `NdArray` CPU backend.
-- `cuda` selects the NVIDIA `Cuda` backend.
+- `cuda` (default) selects the NVIDIA `Cuda` backend.
+- `cpu` selects the CPU `NdArray` backend.
 - `wgpu` selects the cross-platform `Wgpu` backend.
 - `autodiff` wraps the selected backend so we can call `.backward()` on tensors.
 
 The crate aliases the training backend for convenience:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/mod.rs ~line 23 — training backend aliases
+// crates/faf-sim/src/planner/mcts/train/mod.rs ~line 36 — training backend aliases
 #[cfg(feature = "cuda")]
 pub type TrainBackend = Autodiff<Cuda>;
-#[cfg(feature = "wgpu")]
+#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
 pub type TrainBackend = Autodiff<Wgpu>;
-#[cfg(feature = "cpu")]
+#[cfg(all(feature = "cpu", not(any(feature = "cuda", feature = "wgpu"))))]
 pub type TrainBackend = Autodiff<NdArray>;
 
 pub type TrainDevice = burn::tensor::Device<TrainBackend>;
@@ -41,10 +41,16 @@ pub type TrainDevice = burn::tensor::Device<TrainBackend>;
 
 Every tensor and model we train uses `TrainBackend`. The same recorded weights can be loaded back onto the same backend for inference inside MCTS.
 
-To train on your 3090, disable the default CPU feature and enable CUDA:
+CUDA is the default backend, so training on your 3090 no longer requires any extra feature flags:
 
 ```text
-cargo run --release -p faf-sim-cli --no-default-features --features cuda -- train -e 5000 -m 10000 uef novaxcenter
+cargo run --release -p faf-sim-cli -- train -e 5000 -m 10000 uef novaxcenter
+```
+
+To use a different backend, disable the default feature and enable the desired one:
+
+```text
+cargo run --release -p faf-sim-cli --no-default-features --features cpu -- train -e 5000 -m 10000 uef novaxcenter
 ```
 
 ## Backend and Device
@@ -93,7 +99,7 @@ Common operations we use:
 A model in Burn is just a Rust struct whose fields are Burn layers, plus a `#[derive(Module)]` attribute:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 45 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 48 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -123,7 +129,7 @@ Because `HierarchicalPolicyNet<B>` is generic over `B: Backend`, the same struct
 Burn layers are constructed with a config object. For example, a `Linear` layer is initialized from a `LinearConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 67 — constructing linear layers
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 63 — constructing linear layers
 backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 ```
 
@@ -134,7 +140,7 @@ backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 A forward method is ordinary Rust. The only Burn-specific part is the tensor operations:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 81 — latent backbone forward
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 83 — latent backbone forward
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -146,7 +152,7 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 The head methods take the latent vector and optional conditioning inputs (a one-hot direction, a one-hot edge, or a scalar power) and produce logits or regression outputs:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 94 — action head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 96 — action head
 pub(crate) fn action_logits(
     &self,
     latent: Tensor<B, 2>,
@@ -164,7 +170,7 @@ pub(crate) fn action_logits(
 To train, we need gradients. Burn provides them through the `Autodiff<B>` backend wrapper. A tensor on `Autodiff<NdArray>` remembers how it was computed, so calling `.backward()` produces a gradient tape.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 718 — backward pass inside an update
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 720 — backward pass inside an update
 let grads = loss.backward();
 let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
 self.model = self.optimizer
@@ -185,14 +191,14 @@ Burn's `Optimizer::step` takes the model by value and returns a new model. There
 Burn's `Adam` optimizer is configured with `AdamConfig` and initialized with a model reference so it knows the parameter shapes:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 58 — Adam optimizer setup
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 61 — Adam optimizer setup
 let optimizer = AdamConfig::new().init();
 ```
 
 The optimizer is stored alongside the model in the `Trainer`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 37 — optimizer type alias
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 38 — optimizer type alias
 type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
 ```
 
@@ -208,12 +214,13 @@ pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
 ) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create model dir: {e}"))?;
+    }
     let recorder = CompactRecorder::new();
-    model
-        .clone()
-        .into_record()
-        .save_file(path, &recorder)
-        .map_err(|e| e.to_string())
+    recorder
+        .record(model.clone().into_record(), path.to_path_buf())
+        .map_err(|e| format!("failed to save model: {e}"))
 }
 ```
 
@@ -224,14 +231,20 @@ pub fn load_policy(
     num_edges: usize,
 ) -> Result<PolicyBundle<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
-    let model = PolicyBundle::<TrainBackend>::new(&device, num_edges);
     let recorder = CompactRecorder::new();
-    let record = (
-        &model,
-        recorder.load_file(path, &device).map_err(|e| e.to_string())?,
-    )
-        .load_record(model);
-    Ok(record)
+    let record = recorder
+        .load(path.to_path_buf(), &device)
+        .map_err(|e| format!("failed to load model: {e}"))?;
+    let model = PolicyBundle::new(&device, num_edges).load_record(record);
+
+    if model.num_edges() != num_edges {
+        return Err(format!(
+            "action head output dimension mismatch: expected {num_edges}, got {}; retrain the model",
+            model.num_edges()
+        ));
+    }
+
+    Ok(model)
 }
 ```
 

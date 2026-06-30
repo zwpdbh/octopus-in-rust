@@ -16,7 +16,7 @@ The first two heads are discrete (categorical). The last two are continuous (Gau
 ## The `HierarchicalPolicyNet` struct
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 45 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 48 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -39,7 +39,7 @@ pub struct HierarchicalPolicyNet<B: Backend> {
 The constructor sizes every layer from the feature count, hidden sizes, number of directions, and number of plan-graph edges:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 59 — HierarchicalPolicyNet::new
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 63 — HierarchicalPolicyNet::new
 pub fn new(device: &B::Device, num_edges: usize) -> Self {
     let backbone_input = STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT;
     let backbone_hidden = 128;
@@ -72,7 +72,7 @@ Burn layer configs (`LinearConfig::new(in, out).init(device)`) create the weight
 The backbone turns the 16-D input vector into a 64-D latent vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 81 — latent backbone
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 83 — latent backbone
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -88,7 +88,7 @@ This is a plain two-layer MLP. Because every head calls `latent` first, a single
 ### Direction head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 89 — direction head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 91 — direction head
 pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
     self.direction_head.forward(latent)
 }
@@ -99,7 +99,7 @@ Output shape: `[batch, DIRECTION_COUNT]` where `DIRECTION_COUNT = 4`.
 ### Action head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 94 — action head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 96 — action head
 pub(crate) fn action_logits(
     &self,
     latent: Tensor<B, 2>,
@@ -117,7 +117,7 @@ The action head is conditioned on the chosen direction via concatenation. This m
 ### Power head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 106 — power head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 108 — power head
 pub(crate) fn power_mean(
     &self,
     latent: Tensor<B, 2>,
@@ -135,7 +135,7 @@ Output shape: `[batch, 1]`. At inference the scalar is rounded to the nearest in
 ### Squad head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 118 — squad head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — squad head
 pub(crate) fn squad_means(&self, latent: Tensor<B, 2>, power: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = Tensor::cat(vec![latent, power], 1);
     let x = self.squad_hidden.forward(x);
@@ -151,7 +151,7 @@ Output shape: `[batch, 3]`, representing desired T1, T2, and T3 engineer counts.
 During MCTS and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 126 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 128 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     let tensor = tensor_from_vec(&features, device);
     let logits = self.direction_logits(self.latent(tensor));
@@ -173,7 +173,7 @@ At inference time the planner performs four deterministic steps:
 The core inference function is `macro_policy_plan` in `mcts::policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 52 — macro_policy_plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 54 — macro_policy_plan
 fn macro_policy_plan(
     units: &Units,
     mut state: GraphState,
@@ -204,7 +204,7 @@ Because the network is a single `Module`, all three usages share one set of weig
 When the desired squad exceeds the available idle engineers, the unmet demand is stored as shortfall and fed back into the macro network on the next tick:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 180 — shortfall update
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 156 — shortfall update
 *shortfall = shortfall_from_counts(&desired, &idle);
 ```
 

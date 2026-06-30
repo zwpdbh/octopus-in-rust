@@ -37,7 +37,7 @@ pub fn search(
 }
 ```
 
-If `iterations` is zero, the planner falls back to the one-step hierarchical policy directly, preserving the behavior of an untrained or deterministic policy.
+If `iterations` is zero, the loop body is skipped and the search picks the root child with the highest prior probability (because no visits have occurred yet). This is different from the one-step hierarchical policy; if you want the one-step policy, use `mcts::policy::plan` directly with `iterations == 0`.
 
 ## Node structure
 
@@ -169,7 +169,7 @@ fn rollout_value(
 }
 ```
 
-The rollout reuses the same `macro_policy_plan` function used by the one-step policy. This avoids duplicating inference logic and makes the search behave consistently whether `iterations` is zero or large.
+The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
 
 ## Backup
 

@@ -10,9 +10,15 @@ license = "MIT"
 name = "faf-sim"
 path = "src/main.rs"
 
+[features]
+default = ["cuda"]
+cpu = ["faf-sim/cpu"]
+cuda = ["faf-sim/cuda"]
+wgpu = ["faf-sim/wgpu"]
+
 [dependencies]
 clap = { workspace = true }
-faf-sim = { workspace = true }
+faf-sim = { workspace = true, default-features = false }
 faf-units = { workspace = true }
 petgraph = { workspace = true }
 petgraph-svg = { workspace = true }

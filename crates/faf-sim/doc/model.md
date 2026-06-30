@@ -17,7 +17,7 @@ A FAF build order is a directed graph that grows over time. Nodes are built unit
 ### Node lifecycle
 
 ```rust
-// crates/faf-sim/src/sim/state.rs ~line 91 — UnitNodeState (abbreviated)
+// crates/faf-sim/src/sim/state.rs ~line 96 — UnitNodeState (abbreviated)
 pub enum UnitNodeState {
     Constructing { start: f64, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
     Upgrading { start: f64, from_unit_id: UnitKind, started_by: Vec<NodeId>, assisted_by: Vec<NodeId> },
@@ -93,7 +93,7 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
 All static unit knowledge is accessed through the `Units` abstraction in `crates/faf-sim/src/units/mod.rs`. `Units` owns a copy of the raw `faf-units` index and builds derived structures (`TechGraph`, `UpgradeTable`) from it. The rest of `faf-sim` does not import `faf-units` directly.
 
 ```rust
-// crates/faf-sim/src/units/mod.rs ~line 39 — Units (abbreviated)
+// crates/faf-sim/src/units/mod.rs ~line 41 — Units (abbreviated)
 pub struct Units {
     defs: HashMap<UnitKind, UnitDef>,
     builds: HashMap<UnitKind, BuildRecipe>,

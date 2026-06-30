@@ -4,7 +4,6 @@
 //! three learned networks to pick a concrete plan-graph edge, a target build
 //! power, and a [T1, T2, T3] engineer squad.
 
-
 use burn::tensor::Device;
 
 use crate::planner::core::{PlanResult, PlannerConfig, PlannerError, ValueNetKind};

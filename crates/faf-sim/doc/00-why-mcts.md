@@ -34,7 +34,7 @@ MCTS also naturally balances two things that are hard to encode by hand:
 1. **Exploration** — trying actions whose short-term value is unclear.
 2. **Exploitation** — doubling down on actions that look good in simulation.
 
-The UCT formula (covered in [chapter 6](06-mcts-search.md)) does this balance mathematically.
+The UCT formula (covered in [chapter 8](07-mcts-search.md)) does this balance mathematically.
 
 ## Why a learned policy, not random rollouts?
 

@@ -5,7 +5,7 @@
 | **Action head** | Learned Burn head that scores concrete plan-graph edges inside a chosen direction. |
 | **Action space** | All legal plan-graph edges from the current `GraphState`, plus the wait action. |
 | **Adjacency bonus** | Reduced energy/mass cost or build time when structures are placed near each other. Encoded in `Units` and applied to build projects. |
-| **Backend** | The Burn compute backend. CPU training uses `NdArray`, and GPU training can use `Wgpu`. Aliased as `TrainBackend` in the training modules. |
+| **Backend** | The Burn compute backend. CUDA is the default training backend; CPU training uses `NdArray`, and cross-platform GPU training can use `Wgpu`. Aliased as `TrainBackend` in the training modules. |
 | **Baseline** | Moving average of recent episode returns used to center REINFORCE advantages and reduce variance. |
 | **Build order** | A sequence of construction actions that takes the economy from the starting commander to a target unit. |
 | **BuildPower** | Total construction rate contributed by idle engineers, measured in build points per second. |

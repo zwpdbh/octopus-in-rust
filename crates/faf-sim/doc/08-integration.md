@@ -34,7 +34,7 @@ Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if sel
 
 ## Entry point
 
-`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`:
+`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`. Currently it only uses the `iterations` field of `Strategy::Mcts`; `value_net` and `deterministic` are parsed but not yet wired through:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 289 — Planner::plan dispatch
@@ -47,40 +47,46 @@ pub fn plan(
     match self.strategy {
         Strategy::Mcts {
             iterations,
-            value_net: value_net_kind,
-            deterministic,
-        } => mcts::plan(
-            units,
-            initial_state,
-            goal_id,
-            iterations,
-            value_net_kind,
-            deterministic,
-            self.value_net.clone(),
-            &mut self.last_shortfall,
-            &self.config,
-        ),
+            value_net: _,
+            deterministic: _,
+        } => {
+            let model = match self.value_net.as_ref() {
+                Some(m) => m.clone(),
+                None => {
+                    let device = TrainDevice::default();
+                    let num_edges = num_plan_edges(units, goal_id).ok_or_else(|| {
+                        PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
+                    })?;
+                    PolicyBundle::new(&device, num_edges)
+                }
+            };
+            MctsSearch::new(MctsConfig {
+                iterations,
+                ..MctsConfig::default()
+            })
+            .search(initial_state, goal_id, units, &self.config, &model)
+        }
     }
 }
 ```
 
-The MCTS entry point decides whether to run full UCT search or the one-step policy:
+`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step hierarchical policy lives in `mcts::policy::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 28 — mcts::policy::plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 26 — mcts::policy::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
-    iterations: usize,
+    _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    if iterations == 0 {
-        macro_policy_plan(
+    match value_net_kind {
+        ValueNetKind::Mlp => macro_policy_plan(
             units,
             initial_state,
             goal_id,
@@ -88,18 +94,15 @@ pub fn plan(
             deterministic,
             shortfall,
             config,
-        )
-    } else {
-        MctsSearch::new(MctsConfig {
-            iterations,
-            ..MctsConfig::default()
-        })
-        .search(initial_state, goal_id, units, config, &model_or_default(...))
+        ),
+        ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
+            "GNN value net is not yet implemented".to_string(),
+        )),
     }
 }
 ```
 
-When `iterations` is zero the planner uses the one-step hierarchical policy directly. When `iterations` is positive it runs full UCT search with the same `PolicyBundle`.
+The CLI `simulate` command currently always goes through `Planner::plan`, so the `greedy`/`deterministic` flag in the strategy string does not affect inference yet.
 
 ## Reactive planning
 
@@ -241,7 +244,7 @@ All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so call
 The strategy can be parsed from a string:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 142 — Strategy::from_str MCTS parsing
+// crates/faf-sim/src/planner/core.rs ~line 144 — Strategy::from_str MCTS parsing
 if lower == "mcts" {
     return Ok(Strategy::Mcts {
         iterations: 100,
@@ -275,17 +278,20 @@ The default strategy for `simulate` is `mcts:100:mlp:greedy`.
 
 ### GPU builds
 
-Because the Burn backend is selected by Cargo feature, you must pass the GPU feature when building the CLI:
+CUDA is now the default backend, so no extra feature flags are needed for NVIDIA GPUs:
 
 ```text
-# NVIDIA GPU (your 3090)
-cargo run --release -p faf-sim-cli --no-default-features --features cuda -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+# NVIDIA GPU (your 3090) — default
+cargo run --release -p faf-sim-cli -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
 
 # Cross-platform WebGPU/Vulkan
 cargo run --release -p faf-sim-cli --no-default-features --features wgpu -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+
+# CPU-only fallback
+cargo run --release -p faf-sim-cli --no-default-features --features cpu -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
 ```
 
-The same `--features cuda` flag applies to the `train` subcommand.
+The same default applies to the `train` subcommand.
 
 ## Configuration
 
@@ -333,7 +339,7 @@ if let Some(action) = result.first_action {
 Train a policy bundle programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 51 — train_policy
 let (bundle, best_bundle, stats) = train_policy(&units, &goal, TrainConfig::default());
 save_policy(
     best_bundle.as_ref().unwrap_or(&bundle),
