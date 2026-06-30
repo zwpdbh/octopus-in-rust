@@ -126,6 +126,9 @@ pub struct TrainArgs {
     /// Suppress per-episode and progress output.
     #[arg(long, default_value = "false")]
     pub quiet: bool,
+    /// Disable the terminal dashboard and print plain text progress instead.
+    #[arg(long, default_value = "false")]
+    pub no_tui: bool,
     /// Stop early if no new best completion time is found for this many
     /// episodes. Counted only after the first successful episode.
     #[arg(long)]

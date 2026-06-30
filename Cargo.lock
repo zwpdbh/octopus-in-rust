@@ -3033,11 +3033,21 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "faf-sim",
+ "faf-sim-tui",
  "faf-units",
  "petgraph 0.8.3",
  "petgraph-svg",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "faf-sim-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "faf-sim",
+ "ratatui",
 ]
 
 [[package]]

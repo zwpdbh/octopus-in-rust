@@ -340,7 +340,7 @@ Train a policy bundle programmatically:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/policy.rs ~line 51 — train_policy
-let (bundle, best_bundle, stats) = train_policy(&units, &goal, TrainConfig::default());
+let (bundle, best_bundle, stats) = train_policy(&units, &goal, TrainConfig::default(), ());
 save_policy(
     best_bundle.as_ref().unwrap_or(&bundle),
     &PathBuf::from("data/models/mlp-cybran-monkeylord"),
@@ -358,6 +358,23 @@ let planner = Planner::with_value_net(strategy, PlannerConfig::default(), bundle
 ```
 
 The CLI wraps these calls with `train` and `simulate` subcommands. The programmatic API is the source of truth.
+
+## Terminal dashboard
+
+For interactive training, the `faf-sim-cli` binary renders a [`ratatui`](https://ratatui.rs/) dashboard when stdout is a terminal. The dashboard lives in the separate `faf-sim-tui` crate so the core simulator does not depend on UI libraries.
+
+```rust
+// crates/faf-sim-tui/src/dashboard.rs ~line 48 — TrainingDashboard::run
+pub fn run<F, R>(training: F) -> R
+where
+    F: FnOnce(DashboardObserver) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    // ... spawn TUI thread, run training closure, return result ...
+}
+```
+
+Pass `--no-tui` to keep plain-text output, or `--quiet` to suppress live progress entirely. Press `q` or `Esc` in the dashboard to request a graceful stop at the next episode boundary.
 
 ## Model compatibility
 

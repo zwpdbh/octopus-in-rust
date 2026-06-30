@@ -12,6 +12,7 @@ pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
+    observer: impl TrainingObserver + 'static,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
@@ -20,7 +21,7 @@ pub fn train_policy(
     let num_edges = plan_edge_index(units, goal)
         .expect("goal must have a plan graph")
         .len();
-    let mut trainer = Trainer::new(config, num_edges);
+    let mut trainer = Trainer::new(config, num_edges).with_observer(observer);
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)
 }
@@ -235,7 +236,7 @@ Greedy evaluation is the source of the best model; REINFORCE alone does not guar
 After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes cross-entropy/MSE losses with the recorded `(direction, edge_index, target_power, desired_squad, shortfall)` targets.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 85 — fine_tune_best_model
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 91 — fine_tune_best_model
 fn fine_tune_best_model(
     mut trainer: Trainer,
     units: &Units,

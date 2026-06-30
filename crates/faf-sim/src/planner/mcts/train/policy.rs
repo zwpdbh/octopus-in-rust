@@ -4,6 +4,7 @@ use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
 use super::config::{TrainConfig, TrainStats};
+use super::observer::{FineTuneSummary, TrainingObserver};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::PlannerConfig;
@@ -48,10 +49,14 @@ pub fn load_policy(
 
 /// Train a policy for `goal` and return the final model, best-seen model, and
 /// training statistics.
+///
+/// `observer` receives coarse-grained progress events and can be used to drive
+/// a dashboard or logger. Pass `()` if no observer is needed.
 pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
+    observer: impl TrainingObserver + 'static,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
@@ -60,7 +65,7 @@ pub fn train_policy(
     let num_edges = plan_edge_index(units, goal)
         .expect("goal must have a plan graph")
         .len();
-    let mut trainer = Trainer::new(config, num_edges);
+    let mut trainer = Trainer::new(config, num_edges).with_observer(observer);
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)
 }
@@ -71,12 +76,13 @@ pub fn train_policy_from(
     units: &Units,
     goal: &UnitKind,
     config: TrainConfig,
+    observer: impl TrainingObserver + 'static,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
     TrainStats,
 ) {
-    let mut trainer = Trainer::from_model(config, model);
+    let mut trainer = Trainer::from_model(config, model).with_observer(observer);
     trainer.best_model = Some(trainer.model.clone());
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)
@@ -104,12 +110,20 @@ fn fine_tune_best_model(
         .take()
         .unwrap_or_else(|| trainer.model.clone());
     let mut tuner = Trainer::from_model(*config, model_to_tune);
+    tuner.observer = trainer.observer.take();
     let planner_config = PlannerConfig::default();
 
     let mut final_loss = 0.0f32;
     for epoch in 0..config.fine_tune_epochs {
         let loss = tuner.fine_tune_on_trajectory(&trajectory, units, goal, &planner_config);
         final_loss = loss;
+        if let Some(ref mut observer) = tuner.observer {
+            observer.on_fine_tune_epoch(FineTuneSummary {
+                epoch: epoch + 1,
+                total_epochs: config.fine_tune_epochs,
+                loss,
+            });
+        }
         if config.verbose
             && (epoch == 0 || epoch == config.fine_tune_epochs - 1 || (epoch + 1) % 10 == 0)
         {

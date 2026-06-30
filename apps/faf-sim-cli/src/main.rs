@@ -15,6 +15,7 @@
 //! strategy to estimate a completion timeline.
 
 use std::collections::{HashMap, HashSet};
+use std::io::IsTerminal;
 
 use clap::Parser;
 use faf_sim::planner::mcts::macro_net::num_plan_edges;
@@ -105,11 +106,15 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         .def(&goal_kind)
         .expect("target blueprint must exist in index");
 
-    println!(
-        "Training MLP for {} {}",
-        target.faction.display_name(),
-        target.unit.display_name()
-    );
+    let use_tui = !args.quiet && !args.no_tui && std::io::stdout().is_terminal();
+
+    if !use_tui {
+        println!(
+            "Training MLP for {} {}",
+            target.faction.display_name(),
+            target.unit.display_name()
+        );
+    }
 
     let config = TrainConfig {
         episodes: args.episodes,
@@ -123,7 +128,7 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
             args.epsilon_decay_episodes.unwrap_or(args.episodes)
         },
         patience: args.patience,
-        verbose: !args.quiet,
+        verbose: !args.quiet && !use_tui,
         ..Default::default()
     };
 
@@ -131,12 +136,27 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let model_file = path.with_extension("mpk");
     let num_edges = num_plan_edges(units, &goal_kind).expect("goal must have a plan graph");
 
-    let (model, best_model, stats) = if args.resume && model_file.exists() {
+    let (model, best_model, stats) = if use_tui {
+        // The training closure runs on its own thread, so it needs owned data.
+        let units = units.clone();
+        let goal_kind = goal_kind.clone();
+        let path = path.clone();
+        let model_file = model_file.clone();
+        let resume = args.resume;
+        faf_sim_tui::TrainingDashboard::run(move |observer| {
+            if resume && model_file.exists() {
+                let model = load_policy(&path, num_edges).expect("load existing model");
+                train_policy_from(model, &units, &goal_kind, config, observer)
+            } else {
+                train_policy(&units, &goal_kind, config, observer)
+            }
+        })
+    } else if args.resume && model_file.exists() {
         println!("Resuming training from {}", model_file.display());
         let model = load_policy(&path, num_edges).expect("load existing model");
-        train_policy_from(model, units, &goal_kind, config)
+        train_policy_from(model, units, &goal_kind, config, ())
     } else {
-        train_policy(units, &goal_kind, config)
+        train_policy(units, &goal_kind, config, ())
     };
 
     println!(

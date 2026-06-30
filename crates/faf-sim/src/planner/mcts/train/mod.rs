@@ -29,6 +29,7 @@ use burn::backend::{Autodiff, Wgpu};
 pub mod config;
 pub mod episode;
 pub mod math;
+pub mod observer;
 pub mod policy;
 pub mod reward;
 pub mod trainer;
@@ -37,6 +38,7 @@ pub mod trainer;
 mod tests;
 
 pub use config::{TrainConfig, TrainStats};
+pub use observer::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary, TrainingObserver};
 pub use policy::{load_policy, save_policy, train_policy, train_policy_from};
 pub use trainer::Trainer;
 

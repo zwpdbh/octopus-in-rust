@@ -1,6 +1,8 @@
 //! Trainer for the hierarchical policy networks.
 
 use std::f32;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use burn::optim::adaptor::OptimizerAdaptor;
@@ -15,6 +17,7 @@ use super::episode::{BuildTrajectory, Episode, EpisodeStep, TrajectoryStep};
 use super::math::{
     format_time, gaussian_log_prob_scalar, gaussian_log_prob_vec, tensor1d_from_vec,
 };
+use super::observer::{EpisodeSummary, GreedyEvalSummary, TrainingObserver};
 use super::reward::{compute_step_reward, compute_terminal_bonus};
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::PlannerConfig;
@@ -45,6 +48,12 @@ pub struct Trainer {
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
     pub(crate) rng: ThreadRng,
+    /// Optional progress observer. Kept `pub(crate)` so that higher-level entry
+    /// points can move it to a fresh `Trainer` during supervised fine-tuning.
+    pub(crate) observer: Option<Box<dyn TrainingObserver>>,
+    /// Shared flag that can be set from another thread to request a graceful
+    /// stop at the next episode boundary.
+    pub(crate) stop_requested: Arc<AtomicBool>,
 }
 
 impl Trainer {
@@ -67,7 +76,25 @@ impl Trainer {
             config,
             device,
             rng: rand::rng(),
+            observer: None,
+            stop_requested: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Attach a progress observer.
+    pub fn with_observer(mut self, observer: impl TrainingObserver + 'static) -> Self {
+        self.observer = Some(Box::new(observer));
+        self
+    }
+
+    /// Request a graceful stop at the next episode boundary.
+    pub fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop_requested.load(Ordering::Relaxed)
+            || self.observer.as_ref().map_or(false, |o| o.should_stop())
     }
 
     /// Train the policy on the given goal.
@@ -193,8 +220,45 @@ impl Trainer {
                             format_time(best_time.unwrap_or(0.0), best_time.is_some())
                         );
                     }
-                } else if self.config.verbose {
-                    eprintln!("  greedy eval at ep={}: did not reach goal", ep + 1);
+                    if let Some(ref mut observer) = self.observer {
+                        observer.on_greedy_eval(GreedyEvalSummary {
+                            episode: ep + 1,
+                            reached_goal: true,
+                            completion_time: Some(greedy_time),
+                            best_time,
+                        });
+                    }
+                } else {
+                    if self.config.verbose {
+                        eprintln!("  greedy eval at ep={}: did not reach goal", ep + 1);
+                    }
+                    if let Some(ref mut observer) = self.observer {
+                        observer.on_greedy_eval(GreedyEvalSummary {
+                            episode: ep + 1,
+                            reached_goal: false,
+                            completion_time: None,
+                            best_time,
+                        });
+                    }
+                }
+            }
+
+            if let Some(ref mut observer) = self.observer {
+                observer.on_episode_end(EpisodeSummary {
+                    episode: ep + 1,
+                    total_episodes: self.config.episodes,
+                    steps: episode.steps.len(),
+                    epsilon,
+                    reached_goal: episode.reached_goal,
+                    completion_time: episode.completion_time,
+                    loss,
+                    best_time,
+                });
+                if self.should_stop() {
+                    if self.config.verbose {
+                        eprintln!("Stop requested; exiting training loop.");
+                    }
+                    break;
                 }
             }
 
