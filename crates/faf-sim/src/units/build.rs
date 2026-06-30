@@ -4,7 +4,7 @@
 //! abstract `UnitKind`s and derive build recipes for faction-unique units. After
 //! construction the optimizer no longer needs the raw index.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use faf_units::Unit;
 
@@ -165,6 +165,31 @@ pub(crate) fn push_unique(vec: &mut Vec<UnitKind>, kind: UnitKind) {
     if !vec.contains(&kind) {
         vec.push(kind);
     }
+}
+
+/// True for unique units that should appear as candidate goals in the
+/// universal plan graph.
+pub(crate) fn is_goal_candidate(unit: &Unit) -> bool {
+    let cats: HashSet<String> = unit
+        .categories
+        .iter()
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+
+    if cats.contains("TECH4") || cats.contains("EXPERIMENTAL") {
+        return true;
+    }
+
+    if cats.contains("TECH3") && cats.contains("STRUCTURE") {
+        if cats.contains("ARTILLERY") {
+            return true;
+        }
+        if cats.contains("SILO") && !cats.contains("ANTIMISSILE") {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// The canonical UEF blueprint id used as the representative for a common

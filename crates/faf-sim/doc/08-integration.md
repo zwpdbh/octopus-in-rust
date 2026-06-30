@@ -1,6 +1,6 @@
-# 5. Integration
+# 8. Integration and CLI
 
-This chapter explains how to wire the MCTS planner into the existing `faf-sim` planner enum and run it from the CLI (Command Line Interface).
+This chapter explains how to wire the MCTS planner into the existing `faf-sim` planner enum and run it from the CLI.
 
 ## Strategy enum
 
@@ -9,7 +9,7 @@ The `Planner` dispatches to a single strategy, MCTS, but the network that guides
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 67 — ValueNetKind
 pub enum ValueNetKind {
-    /// Macro-direction policy network.
+    /// Hierarchical policy bundle.
     #[default]
     Mlp,
     /// Graph neural network that reasons over the plan graph structure.
@@ -30,11 +30,11 @@ pub enum Strategy {
 }
 ```
 
-Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` now refers to the full hierarchical policy bundle (macro + build-power + engineer-squad networks).
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` refers to the full hierarchical policy bundle (direction + action + power + squad heads).
 
 ## Entry point
 
-`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner now maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`:
+`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 289 — Planner::plan dispatch
@@ -64,23 +64,23 @@ pub fn plan(
 }
 ```
 
-The MCTS entry point is currently a one-step hierarchical policy:
+The MCTS entry point decides whether to run full UCT search or the one-step policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 25 — mcts::policy::plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 28 — mcts::policy::plan
 pub fn plan(
     units: &Units,
     initial_state: GraphState,
     goal_id: &UnitKind,
-    _iterations: usize,
+    iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    match value_net_kind {
-        ValueNetKind::Mlp => macro_policy_plan(
+    if iterations == 0 {
+        macro_policy_plan(
             units,
             initial_state,
             goal_id,
@@ -88,15 +88,18 @@ pub fn plan(
             deterministic,
             shortfall,
             config,
-        ),
-        ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
-            "GNN value net is not yet implemented".to_string(),
-        )),
+        )
+    } else {
+        MctsSearch::new(MctsConfig {
+            iterations,
+            ..MctsConfig::default()
+        })
+        .search(initial_state, goal_id, units, config, &model_or_default(...))
     }
 }
 ```
 
-It ignores the `iterations` parameter because there is no tree search yet. Full UCT search will replace the one-step policy while reusing the same `PolicyBundle`.
+When `iterations` is zero the planner uses the one-step hierarchical policy directly. When `iterations` is positive it runs full UCT search with the same `PolicyBundle`.
 
 ## Reactive planning
 
@@ -111,7 +114,7 @@ loop:
     if goal_reached(state, goal): break
 ```
 
-`PlanResult` already carries a `first_action` field for this purpose:
+`PlanResult` carries a `first_action` field for this purpose:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 19 — PlanResult (abbreviated)
@@ -150,7 +153,7 @@ pub enum Observation {
 }
 ```
 
-`Build` and `Upgrade` now carry a `Vec<NodeId>` so the planner can assign a squad of engineers to a project immediately, rather than only one builder.
+`Build` and `Upgrade` carry a `Vec<NodeId>` so the planner can assign a squad of engineers to a project immediately, rather than only one builder.
 
 `SimActor::run` advances the simulation and emits observations:
 
@@ -211,8 +214,14 @@ pub async fn run_build_order_simulation(
     let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
 
-    let sim = SimActor::new(&[UnitKind::Commander], units.clone(),
-                            Some(goal.clone()), config.sim_dt, obs_tx, cmd_rx);
+    let sim = SimActor::new(
+        &[UnitKind::Commander],
+        units.clone(),
+        Some(goal.clone()),
+        config.sim_dt,
+        obs_tx,
+        cmd_rx,
+    );
     let sim_handle = tokio::spawn(sim.run());
 
     let decision_actor = DecisionActor::new(config.planner, units, goal, obs_rx, cmd_tx);
@@ -259,18 +268,17 @@ So the CLI can accept arguments such as:
 ```text
 faf-sim simulate --strategy mcts cybran monkeylord
 faf-sim simulate --strategy mcts:500 cybran monkeylord
-faf-sim simulate --strategy mcts:500:gnn cybran monkeylord
 faf-sim simulate --strategy mcts:500:mlp:greedy cybran monkeylord
 ```
 
-When MCTS is stable, you can make it the default strategy for the CLI and benchmarks.
+The default strategy for `simulate` is `mcts:100:mlp:greedy`.
 
 ## Configuration
 
 `PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 222 — PlannerConfig default
+// crates/faf-sim/src/planner/core.rs ~line 221 — PlannerConfig default
 fn default() -> Self {
     Self {
         dt: 1.0,
@@ -323,7 +331,7 @@ save_policy(
 And load it later:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 30 — load_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 28 — load_policy
 let num_edges = plan_edge_index(&units, &goal).unwrap().len();
 let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord"), num_edges).unwrap();
 let planner = Planner::with_value_net(strategy, PlannerConfig::default(), bundle);
@@ -333,4 +341,4 @@ The CLI wraps these calls with `train` and `simulate` subcommands. The programma
 
 ## Model compatibility
 
-Saved policy bundles from before the hierarchical-policy redesign will fail to load and must be retrained. `load_policy` checks the macro network dimensions and reports a clear error if they do not match.
+Saved policy bundles from before the hierarchical-policy redesign will fail to load and must be retrained. `load_policy` creates a model of the correct shape and loads the record into it; a shape mismatch produces a clear deserialization error.

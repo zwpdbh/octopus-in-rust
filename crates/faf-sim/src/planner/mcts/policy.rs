@@ -13,15 +13,16 @@ use crate::planner::search::SimAction;
 use crate::sim::{GraphSimError, GraphState, NodeId};
 use crate::units::{UnitKind, Units};
 
-use super::features::{state_features, state_features_with_shortfall};
+use super::features::state_features_with_shortfall;
 use super::macro_net::{
-    clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, one_hot,
-    plan_edge_index, shortfall_from_counts, PolicyBundle,
+    clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, plan_edge_index,
+    shortfall_from_counts, PolicyBundle,
 };
 use super::selections::{
     assigned_squad_counts, find_upgrade_source, idle_engineer_counts, select_squad_for_edge,
 };
 use super::train::TrainBackend;
+use crate::planner::plan_graph::EdgeCategory;
 
 /// Run the one-step hierarchical policy from `initial_state` toward `goal_id`.
 pub fn plan(
@@ -52,7 +53,7 @@ pub fn plan(
 }
 
 /// One-step planner guided by the hierarchical policy networks.
-fn macro_policy_plan(
+pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: GraphState,
     goal_id: &UnitKind,
@@ -71,21 +72,37 @@ fn macro_policy_plan(
     let bundle: PolicyBundle<TrainBackend> =
         policy_bundle.unwrap_or_else(|| PolicyBundle::new(&device, edge_index.len()));
 
-    let base_features = state_features(&state, units, config);
     let macro_features = state_features_with_shortfall(&state, units, config, *shortfall);
-    let macro_logits = bundle.macro_net.evaluate_single(macro_features, &device);
-    let legal_mask = edge_index.legal_mask(&state, units, config);
+    let direction_logits = bundle.evaluate_direction(macro_features.clone(), &device);
+    let direction_mask = edge_index.legal_category_mask(&state, units, config);
 
-    if legal_mask.iter().all(|&b| !b) {
+    if direction_mask.iter().all(|&b| !b) {
+        state.tick(units, config.dt);
+        return Ok(plan_result_with_action(state, SimAction::Wait));
+    }
+
+    let direction_idx = if deterministic {
+        masked_argmax(&direction_logits, &direction_mask)
+    } else {
+        let mut rng = thread_rng();
+        masked_sample_index(&direction_logits, &direction_mask, &mut rng)
+    }
+    .unwrap_or(0);
+    let category = EdgeCategory::ALL[direction_idx];
+
+    let action_logits = bundle.evaluate_action(macro_features.clone(), category, &device);
+    let action_mask = edge_index.legal_mask_for_category(&state, units, config, category);
+
+    if action_mask.iter().all(|&b| !b) {
         state.tick(units, config.dt);
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
     let edge_idx = if deterministic {
-        masked_argmax(&macro_logits, &legal_mask)
+        masked_argmax(&action_logits, &action_mask)
     } else {
         let mut rng = thread_rng();
-        masked_sample_index(&macro_logits, &legal_mask, &mut rng)
+        masked_sample_index(&action_logits, &action_mask, &mut rng)
     }
     .unwrap_or(0);
 
@@ -97,20 +114,11 @@ fn macro_policy_plan(
         }
     };
 
-    let power_features: Vec<f32> = base_features
-        .iter()
-        .copied()
-        .chain(one_hot(edge_idx, edge_index.len()).into_iter())
-        .collect();
-    let power_mean = bundle.power_net.evaluate_single(power_features, &device)[0];
+    let power_mean =
+        bundle.evaluate_power(macro_features.clone(), edge_idx, edge_index.len(), &device);
     let target_power = power_mean.max(0.0).round();
 
-    let squad_features: Vec<f32> = base_features
-        .iter()
-        .copied()
-        .chain(std::iter::once(target_power))
-        .collect();
-    let squad_raw = bundle.squad_net.evaluate_single(squad_features, &device);
+    let squad_raw = bundle.evaluate_squad(macro_features, target_power, &device);
     let squad_raw_arr = [
         squad_raw.get(0).copied().unwrap_or(0.0),
         squad_raw.get(1).copied().unwrap_or(0.0),

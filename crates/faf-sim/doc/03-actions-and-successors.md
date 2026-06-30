@@ -1,34 +1,55 @@
-# 2. Actions and Successors
+# 3. Actions and the Plan Graph
 
-The planner expands a state by choosing from the legal **plan-graph edges** derived from the `PlanGraph`. This chapter describes the two-level action model: high-level edges used by the learned policy, and low-level simulator commands that actually mutate `GraphState`.
+The raw action space of a build-order game is huge: at every tick you could build any unit you are capable of building, upgrade any existing structure, or assign any idle engineer to any active project. This chapter explains how `faf-sim` reduces that space to a small, structured set of **plan-graph edges** that the policy network can reason over.
 
-## Two-level action model
+## The universal plan graph
 
-The planner makes decisions at the level of **plan-graph edges**:
+`faf-sim` builds one **universal plan graph** that contains all common faction units plus candidate T4/T3 goal units. A goal-specific view is then derived by taking the ancestors of the goal node.
+
+```rust
+// crates/faf-sim/src/planner/plan_graph.rs ~line 40 — EdgeCategory
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EdgeCategory {
+    Mass,
+    Energy,
+    BuildPower,
+    Progress,
+}
+```
+
+Every edge in the plan graph is tagged with one of these four categories. The category tells the network what strategic focus the edge serves:
+
+- `Mass` — edges that increase mass income (extractors and storage caps).
+- `Energy` — edges that increase energy income (power generators and energy storage).
+- `BuildPower` — edges that increase total build rate (engineers and engineer upgrades).
+- `Progress` — edges that move toward the goal unit (factories, tech structures, and the goal itself).
+
+The network first picks a direction, then scores only the edges inside that direction. This factorization keeps the action head small and interpretable.
+
+## Plan edges
+
+A `PlanEdge` is a stable, typed action candidate:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/selections.rs ~line 151 — PlanEdge
 #[derive(Debug, Clone)]
 pub struct PlanEdge {
-    /// Source node of the edge (builder for Build, unit being upgraded for Upgrade).
     pub source: UnitKind,
-    /// Target node of the edge.
     pub target: UnitKind,
-    /// Edge kind.
     pub kind: PlanEdgeKind,
+    category: EdgeCategory,
 }
 ```
 
-An edge is still an abstract choice: it says *what* to build or upgrade, but not *which* idle engineers will execute it. Before the edge can be applied, the policy runs two more networks to decide the build power and the `[T1, T2, T3]` engineer squad, and then the squad is resolved into concrete `NodeId`s.
-
-The abstraction is useful because the macro network reasons over a small, stable, plan-graph-constrained set of edges, while the simulator still consumes the existing concrete `SimAction` commands.
-
-## Stable edge indexing
+- `source` is the builder required for a build edge, or the unit being upgraded for an upgrade edge.
+- `target` is the unit that will be created or upgraded into.
+- `kind` is either `Build` or `Upgrade`.
+- `category` is the strategic focus.
 
 The macro network outputs one logit per edge, so the edge list must have a stable order. `PlanEdgeIndex` builds that list once from a `PlanGraph`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 162 — PlanEdgeIndex
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 172 — PlanEdgeIndex
 #[derive(Debug, Clone)]
 pub struct PlanEdgeIndex {
     edges: Vec<PlanEdge>,
@@ -39,7 +60,9 @@ impl PlanEdgeIndex {
     pub fn len(&self) -> usize;
     pub fn get(&self, idx: usize) -> Option<&PlanEdge>;
     pub fn legal_mask(&self, state: &GraphState, units: &Units, config: &PlannerConfig) -> Vec<bool>;
-    pub fn to_selection_option(&self, idx: usize, state: &GraphState, units: &Units, config: &PlannerConfig) -> Option<SelectionOption>;
+    pub fn category_mask(&self, category: EdgeCategory) -> Vec<bool>;
+    pub fn legal_mask_for_category(&self, state, units, config, category) -> Vec<bool>;
+    pub fn legal_category_mask(&self, state, units, config) -> Vec<bool>;
 }
 ```
 
@@ -50,14 +73,14 @@ impl PlanEdgeIndex {
 - for build edges, there is an idle builder capable of building the target and the target does not exceed a storage cap,
 - for upgrade edges, there is a finished source unit and an idle builder capable of performing the upgrade.
 
-The mask is what makes the macro network's `argmax` safe: illegal edges are forced to a very negative logit before the softmax or argmax.
+The masks are what make the network's `argmax` safe: illegal directions and edges are forced to a very negative logit before the softmax or argmax.
 
 ## From edges to selection options
 
 A legal edge index can be converted back to a `SelectionOption` for execution:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 27 — SelectionOption
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 28 — SelectionOption
 pub enum SelectionOption {
     Build(UnitKind),
     Upgrade { from: UnitKind, to: UnitKind },
@@ -66,7 +89,7 @@ pub enum SelectionOption {
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 219 — PlanEdgeIndex::to_selection_option
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 274 — PlanEdgeIndex::to_selection_option
 pub fn to_selection_option(
     &self,
     idx: usize,
@@ -88,14 +111,14 @@ pub fn to_selection_option(
 }
 ```
 
-`Assist` is part of the `SelectionOption` vocabulary but is not generated from plan-graph edges; it is reserved for future expansions that assign idle engineers to already-started projects.
+`Assist` is part of the `SelectionOption` vocabulary but is not generated from plan-graph edges; it is reserved for future expansions that assign idle engineers to already-started projects. The current MCTS rollout and policy use build and upgrade edges only.
 
 ## Resolving the engineer squad
 
-After the macro network selects an edge, the build-power network outputs a scalar target build power and the engineer-squad network outputs desired `[T1, T2, T3]` counts. Those counts are clamped to the actual idle engineers of each tech level and then mapped to real builder nodes by `select_squad_for_edge`:
+After the macro network selects an edge, the build-power head outputs a scalar target build power and the engineer-squad head outputs desired `[T1, T2, T3]` counts. Those counts are clamped to the actual idle engineers of each tech level and then mapped to real builder nodes by `select_squad_for_edge`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/selections.rs ~line 418 — select_squad_for_edge
+// crates/faf-sim/src/planner/mcts/selections.rs ~line 473 — select_squad_for_edge
 pub fn select_squad_for_edge(
     edge: &PlanEdge,
     desired: [usize; ENGINEER_TECH_LEVELS],
@@ -125,7 +148,7 @@ If the desired squad exceeds the available idle engineers, the difference is rec
 
 ## Low-level `SimAction`
 
-The concrete simulator commands are the existing `SimAction` enum, now extended to carry multiple builders:
+The concrete simulator commands are the existing `SimAction` enum, extended to carry multiple builders:
 
 ```rust
 // crates/faf-sim/src/planner/search.rs ~line 21 — SimAction enum
@@ -156,14 +179,14 @@ pub enum SimAction {
 
 ## Execution in the one-step policy
 
-The current one-step planner ties the pieces together in `macro_policy_plan`:
+The one-step planner ties the pieces together in `macro_policy_plan`:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/policy.rs ~line 54 — macro_policy_plan (abbreviated)
 fn macro_policy_plan(...) -> Result<PlanResult, PlannerError> {
-    // 1. forward through macro network, masked argmax over legal edges
-    // 2. forward through build-power network for the selected edge
-    // 3. forward through engineer-squad network
+    // 1. forward through direction head and pick a legal direction
+    // 2. forward through action head for that direction and pick a legal edge
+    // 3. forward through power and squad heads
     // 4. resolve squad, build SimAction::Build/Upgrade, execute
     // 5. update shortfall feedback
 }
@@ -185,13 +208,16 @@ The `CapT2Mex` and `CapT3Mex` unit definitions include the +50% mass adjacency b
 
 ## Why the branching factor matters
 
-The edge list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal edges. The policy bundle keeps the decision cheap:
+The edge list is already much smaller than the raw successor list would be because the `PlanGraph` prunes away units that are not on the path to the goal. Even so, a state with several idle engineers and factories may have many legal edges. The hierarchical policy keeps the decision cheap:
 
-1. Compute the legal mask once with `PlanEdgeIndex::legal_mask`.
-2. Run the three networks in three small forward passes.
-3. Resolve the selected edge into a concrete `SimAction`.
+1. Compute the legal category mask once with `PlanEdgeIndex::legal_category_mask`.
+2. Run the direction head.
+3. Compute the legal edge mask for the chosen category.
+4. Run the action head.
+5. Run the power and squad heads for the selected edge.
+6. Resolve the selected edge into a concrete `SimAction`.
 
-This is `O(num_edges)` forward work per decision, not a tree expansion.
+This is `O(num_edges)` forward work per decision, not a tree expansion. MCTS multiplies that work by its iteration budget, but the per-decision cost remains bounded.
 
 ## Legal move validation
 
@@ -212,3 +238,5 @@ Actions are discrete (build this unit, upgrade that unit, assist, wait), but tim
 - A large `dt` is faster but may miss tight timing windows.
 
 The default `PlannerConfig::dt` is `1.0` second.
+
+Now that we know what actions look like, we can build the network that chooses them.

@@ -7,11 +7,7 @@
 //! encoding of the selected edge, and the squad network receives the target
 //! build power.
 
-use petgraph::algo::dijkstra;
-use petgraph::graph::NodeIndex;
-
 use crate::planner::core::PlannerConfig;
-use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
 use crate::units::{TechLevel, UnitKind, Units};
 
@@ -160,23 +156,6 @@ fn storage_ratio(current: f64, cap: f64) -> f32 {
     } else {
         0.0
     }
-}
-
-/// Shortest number of edges from `kind` to the goal in the plan graph.
-pub(crate) fn distance_to_goal(plan: &PlanGraph, kind: &UnitKind) -> usize {
-    let goal_idx = plan
-        .graph()
-        .node_indices()
-        .find(|i| plan.graph()[*i] == *plan.goal())
-        .unwrap_or(NodeIndex::new(0));
-
-    let distances = dijkstra(plan.graph(), goal_idx, None, |_| 1);
-
-    plan.graph()
-        .node_indices()
-        .find(|i| plan.graph()[*i] == *kind)
-        .and_then(|idx| distances.get(&idx).copied())
-        .unwrap_or(usize::MAX / 2)
 }
 
 #[cfg(test)]

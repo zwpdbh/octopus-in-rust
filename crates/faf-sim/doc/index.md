@@ -1,21 +1,33 @@
-# faf-sim documentation
+# Reinforcement Learning for Build-Order Optimization with Burn
 
-`faf-sim` is a discrete-time build-order planner and simulator for Supreme Commander: Forged Alliance. It models economy, unit construction, and adjacency bonuses, and learns a hierarchical policy to guide MCTS search.
+This tutorial walks through building a reinforcement-learning (RL) planner in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework. The concrete domain is Supreme Commander: Forged Alliance (FAF): you start with a single commander unit and must choose what to build, when, and with which engineers so that a high-value goal unit (e.g. a Monkeylord or a Novax Center) finishes as early as possible.
 
-## Reading guide
+`faf-sim` provides:
 
-Start with the chapters in order if you are new to the crate:
+- A deterministic discrete-time simulator for economy, construction, and adjacency bonuses.
+- A universal plan graph that encodes every legal prerequisite chain.
+- A hierarchical policy network written as a `burn::module::Module`.
+- A REINFORCE training loop with per-step reward shaping.
+- A UCT MCTS search that uses the trained network as a prior and rollout policy.
 
-1. **[Why MCTS?](00-why-mcts.md)** — why MCTS is a good fit for FAF build-order optimization.
-2. **[The state graph](01-the-state-graph.md)** — how the simulator state is represented and what MCTS sees.
-3. **[Actions and successors](02-actions-and-successors.md)** — legal actions, plan-graph edges, and multi-builder squads.
-4. **[Hierarchical policy network](03-value-network.md)** — the three learned networks that guide planning.
-5. **[MCTS search](04-mcts-search.md)** — the planned UCT loop and current one-step policy.
-6. **[Integration](05-integration.md)** — how the planner connects to actors and the CLI.
-7. **[Training pipeline](06-training-pipeline.md)** — how the policy bundle is trained, saved, and loaded.
-8. **[Benchmarking and tuning](07-benchmarking-and-tuning.md)** — metrics and search-budget tuning.
-9. **[Build-order optimization model](model.md)** — formal definitions, constraints, and assumptions.
-10. **[Glossary](glossary.md)** — terms and abbreviations used throughout the docs.
+## Who this tutorial is for
+
+You should be comfortable with Rust and with the basics of neural networks and policy-gradient methods. You do **not** need prior experience with Burn; the first few chapters introduce the framework as we use it.
+
+## Tutorial chapters
+
+1. **[Why RL for build orders?](00-why-mcts.md)** — What makes build-order optimization hard, and why we combine MCTS with a learned policy.
+2. **[Burn basics for RL](01-burn-basics.md)** — `Backend`, `Tensor`, `Module`, `Autodiff`, optimizers, devices, and recordings. Everything you need to read the rest of the code.
+3. **[Modeling the environment](02-the-state-graph.md)** — `GraphState`, the economy, featurization, and what the network sees.
+4. **[Actions and the plan graph](03-actions-and-successors.md)** — How we reduce a huge raw action space to a small set of legal plan-graph edges.
+5. **[Building the policy network in Burn](04-value-network.md)** — A hierarchical `Module` with shared backbone, direction head, action head, build-power head, and engineer-squad head.
+6. **[Reward shaping](05-reward-shaping.md)** — Per-step rewards for build-power growth and stall/overflow penalties, plus a terminal bonus.
+7. **[Training with REINFORCE](06-training-pipeline.md)** — Episode rollouts, returns, joint log-probabilities, entropy regularization, and fine-tuning on the best trajectory.
+8. **[MCTS search](07-mcts-search.md)** — UCT selection, expansion, policy-prior ordering, rollout, backup, and choosing the final action.
+9. **[Integration and CLI](08-integration.md)** — Wiring the planner into the actor loop and running `train` / `simulate` from the command line.
+10. **[Benchmarking and tuning](09-benchmarking-and-tuning.md)** — Metrics, diagnosing failure modes, and tuning `c_puct`, iteration budgets, and reward coefficients.
+11. **[Glossary](glossary.md)** — Terms used throughout the tutorial.
+12. **[Formal model](model.md)** — Exact definitions, constraints, and assumptions (optional reference).
 
 ## Quick reference
 
@@ -30,5 +42,4 @@ Start with the chapters in order if you are new to the crate:
 ## Important notes
 
 - Old `.mpk` model files saved before the hierarchical-policy redesign are incompatible and must be deleted and retrained.
-- The MCTS search loop is not yet implemented; `Strategy::Mcts` currently runs a one-step hierarchical policy.
-- Only `ValueNetKind::Mlp` is implemented. `Gnn` returns an error if selected.
+- Only `ValueNetKind::Mlp` (the hierarchical network) is implemented. `Gnn` returns an error if selected.

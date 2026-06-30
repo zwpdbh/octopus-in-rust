@@ -14,19 +14,20 @@ use super::episode::{BuildTrajectory, Episode, EpisodeStep, TrajectoryStep};
 use super::math::{
     format_time, gaussian_log_prob_scalar, gaussian_log_prob_vec, tensor1d_from_vec,
 };
-use super::reward::compute_progress_reward;
+use super::reward::{compute_step_reward, compute_terminal_bonus};
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::PlannerConfig;
 use crate::planner::mcts::features::{state_features, state_features_with_shortfall};
 use crate::planner::mcts::macro_net::{
     clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, one_hot,
-    shortfall_from_counts, PolicyBundle, MASK_VALUE,
+    shortfall_from_counts, PolicyBundle, DIRECTION_COUNT, MASK_VALUE,
 };
 use crate::planner::mcts::policy::execute_action;
 use crate::planner::mcts::selections::{
     assigned_squad_counts, find_upgrade_source, idle_engineer_counts, select_squad_for_edge,
     PlanEdgeIndex,
 };
+use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::plan_graph::PlanGraph;
 use crate::planner::search::SimAction;
 use crate::sim::GraphState;
@@ -43,9 +44,6 @@ pub struct Trainer {
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
     pub(crate) rng: ThreadRng,
-    pub(crate) return_mean: f32,
-    pub(crate) return_var: f32,
-    pub(crate) return_count: f32,
 }
 
 impl Trainer {
@@ -68,9 +66,6 @@ impl Trainer {
             config,
             device,
             rng: thread_rng(),
-            return_mean: 0.0,
-            return_var: 0.0,
-            return_count: 0.0,
         }
     }
 
@@ -240,7 +235,7 @@ impl Trainer {
         ep: usize,
         units: &Units,
         goal: &UnitKind,
-        plan: &PlanGraph,
+        _plan: &PlanGraph,
         edge_index: &PlanEdgeIndex,
         planner_config: &PlannerConfig,
         epsilon: f32,
@@ -274,8 +269,8 @@ impl Trainer {
                 break;
             }
 
-            let legal_mask = edge_index.legal_mask(&state, units, planner_config);
-            if legal_mask.iter().all(|&b| !b) {
+            let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+            if direction_mask.iter().all(|&b| !b) {
                 state.tick(units, self.config.dt);
                 continue;
             }
@@ -283,13 +278,40 @@ impl Trainer {
             let base_features = state_features(&state, units, planner_config);
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
-            let macro_logits = self
+            let direction_logits = self
                 .model
-                .macro_net
-                .evaluate_single(macro_features, &self.device);
+                .evaluate_direction(macro_features.clone(), &self.device);
+
+            let (direction_idx, category) = if self.rng.gen::<f32>() < epsilon {
+                let legal_directions: Vec<usize> = direction_mask
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &legal)| legal)
+                    .map(|(i, _)| i)
+                    .collect();
+                let idx = *legal_directions
+                    .get(self.rng.gen_range(0..legal_directions.len()))
+                    .unwrap_or(&0);
+                (idx, EdgeCategory::ALL[idx])
+            } else {
+                let idx = masked_sample_index(&direction_logits, &direction_mask, &mut self.rng)
+                    .unwrap_or(0);
+                (idx, EdgeCategory::ALL[idx])
+            };
+
+            let action_mask =
+                edge_index.legal_mask_for_category(&state, units, planner_config, category);
+            if action_mask.iter().all(|&b| !b) {
+                state.tick(units, self.config.dt);
+                continue;
+            }
+
+            let action_logits =
+                self.model
+                    .evaluate_action(macro_features.clone(), category, &self.device);
 
             let edge_idx = if self.rng.gen::<f32>() < epsilon {
-                let legal_indices: Vec<usize> = legal_mask
+                let legal_indices: Vec<usize> = action_mask
                     .iter()
                     .enumerate()
                     .filter(|(_, &legal)| legal)
@@ -299,7 +321,7 @@ impl Trainer {
                     .get(self.rng.gen_range(0..legal_indices.len()))
                     .unwrap_or(&0)
             } else {
-                masked_sample_index(&macro_logits, &legal_mask, &mut self.rng).unwrap_or(0)
+                masked_sample_index(&action_logits, &action_mask, &mut self.rng).unwrap_or(0)
             };
 
             let edge = match edge_index.get(edge_idx) {
@@ -310,15 +332,12 @@ impl Trainer {
                 }
             };
 
-            let power_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(one_hot(edge_idx, edge_index.len()).into_iter())
-                .collect();
-            let power_mean = self
-                .model
-                .power_net
-                .evaluate_single(power_features, &self.device)[0];
+            let power_mean = self.model.evaluate_power(
+                macro_features.clone(),
+                edge_idx,
+                edge_index.len(),
+                &self.device,
+            );
             let target_power = crate::planner::mcts::macro_net::sample_gaussian(
                 power_mean,
                 self.config.power_std,
@@ -327,15 +346,9 @@ impl Trainer {
             .max(0.0)
             .round();
 
-            let squad_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(std::iter::once(target_power))
-                .collect();
             let squad_raw = self
                 .model
-                .squad_net
-                .evaluate_single(squad_features, &self.device);
+                .evaluate_squad(macro_features, target_power, &self.device);
             let squad_raw_arr = [
                 squad_raw.get(0).copied().unwrap_or(0.0),
                 squad_raw.get(1).copied().unwrap_or(0.0),
@@ -386,19 +399,25 @@ impl Trainer {
                 },
             };
 
+            let prev_state = state.clone();
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
                 shortfall = shortfall_from_counts(desired, available);
                 state.tick(units, self.config.dt);
                 continue;
             }
 
+            let step_reward = compute_step_reward(&prev_state, &state, units);
+
             episode.steps.push(EpisodeStep {
                 base_features,
                 shortfall,
-                legal_mask,
+                direction_mask,
+                direction_index: direction_idx,
+                action_mask,
                 edge_index: edge_idx,
                 target_power,
                 desired_squad: sampled_squad,
+                step_reward,
                 return_value: 0.0,
             });
 
@@ -406,7 +425,7 @@ impl Trainer {
             shortfall = shortfall_from_counts(desired, assigned_counts);
         }
 
-        episode.final_reward = compute_progress_reward(&state, units, goal, plan);
+        episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);
         self.compute_returns(&mut episode);
         episode
     }
@@ -463,17 +482,27 @@ impl Trainer {
                 return Some(state.time);
             }
 
-            let legal_mask = edge_index.legal_mask(&state, units, planner_config);
-            if legal_mask.iter().all(|&b| !b) {
+            let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+            if direction_mask.iter().all(|&b| !b) {
                 state.tick(units, dt);
                 continue;
             }
 
-            let base_features = state_features(&state, units, planner_config);
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
-            let macro_logits = model.macro_net.evaluate_single(macro_features, device);
-            let edge_idx = masked_argmax(&macro_logits, &legal_mask).unwrap_or(0);
+            let direction_logits = model.evaluate_direction(macro_features.clone(), device);
+            let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
+            let category = EdgeCategory::ALL[direction_idx];
+
+            let action_mask =
+                edge_index.legal_mask_for_category(&state, units, planner_config, category);
+            if action_mask.iter().all(|&b| !b) {
+                state.tick(units, dt);
+                continue;
+            }
+
+            let action_logits = model.evaluate_action(macro_features.clone(), category, device);
+            let edge_idx = masked_argmax(&action_logits, &action_mask).unwrap_or(0);
 
             let edge = match edge_index.get(edge_idx) {
                 Some(e) => e.clone(),
@@ -483,20 +512,11 @@ impl Trainer {
                 }
             };
 
-            let power_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(one_hot(edge_idx, edge_index.len()).into_iter())
-                .collect();
-            let power_mean = model.power_net.evaluate_single(power_features, device)[0];
+            let power_mean =
+                model.evaluate_power(macro_features.clone(), edge_idx, edge_index.len(), device);
             let target_power = power_mean.max(0.0).round();
 
-            let squad_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(std::iter::once(target_power))
-                .collect();
-            let squad_raw = model.squad_net.evaluate_single(squad_features, device);
+            let squad_raw = model.evaluate_squad(macro_features, target_power, device);
             let squad_raw_arr = [
                 squad_raw.get(0).copied().unwrap_or(0.0),
                 squad_raw.get(1).copied().unwrap_or(0.0),
@@ -546,23 +566,28 @@ impl Trainer {
             return;
         }
 
-        let raw_return = episode.final_reward;
+        // Discounted returns from each step, including the terminal bonus at the
+        // end of the episode.
+        let gamma = self.config.gamma;
+        let mut returns = Vec::with_capacity(step_count);
+        let mut g = episode.final_reward;
+        for step in episode.steps.iter().rev() {
+            g = step.step_reward + gamma * g;
+            returns.push(g);
+        }
+        returns.reverse();
 
-        self.return_count += 1.0;
-        let delta = raw_return - self.return_mean;
-        self.return_mean += delta / self.return_count;
-        let delta2 = raw_return - self.return_mean;
-        self.return_var += delta * delta2;
+        let mean = returns.iter().sum::<f32>() / step_count as f32;
+        let std = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f32>() / step_count as f32)
+            .sqrt()
+            .max(1e-6);
 
-        let std = (self.return_var / self.return_count).sqrt().max(1e-6);
-        let normalized = (raw_return - self.return_mean) / std;
-
-        for step in &mut episode.steps {
-            step.return_value = normalized;
+        for (step, ret) in episode.steps.iter_mut().zip(returns) {
+            step.return_value = (ret - mean) / std;
         }
     }
 
-    /// Update all three networks from one episode using REINFORCE.
+    /// Update the hierarchical policy network from one episode using REINFORCE.
     pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
         let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
         let mut total_loss = 0.0f32;
@@ -570,45 +595,85 @@ impl Trainer {
 
         for step in &episode.steps {
             let base_features = step.base_features.clone();
-            let num_edges = step.legal_mask.len();
+            let num_edges = step.action_mask.len();
 
-            // Macro network.
             let macro_features = {
                 let mut v = base_features.clone();
                 v.extend_from_slice(&step.shortfall);
                 v
             };
             let macro_input = tensor1d_from_vec(&macro_features);
-            let macro_logits = self.model.macro_net.forward(macro_input).flatten::<1>(0, 1);
-            let mask: Vec<f32> = step
-                .legal_mask
+            let latent = self.model.latent(macro_input);
+
+            // Direction head.
+            let direction_logits = self
+                .model
+                .direction_logits(latent.clone())
+                .flatten::<1>(0, 1);
+            let direction_mask: Vec<f32> = step
+                .direction_mask
                 .iter()
                 .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
                 .collect();
-            let mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::new(mask, [num_edges]),
+            let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                TensorData::new(direction_mask, [DIRECTION_COUNT]),
                 &self.device,
             );
-            let masked_logits = macro_logits + mask_tensor;
-            let log_probs = log_softmax(masked_logits, 0);
-            let index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+            let masked_direction_logits = direction_logits + direction_mask_tensor;
+            let direction_log_probs = log_softmax(masked_direction_logits, 0);
+            let direction_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                TensorData::new(vec![step.direction_index as i64], [1]),
+                &self.device,
+            );
+            let direction_log_prob = direction_log_probs
+                .clone()
+                .select(0, direction_index_tensor);
+
+            // Action head (conditioned on the chosen direction).
+            let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                TensorData::new(
+                    one_hot(step.direction_index, DIRECTION_COUNT),
+                    [1, DIRECTION_COUNT],
+                ),
+                &self.device,
+            );
+            let action_logits = self
+                .model
+                .action_logits(latent.clone(), direction_one_hot)
+                .flatten::<1>(0, 1);
+            let action_mask: Vec<f32> = step
+                .action_mask
+                .iter()
+                .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                .collect();
+            let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                TensorData::new(action_mask, [num_edges]),
+                &self.device,
+            );
+            let masked_action_logits = action_logits + action_mask_tensor;
+            let action_log_probs = log_softmax(masked_action_logits, 0);
+            let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
                 TensorData::new(vec![step.edge_index as i64], [1]),
                 &self.device,
             );
-            let macro_log_prob = log_probs.clone().select(0, index_tensor);
+            let action_log_prob = action_log_probs.clone().select(0, edge_index_tensor);
 
-            // Entropy bonus over the masked macro distribution.
-            let probs = log_probs.clone().exp();
-            let entropy = (probs * log_probs).neg().sum();
+            // Entropy bonus over both the direction and action distributions.
+            let direction_probs = direction_log_probs.clone().exp();
+            let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
+            let action_probs = action_log_probs.clone().exp();
+            let action_entropy = (action_probs * action_log_probs).neg().sum();
+            let entropy = direction_entropy + action_entropy;
 
             // Build-power network.
-            let power_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(one_hot(step.edge_index, num_edges).into_iter())
-                .collect();
-            let power_input = tensor1d_from_vec(&power_features);
-            let power_mean = self.model.power_net.forward(power_input).flatten::<1>(0, 1);
+            let edge_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                TensorData::new(one_hot(step.edge_index, num_edges), [1, num_edges]),
+                &self.device,
+            );
+            let power_mean = self
+                .model
+                .power_mean(latent.clone(), edge_one_hot)
+                .flatten::<1>(0, 1);
             let power_log_prob = gaussian_log_prob_scalar(
                 power_mean,
                 step.target_power,
@@ -617,13 +682,14 @@ impl Trainer {
             );
 
             // Engineer-squad network.
-            let squad_features: Vec<f32> = base_features
-                .iter()
-                .copied()
-                .chain(std::iter::once(step.target_power))
-                .collect();
-            let squad_input = tensor1d_from_vec(&squad_features);
-            let squad_means = self.model.squad_net.forward(squad_input).flatten::<1>(0, 1);
+            let power_tensor = Tensor::<TrainBackend, 2>::from_data(
+                TensorData::new(vec![step.target_power], [1, 1]),
+                &self.device,
+            );
+            let squad_means = self
+                .model
+                .squad_means(latent, power_tensor)
+                .flatten::<1>(0, 1);
             let squad_log_prob = gaussian_log_prob_vec(
                 squad_means,
                 &step.desired_squad,
@@ -631,7 +697,8 @@ impl Trainer {
                 &self.device,
             );
 
-            let joint_log_prob = macro_log_prob + power_log_prob + squad_log_prob;
+            let joint_log_prob =
+                direction_log_prob + action_log_prob + power_log_prob + squad_log_prob;
             let return_tensor = Tensor::<TrainBackend, 1>::from_data(
                 TensorData::new(vec![step.return_value], [1]),
                 &self.device,
@@ -696,38 +763,84 @@ impl Trainer {
                 let base_features = state_features(&state, units, planner_config);
                 let num_edges = edge_index.len();
 
-                // Macro cross-entropy loss.
+                let category = edge_index
+                    .get(step.edge_index)
+                    .map(|e| e.category())
+                    .unwrap_or(EdgeCategory::Progress);
+                let direction_index = category as usize;
+
                 let macro_features: Vec<f32> = {
                     let mut v = base_features.clone();
                     v.extend_from_slice(&step.shortfall);
                     v
                 };
                 let macro_input = tensor1d_from_vec(&macro_features);
-                let macro_logits = self.model.macro_net.forward(macro_input).flatten::<1>(0, 1);
-                let mask: Vec<f32> = current_mask
-                    .iter()
-                    .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
-                    .collect();
-                let mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                    TensorData::new(mask, [num_edges]),
+                let latent = self.model.latent(macro_input);
+
+                // Direction cross-entropy loss.
+                let direction_logits = self
+                    .model
+                    .direction_logits(latent.clone())
+                    .flatten::<1>(0, 1);
+                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+                let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                    TensorData::new(
+                        direction_mask
+                            .iter()
+                            .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                            .collect(),
+                        [DIRECTION_COUNT],
+                    ),
                     &self.device,
                 );
-                let masked_logits = macro_logits + mask_tensor;
-                let log_probs = log_softmax(masked_logits, 0);
-                let index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                let masked_direction_logits = direction_logits + direction_mask_tensor;
+                let direction_log_probs = log_softmax(masked_direction_logits, 0);
+                let direction_index_tensor =
+                    Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                        TensorData::new(vec![direction_index as i64], [1]),
+                        &self.device,
+                    );
+                let direction_ce = direction_log_probs.select(0, direction_index_tensor).neg();
+
+                // Action cross-entropy loss (conditioned on the recorded direction).
+                let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                    TensorData::new(
+                        one_hot(direction_index, DIRECTION_COUNT),
+                        [1, DIRECTION_COUNT],
+                    ),
+                    &self.device,
+                );
+                let action_logits = self
+                    .model
+                    .action_logits(latent.clone(), direction_one_hot)
+                    .flatten::<1>(0, 1);
+                let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                    TensorData::new(
+                        current_mask
+                            .iter()
+                            .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                            .collect(),
+                        [num_edges],
+                    ),
+                    &self.device,
+                );
+                let masked_action_logits = action_logits + action_mask_tensor;
+                let action_log_probs = log_softmax(masked_action_logits, 0);
+                let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
                     TensorData::new(vec![step.edge_index as i64], [1]),
                     &self.device,
                 );
-                let macro_ce = log_probs.select(0, index_tensor).neg();
+                let action_ce = action_log_probs.select(0, edge_index_tensor).neg();
 
                 // Build-power MSE loss.
-                let power_features: Vec<f32> = base_features
-                    .iter()
-                    .copied()
-                    .chain(one_hot(step.edge_index, num_edges).into_iter())
-                    .collect();
-                let power_input = tensor1d_from_vec(&power_features);
-                let power_mean = self.model.power_net.forward(power_input).flatten::<1>(0, 1);
+                let edge_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                    TensorData::new(one_hot(step.edge_index, num_edges), [1, num_edges]),
+                    &self.device,
+                );
+                let power_mean = self
+                    .model
+                    .power_mean(latent.clone(), edge_one_hot)
+                    .flatten::<1>(0, 1);
                 let target_power = Tensor::<TrainBackend, 1>::from_data(
                     TensorData::new(vec![step.target_power], [1]),
                     &self.device,
@@ -736,13 +849,14 @@ impl Trainer {
                 let power_mse = (power_diff.clone() * power_diff).sum();
 
                 // Engineer-squad MSE loss.
-                let squad_features: Vec<f32> = base_features
-                    .iter()
-                    .copied()
-                    .chain(std::iter::once(step.target_power))
-                    .collect();
-                let squad_input = tensor1d_from_vec(&squad_features);
-                let squad_means = self.model.squad_net.forward(squad_input).flatten::<1>(0, 1);
+                let power_tensor = Tensor::<TrainBackend, 2>::from_data(
+                    TensorData::new(vec![step.target_power], [1, 1]),
+                    &self.device,
+                );
+                let squad_means = self
+                    .model
+                    .squad_means(latent, power_tensor)
+                    .flatten::<1>(0, 1);
                 let target_squad = Tensor::<TrainBackend, 1>::from_data(
                     TensorData::new(step.desired_squad.to_vec(), [3]),
                     &self.device,
@@ -750,7 +864,7 @@ impl Trainer {
                 let squad_diff = squad_means - target_squad;
                 let squad_mse = (squad_diff.clone() * squad_diff).sum();
 
-                let step_loss = macro_ce + power_mse + squad_mse;
+                let step_loss = direction_ce + action_ce + power_mse + squad_mse;
                 total_loss_value += step_loss.clone().into_data().as_slice::<f32>().unwrap()[0];
                 accumulated_loss = Some(match accumulated_loss {
                     Some(acc) => acc + step_loss,

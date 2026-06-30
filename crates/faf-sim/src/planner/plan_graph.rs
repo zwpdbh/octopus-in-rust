@@ -1,24 +1,24 @@
 //! ACU-rooted plan graph for build-order visualisation.
 //!
 //! The plan graph starts from the ACU and expands forward through build and
-//! upgrade rules. It includes
-//! both the technology chain (factories, engineers) and the economic
-//! infrastructure (mass extractors, power generators) required to reach a
-//! goal unit.
+//! upgrade rules. It includes the technology chain (factories, engineers) and
+//! the economic infrastructure (mass extractors, power generators) required to
+//! reach any supported goal unit.
+//!
+//! The graph is intentionally made *universal*: one graph contains all common
+//! units and all candidate goal units. A concrete goal is just a pointer into
+//! this graph; `PlanGraph::for_goal` produces a goal-specific view by pruning
+//! everything that is not an ancestor of the chosen goal.
 //!
 //! Edges have two kinds:
 //!
 //! - `Build` — the source unit can construct the target unit.
 //! - `Upgrade` — the source unit can be upgraded into the target unit.
-//!
-//! The graph is intentionally simplified: it shows one representative of each
-//! common tier (T1/T2/T3 factories, engineers, mexes, pgens) plus the goal.
-//! Faction-specific names are normalised to the abstract `UnitKind` labels.
 
 use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::Bfs;
+use petgraph::visit::{Bfs, EdgeRef};
 
 use crate::units::{TechLevel, UnitKind, Units};
 
@@ -29,6 +29,43 @@ pub enum PlanEdgeKind {
     Build,
     /// Source unit is upgraded into the target unit.
     Upgrade,
+}
+
+/// Strategic focus of a plan-graph edge.
+///
+/// This is used by the hierarchical policy network: the direction head picks
+/// a focus, and the action head then scores only the legal edges that belong
+/// to that focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EdgeCategory {
+    /// Edges that increase mass income.
+    Mass,
+    /// Edges that increase energy income or storage.
+    Energy,
+    /// Edges that increase build power.
+    BuildPower,
+    /// Edges that directly advance toward the concrete goal unit.
+    Progress,
+}
+
+impl EdgeCategory {
+    /// All possible strategic directions.
+    pub const ALL: [EdgeCategory; 4] = [
+        EdgeCategory::Mass,
+        EdgeCategory::Energy,
+        EdgeCategory::BuildPower,
+        EdgeCategory::Progress,
+    ];
+
+    /// Categorise an edge based on what the target unit contributes.
+    pub fn categorize(_source: &UnitKind, target: &UnitKind) -> EdgeCategory {
+        match target {
+            UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex => EdgeCategory::Mass,
+            UnitKind::Pgen(_) | UnitKind::EnergyStorage => EdgeCategory::Energy,
+            UnitKind::Engineer(_) | UnitKind::Factory(_) => EdgeCategory::BuildPower,
+            UnitKind::Commander | UnitKind::Unique(_) => EdgeCategory::Progress,
+        }
+    }
 }
 
 /// A simplified, ACU-rooted plan graph for a goal unit.
@@ -59,6 +96,61 @@ impl PlanGraph {
     }
 }
 
+/// A universal, faction-abstract plan graph containing all relevant units.
+///
+/// Candidate goal units (T4 experimentals and selected important T3 structures)
+/// live alongside the common technology and economic tree. A concrete
+/// [`PlanGraph`] view for any supported goal can be derived on demand.
+#[derive(Debug, Clone, Default)]
+pub struct UniversalPlanGraph {
+    graph: DiGraph<UnitKind, PlanEdgeKind>,
+}
+
+impl UniversalPlanGraph {
+    /// Borrow the underlying petgraph structure.
+    pub fn graph(&self) -> &DiGraph<UnitKind, PlanEdgeKind> {
+        &self.graph
+    }
+
+    /// Return a goal-specific view containing the goal and all common units up
+    /// to the technology tier it requires.
+    ///
+    /// This keeps the same economic/tech breadth as the old per-goal builder:
+    /// reaching a T3/Experimental goal includes every T1-T3 common unit, while
+    /// a T1 goal includes only the T1 common units.
+    pub fn for_goal(&self, units: &Units, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
+        let max_tech = max_tech_needed(units, goal);
+        let relevant: HashSet<UnitKind> = relevant_unit_kinds(max_tech, goal).into_iter().collect();
+
+        let mut subgraph = DiGraph::<UnitKind, PlanEdgeKind>::new();
+        let mut new_indices: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        for old_idx in self.graph.node_indices() {
+            let kind = &self.graph[old_idx];
+            if relevant.contains(kind) {
+                new_indices.insert(old_idx, subgraph.add_node(kind.clone()));
+            }
+        }
+
+        for edge in self.graph.edge_references() {
+            if relevant.contains(&self.graph[edge.source()])
+                && relevant.contains(&self.graph[edge.target()])
+            {
+                let s = new_indices[&edge.source()];
+                let t = new_indices[&edge.target()];
+                if subgraph.find_edge(s, t).is_none() {
+                    subgraph.add_edge(s, t, *edge.weight());
+                }
+            }
+        }
+
+        if !is_reachable(&subgraph, &UnitKind::Commander, goal) {
+            return Err(PlanGraphError::GoalUnreachable(goal.clone()));
+        }
+
+        Ok(PlanGraph::new(subgraph, goal.clone()))
+    }
+}
+
 /// Error returned when a plan graph cannot be constructed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanGraphError {
@@ -80,41 +172,14 @@ impl std::error::Error for PlanGraphError {}
 
 /// Build a simplified, ACU-rooted plan graph for `goal`.
 ///
-/// The returned graph contains:
-///
-/// - The ACU as the root.
-/// - All common factory, engineer, mex and pgen tiers up to the technology
-///   level required by the goal.
-/// - The goal unit itself.
-/// - `Build` edges for same-tier construction (e.g. T2 factory -> T2 engineer).
-/// - `Upgrade` edges for tier progression (e.g. T1 factory -> T2 factory).
-/// - The actual build edge from the goal's legal builder(s) to the goal.
+/// This is a convenience wrapper around [`build_universal_plan_graph`] followed
+/// by [`UniversalPlanGraph::for_goal`].
 pub fn build_plan_graph(units: &Units, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
-    let max_tech = max_tech_needed(units, goal);
-    let relevant = relevant_unit_kinds(max_tech, goal);
-
-    let mut graph = DiGraph::<UnitKind, PlanEdgeKind>::new();
-    let mut indices: HashMap<UnitKind, NodeIndex> = HashMap::new();
-    for kind in &relevant {
-        indices.insert(kind.clone(), graph.add_node(kind.clone()));
-    }
-
-    add_build_edges(units, &relevant, &indices, &mut graph);
-    add_upgrade_edges(units, &relevant, &indices, &mut graph);
-
-    let acu = UnitKind::Commander;
-    if !is_reachable(&graph, &acu, goal) {
-        return Err(PlanGraphError::GoalUnreachable(goal.clone()));
-    }
-
-    Ok(PlanGraph::new(graph, goal.clone()))
+    units.universal_plan_graph().for_goal(units, goal)
 }
 
 /// Determine the highest technology tier that must be achieved to build
 /// `goal`.
-///
-/// This is the maximum tier appearing in the goal's prerequisite chain or
-/// among its direct builders.
 fn max_tech_needed(units: &Units, goal: &UnitKind) -> TechLevel {
     let mut max = TechLevel::T1;
 
@@ -147,7 +212,7 @@ fn tech_level(kind: &UnitKind) -> Option<TechLevel> {
     }
 }
 
-/// Collect the unit kinds that should appear in the plan graph.
+/// Collect the unit kinds that should appear in a goal-specific plan graph.
 fn relevant_unit_kinds(max_tech: TechLevel, goal: &UnitKind) -> Vec<UnitKind> {
     let mut kinds = Vec::new();
     kinds.push(UnitKind::Commander);
@@ -163,8 +228,12 @@ fn relevant_unit_kinds(max_tech: TechLevel, goal: &UnitKind) -> Vec<UnitKind> {
     }
 
     // Capped mexes and energy storage are available once engineers exist.
-    kinds.push(UnitKind::CapT2Mex);
-    kinds.push(UnitKind::CapT3Mex);
+    if max_tech >= TechLevel::T2 {
+        kinds.push(UnitKind::CapT2Mex);
+    }
+    if max_tech >= TechLevel::T3 {
+        kinds.push(UnitKind::CapT3Mex);
+    }
     kinds.push(UnitKind::EnergyStorage);
 
     if !kinds.contains(goal) {
@@ -174,32 +243,67 @@ fn relevant_unit_kinds(max_tech: TechLevel, goal: &UnitKind) -> Vec<UnitKind> {
     kinds
 }
 
+/// Build the universal plan graph containing all common units and candidate
+/// goal units.
+pub fn build_universal_plan_graph(units: &Units) -> UniversalPlanGraph {
+    let mut kinds = common_unit_kinds();
+    for goal in units.goal_candidates() {
+        if !kinds.contains(goal) {
+            kinds.push(goal.clone());
+        }
+    }
+
+    let mut graph = DiGraph::<UnitKind, PlanEdgeKind>::new();
+    let mut indices: HashMap<UnitKind, NodeIndex> = HashMap::new();
+    for kind in &kinds {
+        indices.insert(kind.clone(), graph.add_node(kind.clone()));
+    }
+    let kind_set: HashSet<&UnitKind> = kinds.iter().collect();
+
+    add_build_edges(units, &kinds, &kind_set, &indices, &mut graph);
+    add_upgrade_edges(units, &kinds, &kind_set, &indices, &mut graph);
+
+    UniversalPlanGraph { graph }
+}
+
+/// Return the common unit kinds that are always part of the plan graph.
+fn common_unit_kinds() -> Vec<UnitKind> {
+    let mut kinds = vec![UnitKind::Commander];
+    for tech in [TechLevel::T1, TechLevel::T2, TechLevel::T3] {
+        kinds.push(UnitKind::Factory(tech));
+        kinds.push(UnitKind::Engineer(tech));
+        kinds.push(UnitKind::Mex(tech));
+        kinds.push(UnitKind::Pgen(tech));
+    }
+    kinds.push(UnitKind::CapT2Mex);
+    kinds.push(UnitKind::CapT3Mex);
+    kinds.push(UnitKind::EnergyStorage);
+    kinds
+}
+
 /// Add `Build` edges between relevant units.
 ///
-/// We keep edges that represent natural same-tier construction, plus the
-/// edge from the goal's actual builder(s) to the goal. Higher-tier builders
-/// constructing lower-tier targets (e.g. a T3 engineer rebuilding a T1 mex)
-/// are omitted to keep the plan graph readable.
+/// We keep natural same-tier construction edges for common units and the real
+/// builder edges for every unique goal candidate.
 fn add_build_edges(
     units: &Units,
-    relevant: &[UnitKind],
+    kinds: &[UnitKind],
+    kind_set: &HashSet<&UnitKind>,
     indices: &HashMap<UnitKind, NodeIndex>,
     graph: &mut DiGraph<UnitKind, PlanEdgeKind>,
 ) {
-    let relevant_set: HashSet<&UnitKind> = relevant.iter().collect();
-
-    for target in relevant {
+    for target in kinds {
         let Some(recipe) = units.build_recipe(target) else {
             continue;
         };
 
         for builder in &recipe.builder_options {
-            if !relevant_set.contains(builder) {
+            if !kind_set.contains(builder) {
                 continue;
             }
 
-            // Always show the actual builder edge for the goal.
-            if target == relevant.last().expect("goal is last") {
+            // Always show the actual builder edge for unique goal candidates.
+            if matches!(target, UnitKind::Unique(_)) {
                 add_edge(graph, indices, builder, target, PlanEdgeKind::Build);
                 continue;
             }
@@ -215,15 +319,14 @@ fn add_build_edges(
 /// Add `Upgrade` edges between relevant units.
 fn add_upgrade_edges(
     units: &Units,
-    relevant: &[UnitKind],
+    kinds: &[UnitKind],
+    kind_set: &HashSet<&UnitKind>,
     indices: &HashMap<UnitKind, NodeIndex>,
     graph: &mut DiGraph<UnitKind, PlanEdgeKind>,
 ) {
-    let relevant_set: HashSet<&UnitKind> = relevant.iter().collect();
-
-    for from in relevant {
+    for from in kinds {
         for recipe in units.upgrade_recipes(from) {
-            if relevant_set.contains(&recipe.from) && relevant_set.contains(&recipe.to) {
+            if kind_set.contains(&recipe.from) && kind_set.contains(&recipe.to) {
                 add_edge(
                     graph,
                     indices,
@@ -257,6 +360,7 @@ fn add_edge(
 /// - ACU constructing T1 infrastructure (factory, mex, pgen).
 /// - A factory constructing an engineer of the same tier.
 /// - An engineer constructing a mex or pgen of the same tier.
+/// - Any engineer constructing energy storage.
 ///
 /// This deliberately excludes higher-tier builders constructing lower-tier
 /// structures or engineers constructing factories, both of which would create
@@ -281,13 +385,10 @@ fn is_reachable(
     start: &UnitKind,
     goal: &UnitKind,
 ) -> bool {
-    let mut bfs = Bfs::new(
-        graph,
-        graph
-            .node_indices()
-            .find(|i| graph[*i] == *start)
-            .expect("start node exists"),
-    );
+    let Some(start_idx) = graph.node_indices().find(|i| graph[*i] == *start) else {
+        return false;
+    };
+    let mut bfs = Bfs::new(graph, start_idx);
     while let Some(idx) = bfs.next(graph) {
         if graph[idx] == *goal {
             return true;
@@ -387,5 +488,60 @@ mod tests {
         assert!(node_set.contains(&UnitKind::Commander));
         assert!(node_set.contains(&UnitKind::Pgen(TechLevel::T1)));
         assert!(!node_set.contains(&UnitKind::Factory(TechLevel::T2)));
+    }
+
+    #[test]
+    fn universal_graph_contains_multiple_goal_candidates() {
+        let units = load_units();
+        let universal = units.universal_plan_graph();
+        let node_set: HashSet<UnitKind> = universal
+            .graph
+            .raw_nodes()
+            .iter()
+            .map(|n| n.weight.clone())
+            .collect();
+
+        assert!(node_set.contains(&UnitKind::Commander));
+        assert!(node_set.contains(&UnitKind::Factory(TechLevel::T3)));
+        assert!(node_set.contains(&UnitKind::Mex(TechLevel::T3)));
+        // Fatboy and Monkeylord are both T4 experimentals and should coexist.
+        assert!(node_set.contains(&UnitKind::Unique(crate::units::UnitId(
+            "UEL0401".to_string()
+        ))));
+        assert!(node_set.contains(&UnitKind::Unique(crate::units::UnitId(
+            "URL0402".to_string()
+        ))));
+    }
+
+    #[test]
+    fn goal_views_are_independent_subgraphs() {
+        let units = load_units();
+        let fatboy = UnitKind::Unique(crate::units::UnitId("UEL0401".to_string()));
+        let monkeylord = UnitKind::Unique(crate::units::UnitId("URL0402".to_string()));
+
+        let fatboy_graph = build_plan_graph(&units, &fatboy).expect("fatboy reachable");
+        let monkeylord_graph = build_plan_graph(&units, &monkeylord).expect("monkeylord reachable");
+
+        let fatboy_nodes: HashSet<UnitKind> = fatboy_graph
+            .graph()
+            .raw_nodes()
+            .iter()
+            .map(|n| n.weight.clone())
+            .collect();
+        let monkeylord_nodes: HashSet<UnitKind> = monkeylord_graph
+            .graph()
+            .raw_nodes()
+            .iter()
+            .map(|n| n.weight.clone())
+            .collect();
+
+        // The common tech/eco tree is shared.
+        assert!(fatboy_nodes.contains(&UnitKind::Factory(TechLevel::T3)));
+        assert!(monkeylord_nodes.contains(&UnitKind::Factory(TechLevel::T3)));
+        // Each view keeps only its own goal unit.
+        assert!(fatboy_nodes.contains(&fatboy));
+        assert!(!fatboy_nodes.contains(&monkeylord));
+        assert!(monkeylord_nodes.contains(&monkeylord));
+        assert!(!monkeylord_nodes.contains(&fatboy));
     }
 }

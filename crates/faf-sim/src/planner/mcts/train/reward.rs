@@ -1,76 +1,53 @@
 //! Reward shaping for policy-gradient training.
 
-use crate::planner::plan_graph::PlanGraph;
 use crate::sim::GraphState;
-use crate::units::{TechLevel, UnitKind, Units};
+use crate::units::Units;
 
-/// Compute a shaped reward from the final state of an episode.
+/// Compute a terminal bonus for reaching the goal.
 ///
-/// The reward is designed to encourage fast goal completion while still giving
-/// a strong signal for the economic infrastructure (mass, power, build power,
-/// energy storage) that makes fast completions possible.
-pub(crate) fn compute_progress_reward(
-    state: &GraphState,
+/// A large positive reward encourages finishing, while a small time penalty
+/// discourages very slow completions.
+pub(crate) fn compute_terminal_bonus(state: &GraphState, goal_reached: bool) -> f32 {
+    if goal_reached {
+        1000.0 - state.time as f32 * 0.2
+    } else {
+        0.0
+    }
+}
+
+/// Compute the per-step reward.
+///
+/// The agent is rewarded for increasing total active build power and punished
+/// for resource stalls and mass overflow.
+pub(crate) fn compute_step_reward(
+    prev_state: &GraphState,
+    next_state: &GraphState,
     units: &Units,
-    goal: &UnitKind,
-    plan: &PlanGraph,
 ) -> f32 {
     let mut reward = 0.0f32;
 
-    // Reward for owning nodes on the plan graph. Nodes closer to the goal
-    // contribute more, so the policy is pushed toward the goal path.
-    for node in plan.graph().node_indices() {
-        let kind = &plan.graph()[node];
-        if state.has_completed_unit(kind) {
-            let distance = crate::planner::mcts::features::distance_to_goal(plan, kind);
-            reward += 2.0 / (1.0 + distance as f32);
+    // Reward increasing build power.
+    let prev_bp = prev_state.total_active_build_power(units) as f32;
+    let next_bp = next_state.total_active_build_power(units) as f32;
+    reward += ((next_bp - prev_bp) / 20.0).clamp(-10.0, 10.0);
+
+    // Penalise mass stall: production halts when storage is empty.
+    if next_state.economy.mass_storage < 1.0 {
+        reward -= 5.0;
+    }
+
+    // Penalise mass overflow: income is wasted when storage is nearly full.
+    let mass_cap = next_state.economy.mass_storage_cap;
+    if mass_cap > 0.0 {
+        let mass_ratio = (next_state.economy.mass_storage / mass_cap) as f32;
+        if mass_ratio > 0.9 {
+            reward -= 5.0 * (mass_ratio - 0.9) / 0.1;
         }
     }
 
-    // Tech-tier milestones: unlocking higher-tier factories and engineers is
-    // critical for reaching the goal.
-    let factory_tier = [TechLevel::T1, TechLevel::T2, TechLevel::T3]
-        .iter()
-        .filter(|t| state.has_completed_unit(&UnitKind::Factory(**t)))
-        .count() as f32;
-    let engineer_tier = [TechLevel::T1, TechLevel::T2, TechLevel::T3]
-        .iter()
-        .filter(|t| state.has_completed_unit(&UnitKind::Engineer(**t)))
-        .count() as f32;
-    reward += factory_tier * 5.0;
-    reward += engineer_tier * 5.0;
-
-    // Economic infrastructure: the agent should learn to build mass, power,
-    // energy storage, and engineers. These rewards scale with counts and income
-    // so that building *more* eco is directly rewarded, not just unlocking the
-    // first instance of each unit.
-    let mex_count = state.count_active_mex() as f32;
-    let pgen_count = state.count_active_pgen() as f32;
-    let storage_count = state.count_active_energy_storage() as f32;
-    let build_power = state.total_active_build_power(units) as f32;
-
-    reward += mex_count * 2.0;
-    reward += pgen_count * 0.5;
-    reward += storage_count * 0.25;
-    reward += (build_power / 20.0).clamp(0.0, 50.0);
-
-    // Income: direct incentives for high mass/energy throughput. These are
-    // unbounded so the policy does not hit an artificial cap too early.
-    reward += (state.economy.net_mass_income as f32 / 5.0).clamp(0.0, 100.0);
-    reward += (state.economy.net_energy_income as f32 / 50.0).clamp(0.0, 100.0);
-
-    // Goal completion: the dominant term. Faster completions get much higher
-    // reward, which should drive the policy to invest in the eco needed to
-    // achieve them.
-    if state.goal_reached(goal) {
-        reward += 2500.0;
-        // Subtract roughly 0.4 reward per second of game time. At 33m this is
-        // still a large positive bonus; only very slow runs approach zero.
-        reward -= state.time as f32 * 0.4;
-    } else {
-        // Strong penalty for failing to reach the goal within the step budget,
-        // so the agent prefers finishing episodes rather than stalling.
-        reward -= 50.0;
+    // Penalise energy stall severely: it throttles build power and mass income.
+    if next_state.economy.energy_storage < 1.0 {
+        reward -= 20.0;
     }
 
     reward

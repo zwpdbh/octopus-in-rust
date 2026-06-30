@@ -1,16 +1,18 @@
-//! Learned hierarchical macro-edge + build-power + engineer-squad policy.
+//! Learned hierarchical policy network.
 //!
-//! Three small MLPs are trained jointly with REINFORCE:
+//! A single network with a shared backbone and four heads:
 //!
-//! 1. `MacroNet` selects a concrete plan-graph edge from state features plus
-//!    engineer-shortfall feedback.
-//! 2. `BuildPowerNet` decides how much build power to allocate to the selected
+//! 1. **Direction head** — picks a strategic focus (`Mass`, `Energy`, `BuildPower`,
+//!    or `Progress`).
+//! 2. **Action head** — scores the legal plan-graph edges inside the chosen focus.
+//! 3. **Power head** — decides how much build power to allocate to the selected
 //!    edge.
-//! 3. `EngineerSquadNet` decides the desired [T1, T2, T3] engineer counts to
-//!    realize that build power.
+//! 4. **Squad head** — decides the desired `[T1, T2, T3]` engineer counts to
+//!    deliver that build power.
 //!
-//! At inference all three networks are deterministic: argmax over legal edges,
-//! then round/clamp for build power and the engineer squad.
+//! At inference the network is deterministic: masked argmax over legal
+//! directions, then masked argmax over the legal edges in that direction, then
+//! round/clamp for build power and the engineer squad.
 
 use burn::module::Module;
 use burn::nn::{Linear, LinearConfig, Relu};
@@ -21,7 +23,11 @@ use rand::prelude::*;
 
 use super::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
 use super::selections::PlanEdgeIndex;
+use crate::planner::plan_graph::EdgeCategory;
 use crate::units::{UnitKind, Units};
+
+/// Number of strategic directions the direction head can choose from.
+pub const DIRECTION_COUNT: usize = 4;
 
 /// Standard deviation used when sampling build power during training.
 pub const DEFAULT_POWER_STD: f32 = 2.0;
@@ -31,177 +37,151 @@ pub const DEFAULT_SQUAD_STD: f32 = 0.5;
 /// Mask value that makes a logit numerically irrelevant after softmax.
 pub(crate) const MASK_VALUE: f32 = -1e9;
 
-/// Macro-edge policy network.
+/// Hierarchical policy network.
 ///
 /// Input: base state features + previous-tick engineer shortfall.
-/// Output: logits over the edges of the plan graph.
+/// Outputs: direction logits, action logits over plan-graph edges, scalar target
+/// build power, and `[T1, T2, T3]` engineer counts.
 #[derive(Module, Debug)]
-pub struct MacroNet<B: Backend> {
-    linear1: Linear<B>,
+pub struct HierarchicalPolicyNet<B: Backend> {
+    backbone1: Linear<B>,
+    backbone2: Linear<B>,
     activation: Relu,
-    linear2: Linear<B>,
-    output: Linear<B>,
+    direction_head: Linear<B>,
+    action_hidden: Linear<B>,
+    action_head: Linear<B>,
+    power_hidden: Linear<B>,
+    power_head: Linear<B>,
+    squad_hidden: Linear<B>,
+    squad_head: Linear<B>,
 }
 
-impl<B: Backend> MacroNet<B> {
-    /// Create a new macro network that outputs one logit per plan-graph edge.
+impl<B: Backend> HierarchicalPolicyNet<B> {
+    /// Create a new hierarchical policy for a plan graph with `num_edges`.
     pub fn new(device: &B::Device, num_edges: usize) -> Self {
+        let backbone_input = STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT;
+        let backbone_hidden = 128;
+        let latent_dim = 64;
+
         Self {
-            linear1: LinearConfig::new(STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT, 128)
-                .init(device),
+            backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
+            backbone2: LinearConfig::new(backbone_hidden, latent_dim).init(device),
             activation: Relu::new(),
-            linear2: LinearConfig::new(128, 64).init(device),
-            output: LinearConfig::new(64, num_edges).init(device),
+            direction_head: LinearConfig::new(latent_dim, DIRECTION_COUNT).init(device),
+            action_hidden: LinearConfig::new(latent_dim + DIRECTION_COUNT, 128).init(device),
+            action_head: LinearConfig::new(128, num_edges).init(device),
+            power_hidden: LinearConfig::new(latent_dim + num_edges, 64).init(device),
+            power_head: LinearConfig::new(64, 1).init(device),
+            squad_hidden: LinearConfig::new(latent_dim + 1, 64).init(device),
+            squad_head: LinearConfig::new(64, 3).init(device),
         }
     }
 
-    /// Expected size of the input feature vector.
-    pub fn input_dim(&self) -> usize {
-        let [d_input, _] = self.linear1.weight.shape().dims();
-        d_input
-    }
-
-    /// Number of edges this network scores.
-    pub fn output_dim(&self) -> usize {
-        let [_, d_output] = self.output.weight.shape().dims();
-        d_output
-    }
-
-    /// Evaluate a batch of feature vectors.
-    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
-        let x = self.linear1.forward(features);
+    /// Shared backbone that turns state features into a latent vector.
+    pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
+        let x = self.backbone1.forward(features);
         let x = self.activation.forward(x);
-        let x = self.linear2.forward(x);
+        let x = self.backbone2.forward(x);
+        self.activation.forward(x)
+    }
+
+    /// Direction logits from a latent vector.
+    pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
+        self.direction_head.forward(latent)
+    }
+
+    /// Action logits from a latent vector and a one-hot direction.
+    pub(crate) fn action_logits(
+        &self,
+        latent: Tensor<B, 2>,
+        direction_one_hot: Tensor<B, 2>,
+    ) -> Tensor<B, 2> {
+        let x = Tensor::cat(vec![latent, direction_one_hot], 1);
+        let x = self.action_hidden.forward(x);
         let x = self.activation.forward(x);
-        self.output.forward(x)
+        self.action_head.forward(x)
     }
 
-    /// Convenience wrapper for a single feature vector.
-    pub fn evaluate_single(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-        let feature_count = features.len();
-        let data = TensorData::new(features, [1, feature_count]);
-        let tensor = Tensor::from_data(data, device);
-        let output = self.forward(tensor);
-        output.into_data().as_slice::<f32>().unwrap().to_vec()
-    }
-}
-
-/// Build-power network.
-///
-/// Input: base state features + one-hot selected edge.
-/// Output: scalar target build power.
-#[derive(Module, Debug)]
-pub struct BuildPowerNet<B: Backend> {
-    linear1: Linear<B>,
-    activation: Relu,
-    linear2: Linear<B>,
-    output: Linear<B>,
-}
-
-impl<B: Backend> BuildPowerNet<B> {
-    /// Create a new build-power network.
-    pub fn new(device: &B::Device, num_edges: usize) -> Self {
-        Self {
-            linear1: LinearConfig::new(STATE_FEATURE_COUNT + num_edges, 64).init(device),
-            activation: Relu::new(),
-            linear2: LinearConfig::new(64, 32).init(device),
-            output: LinearConfig::new(32, 1).init(device),
-        }
-    }
-
-    /// Evaluate a batch of feature vectors.
-    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
-        let x = self.linear1.forward(features);
+    /// Scalar target build power from a latent vector and a one-hot selected edge.
+    pub(crate) fn power_mean(
+        &self,
+        latent: Tensor<B, 2>,
+        edge_one_hot: Tensor<B, 2>,
+    ) -> Tensor<B, 2> {
+        let x = Tensor::cat(vec![latent, edge_one_hot], 1);
+        let x = self.power_hidden.forward(x);
         let x = self.activation.forward(x);
-        let x = self.linear2.forward(x);
+        self.power_head.forward(x)
+    }
+
+    /// `[T1, T2, T3]` engineer counts from a latent vector and target power.
+    pub(crate) fn squad_means(&self, latent: Tensor<B, 2>, power: Tensor<B, 2>) -> Tensor<B, 2> {
+        let x = Tensor::cat(vec![latent, power], 1);
+        let x = self.squad_hidden.forward(x);
         let x = self.activation.forward(x);
-        self.output.forward(x)
+        self.squad_head.forward(x)
     }
 
-    /// Convenience wrapper for a single feature vector.
-    pub fn evaluate_single(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-        let feature_count = features.len();
-        let data = TensorData::new(features, [1, feature_count]);
-        let tensor = Tensor::from_data(data, device);
-        let output = self.forward(tensor);
-        output.into_data().as_slice::<f32>().unwrap().to_vec()
+    /// Convenience: evaluate the direction head on a single feature vector.
+    pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
+        let tensor = tensor_from_vec(&features, device);
+        let logits = self.direction_logits(self.latent(tensor));
+        logits.into_data().as_slice::<f32>().unwrap().to_vec()
     }
 
-    /// Number of outputs from this network.
-    pub fn output_dim(&self) -> usize {
-        let [_, d_output] = self.output.weight.shape().dims();
-        d_output
-    }
-}
-
-/// Engineer-squad network.
-///
-/// Input: base state features + target build power.
-/// Output: [T1, T2, T3] engineer counts.
-#[derive(Module, Debug)]
-pub struct EngineerSquadNet<B: Backend> {
-    linear1: Linear<B>,
-    activation: Relu,
-    linear2: Linear<B>,
-    output: Linear<B>,
-}
-
-impl<B: Backend> EngineerSquadNet<B> {
-    /// Create a new engineer-squad network.
-    pub fn new(device: &B::Device) -> Self {
-        Self {
-            linear1: LinearConfig::new(STATE_FEATURE_COUNT + 1, 64).init(device),
-            activation: Relu::new(),
-            linear2: LinearConfig::new(64, 32).init(device),
-            output: LinearConfig::new(32, 3).init(device),
-        }
+    /// Convenience: evaluate the action head on a single feature vector and
+    /// chosen direction.
+    pub fn evaluate_action(
+        &self,
+        features: Vec<f32>,
+        direction: EdgeCategory,
+        device: &B::Device,
+    ) -> Vec<f32> {
+        let latent = self.latent(tensor_from_vec(&features, device));
+        let direction_one_hot =
+            tensor_from_vec(&one_hot(direction as usize, DIRECTION_COUNT), device);
+        let logits = self.action_logits(latent, direction_one_hot);
+        logits.into_data().as_slice::<f32>().unwrap().to_vec()
     }
 
-    /// Evaluate a batch of feature vectors.
-    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
-        let x = self.linear1.forward(features);
-        let x = self.activation.forward(x);
-        let x = self.linear2.forward(x);
-        let x = self.activation.forward(x);
-        self.output.forward(x)
+    /// Convenience: evaluate the power head on a single feature vector and
+    /// selected edge.
+    pub fn evaluate_power(
+        &self,
+        features: Vec<f32>,
+        edge_idx: usize,
+        num_edges: usize,
+        device: &B::Device,
+    ) -> f32 {
+        let latent = self.latent(tensor_from_vec(&features, device));
+        let edge_one_hot = tensor_from_vec(&one_hot(edge_idx, num_edges), device);
+        let out = self.power_mean(latent, edge_one_hot);
+        out.into_data().as_slice::<f32>().unwrap()[0]
     }
 
-    /// Convenience wrapper for a single feature vector.
-    pub fn evaluate_single(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-        let feature_count = features.len();
-        let data = TensorData::new(features, [1, feature_count]);
-        let tensor = Tensor::from_data(data, device);
-        let output = self.forward(tensor);
-        output.into_data().as_slice::<f32>().unwrap().to_vec()
+    /// Convenience: evaluate the squad head on a single feature vector and
+    /// target power.
+    pub fn evaluate_squad(&self, features: Vec<f32>, power: f32, device: &B::Device) -> Vec<f32> {
+        let latent = self.latent(tensor_from_vec(&features, device));
+        let power_tensor = tensor_from_vec(&vec![power], device);
+        let out = self.squad_means(latent, power_tensor);
+        out.into_data().as_slice::<f32>().unwrap().to_vec()
     }
 
-    /// Number of outputs from this network.
-    pub fn output_dim(&self) -> usize {
-        let [_, d_output] = self.output.weight.shape().dims();
+    /// Number of plan-graph edges this network scores.
+    pub fn num_edges(&self) -> usize {
+        let [_, d_output] = self.action_head.weight.shape().dims();
         d_output
     }
 }
 
-/// Container for the three jointly-trained policy networks.
-#[derive(Module, Debug)]
-pub struct PolicyBundle<B: Backend> {
-    /// Selects the concrete plan-graph edge to satisfy.
-    pub macro_net: MacroNet<B>,
-    /// Decides how much build power the selected edge needs.
-    pub power_net: BuildPowerNet<B>,
-    /// Decides the [T1, T2, T3] engineer counts for that build power.
-    pub squad_net: EngineerSquadNet<B>,
-}
+/// Compatibility alias for code that refers to the old `PolicyBundle`.
+pub type PolicyBundle<B> = HierarchicalPolicyNet<B>;
 
-impl<B: Backend> PolicyBundle<B> {
-    /// Create a randomly-initialized policy for a plan graph with `num_edges`.
-    pub fn new(device: &B::Device, num_edges: usize) -> Self {
-        Self {
-            macro_net: MacroNet::new(device, num_edges),
-            power_net: BuildPowerNet::new(device, num_edges),
-            squad_net: EngineerSquadNet::new(device),
-        }
-    }
+/// Build a 2-D tensor of shape `[1, features.len()]` from a feature vector.
+fn tensor_from_vec<B: Backend>(features: &[f32], device: &B::Device) -> Tensor<B, 2> {
+    let data = TensorData::new(features.to_vec(), [1, features.len()]);
+    Tensor::<B, 2>::from_data(data, device)
 }
 
 /// Build a one-hot vector with `1.0` at `idx`.
@@ -222,7 +202,7 @@ pub fn apply_mask(logits: &mut [f32], mask: &[bool]) {
     }
 }
 
-/// Deterministically select the highest-scoring legal edge.
+/// Deterministically select the highest-scoring legal item.
 pub fn masked_argmax(logits: &[f32], mask: &[bool]) -> Option<usize> {
     logits
         .iter()
@@ -328,33 +308,31 @@ mod tests {
     }
 
     #[test]
-    fn macro_net_runs_forward_pass() {
+    fn hierarchical_net_runs_forward_pass() {
         let device = Default::default();
-        let net: MacroNet<burn::backend::NdArray> = MacroNet::new(&device, 25);
+        let net: HierarchicalPolicyNet<burn::backend::NdArray> =
+            HierarchicalPolicyNet::new(&device, 25);
+
         let features = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];
-        let scores = net.evaluate_single(features, &device);
-        assert_eq!(scores.len(), 25);
-        assert!(scores.iter().all(|s| s.is_finite()));
-    }
+        let latent = net.latent(tensor_from_vec(&features, &device));
 
-    #[test]
-    fn build_power_net_runs_forward_pass() {
-        let device = Default::default();
-        let net: BuildPowerNet<burn::backend::NdArray> = BuildPowerNet::new(&device, 25);
-        let features = vec![0.0f32; STATE_FEATURE_COUNT + 25];
-        let out = net.evaluate_single(features, &device);
-        assert_eq!(out.len(), 1);
-        assert!(out[0].is_finite());
-    }
+        let direction = net.direction_logits(latent.clone());
+        assert_eq!(
+            direction.into_data().as_slice::<f32>().unwrap().len(),
+            DIRECTION_COUNT
+        );
 
-    #[test]
-    fn engineer_squad_net_runs_forward_pass() {
-        let device = Default::default();
-        let net: EngineerSquadNet<burn::backend::NdArray> = EngineerSquadNet::new(&device);
-        let features = vec![0.0f32; STATE_FEATURE_COUNT + 1];
-        let out = net.evaluate_single(features, &device);
-        assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|s| s.is_finite()));
+        let direction_one_hot = tensor_from_vec(&one_hot(0, DIRECTION_COUNT), &device);
+        let action = net.action_logits(latent.clone(), direction_one_hot);
+        assert_eq!(action.into_data().as_slice::<f32>().unwrap().len(), 25);
+
+        let edge_one_hot = tensor_from_vec(&one_hot(0, 25), &device);
+        let power = net.power_mean(latent.clone(), edge_one_hot);
+        assert_eq!(power.into_data().as_slice::<f32>().unwrap().len(), 1);
+
+        let power_tensor = tensor_from_vec(&vec![5.0], &device);
+        let squad = net.squad_means(latent, power_tensor);
+        assert_eq!(squad.into_data().as_slice::<f32>().unwrap().len(), 3);
     }
 
     #[test]
@@ -364,9 +342,7 @@ mod tests {
         let num_edges = num_plan_edges(&units, &goal).expect("goal has a plan graph");
         let device = Default::default();
         let bundle: PolicyBundle<burn::backend::NdArray> = PolicyBundle::new(&device, num_edges);
-        assert_eq!(bundle.macro_net.output_dim(), num_edges);
-        assert_eq!(bundle.power_net.output_dim(), 1);
-        assert_eq!(bundle.squad_net.output_dim(), 3);
+        assert_eq!(bundle.num_edges(), num_edges);
     }
 
     #[test]

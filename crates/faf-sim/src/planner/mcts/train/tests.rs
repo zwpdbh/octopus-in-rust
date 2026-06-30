@@ -1,4 +1,4 @@
-use crate::planner::mcts::features::STATE_FEATURE_COUNT;
+use crate::planner::mcts::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
 use crate::planner::mcts::macro_net::plan_edge_index;
 use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
 use crate::units::{UnitId, UnitKind, Units};
@@ -51,9 +51,9 @@ fn save_and_load_policy_round_trip() {
     let loaded = load_policy(&path, num_edges).expect("load should succeed");
 
     let device: TrainDevice = Default::default();
-    let dummy = vec![0.0f32; STATE_FEATURE_COUNT + 3];
-    let before = model.macro_net.evaluate_single(dummy.clone(), &device);
-    let after = loaded.macro_net.evaluate_single(dummy, &device);
+    let dummy = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];
+    let before = model.evaluate_direction(dummy.clone(), &device);
+    let after = loaded.evaluate_direction(dummy, &device);
     assert_eq!(before.len(), after.len());
     for (a, b) in before.iter().zip(after.iter()) {
         assert!((a - b).abs() < 1e-3, "loaded model outputs should match");

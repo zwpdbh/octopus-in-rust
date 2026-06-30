@@ -5,16 +5,23 @@
 pub(crate) struct EpisodeStep {
     /// Base state feature vector (without shortfall).
     pub(crate) base_features: Vec<f32>,
-    /// Shortfall feedback fed into the macro network at this step.
+    /// Shortfall feedback fed into the direction head at this step.
     pub(crate) shortfall: [f32; 3],
-    /// Legal-edge mask used to mask the macro logits.
-    pub(crate) legal_mask: Vec<bool>,
+    /// Mask over [`EdgeCategory::ALL`] indicating which directions are legal.
+    pub(crate) direction_mask: Vec<bool>,
+    /// Selected strategic direction index (into [`EdgeCategory::ALL`]).
+    pub(crate) direction_index: usize,
+    /// Mask over plan-graph edges indicating which edges in the chosen direction
+    /// are legal.
+    pub(crate) action_mask: Vec<bool>,
     /// Index of the selected plan-graph edge.
     pub(crate) edge_index: usize,
     /// Target build power sampled for this edge.
     pub(crate) target_power: f32,
     /// Desired [T1, T2, T3] engineer counts sampled for this build power.
     pub(crate) desired_squad: [f32; 3],
+    /// Raw reward received after this step.
+    pub(crate) step_reward: f32,
     /// Normalized return for this step, filled in after the episode ends.
     pub(crate) return_value: f32,
 }

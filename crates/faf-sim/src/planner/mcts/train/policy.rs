@@ -29,8 +29,6 @@ pub fn load_policy(
     path: &std::path::Path,
     num_edges: usize,
 ) -> Result<PolicyBundle<TrainBackend>, String> {
-    use crate::planner::mcts::features::STATE_FEATURE_COUNT;
-
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();
     let record = recorder
@@ -38,17 +36,10 @@ pub fn load_policy(
         .map_err(|e| format!("failed to load model: {e}"))?;
     let model = PolicyBundle::new(&device, num_edges).load_record(record);
 
-    if model.macro_net.input_dim() != STATE_FEATURE_COUNT + 3 {
+    if model.num_edges() != num_edges {
         return Err(format!(
-            "macro network input dimension mismatch: expected {}, got {}; retrain the model",
-            STATE_FEATURE_COUNT + 3,
-            model.macro_net.input_dim()
-        ));
-    }
-    if model.macro_net.output_dim() != num_edges {
-        return Err(format!(
-            "macro network output dimension mismatch: expected {num_edges}, got {}; retrain the model",
-            model.macro_net.output_dim()
+            "action head output dimension mismatch: expected {num_edges}, got {}; retrain the model",
+            model.num_edges()
         ));
     }
 

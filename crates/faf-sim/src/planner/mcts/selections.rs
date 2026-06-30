@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use petgraph::visit::EdgeRef;
 
 use crate::planner::core::PlannerConfig;
-use crate::planner::plan_graph::{PlanEdgeKind, PlanGraph};
+use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind, PlanGraph};
 
 use crate::sim::{GraphState, NodeId, UnitNodeState};
 use crate::units::{TechLevel, UnitKind, Units};
@@ -156,6 +156,15 @@ pub struct PlanEdge {
     pub target: UnitKind,
     /// Edge kind.
     pub kind: PlanEdgeKind,
+    /// Strategic focus of this edge.
+    category: EdgeCategory,
+}
+
+impl PlanEdge {
+    /// Strategic focus of this edge.
+    pub fn category(&self) -> EdgeCategory {
+        self.category
+    }
 }
 
 /// Indexable edge list derived from a [`PlanGraph`].
@@ -170,10 +179,15 @@ impl PlanEdgeIndex {
         let edges: Vec<PlanEdge> = plan
             .graph()
             .edge_references()
-            .map(|e| PlanEdge {
-                source: plan.graph()[e.source()].clone(),
-                target: plan.graph()[e.target()].clone(),
-                kind: *e.weight(),
+            .map(|e| {
+                let source = plan.graph()[e.source()].clone();
+                let target = plan.graph()[e.target()].clone();
+                PlanEdge {
+                    source: source.clone(),
+                    target: target.clone(),
+                    kind: *e.weight(),
+                    category: EdgeCategory::categorize(&source, &target),
+                }
             })
             .collect();
         Self { edges }
@@ -209,6 +223,47 @@ impl PlanEdgeIndex {
         self.edges
             .iter()
             .map(|e| is_edge_legal(e, state, units, config))
+            .collect()
+    }
+
+    /// Return a mask for all edges that belong to `category`.
+    pub fn category_mask(&self, category: EdgeCategory) -> Vec<bool> {
+        self.edges
+            .iter()
+            .map(|e| e.category() == category)
+            .collect()
+    }
+
+    /// Return a mask for edges that are both legal in `state` and belong to
+    /// `category`.
+    pub fn legal_mask_for_category(
+        &self,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+        category: EdgeCategory,
+    ) -> Vec<bool> {
+        self.edges
+            .iter()
+            .map(|e| e.category() == category && is_edge_legal(e, state, units, config))
+            .collect()
+    }
+
+    /// Return a mask over [`EdgeCategory::ALL`] indicating which categories have
+    /// at least one legal edge in `state`.
+    pub fn legal_category_mask(
+        &self,
+        state: &GraphState,
+        units: &Units,
+        config: &PlannerConfig,
+    ) -> Vec<bool> {
+        EdgeCategory::ALL
+            .iter()
+            .map(|c| {
+                self.edges
+                    .iter()
+                    .any(|e| e.category() == *c && is_edge_legal(e, state, units, config))
+            })
             .collect()
     }
 

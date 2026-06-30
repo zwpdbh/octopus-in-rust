@@ -22,12 +22,13 @@ use faf_sim::planner::mcts::train::{
     load_policy, save_policy, train_policy, train_policy_from, TrainConfig,
 };
 use faf_sim::{
-    run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, PlanGraph, Planner,
-    SimulationConfig, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
+    run_build_order_simulation, GraphState, NodeId, PlanEdgeKind, Planner, SimulationConfig,
+    Strategy, UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
+use petgraph::Direction;
 use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, NodeLabel, RenderOptions};
 
 mod cmdline;
@@ -295,15 +296,9 @@ fn run_plan(
     }
 
     let goal_kind = target.to_sim_unit_kind();
-    let plan_graph = match units.plan_graph(&goal_kind) {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("Failed to build plan graph: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let visual_graph = build_visual_graph(units, &plan_graph);
+    let universal = units.universal_plan_graph();
+    let highlighted = ancestor_kinds(universal.graph(), &goal_kind);
+    let visual_graph = build_visual_graph(units, universal.graph(), &highlighted);
 
     let path = match output {
         Some(path) => path,
@@ -380,26 +375,79 @@ impl EdgeLabel for VisualEdge {
     }
 }
 
-/// Build a labelled petgraph from the ACU-rooted plan graph for rendering.
-///
-/// The returned graph preserves the structure of `plan_graph` but attaches
-/// human-readable labels and edge styles.
-fn build_visual_graph(
-    units: &SimUnits,
-    plan_graph: &PlanGraph,
-) -> petgraph::graph::DiGraph<String, VisualEdge> {
-    let inner = plan_graph.graph();
-    let mut graph = petgraph::graph::DiGraph::<String, VisualEdge>::new();
-    let mut indices: HashMap<SimUnitKind, NodeIndex> = HashMap::new();
+/// Collect all ancestors of `goal` in `graph` (including the goal itself).
+fn ancestor_kinds(
+    graph: &petgraph::graph::DiGraph<SimUnitKind, PlanEdgeKind>,
+    goal: &SimUnitKind,
+) -> HashSet<SimUnitKind> {
+    let mut ancestors = HashSet::new();
+    let Some(goal_idx) = graph.node_indices().find(|i| &graph[*i] == goal) else {
+        return ancestors;
+    };
 
-    for node in inner.node_indices() {
-        let kind = &inner[node];
-        indices.insert(kind.clone(), graph.add_node(node_label(units, kind)));
+    let mut queue = vec![goal_idx];
+    ancestors.insert(goal.clone());
+
+    while let Some(idx) = queue.pop() {
+        for parent in graph.neighbors_directed(idx, Direction::Incoming) {
+            if ancestors.insert(graph[parent].clone()) {
+                queue.push(parent);
+            }
+        }
     }
 
-    for edge in inner.edge_references() {
-        let from = indices[&inner[edge.source()]];
-        let to = indices[&inner[edge.target()]];
+    ancestors
+}
+
+/// A rendered node with an optional highlight colour.
+#[derive(Debug, Clone)]
+struct VisualNode {
+    label: String,
+    color: Option<String>,
+}
+
+impl NodeLabel for VisualNode {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn color(&self) -> Option<String> {
+        self.color.clone()
+    }
+}
+
+/// Build a labelled petgraph from the ACU-rooted plan graph for rendering.
+///
+/// The returned graph preserves the structure of the input graph but attaches
+/// human-readable labels, edge styles, and optional highlighting for the
+/// selected goal path.
+fn build_visual_graph(
+    units: &SimUnits,
+    plan_graph: &petgraph::graph::DiGraph<SimUnitKind, PlanEdgeKind>,
+    highlighted: &HashSet<SimUnitKind>,
+) -> petgraph::graph::DiGraph<VisualNode, VisualEdge> {
+    let mut graph = petgraph::graph::DiGraph::<VisualNode, VisualEdge>::new();
+    let mut indices: HashMap<SimUnitKind, NodeIndex> = HashMap::new();
+
+    for node in plan_graph.node_indices() {
+        let kind = &plan_graph[node];
+        let color = if highlighted.contains(kind) {
+            Some("#ffeb3b".to_string()) // yellow highlight
+        } else {
+            None
+        };
+        indices.insert(
+            kind.clone(),
+            graph.add_node(VisualNode {
+                label: node_label(units, kind),
+                color,
+            }),
+        );
+    }
+
+    for edge in plan_graph.edge_references() {
+        let from = indices[&plan_graph[edge.source()]];
+        let to = indices[&plan_graph[edge.target()]];
         graph.add_edge(from, to, VisualEdge::for_kind(*edge.weight()));
     }
 

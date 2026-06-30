@@ -20,7 +20,9 @@ use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
-use crate::planner::plan_graph::{build_plan_graph, PlanGraph, PlanGraphError};
+use crate::planner::plan_graph::{
+    build_universal_plan_graph, PlanGraph, PlanGraphError, UniversalPlanGraph,
+};
 use crate::planner::strips::{build_operators, Operator};
 
 pub use kind::{
@@ -40,6 +42,8 @@ pub struct Units {
     defs: HashMap<UnitKind, UnitDef>,
     builds: HashMap<UnitKind, BuildRecipe>,
     upgrades: HashMap<UnitKind, Vec<UpgradeRecipe>>,
+    goal_candidates: Vec<UnitKind>,
+    universal_plan_graph: UniversalPlanGraph,
 }
 
 impl Units {
@@ -156,11 +160,31 @@ impl Units {
             builds.insert(kind, recipe);
         }
 
-        Self {
+        // Collect candidate goal units (T4 experimentals and selected T3
+        // structures) for the universal plan graph.
+        let mut goal_candidates_set: HashSet<UnitKind> = HashSet::new();
+        for unit in &index.units {
+            if let Some(UnitKind::Unique(id)) = build::classify_unit(unit) {
+                if build::is_goal_candidate(unit) {
+                    goal_candidates_set.insert(UnitKind::Unique(id.clone()));
+                }
+            }
+        }
+        let mut goal_candidates: Vec<UnitKind> = goal_candidates_set
+            .into_iter()
+            .filter(|k| builds.contains_key(k))
+            .collect();
+        goal_candidates.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));
+
+        let mut units = Self {
             defs,
             builds,
             upgrades,
-        }
+            goal_candidates,
+            universal_plan_graph: UniversalPlanGraph::default(),
+        };
+        units.universal_plan_graph = build_universal_plan_graph(&units);
+        units
     }
 
     /// Look up a unit definition by kind.
@@ -234,13 +258,23 @@ impl Units {
         build_operators(self)
     }
 
+    /// Return the candidate goal units included in the universal plan graph.
+    pub fn goal_candidates(&self) -> &[UnitKind] {
+        &self.goal_candidates
+    }
+
+    /// Borrow the universal plan graph shared across all goals.
+    pub fn universal_plan_graph(&self) -> &UniversalPlanGraph {
+        &self.universal_plan_graph
+    }
+
     /// Build a simplified, ACU-rooted plan graph for the requested unit.
     ///
-    /// The graph includes the technology chain (factories, engineers) and the
-    /// economic infrastructure (mex, pgen) required to reach the goal, rooted
-    /// at the ACU.
+    /// The returned graph is a goal-specific view into the cached universal
+    /// plan graph, containing only the units and edges that are ancestors of
+    /// the chosen goal.
     pub fn plan_graph(&self, goal: &UnitKind) -> Result<PlanGraph, PlanGraphError> {
-        build_plan_graph(self, goal)
+        self.universal_plan_graph.for_goal(self, goal)
     }
 
     /// Return the prerequisite chain from the starting commander to a goal.

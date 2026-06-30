@@ -1,8 +1,8 @@
-# 1. The State Graph
+# 1. Modeling the Environment
 
-In MCTS, every node in the tree is a **state**. For FAF build-order optimization, the state is the simulator's `GraphState`. This chapter explains the structure of that state and what matters when MCTS evaluates it.
+In RL, every decision is made from a **state**. For FAF build-order optimization, the state is the simulator's `GraphState`. This chapter explains the structure of that state and how we turn it into a fixed-size feature vector that a Burn network can consume.
 
-For the full formal model — exact definitions, constraints, and assumptions — see [`model.md`](./model.md). This chapter focuses on the MCTS-relevant view.
+For the full formal model — exact definitions, constraints, and assumptions — see [`model.md`](./model.md). This chapter focuses on the RL-relevant view.
 
 ## From ACU to goal
 
@@ -25,7 +25,7 @@ pub struct GraphState {
 }
 ```
 
-MCTS does not need to invent this representation; it reuses the existing simulator state as its node payload. It also does not need to read raw FAF data; all unit knowledge comes through the `Units` repository.
+The RL planner does not need to invent this representation; it reuses the existing simulator state as its node payload. It also does not need to read raw FAF data; all unit knowledge comes through the `Units` repository.
 
 ## Nodes and edges
 
@@ -46,7 +46,7 @@ This keeps the graph history explicit: the old unit remains visible as a retired
 
 ## Builder constraints that shape the tree
 
-Builder behavior creates most of the structure that MCTS must reason about:
+Builder behavior creates most of the structure that the planner must reason about:
 
 - A builder works on **exactly one target at a time**. Its build power is indivisible.
 - A builder can contribute to many units over its lifetime, but the construction intervals must not overlap.
@@ -68,16 +68,63 @@ The state also contains the economy:
 
 When a resource-producing unit finishes, its production is added to the economy state immediately at its `finish_time`.
 
-If available mass or energy cannot sustain the assigned build power, the effective build rate is reduced proportionally to the most-constrained resource. Energy stall is especially punishing because it slows both construction and mass income. A good MCTS search will learn to avoid it.
+If available mass or energy cannot sustain the assigned build power, the effective build rate is reduced proportionally to the most-constrained resource. Energy stall is especially punishing because it slows both construction and mass income. A good RL policy will learn to avoid it.
 
 For the current model:
 
 - Energy-dependent systems (shields, radar, stealth) are ignored.
 - Reclaim is not modeled.
 
-## What MCTS sees
+## Featurizing the state
 
-From MCTS's point of view, a state is a snapshot it can evaluate and expand:
+Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `GraphState` into a 13-dimensional vector:
+
+```rust
+// crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constants
+pub const STATE_FEATURE_COUNT: usize = 13;
+pub const SHORTFALL_FEATURE_COUNT: usize = 3;
+```
+
+The 13 features are listed in `state_features`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/features.rs ~line 27 — state feature order
+// 0. net mass income   (scaled by 100)
+// 1. net energy income (scaled by 1000)
+// 2. mass storage ratio
+// 3. energy storage ratio
+// 4. total active build power (scaled by 100)
+// 5. simulation time (scaled by 3600 s)
+// 6. active mex fraction of cap
+// 7. active pgen fraction of cap
+// 8. active energy storage fraction of cap
+// 9. active project count (scaled by 10)
+// 10. has T2 factory
+// 11. has T3 factory
+// 12. has T3 engineer
+```
+
+They are intentionally economy-centric. Build orders in FAF are driven mainly by income, build power, and tech tier, so the network gets those directly instead of a huge one-hot unit roster.
+
+The macro network also receives a three-dimensional **shortfall** vector, which records how many idle engineers of each tech level were requested but unavailable in the previous tick. This feedback lets the policy learn to build or upgrade engineers before retrying an action that previously starved.
+
+```rust
+// crates/faf-sim/src/planner/mcts/features.rs ~line 123 — state_features_with_shortfall
+pub fn state_features_with_shortfall(
+    state: &GraphState,
+    units: &Units,
+    config: &PlannerConfig,
+    shortfall: [f32; SHORTFALL_FEATURE_COUNT],
+) -> Vec<f32> {
+    let mut features = state_features(state, units, config);
+    features.extend_from_slice(&shortfall);
+    features
+}
+```
+
+## What the policy sees
+
+From the network's point of view, a state is a snapshot it can evaluate and expand:
 
 ```text
 GraphState
@@ -85,9 +132,18 @@ GraphState
 ├── graph of completed and under-construction units
 ├── economy
 └── events
+    │
+    ▼
+state_features()  →  [f32; 13]
+    │
+    ▼
+state_features_with_shortfall()  →  [f32; 16]
+    │
+    ▼
+HierarchicalPolicyNet
 ```
 
-The macro network receives a featurized version of this snapshot plus previous-tick engineer shortfall (see [`03-value-network.md`](./03-value-network.md)). The search loop uses the legal successors of this snapshot to grow the tree (see [`02-actions-and-successors.md`](./02-actions-and-successors.md)).
+The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 2](02-actions-and-successors.md)).
 
 ## Objectives
 

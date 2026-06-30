@@ -1,3 +1,8 @@
+## Strategy
+
+- Use MCTS + value network (RL)
+- The RL use the eco state to generate a probability over candidates discovered from plan graph.
+
 ## Commands
 
 ```sh

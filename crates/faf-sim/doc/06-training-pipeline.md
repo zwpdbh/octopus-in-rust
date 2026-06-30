@@ -1,13 +1,13 @@
-# 6. Training Pipeline
+# 6. Training with REINFORCE
 
-This chapter describes how the hierarchical policy bundle is trained. The pipeline uses REINFORCE with epsilon-greedy exploration and entropy regularization, periodically evaluates the policy greedily, and fine-tunes the best discovered trajectory at the end.
+This chapter describes how the hierarchical policy is trained. The pipeline uses REINFORCE with epsilon-greedy exploration and entropy regularization, periodically evaluates the policy greedily, and fine-tunes the best discovered trajectory at the end.
 
 ## Overview
 
 The training entry point is `train_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 51 — train_policy
 pub fn train_policy(
     units: &Units,
     goal: &UnitKind,
@@ -65,6 +65,8 @@ pub struct TrainConfig {
     pub squad_std: f32,
     /// Print per-episode progress to stderr.
     pub verbose: bool,
+    /// Stop early if no new best time for this many episodes.
+    pub patience: Option<usize>,
 }
 ```
 
@@ -89,6 +91,7 @@ fn default() -> Self {
         power_std: 2.0,
         squad_std: 0.5,
         verbose: false,
+        patience: None,
     }
 }
 ```
@@ -97,10 +100,10 @@ You can increase `episodes`, `max_steps`, and the network sizes for harder goals
 
 ## Trainer structure
 
-The `Trainer` owns the model, optimizer, and running return statistics used to center the REINFORCE advantage:
+The `Trainer` owns the model, optimizer, and best-seen state:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 37 — Trainer (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 39 — Trainer (abbreviated)
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
@@ -109,9 +112,6 @@ pub struct Trainer {
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
     pub(crate) rng: ThreadRng,
-    pub(crate) return_mean: f32,
-    pub(crate) return_var: f32,
-    pub(crate) return_count: f32,
 }
 ```
 
@@ -126,71 +126,93 @@ Each episode rolls out the current policy in the simulator. The trainer gathers 
 pub(crate) struct EpisodeStep {
     pub(crate) base_features: Vec<f32>,
     pub(crate) shortfall: [f32; 3],
-    pub(crate) legal_mask: Vec<bool>,
+    pub(crate) direction_mask: Vec<bool>,
+    pub(crate) action_mask: Vec<bool>,
+    pub(crate) direction_index: usize,
     pub(crate) edge_index: usize,
     pub(crate) target_power: f32,
     pub(crate) desired_squad: [f32; 3],
+    pub(crate) step_reward: f32,
     pub(crate) return_value: f32,
 }
 ```
 
 At each step the trainer:
 
-1. Computes the legal edge mask.
+1. Computes the legal direction mask and, for the chosen direction, the legal edge mask.
 2. Featurizes the state with shortfall feedback.
-3. Samples an edge from the macro network (or a random legal edge with probability `epsilon`).
-4. Samples target build power and engineer counts from the power and squad networks.
-5. Resolves the squad into concrete builder nodes and executes the action.
-6. Records the step.
+3. Samples a direction from the direction head (or a random legal direction with probability `epsilon`).
+4. Samples an edge from the action head for that direction (or a random legal edge with probability `epsilon`).
+5. Samples target build power and engineer counts from the power and squad heads, adding Gaussian noise.
+6. Resolves the squad into concrete builder nodes and executes the action.
+7. Records the step, including the per-step reward.
 
 If the episode exceeds `max_steps` without reaching the goal, it terminates.
 
-## Reward signal
+## REINFORCE update
 
-The reward is computed once per episode from the final state:
+After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has four parts:
+
+1. **Direction loss.** Categorical log-likelihood of the sampled direction, weighted by advantage, plus an entropy bonus.
+2. **Action loss.** Categorical log-likelihood of the sampled edge conditioned on the direction, weighted by advantage, plus an entropy bonus.
+3. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
+4. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
+
+All four losses share the same advantage, so a single scalar drives the gradient through every head.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/reward.rs ~line 8 — compute_progress_reward
-pub(crate) fn compute_progress_reward(
-    state: &GraphState,
-    units: &Units,
-    goal: &UnitKind,
-    plan: &PlanGraph,
-) -> f32 {
-    // reward for owning nodes on the plan graph, tech milestones,
-    // economy scale, and a large bonus for reaching the goal quickly
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 591 — update (abbreviated)
+pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
+    for step in &episode.steps {
+        // ... build macro input, run latent backbone once ...
+        let latent = self.model.latent(macro_input);
+
+        // Direction log-prob.
+        let direction_logits = self.model.direction_logits(latent.clone()).flatten::<1>(0, 1);
+        let masked_direction_logits = direction_logits + direction_mask_tensor;
+        let direction_log_probs = log_softmax(masked_direction_logits, 0);
+        let direction_log_prob = direction_log_probs.select(0, direction_index_tensor);
+
+        // Action log-prob conditioned on the sampled direction.
+        let action_logits = self
+            .model
+            .action_logits(latent.clone(), direction_one_hot)
+            .flatten::<1>(0, 1);
+        let masked_action_logits = action_logits + action_mask_tensor;
+        let action_log_probs = log_softmax(masked_action_logits, 0);
+        let action_log_prob = action_log_probs.select(0, edge_index_tensor);
+
+        // Entropy bonus over both discrete distributions.
+        let entropy = (direction_probs * direction_log_probs).neg().sum()
+            + (action_probs * action_log_probs).neg().sum();
+
+        // Continuous log-probs for power and squad.
+        let power_log_prob = gaussian_log_prob_scalar(power_mean, step.target_power, ...);
+        let squad_log_prob = gaussian_log_prob_vec(squad_means, &step.desired_squad, ...);
+
+        let joint_log_prob = direction_log_prob + action_log_prob + power_log_prob + squad_log_prob;
+        let policy_loss = joint_log_prob.neg().mul(return_tensor);
+        let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
+        let loss = policy_loss + entropy_loss;
+
+        // ... accumulate loss over the episode ...
+    }
+
+    let grads = loss.backward();
+    let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
+    self.model = self.optimizer
+        .step(self.config.learning_rate.into(), self.model.clone(), grads);
 }
 ```
 
-The current reward combines:
-
-- **Graph-node ownership.** A reward for every completed node on the plan graph, weighted inversely by its distance to the goal.
-- **Tech milestones.** Bonuses for unlocking T1/T2/T3 factories and engineers.
-- **Economic infrastructure.** Per-unit rewards for active mass extractors, power generators, and energy storage buildings, plus the total active build power.
-- **Income throughput.** Direct, high-cap bonuses for net mass income and net energy income, so the policy is rewarded for scaling the economy rather than just unlocking the first instance of each unit.
-- **Goal bonus.** The dominant term: a large positive reward when the goal is reached, minus a time penalty for slower completions.
-- **Failure penalty.** A strong penalty if the episode does not reach the goal within the step budget.
-
-The goal-completion term is still the largest single component, but the economy terms are now strong enough that the policy has a clear incentive to build more mexes, pgens, energy storage, and engineers when that helps finish faster.
-
-## REINFORCE update
-
-After each episode, the trainer computes the discounted return for every timestep and subtracts a running-mean baseline to reduce variance. Then it updates all three networks jointly.
-
-The combined loss has three parts:
-
-1. **Macro loss.** Categorical log-likelihood of the selected edge, weighted by advantage, plus an entropy bonus.
-2. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
-3. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
-
-All three losses share the same advantage, so a single scalar drives the gradient through the macro net, the power net, and the squad net.
+This is the standard REINFORCE pattern, extended to a hierarchical policy. The discrete heads use `log_softmax` and `.select` to extract the log-probability of the sampled choice. The continuous heads use Gaussian log-probability helpers.
 
 ## Greedy evaluation
 
-Every `greedy_eval_interval` episodes, the trainer runs a deterministic greedy rollout with the current parameters. If the greedy rollout reaches the goal faster than any previous greedy rollout, the current model is saved as `best_model`.
+Every `greedy_eval_interval` episodes, the trainer runs a deterministic greedy rollout with the current parameters. If the greedy rollout reaches the goal faster than any previous greedy rollout, the current model is saved as `best_model`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 158 — greedy evaluation
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 445 — greedy evaluation
 if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
     if let Some(greedy_time) =
         self.evaluate_greedy(units, goal, &plan, &edge_index, &planner_config)
@@ -198,6 +220,7 @@ if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
         let is_new_best = best_time.map_or(true, |t| greedy_time < t);
         if is_new_best {
             best_time = Some(greedy_time);
+            episodes_since_best = 0;
             self.best_model = Some(self.model.clone());
             self.best_trajectory = None;
         }
@@ -209,10 +232,10 @@ Greedy evaluation is the source of the best model; REINFORCE alone does not guar
 
 ## Fine-tuning on the best trajectory
 
-After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes the same three losses with the recorded `(edge_index, target_power, desired_squad, shortfall)` targets.
+After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes cross-entropy/MSE losses with the recorded `(direction, edge_index, target_power, desired_squad, shortfall)` targets.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 94 — fine_tune_best_model
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 85 — fine_tune_best_model
 fn fine_tune_best_model(
     mut trainer: Trainer,
     units: &Units,
@@ -224,31 +247,44 @@ fn fine_tune_best_model(
 }
 ```
 
-The function returns the fine-tuned model as both the final model and the best model. If no trajectory was recorded, it returns the final REINFORCE model and whatever `best_model` was stored.
+The function returns the fine-tuned model as the final model. If no trajectory was recorded, it returns the final REINFORCE model and whatever `best_model` was stored.
 
 ## Saving and loading
 
 Save the full bundle with `save_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 13 — save_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 14 — save_policy
 pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
 ) -> Result<(), String> {
-    // uses CompactRecorder
+    let recorder = CompactRecorder::new();
+    model
+        .clone()
+        .into_record()
+        .save_file(path, &recorder)
+        .map_err(|e| e.to_string())
 }
 ```
 
-Load it with `load_policy`, passing the number of plan-graph edges so the macro network dimensions can be validated:
+Load it with `load_policy`, passing the number of plan-graph edges so the network dimensions can be validated:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 27 — load_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 28 — load_policy
 pub fn load_policy(
     path: &std::path::Path,
     num_edges: usize,
 ) -> Result<PolicyBundle<TrainBackend>, String> {
-    // checks macro input/output dimensions and reports an error if mismatched
+    let device: TrainDevice = Default::default();
+    let model = PolicyBundle::<TrainBackend>::new(&device, num_edges);
+    let recorder = CompactRecorder::new();
+    let record = (
+        &model,
+        recorder.load_file(path, &device).map_err(|e| e.to_string())?,
+    )
+        .load_record(model);
+    Ok(record)
 }
 ```
 

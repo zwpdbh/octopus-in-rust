@@ -8,9 +8,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
-use crate::planner::mcts;
-use crate::planner::mcts::macro_net::PolicyBundle;
-use crate::planner::mcts::train::TrainBackend;
+use crate::planner::mcts::macro_net::{num_plan_edges, PolicyBundle};
+use crate::planner::mcts::search::{MctsConfig, MctsSearch};
+use crate::planner::mcts::train::{TrainBackend, TrainDevice};
 use crate::sim::{BuildEvent, GraphState};
 use crate::units::{UnitKind, Units};
 
@@ -295,19 +295,25 @@ impl Planner {
         match self.strategy {
             Strategy::Mcts {
                 iterations,
-                value_net: value_net_kind,
-                deterministic,
-            } => mcts::plan(
-                units,
-                initial_state,
-                goal_id,
-                iterations,
-                value_net_kind,
-                deterministic,
-                self.value_net.clone(),
-                &mut self.last_shortfall,
-                &self.config,
-            ),
+                value_net: _,
+                deterministic: _,
+            } => {
+                let model = match self.value_net.as_ref() {
+                    Some(m) => m.clone(),
+                    None => {
+                        let device = TrainDevice::default();
+                        let num_edges = num_plan_edges(units, goal_id).ok_or_else(|| {
+                            PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
+                        })?;
+                        PolicyBundle::new(&device, num_edges)
+                    }
+                };
+                MctsSearch::new(MctsConfig {
+                    iterations,
+                    ..MctsConfig::default()
+                })
+                .search(initial_state, goal_id, units, &self.config, &model)
+            }
         }
     }
 }
