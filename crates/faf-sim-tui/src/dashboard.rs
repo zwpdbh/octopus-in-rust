@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Wrap}
 use ratatui::{Frame, Terminal};
 
 use faf_sim::planner::mcts::train::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 use crate::observer::{DashboardEvent, DashboardObserver};
 
@@ -86,8 +87,10 @@ fn run_tui(
     let mut guard = TerminalGuard { terminal };
 
     let mut state = DashboardState::default();
+    state.refresh_system();
     let mut last_render = Instant::now();
     let render_interval = Duration::from_millis(100);
+    let system_refresh_interval = Duration::from_secs(1);
 
     loop {
         // Drain all pending training events.
@@ -99,14 +102,17 @@ fn run_tui(
         while let Ok(true) = event::poll(Duration::from_secs(0)) {
             if let Ok(Event::Key(key)) = event::read() {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => {
-                            stop_flag.store(true, Ordering::Relaxed);
-                        }
-                        _ => {}
+                    let is_ctrl_d = key.code == KeyCode::Char('d')
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
+                    if is_ctrl_d || key.code == KeyCode::Esc {
+                        stop_flag.store(true, Ordering::Relaxed);
                     }
                 }
             }
+        }
+
+        if state.last_system_refresh.elapsed() >= system_refresh_interval {
+            state.refresh_system();
         }
 
         if last_render.elapsed() >= render_interval {
@@ -128,7 +134,6 @@ fn run_tui(
 }
 
 /// Mutable dashboard state updated from training events.
-#[derive(Default)]
 struct DashboardState {
     start_time: Option<Instant>,
     current_episode: usize,
@@ -138,6 +143,31 @@ struct DashboardState {
     recent_episodes: Vec<EpisodeSummary>,
     greedy_evals: Vec<GreedyEvalSummary>,
     fine_tune: Option<FineTuneSummary>,
+    system: System,
+    last_system_refresh: Instant,
+    gpu_info: Option<String>,
+}
+
+impl Default for DashboardState {
+    fn default() -> Self {
+        Self {
+            start_time: None,
+            current_episode: 0,
+            total_episodes: 0,
+            best_time: None,
+            current_epsilon: 0.0,
+            recent_episodes: Vec::new(),
+            greedy_evals: Vec::new(),
+            fine_tune: None,
+            system: System::new_with_specifics(
+                RefreshKind::new()
+                    .with_cpu(CpuRefreshKind::everything())
+                    .with_memory(MemoryRefreshKind::everything()),
+            ),
+            last_system_refresh: Instant::now(),
+            gpu_info: None,
+        }
+    }
 }
 
 impl DashboardState {
@@ -227,6 +257,23 @@ impl DashboardState {
             self.current_episode as f32 / elapsed
         } else {
             0.0
+        }
+    }
+
+    fn refresh_system(&mut self) {
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.last_system_refresh = Instant::now();
+        self.gpu_info = query_gpu_info();
+    }
+
+    fn backend_name(&self) -> &'static str {
+        if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "wgpu") {
+            "WGPU"
+        } else {
+            "CPU"
         }
     }
 
@@ -365,6 +412,25 @@ fn render_metrics_table(frame: &mut Frame, state: &DashboardState, area: Rect) {
     let avg_steps = format!("{:.1}", state.avg_steps(100));
     let eps_per_sec = format!("{:.2}", state.episodes_per_second());
 
+    let cpu_usage = if state.system.cpus().is_empty() {
+        "---".to_string()
+    } else {
+        let avg = state
+            .system
+            .cpus()
+            .iter()
+            .map(|cpu| cpu.cpu_usage())
+            .sum::<f32>()
+            / state.system.cpus().len() as f32;
+        format!("{:.1}%", avg)
+    };
+    let mem_used = state.system.used_memory() / 1024 / 1024;
+    let mem_total = state.system.total_memory() / 1024 / 1024;
+    let memory = format!("{} / {} MiB", mem_used, mem_total);
+
+    let backend = state.backend_name();
+    let gpu = state.gpu_info.as_ref().map(|s| s.as_str()).unwrap_or("n/a");
+
     let rows = [
         metric_row("Best time", best),
         metric_row("Epsilon", format!("{:.4}", state.current_epsilon)),
@@ -372,6 +438,10 @@ fn render_metrics_table(frame: &mut Frame, state: &DashboardState, area: Rect) {
         metric_row("Avg loss (100ep)", avg_loss),
         metric_row("Avg steps (100ep)", avg_steps),
         metric_row("Episodes/sec", eps_per_sec),
+        metric_row("Backend", backend.to_string()),
+        metric_row("CPU usage", cpu_usage),
+        metric_row("Memory", memory),
+        metric_row("GPU usage", gpu.to_string()),
     ];
 
     let table = Table::new(rows, [Constraint::Length(20), Constraint::Min(10)])
@@ -493,7 +563,7 @@ fn render_footer(frame: &mut Frame, state: &DashboardState, area: Rect) {
     let controls = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
-                "q",
+                "Ctrl+D",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -522,4 +592,26 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
+}
+
+fn query_gpu_info() -> Option<String> {
+    if !cfg!(feature = "cuda") {
+        return None;
+    }
+
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+
+    let line = String::from_utf8(output.stdout).ok()?;
+    let first_line = line.lines().next()?;
+    let mut parts = first_line.split(',');
+    let util = parts.next()?.trim();
+    let mem_used = parts.next()?.trim();
+    let mem_total = parts.next()?.trim();
+    Some(format!("{}% | {} / {} MiB", util, mem_used, mem_total))
 }

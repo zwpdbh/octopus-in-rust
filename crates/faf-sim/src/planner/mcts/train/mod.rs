@@ -4,20 +4,22 @@
 //! Uses REINFORCE: roll out episodes with the current policy, then update all
 //! four heads jointly from shaped rewards.
 //!
-//! The training backend is selected by Cargo feature. The default is `cpu`,
-//! but any single backend can be selected explicitly:
-//! - `cpu` (default): `Autodiff<NdArray>`.
+//! The training backend is selected by Cargo feature. The library default is
+//! `cpu` so tests and library users can run without a GPU. The `faf-sim-cli`
+//! binary defaults to `cuda` for training performance.
+//!
+//! Available backends:
+//! - `cpu`: `Autodiff<NdArray>`.
 //! - `cuda`: `Autodiff<Cuda>`.
 //! - `wgpu`: `Autodiff<Wgpu>`.
 //!
 //! To switch to a non-default backend, disable the default feature and enable
-//! the desired one:
+//! the desired one, for example:
 //! `cargo run --no-default-features --features cuda --bin faf-sim -- train ...`
 //!
 //! When multiple backend features are enabled simultaneously (for example in a
-//! workspace build), CPU takes precedence so tests run without requiring a GPU.
-//! The `faf-sim-cli` package disables the library default and enables `cuda`,
-//! so normal training builds still use the GPU backend.
+//! workspace build), CPU takes precedence so tests can still run on machines
+//! without a GPU when both features are accidentally enabled.
 
 #[cfg(all(feature = "cuda", not(feature = "cpu")))]
 use burn::backend::{Autodiff, Cuda};

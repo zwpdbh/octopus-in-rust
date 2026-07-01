@@ -22,7 +22,7 @@ resolver = "3"
 [workspace.dependencies]
 # Path crates
 faf-sim = { path = "crates/faf-sim", default-features = false }
-faf-sim-tui = { path = "crates/faf-sim-tui" }
+faf-sim-tui = { path = "crates/faf-sim-tui", default-features = false }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }
