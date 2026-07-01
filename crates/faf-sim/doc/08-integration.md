@@ -30,7 +30,7 @@ pub enum Strategy {
 }
 ```
 
-Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` refers to the full hierarchical policy bundle (direction + action + power + squad heads).
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` refers to the full hierarchical policy bundle (upgrade + direction + action + power + squad heads).
 
 ## Entry point
 

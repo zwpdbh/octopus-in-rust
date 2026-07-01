@@ -1,6 +1,19 @@
 # 7. MCTS Search
 
-This chapter describes the UCT (Upper Confidence Bound applied to Trees) search loop that sits on top of the hierarchical policy. The policy provides prior probabilities over plan-graph edges and a default rollout policy; MCTS turns those into a closed-loop planner.
+This chapter describes the UCT (Upper Confidence Bound applied to Trees) search loop that sits on top of the trained hierarchical policy. The policy provides prior probabilities over plan-graph edges and a default rollout policy; MCTS turns those into a closed-loop planner.
+
+**MCTS is used during simulation, not during training.** Training uses REINFORCE to optimize the policy network directly (see [chapter 7](06-training-pipeline.md)). MCTS is what you run when you call `faf-sim simulate` with a trained model.
+
+## MCTS vs the one-step policy
+
+MCTS is not the only way to use the trained network. The network can act by itself through `macro_policy_plan`, which runs one forward pass and immediately returns a `SimAction`. MCTS is an optional search layer on top of that one-step policy.
+
+The difference is lookahead:
+
+- **One-step policy:** picks the best action for the current state only. Fast, but myopic.
+- **MCTS:** simulates many future trajectories, each one using the one-step policy to choose actions, and picks the root action with the best empirical average.
+
+Training uses the one-step policy directly because it is fast enough to run thousands of episodes. The CLI `simulate` command uses MCTS to get stronger play from the same trained weights.
 
 ## Search loop
 
@@ -46,6 +59,8 @@ pub fn search(
 ```
 
 If `iterations` is zero, the loop body is skipped and the search picks the root child with the highest prior probability (because no visits have occurred yet). This is different from the one-step hierarchical policy; if you want the one-step policy, use `mcts::policy::plan` directly with `iterations == 0`.
+
+The final root move is chosen by **visit count**, not by the policy directly. MCTS aggregates the results of many rollouts and picks the action that was explored most often, which is usually the most robust action.
 
 ## Node structure
 
@@ -120,6 +135,8 @@ fn evaluate_edge_priors(
 ```
 
 This prior is what makes PUCT explore sensible edges first. Untrained networks still produce a prior, but it is essentially random; after training, the prior concentrates on high-value edges.
+
+**Upgrade note:** the prior computation uses the direction and action heads only. Factory-upgrade edges are reached through the `IncreaseBP` direction. The dedicated `upgrade_head` is **not** used when computing MCTS priors, although it is used during rollouts (see below).
 
 ## Expansion
 
@@ -197,7 +214,11 @@ fn rollout_value(
 }
 ```
 
-The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
+The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. That means rollouts use the full hierarchical policy, including the `upgrade_head`, to choose factory upgrades. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
+
+## MCTS does not guarantee success
+
+MCTS only searches `iterations` root-level expansions. A bad trained network will still produce bad priors and bad rollouts, so MCTS cannot magically fix an undertrained policy. It can only amplify a good policy into better move selection. If the network has never learned to tech up or build a T3 engineer, `simulate` will fail just like training does.
 
 ## Backup
 

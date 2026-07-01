@@ -22,7 +22,7 @@
 | **GraphState** | The authoritative discrete simulator state: units, projects, economy, completed structures. |
 | **GNN** | Graph Neural Network. A planned alternative value head that reasons directly over the plan graph. Not yet implemented. |
 | **Goal** | The abstract target the planner is trying to reach: `{ tech_level, mass_cost, energy_cost, build_time }`. The CLI resolves a concrete unit such as `novaxcenter` into a `Goal`. |
-| **HierarchicalPolicyNet** | The single Burn `Module` that implements the four-head policy network. |
+| **HierarchicalPolicyNet** | The single Burn `Module` that implements the five-head policy network. |
 | **MCTS** | Monte Carlo Tree Search. Uses UCT selection, expansion, rollout, and backup to choose actions. |
 | **Module** | Burn derive macro that makes a struct recordable, loadable, optimizable, and device-movable. |
 | **NodeId** | Opaque identifier for a node in `GraphState` (a unit instance or project). |
@@ -43,6 +43,7 @@
 | **SimAction** | Internal representation of a simulator action: `Build`, `Upgrade`, `Assist`, or `Wait`. |
 | **Simulator tick** | One fixed-duration step of the discrete-time economy and build-progress simulation. |
 | **Squad head** | Learned Burn head that outputs desired `[T1, T2, T3]` engineer counts. |
+| **Upgrade head** | Learned Burn head that outputs factory-upgrade options: `NoUpgrade`, `T1→T2`, or `T2→T3`. |
 | **Strategy** | The planner enum. Currently only `Strategy::Mcts` exists, with `ValueNetKind::Mlp` or `Gnn`. |
 | **UCT** | Upper Confidence Bound applied to Trees. The selection formula used by MCTS. |
 | **UnitKind** | Type-level identifier for a unit class, e.g. `UnitKind::Engineer(T3)` or `UnitKind::Unique(UnitId("UEL0301".to_string()))`. |

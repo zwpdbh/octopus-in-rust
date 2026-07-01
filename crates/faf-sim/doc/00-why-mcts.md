@@ -2,7 +2,7 @@
 
 A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal is reached. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
-This tutorial explains why **reinforcement learning (RL)** guided by **Monte Carlo Tree Search (MCTS)** is a good fit for FAF build-order optimization, and why we implement it in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework.
+This tutorial explains why **reinforcement learning (RL)** is a good fit for FAF build-order optimization, why we train the policy with REINFORCE, and why we use **Monte Carlo Tree Search (MCTS)** only during simulation/inference. The implementation is in Rust with the [`Burn`](https://github.com/tracel-ai/burn) deep-learning framework.
 
 ## The search space is enormous and sequential
 
@@ -25,16 +25,16 @@ Burn lets us keep the simulator, the policy network, and the training loop in a 
 
 Because the simulator is written in the same language as the model, we can run millions of deterministic simulation steps during training and backpropagate through the policy that produced them.
 
-## What MCTS adds
+## What MCTS adds (during simulation)
 
-MCTS is **closed-loop**. It keeps a search tree rooted in the current observed state, expands the most promising branches, and recomputes the best action from the real state each tick. Small deviations do not compound because the planner always reasons from the latest state.
+MCTS is used only when you run `faf-sim simulate`, not during training. It is **closed-loop**. It keeps a search tree rooted in the current observed state, expands the most promising branches, and recomputes the best action from the real state each tick. Small deviations do not compound because the planner always reasons from the latest state.
 
 MCTS also naturally balances two things that are hard to encode by hand:
 
 1. **Exploration** — trying actions whose short-term value is unclear.
 2. **Exploitation** — doubling down on actions that look good in simulation.
 
-The UCT formula (covered in [chapter 8](07-mcts-search.md)) does this balance mathematically.
+The UCT formula (covered in [chapter 8](07-mcts-search.md)) does this balance mathematically. During training, the policy explores by sampling from its own output with epsilon-greedy noise instead of building a tree.
 
 ## Why a learned policy, not random rollouts?
 
@@ -46,12 +46,13 @@ In classic MCTS, a leaf is evaluated by playing random moves to the end and aver
 
 A **learned hierarchical policy** replaces the random rollout. It is a single `burn::module::Module` that, in a small number of forward passes, decides:
 
-1. Which strategic direction to focus on (`Mass`, `Energy`, `BuildPower`, or `Progress`).
-2. Which concrete plan-graph edge to satisfy next inside that direction.
-3. How much build power to allocate to that edge.
-4. Which `[T1, T2, T3]` engineers should provide that build power.
+1. Whether to upgrade a factory (`None`, `T1→T2`, or `T2→T3`).
+2. Which strategic direction to focus on (`Mass`, `Energy`, `BuildPower`, or `Goal`).
+3. Which concrete plan-graph edge to satisfy next inside that direction.
+4. How much build power to allocate to that edge.
+5. Which `[T1, T2, T3]` engineers should provide that build power.
 
-MCTS still explores the tree, but it selects concrete edges with the policy instead of simulating random sequences to the end.
+During simulation MCTS still explores the tree, but it selects concrete edges with the policy instead of simulating random sequences to the end. During training the policy is sampled directly, without any tree.
 
 The combination looks like this:
 
@@ -61,6 +62,7 @@ The combination looks like this:
                 ▼
         ┌─────────────────────────────────┐
         │  HierarchicalPolicyNet          │
+        │  • upgrade head                 │
         │  • direction head               │
         │  • action head                  │
         │  • power head                   │
@@ -77,6 +79,40 @@ The combination looks like this:
                 next GraphState
 ```
 
+## Why MCTS if the policy can act alone?
+
+A natural question is: if `macro_policy_plan` already turns the network output into a concrete `SimAction`, why do we need MCTS at all?
+
+The answer is that MCTS is **not required** to use the policy. The policy can act by itself in a single forward pass:
+
+```text
+state → HierarchicalPolicyNet → upgrade/direction/edge/power/squad → SimAction
+```
+
+That one-step mode is exactly what the trainer uses, because running MCTS inside every training episode would be too slow.
+
+MCTS becomes useful **after** training, during simulation. It wraps the same one-step policy and uses it to look ahead:
+
+```text
+Planner::plan(state, goal)
+    │
+    ▼
+MCTS tree search
+    │  • each node expands a legal plan-graph edge
+    │  • selection uses network priors (PUCT)
+    │  • leaf values come from greedy policy rollouts
+    │  • many futures are simulated and averaged
+    ▼
+action with highest visit count
+```
+
+So the relationship is:
+
+- **Training:** REINFORCE on one-step policy rollouts. No MCTS.
+- **Simulation:** MCTS searches through many one-step policy rollouts to pick a more robust action.
+
+MCTS adds lookahead and averaging. It can find actions that look slightly worse now but lead to much better states later, and it can recover when the network's single-step greedy choice is wrong.
+
 ## Why FAF is a good testbed for this
 
 - **Deterministic simulator.** The same state and action always produce the same next state, so MCTS rollouts are exact and reproducible.
@@ -92,4 +128,4 @@ The combination looks like this:
 
 ## The roadmap in one paragraph
 
-We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, build a small hierarchical `HierarchicalPolicyNet` in Burn to map state features to a direction, a concrete edge, build power, and engineer squad, resolve each decision into a concrete command, run UCT search at every decision, and use the resulting planner inside `faf-sim`. The rest of this tutorial walks through each piece.
+We model the simulator state as an MCTS node, generate legal candidates from the `PlanGraph`, build a small hierarchical `HierarchicalPolicyNet` in Burn to map state features to a factory-upgrade decision, a direction, a concrete edge, build power, and engineer squad, resolve each decision into a concrete command, train the network with REINFORCE, and run UCT search on top of the trained network during simulation. The rest of this tutorial walks through each piece.

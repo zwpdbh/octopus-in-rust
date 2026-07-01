@@ -34,39 +34,45 @@ pub enum PlanEdgeKind {
 /// This is used by the hierarchical policy network: the direction head picks
 /// a focus, and the action head then scores only the legal edges that belong
 /// to that focus.
+///
+/// Factory upgrades are *not* a direction. They are handled by a dedicated
+/// `upgrade_head` because teching up is a separate strategic decision from
+/// choosing an economic focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeCategory {
     /// Edges that increase mass income.
-    Mass,
+    IncreaseMass,
     /// Edges that increase energy income or storage.
-    Energy,
+    IncreaseEnergy,
     /// Edges that increase build power.
-    BuildPower,
+    IncreaseBP,
     /// The single edge that builds the abstract goal.
-    Progress,
+    Goal,
 }
 
 impl EdgeCategory {
     /// All possible strategic directions.
     pub const ALL: [EdgeCategory; 4] = [
-        EdgeCategory::Mass,
-        EdgeCategory::Energy,
-        EdgeCategory::BuildPower,
-        EdgeCategory::Progress,
+        EdgeCategory::IncreaseMass,
+        EdgeCategory::IncreaseEnergy,
+        EdgeCategory::IncreaseBP,
+        EdgeCategory::Goal,
     ];
 
     /// Categorise an edge based on what the target node contributes.
     pub fn categorize(target: &PlanNode) -> EdgeCategory {
         match target {
-            PlanNode::Goal(_) => EdgeCategory::Progress,
+            PlanNode::Goal(_) => EdgeCategory::Goal,
             PlanNode::Unit(UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex) => {
-                EdgeCategory::Mass
+                EdgeCategory::IncreaseMass
             }
-            PlanNode::Unit(UnitKind::Pgen(_) | UnitKind::EnergyStorage) => EdgeCategory::Energy,
+            PlanNode::Unit(UnitKind::Pgen(_) | UnitKind::EnergyStorage) => {
+                EdgeCategory::IncreaseEnergy
+            }
             PlanNode::Unit(UnitKind::Engineer(_) | UnitKind::Factory(_) | UnitKind::Commander) => {
-                EdgeCategory::BuildPower
+                EdgeCategory::IncreaseBP
             }
-            PlanNode::Unit(UnitKind::Unique(_)) => EdgeCategory::BuildPower,
+            PlanNode::Unit(UnitKind::Unique(_)) => EdgeCategory::IncreaseBP,
         }
     }
 }

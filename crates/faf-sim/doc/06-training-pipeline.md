@@ -2,6 +2,8 @@
 
 This chapter describes how the hierarchical policy is trained. The pipeline uses REINFORCE with epsilon-greedy exploration and entropy regularization, periodically evaluates the policy greedily, and fine-tunes the best discovered trajectory at the end.
 
+**Important:** training does **not** use MCTS. The trainer samples actions directly from the current policy network and rolls out full episodes in the simulator. MCTS is used later, during simulation, to search on top of the trained network.
+
 ## Overview
 
 The training entry point is `train_policy`:
@@ -127,6 +129,8 @@ Each episode rolls out the current policy in the simulator. The trainer gathers 
 pub(crate) struct EpisodeStep {
     pub(crate) base_features: Vec<f32>,
     pub(crate) shortfall: [f32; 3],
+    pub(crate) upgrade_mask: Vec<bool>,
+    pub(crate) upgrade_index: usize,
     pub(crate) direction_mask: Vec<bool>,
     pub(crate) action_mask: Vec<bool>,
     pub(crate) direction_index: usize,
@@ -140,58 +144,65 @@ pub(crate) struct EpisodeStep {
 
 At each step the trainer:
 
-1. Computes the legal direction mask and, for the chosen direction, the legal edge mask.
-2. Featurizes the state with shortfall feedback.
-3. Samples a direction from the direction head (or a random legal direction with probability `epsilon`).
-4. Samples an edge from the action head for that direction (or a random legal edge with probability `epsilon`).
-5. Samples target build power and engineer counts from the power and squad heads, adding Gaussian noise.
-6. Resolves the squad into concrete builder nodes and executes the action.
-7. Records the step, including the per-step reward.
+1. Featurizes the state with shortfall feedback.
+2. Computes the legal factory-upgrade mask.
+3. Samples an upgrade option from the upgrade head (or a random legal upgrade with probability `epsilon`).
+4. If no upgrade was chosen, computes the legal direction mask and the legal edge mask for that direction, then samples a direction and edge (again with epsilon-greedy noise).
+5. If an upgrade was chosen, resolves it to the corresponding plan-graph upgrade edge.
+6. Samples target build power and engineer counts from the power and squad heads, adding Gaussian noise.
+7. Resolves the squad into concrete builder nodes and executes the action.
+8. Records the step, including the per-step reward and any newly earned milestone bonus.
 
 If the episode exceeds `max_steps` without reaching the goal, it terminates.
 
 ## REINFORCE update
 
-After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has four parts:
+After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has five parts:
 
-1. **Direction loss.** Categorical log-likelihood of the sampled direction, weighted by advantage, plus an entropy bonus.
-2. **Action loss.** Categorical log-likelihood of the sampled edge conditioned on the direction, weighted by advantage, plus an entropy bonus.
-3. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
-4. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
+1. **Upgrade loss.** Categorical log-likelihood of the sampled upgrade option, weighted by advantage, plus an entropy bonus. Computed for every step because index 0 ("no upgrade") is also a decision.
+2. **Direction loss.** Categorical log-likelihood of the sampled direction, weighted by advantage, plus an entropy bonus. Only computed when no upgrade was chosen.
+3. **Action loss.** Categorical log-likelihood of the sampled edge conditioned on the direction, weighted by advantage, plus an entropy bonus. Only computed when no upgrade was chosen.
+4. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
+5. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
 
-All four losses share the same advantage, so a single scalar drives the gradient through every head.
+All five losses share the same advantage, so a single scalar drives the gradient through every head.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 678 — update (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 897 — update (abbreviated)
 pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
     for step in &episode.steps {
         // ... build macro input, run latent backbone once ...
         let latent = self.model.latent(macro_input);
 
-        // Direction log-prob.
-        let direction_logits = self.model.direction_logits(latent.clone()).flatten::<1>(0, 1);
-        let masked_direction_logits = direction_logits + direction_mask_tensor;
-        let direction_log_probs = log_softmax(masked_direction_logits, 0);
-        let direction_log_prob = direction_log_probs.select(0, direction_index_tensor);
+        // Upgrade log-prob (always computed; index 0 is "no upgrade").
+        let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
+        let masked_upgrade_logits = upgrade_logits + upgrade_mask_tensor;
+        let upgrade_log_probs = log_softmax(masked_upgrade_logits, 0);
+        let upgrade_log_prob = upgrade_log_probs.select(0, upgrade_index_tensor);
+        let upgrade_entropy = (upgrade_probs * upgrade_log_probs).neg().sum();
 
-        // Action log-prob conditioned on the sampled direction.
-        let action_logits = self
-            .model
-            .action_logits(latent.clone(), direction_one_hot)
-            .flatten::<1>(0, 1);
-        let masked_action_logits = action_logits + action_mask_tensor;
-        let action_log_probs = log_softmax(masked_action_logits, 0);
-        let action_log_prob = action_log_probs.select(0, edge_index_tensor);
+        // Direction and action log-probs are only computed when no upgrade was chosen.
+        let (direction_log_prob, action_log_prob, direction_entropy, action_entropy) =
+            if step.upgrade_index == 0 {
+                // ... direction log-prob ...
+                // ... action log-prob conditioned on sampled direction ...
+                (dir_lp, act_lp, dir_ent, act_ent)
+            } else {
+                // Zero tensors: no gradient through unused heads on upgrade steps.
+                (zero.clone(), zero.clone(), zero.clone(), zero)
+            };
 
-        // Entropy bonus over both discrete distributions.
-        let entropy = (direction_probs * direction_log_probs).neg().sum()
-            + (action_probs * action_log_probs).neg().sum();
+        let entropy = direction_entropy + action_entropy + upgrade_entropy;
 
         // Continuous log-probs for power and squad.
         let power_log_prob = gaussian_log_prob_scalar(power_mean, step.target_power, ...);
         let squad_log_prob = gaussian_log_prob_vec(squad_means, &step.desired_squad, ...);
 
-        let joint_log_prob = direction_log_prob + action_log_prob + power_log_prob + squad_log_prob;
+        let joint_log_prob = upgrade_log_prob
+            + direction_log_prob
+            + action_log_prob
+            + power_log_prob
+            + squad_log_prob;
         let policy_loss = joint_log_prob.neg().mul(return_tensor);
         let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
         let loss = policy_loss + entropy_loss;

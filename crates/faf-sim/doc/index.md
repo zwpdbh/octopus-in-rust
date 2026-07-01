@@ -7,8 +7,8 @@ This tutorial walks through building a reinforcement-learning (RL) planner in Ru
 - A deterministic discrete-time simulator for economy, construction, and adjacency bonuses.
 - A universal plan graph that encodes every legal prerequisite chain.
 - A hierarchical policy network written as a `burn::module::Module`.
-- A REINFORCE training loop with per-step reward shaping.
-- A UCT MCTS search that uses the trained network as a prior and rollout policy.
+- A REINFORCE training loop that trains the network directly from episode rollouts.
+- A UCT MCTS search that uses the trained network as a prior and rollout policy during simulation.
 
 ## Who this tutorial is for
 
@@ -20,9 +20,9 @@ You should be comfortable with Rust and with the basics of neural networks and p
 2. **[Burn basics for RL](01-burn-basics.md)** — `Backend`, `Tensor`, `Module`, `Autodiff`, optimizers, devices, and recordings. Everything you need to read the rest of the code.
 3. **[Modeling the environment](02-the-state-graph.md)** — `GraphState`, the economy, featurization, and what the network sees.
 4. **[Actions and the plan graph](03-actions-and-successors.md)** — How we reduce a huge raw action space to a small set of legal plan-graph edges.
-5. **[Building the policy network in Burn](04-value-network.md)** — A hierarchical `Module` with shared backbone, direction head, action head, build-power head, and engineer-squad head.
-6. **[Reward shaping](05-reward-shaping.md)** — Per-step rewards for build-power growth and stall/overflow penalties, plus a terminal bonus.
-7. **[Training with REINFORCE](06-training-pipeline.md)** — Episode rollouts, returns, joint log-probabilities, entropy regularization, and fine-tuning on the best trajectory.
+5. **[Building the policy network in Burn](04-value-network.md)** — A hierarchical `Module` with shared backbone, upgrade head, direction head, action head, build-power head, and engineer-squad head.
+6. **[Reward shaping](05-reward-shaping.md)** — Per-step rewards for build-power, mass/power income, storage pressure, and stalls, plus one-time tech milestones and a terminal bonus.
+7. **[Training with REINFORCE](06-training-pipeline.md)** — Episode rollouts with the policy network (no MCTS), returns, joint log-probabilities, entropy regularization, and fine-tuning on the best trajectory.
 8. **[MCTS search](07-mcts-search.md)** — UCT selection, expansion, policy-prior ordering, rollout, backup, and choosing the final action.
 9. **[Integration and CLI](08-integration.md)** — Wiring the planner into the actor loop and running `train` / `simulate` from the command line.
 10. **[Benchmarking and tuning](09-benchmarking-and-tuning.md)** — Metrics, diagnosing failure modes, and tuning `c_puct`, iteration budgets, and reward coefficients.

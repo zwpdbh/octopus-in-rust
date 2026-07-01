@@ -18,15 +18,17 @@ use super::math::{
     format_time, gaussian_log_prob_scalar, gaussian_log_prob_vec, tensor1d_from_vec,
 };
 use super::observer::{EpisodeSummary, GreedyEvalSummary, TrainingObserver};
-use super::reward::{compute_step_reward, compute_terminal_bonus};
+use super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::features::{state_features, state_features_with_shortfall};
 use crate::planner::mcts::macro_net::{
     clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, one_hot,
-    shortfall_from_counts, PolicyBundle, DIRECTION_COUNT, MASK_VALUE,
+    shortfall_from_counts, PolicyBundle, DIRECTION_COUNT, MASK_VALUE, UPGRADE_OPTION_COUNT,
 };
-use crate::planner::mcts::policy::execute_action;
+use crate::planner::mcts::policy::{
+    execute_action, find_upgrade_edge_idx, upgrade_mask, FACTORY_UPGRADE_OPTIONS,
+};
 use crate::planner::mcts::selections::{
     assigned_squad_counts, find_upgrade_source, idle_engineer_counts, select_squad_for_edge,
     PlanEdgeIndex,
@@ -34,7 +36,7 @@ use crate::planner::mcts::selections::{
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::plan_graph::PlanGraph;
 use crate::planner::search::SimAction;
-use crate::sim::GraphState;
+use crate::sim::{GraphState, NodeId};
 use crate::units::{UnitKind, Units};
 
 /// Concrete optimizer type returned by `AdamConfig::init` for a full policy bundle.
@@ -184,6 +186,7 @@ impl Trainer {
                                 target_power: s.target_power,
                                 desired_squad: s.desired_squad,
                                 shortfall: s.shortfall,
+                                upgrade_index: s.upgrade_index,
                             })
                             .collect(),
                     });
@@ -311,6 +314,7 @@ impl Trainer {
             steps: Vec::new(),
         };
         let mut shortfall = [0.0f32; 3];
+        let mut milestones = MilestoneTracker::default();
 
         let progress_interval = Duration::from_secs(2);
         let mut last_progress = Instant::now();
@@ -332,172 +336,318 @@ impl Trainer {
                 break;
             }
 
-            let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
-            if direction_mask.iter().all(|&b| !b) {
-                state.tick(units, self.config.dt);
-                continue;
-            }
-
             let base_features = state_features(&state, units, planner_config);
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
-            let direction_logits = self
+
+            // The upgrade head decides whether to tech up a factory before the
+            // normal direction/action pipeline runs.
+            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units, planner_config);
+            let upgrade_logits = self
                 .model
-                .evaluate_direction(macro_features.clone(), &self.device);
-
-            let (direction_idx, category) = if self.rng.random::<f32>() < epsilon {
-                let legal_directions: Vec<usize> = direction_mask
+                .evaluate_upgrade(macro_features.clone(), &self.device);
+            let upgrade_idx = if self.rng.random::<f32>() < epsilon {
+                let legal_upgrades: Vec<usize> = upgrade_legal_mask
                     .iter()
                     .enumerate()
                     .filter(|(_, &legal)| legal)
                     .map(|(i, _)| i)
                     .collect();
-                let idx = *legal_directions
-                    .get(self.rng.random_range(0..legal_directions.len()))
-                    .unwrap_or(&0);
-                (idx, EdgeCategory::ALL[idx])
-            } else {
-                let idx = masked_sample_index(&direction_logits, &direction_mask, &mut self.rng)
-                    .unwrap_or(0);
-                (idx, EdgeCategory::ALL[idx])
-            };
-
-            let action_mask =
-                edge_index.legal_mask_for_category(&state, units, planner_config, category);
-            if action_mask.iter().all(|&b| !b) {
-                state.tick(units, self.config.dt);
-                continue;
-            }
-
-            let action_logits =
-                self.model
-                    .evaluate_action(macro_features.clone(), category, &self.device);
-
-            let edge_idx = if self.rng.random::<f32>() < epsilon {
-                let legal_indices: Vec<usize> = action_mask
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &legal)| legal)
-                    .map(|(i, _)| i)
-                    .collect();
-                *legal_indices
-                    .get(self.rng.random_range(0..legal_indices.len()))
+                *legal_upgrades
+                    .get(self.rng.random_range(0..legal_upgrades.len()))
                     .unwrap_or(&0)
             } else {
-                masked_sample_index(&action_logits, &action_mask, &mut self.rng).unwrap_or(0)
+                masked_sample_index(&upgrade_logits, &upgrade_legal_mask, &mut self.rng)
+                    .unwrap_or(0)
             };
 
-            let edge = match edge_index.get(edge_idx) {
-                Some(e) => e.clone(),
-                None => {
+            struct StepDecision {
+                direction_mask: Vec<bool>,
+                direction_index: usize,
+                action_mask: Vec<bool>,
+                edge_index: usize,
+                target_power: f32,
+                sampled_squad: [f32; 3],
+                desired: [usize; 3],
+                available: [usize; 3],
+                builders: Vec<NodeId>,
+                action: SimAction,
+            }
+
+            let decision = if upgrade_idx > 0 {
+                let (source_kind, target_kind) = &FACTORY_UPGRADE_OPTIONS[upgrade_idx - 1];
+                let upgrade_edge_idx =
+                    match find_upgrade_edge_idx(edge_index, source_kind, target_kind) {
+                        Some(idx) => idx,
+                        None => {
+                            state.tick(units, self.config.dt);
+                            continue;
+                        }
+                    };
+                let edge = match edge_index.get(upgrade_edge_idx) {
+                    Some(e) => e.clone(),
+                    None => {
+                        state.tick(units, self.config.dt);
+                        continue;
+                    }
+                };
+
+                let power_mean = self.model.evaluate_power(
+                    macro_features.clone(),
+                    upgrade_edge_idx,
+                    edge_index.len(),
+                    &self.device,
+                );
+                let target_power = crate::planner::mcts::macro_net::sample_gaussian(
+                    power_mean,
+                    self.config.power_std,
+                    &mut self.rng,
+                )
+                .max(0.0)
+                .round();
+
+                let squad_raw =
+                    self.model
+                        .evaluate_squad(macro_features, target_power, &self.device);
+                let squad_raw_arr = [
+                    squad_raw.get(0).copied().unwrap_or(0.0),
+                    squad_raw.get(1).copied().unwrap_or(0.0),
+                    squad_raw.get(2).copied().unwrap_or(0.0),
+                ];
+                let sampled_squad = [
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[0],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[1],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[2],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                ];
+
+                let available = idle_engineer_counts(&state, units);
+                let mut desired = clamp_squad(sampled_squad, available);
+                desired = ensure_minimum_squad(desired, available);
+
+                let builders = select_squad_for_edge(&edge, desired, &state, units);
+                if builders.is_empty() {
+                    shortfall = shortfall_from_counts(desired, available);
                     state.tick(units, self.config.dt);
                     continue;
                 }
-            };
 
-            let power_mean = self.model.evaluate_power(
-                macro_features.clone(),
-                edge_idx,
-                edge_index.len(),
-                &self.device,
-            );
-            let target_power = crate::planner::mcts::macro_net::sample_gaussian(
-                power_mean,
-                self.config.power_std,
-                &mut self.rng,
-            )
-            .max(0.0)
-            .round();
+                let old_node = find_upgrade_source(&state, source_kind)
+                    .unwrap_or_else(|| crate::sim::NodeId::new(0));
+                let action = SimAction::Upgrade {
+                    target_unit_id: target_kind.clone(),
+                    old_node,
+                    builders: builders.clone(),
+                };
 
-            let squad_raw = self
-                .model
-                .evaluate_squad(macro_features, target_power, &self.device);
-            let squad_raw_arr = [
-                squad_raw.get(0).copied().unwrap_or(0.0),
-                squad_raw.get(1).copied().unwrap_or(0.0),
-                squad_raw.get(2).copied().unwrap_or(0.0),
-            ];
-            let sampled_squad = [
-                crate::planner::mcts::macro_net::sample_gaussian(
-                    squad_raw_arr[0],
-                    self.config.squad_std,
+                StepDecision {
+                    direction_mask: vec![false; DIRECTION_COUNT],
+                    direction_index: 0,
+                    action_mask: vec![false; edge_index.len()],
+                    edge_index: upgrade_edge_idx,
+                    target_power,
+                    sampled_squad,
+                    desired,
+                    available,
+                    builders,
+                    action,
+                }
+            } else {
+                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+                if direction_mask.iter().all(|&b| !b) {
+                    state.tick(units, self.config.dt);
+                    continue;
+                }
+
+                let direction_logits = self
+                    .model
+                    .evaluate_direction(macro_features.clone(), &self.device);
+
+                let (direction_idx, category) = if self.rng.random::<f32>() < epsilon {
+                    let legal_directions: Vec<usize> = direction_mask
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &legal)| legal)
+                        .map(|(i, _)| i)
+                        .collect();
+                    let idx = *legal_directions
+                        .get(self.rng.random_range(0..legal_directions.len()))
+                        .unwrap_or(&0);
+                    (idx, EdgeCategory::ALL[idx])
+                } else {
+                    let idx =
+                        masked_sample_index(&direction_logits, &direction_mask, &mut self.rng)
+                            .unwrap_or(0);
+                    (idx, EdgeCategory::ALL[idx])
+                };
+
+                let action_mask =
+                    edge_index.legal_mask_for_category(&state, units, planner_config, category);
+                if action_mask.iter().all(|&b| !b) {
+                    state.tick(units, self.config.dt);
+                    continue;
+                }
+
+                let action_logits =
+                    self.model
+                        .evaluate_action(macro_features.clone(), category, &self.device);
+
+                let edge_idx = if self.rng.random::<f32>() < epsilon {
+                    let legal_indices: Vec<usize> = action_mask
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &legal)| legal)
+                        .map(|(i, _)| i)
+                        .collect();
+                    *legal_indices
+                        .get(self.rng.random_range(0..legal_indices.len()))
+                        .unwrap_or(&0)
+                } else {
+                    masked_sample_index(&action_logits, &action_mask, &mut self.rng).unwrap_or(0)
+                };
+
+                let edge = match edge_index.get(edge_idx) {
+                    Some(e) => e.clone(),
+                    None => {
+                        state.tick(units, self.config.dt);
+                        continue;
+                    }
+                };
+
+                let power_mean = self.model.evaluate_power(
+                    macro_features.clone(),
+                    edge_idx,
+                    edge_index.len(),
+                    &self.device,
+                );
+                let target_power = crate::planner::mcts::macro_net::sample_gaussian(
+                    power_mean,
+                    self.config.power_std,
                     &mut self.rng,
                 )
-                .max(0.0),
-                crate::planner::mcts::macro_net::sample_gaussian(
-                    squad_raw_arr[1],
-                    self.config.squad_std,
-                    &mut self.rng,
-                )
-                .max(0.0),
-                crate::planner::mcts::macro_net::sample_gaussian(
-                    squad_raw_arr[2],
-                    self.config.squad_std,
-                    &mut self.rng,
-                )
-                .max(0.0),
-            ];
+                .max(0.0)
+                .round();
 
-            let available = idle_engineer_counts(&state, units);
-            let mut desired = clamp_squad(sampled_squad, available);
-            desired = ensure_minimum_squad(desired, available);
+                let squad_raw =
+                    self.model
+                        .evaluate_squad(macro_features, target_power, &self.device);
+                let squad_raw_arr = [
+                    squad_raw.get(0).copied().unwrap_or(0.0),
+                    squad_raw.get(1).copied().unwrap_or(0.0),
+                    squad_raw.get(2).copied().unwrap_or(0.0),
+                ];
+                let sampled_squad = [
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[0],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[1],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                    crate::planner::mcts::macro_net::sample_gaussian(
+                        squad_raw_arr[2],
+                        self.config.squad_std,
+                        &mut self.rng,
+                    )
+                    .max(0.0),
+                ];
 
-            let builders = select_squad_for_edge(&edge, desired, &state, units);
-            if builders.is_empty() {
-                shortfall = shortfall_from_counts(desired, available);
-                state.tick(units, self.config.dt);
-                continue;
-            }
+                let available = idle_engineer_counts(&state, units);
+                let mut desired = clamp_squad(sampled_squad, available);
+                desired = ensure_minimum_squad(desired, available);
 
-            let action = match edge.kind {
-                crate::planner::plan_graph::PlanEdgeKind::Build => {
-                    if let Some(target_goal) = edge.target_goal() {
-                        SimAction::BuildGoal {
-                            goal: *target_goal,
-                            builders: builders.clone(),
-                        }
-                    } else {
-                        SimAction::Build {
-                            unit_id: edge.target_unit().expect("build target unit").clone(),
-                            builders: builders.clone(),
+                let builders = select_squad_for_edge(&edge, desired, &state, units);
+                if builders.is_empty() {
+                    shortfall = shortfall_from_counts(desired, available);
+                    state.tick(units, self.config.dt);
+                    continue;
+                }
+
+                let action = match edge.kind {
+                    crate::planner::plan_graph::PlanEdgeKind::Build => {
+                        if let Some(target_goal) = edge.target_goal() {
+                            SimAction::BuildGoal {
+                                goal: *target_goal,
+                                builders: builders.clone(),
+                            }
+                        } else {
+                            SimAction::Build {
+                                unit_id: edge.target_unit().expect("build target unit").clone(),
+                                builders: builders.clone(),
+                            }
                         }
                     }
+                    crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
+                        target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+                        old_node: find_upgrade_source(
+                            &state,
+                            edge.source_unit().expect("upgrade source unit"),
+                        )
+                        .unwrap_or_else(|| crate::sim::NodeId::new(0)),
+                        builders: builders.clone(),
+                    },
+                };
+
+                StepDecision {
+                    direction_mask,
+                    direction_index: direction_idx,
+                    action_mask,
+                    edge_index: edge_idx,
+                    target_power,
+                    sampled_squad,
+                    desired,
+                    available,
+                    builders,
+                    action,
                 }
-                crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-                    target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
-                    old_node: find_upgrade_source(
-                        &state,
-                        edge.source_unit().expect("upgrade source unit"),
-                    )
-                    .unwrap_or_else(|| crate::sim::NodeId::new(0)),
-                    builders: builders.clone(),
-                },
             };
 
             let prev_state = state.clone();
-            if execute_action(&mut state, &action, units, self.config.dt).is_err() {
-                shortfall = shortfall_from_counts(desired, available);
+            if execute_action(&mut state, &decision.action, units, self.config.dt).is_err() {
+                shortfall = shortfall_from_counts(decision.desired, decision.available);
                 state.tick(units, self.config.dt);
                 continue;
             }
 
-            let step_reward = compute_step_reward(&prev_state, &state, units);
+            let mut step_reward = compute_step_reward(&prev_state, &state, units);
+            step_reward += milestones.update(&state, units);
 
             episode.steps.push(EpisodeStep {
                 base_features,
                 shortfall,
-                direction_mask,
-                direction_index: direction_idx,
-                action_mask,
-                edge_index: edge_idx,
-                target_power,
-                desired_squad: sampled_squad,
+                upgrade_mask: upgrade_legal_mask,
+                upgrade_index: upgrade_idx,
+                direction_mask: decision.direction_mask,
+                direction_index: decision.direction_index,
+                action_mask: decision.action_mask,
+                edge_index: decision.edge_index,
+                target_power: decision.target_power,
+                desired_squad: decision.sampled_squad,
                 step_reward,
                 return_value: 0.0,
             });
 
-            let assigned_counts = assigned_squad_counts(&state, &builders);
-            shortfall = shortfall_from_counts(desired, assigned_counts);
+            let assigned_counts = assigned_squad_counts(&state, &decision.builders);
+            shortfall = shortfall_from_counts(decision.desired, assigned_counts);
         }
 
         episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);
@@ -557,85 +707,154 @@ impl Trainer {
                 return Some(state.time);
             }
 
-            let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
-            if direction_mask.iter().all(|&b| !b) {
-                state.tick(units, dt);
-                continue;
-            }
-
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
-            let direction_logits = model.evaluate_direction(macro_features.clone(), device);
-            let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
-            let category = EdgeCategory::ALL[direction_idx];
 
-            let action_mask =
-                edge_index.legal_mask_for_category(&state, units, planner_config, category);
-            if action_mask.iter().all(|&b| !b) {
-                state.tick(units, dt);
-                continue;
-            }
+            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units, planner_config);
+            let upgrade_idx = if !upgrade_legal_mask.iter().all(|&b| !b) {
+                let upgrade_logits = model.evaluate_upgrade(macro_features.clone(), device);
+                masked_argmax(&upgrade_logits, &upgrade_legal_mask).unwrap_or(0)
+            } else {
+                0
+            };
 
-            let action_logits = model.evaluate_action(macro_features.clone(), category, device);
-            let edge_idx = masked_argmax(&action_logits, &action_mask).unwrap_or(0);
+            let (_edge_idx, _target_power, desired, builders, action) = if upgrade_idx > 0 {
+                let (source_kind, target_kind) = &FACTORY_UPGRADE_OPTIONS[upgrade_idx - 1];
+                let edge_idx = match find_upgrade_edge_idx(edge_index, source_kind, target_kind) {
+                    Some(idx) => idx,
+                    None => {
+                        state.tick(units, dt);
+                        continue;
+                    }
+                };
+                let edge = match edge_index.get(edge_idx) {
+                    Some(e) => e.clone(),
+                    None => {
+                        state.tick(units, dt);
+                        continue;
+                    }
+                };
 
-            let edge = match edge_index.get(edge_idx) {
-                Some(e) => e.clone(),
-                None => {
+                let power_mean = model.evaluate_power(
+                    macro_features.clone(),
+                    edge_idx,
+                    edge_index.len(),
+                    device,
+                );
+                let target_power = power_mean.max(0.0).round();
+
+                let squad_raw = model.evaluate_squad(macro_features, target_power, device);
+                let squad_raw_arr = [
+                    squad_raw.get(0).copied().unwrap_or(0.0),
+                    squad_raw.get(1).copied().unwrap_or(0.0),
+                    squad_raw.get(2).copied().unwrap_or(0.0),
+                ];
+
+                let available = idle_engineer_counts(&state, units);
+                let mut desired = clamp_squad(squad_raw_arr, available);
+                desired = ensure_minimum_squad(desired, available);
+
+                let builders = select_squad_for_edge(&edge, desired, &state, units);
+                if builders.is_empty() {
+                    shortfall = shortfall_from_counts(desired, available);
                     state.tick(units, dt);
                     continue;
                 }
-            };
 
-            let power_mean =
-                model.evaluate_power(macro_features.clone(), edge_idx, edge_index.len(), device);
-            let target_power = power_mean.max(0.0).round();
+                let old_node = find_upgrade_source(&state, source_kind)
+                    .unwrap_or_else(|| crate::sim::NodeId::new(0));
+                let action = SimAction::Upgrade {
+                    target_unit_id: target_kind.clone(),
+                    old_node,
+                    builders: builders.clone(),
+                };
 
-            let squad_raw = model.evaluate_squad(macro_features, target_power, device);
-            let squad_raw_arr = [
-                squad_raw.get(0).copied().unwrap_or(0.0),
-                squad_raw.get(1).copied().unwrap_or(0.0),
-                squad_raw.get(2).copied().unwrap_or(0.0),
-            ];
+                (edge_idx, target_power, desired, builders, action)
+            } else {
+                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+                if direction_mask.iter().all(|&b| !b) {
+                    state.tick(units, dt);
+                    continue;
+                }
 
-            let available = idle_engineer_counts(&state, units);
-            let mut desired = clamp_squad(squad_raw_arr, available);
-            desired = ensure_minimum_squad(desired, available);
+                let direction_logits = model.evaluate_direction(macro_features.clone(), device);
+                let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
+                let category = EdgeCategory::ALL[direction_idx];
 
-            let builders = select_squad_for_edge(&edge, desired, &state, units);
-            if builders.is_empty() {
-                shortfall = shortfall_from_counts(desired, available);
-                state.tick(units, dt);
-                continue;
-            }
+                let action_mask =
+                    edge_index.legal_mask_for_category(&state, units, planner_config, category);
+                if action_mask.iter().all(|&b| !b) {
+                    state.tick(units, dt);
+                    continue;
+                }
 
-            let action = match edge.kind {
-                crate::planner::plan_graph::PlanEdgeKind::Build => {
-                    if let Some(target_goal) = edge.target_goal() {
-                        SimAction::BuildGoal {
-                            goal: *target_goal,
-                            builders: builders.clone(),
-                        }
-                    } else {
-                        SimAction::Build {
-                            unit_id: edge.target_unit().expect("build target unit").clone(),
-                            builders: builders.clone(),
+                let action_logits = model.evaluate_action(macro_features.clone(), category, device);
+                let edge_idx = masked_argmax(&action_logits, &action_mask).unwrap_or(0);
+
+                let edge = match edge_index.get(edge_idx) {
+                    Some(e) => e.clone(),
+                    None => {
+                        state.tick(units, dt);
+                        continue;
+                    }
+                };
+
+                let power_mean = model.evaluate_power(
+                    macro_features.clone(),
+                    edge_idx,
+                    edge_index.len(),
+                    device,
+                );
+                let target_power = power_mean.max(0.0).round();
+
+                let squad_raw = model.evaluate_squad(macro_features, target_power, device);
+                let squad_raw_arr = [
+                    squad_raw.get(0).copied().unwrap_or(0.0),
+                    squad_raw.get(1).copied().unwrap_or(0.0),
+                    squad_raw.get(2).copied().unwrap_or(0.0),
+                ];
+
+                let available = idle_engineer_counts(&state, units);
+                let mut desired = clamp_squad(squad_raw_arr, available);
+                desired = ensure_minimum_squad(desired, available);
+
+                let builders = select_squad_for_edge(&edge, desired, &state, units);
+                if builders.is_empty() {
+                    shortfall = shortfall_from_counts(desired, available);
+                    state.tick(units, dt);
+                    continue;
+                }
+
+                let action = match edge.kind {
+                    crate::planner::plan_graph::PlanEdgeKind::Build => {
+                        if let Some(target_goal) = edge.target_goal() {
+                            SimAction::BuildGoal {
+                                goal: *target_goal,
+                                builders: builders.clone(),
+                            }
+                        } else {
+                            SimAction::Build {
+                                unit_id: edge.target_unit().expect("build target unit").clone(),
+                                builders: builders.clone(),
+                            }
                         }
                     }
-                }
-                crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
-                    target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
-                    old_node: find_upgrade_source(
-                        &state,
-                        edge.source_unit().expect("upgrade source unit"),
-                    )
-                    .unwrap_or_else(|| crate::sim::NodeId::new(0)),
-                    builders: builders.clone(),
-                },
+                    crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
+                        target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
+                        old_node: find_upgrade_source(
+                            &state,
+                            edge.source_unit().expect("upgrade source unit"),
+                        )
+                        .unwrap_or_else(|| crate::sim::NodeId::new(0)),
+                        builders: builders.clone(),
+                    },
+                };
+
+                (edge_idx, target_power, desired, builders, action)
             };
 
             if execute_action(&mut state, &action, units, dt).is_err() {
-                shortfall = shortfall_from_counts(desired, available);
+                shortfall = shortfall_from_counts(desired, idle_engineer_counts(&state, units));
                 state.tick(units, dt);
                 continue;
             }
@@ -692,65 +911,103 @@ impl Trainer {
             let macro_input = tensor1d_from_vec(&macro_features);
             let latent = self.model.latent(macro_input);
 
-            // Direction head.
-            let direction_logits = self
-                .model
-                .direction_logits(latent.clone())
-                .flatten::<1>(0, 1);
-            let direction_mask: Vec<f32> = step
-                .direction_mask
+            // Upgrade head (always evaluated; index 0 means "no upgrade").
+            let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
+            let upgrade_mask: Vec<f32> = step
+                .upgrade_mask
                 .iter()
                 .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
                 .collect();
-            let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::new(direction_mask, [DIRECTION_COUNT]),
+            let upgrade_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                TensorData::new(upgrade_mask, [UPGRADE_OPTION_COUNT]),
                 &self.device,
             );
-            let masked_direction_logits = direction_logits + direction_mask_tensor;
-            let direction_log_probs = log_softmax(masked_direction_logits, 0);
-            let direction_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                TensorData::new(vec![step.direction_index as i64], [1]),
+            let masked_upgrade_logits = upgrade_logits + upgrade_mask_tensor;
+            let upgrade_log_probs = log_softmax(masked_upgrade_logits, 0);
+            let upgrade_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                TensorData::new(vec![step.upgrade_index as i64], [1]),
                 &self.device,
             );
-            let direction_log_prob = direction_log_probs
-                .clone()
-                .select(0, direction_index_tensor);
+            let upgrade_log_prob = upgrade_log_probs.clone().select(0, upgrade_index_tensor);
+            let upgrade_probs = upgrade_log_probs.clone().exp();
+            let upgrade_entropy = (upgrade_probs * upgrade_log_probs).neg().sum();
 
-            // Action head (conditioned on the chosen direction).
-            let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
-                TensorData::new(
-                    one_hot(step.direction_index, DIRECTION_COUNT),
-                    [1, DIRECTION_COUNT],
-                ),
-                &self.device,
-            );
-            let action_logits = self
-                .model
-                .action_logits(latent.clone(), direction_one_hot)
-                .flatten::<1>(0, 1);
-            let action_mask: Vec<f32> = step
-                .action_mask
-                .iter()
-                .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
-                .collect();
-            let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::new(action_mask, [num_edges]),
-                &self.device,
-            );
-            let masked_action_logits = action_logits + action_mask_tensor;
-            let action_log_probs = log_softmax(masked_action_logits, 0);
-            let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                TensorData::new(vec![step.edge_index as i64], [1]),
-                &self.device,
-            );
-            let action_log_prob = action_log_probs.clone().select(0, edge_index_tensor);
+            // Direction and action heads are only part of the decision when no
+            // factory upgrade was chosen.
+            let (direction_log_prob, action_log_prob, direction_entropy, action_entropy) =
+                if step.upgrade_index == 0 {
+                    let direction_logits = self
+                        .model
+                        .direction_logits(latent.clone())
+                        .flatten::<1>(0, 1);
+                    let direction_mask: Vec<f32> = step
+                        .direction_mask
+                        .iter()
+                        .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                        .collect();
+                    let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(direction_mask, [DIRECTION_COUNT]),
+                        &self.device,
+                    );
+                    let masked_direction_logits = direction_logits + direction_mask_tensor;
+                    let direction_log_probs = log_softmax(masked_direction_logits, 0);
+                    let direction_index_tensor =
+                        Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                            TensorData::new(vec![step.direction_index as i64], [1]),
+                            &self.device,
+                        );
+                    let direction_log_prob = direction_log_probs
+                        .clone()
+                        .select(0, direction_index_tensor);
 
-            // Entropy bonus over both the direction and action distributions.
-            let direction_probs = direction_log_probs.clone().exp();
-            let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
-            let action_probs = action_log_probs.clone().exp();
-            let action_entropy = (action_probs * action_log_probs).neg().sum();
-            let entropy = direction_entropy + action_entropy;
+                    let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                        TensorData::new(
+                            one_hot(step.direction_index, DIRECTION_COUNT),
+                            [1, DIRECTION_COUNT],
+                        ),
+                        &self.device,
+                    );
+                    let action_logits = self
+                        .model
+                        .action_logits(latent.clone(), direction_one_hot)
+                        .flatten::<1>(0, 1);
+                    let action_mask: Vec<f32> = step
+                        .action_mask
+                        .iter()
+                        .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                        .collect();
+                    let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(action_mask, [num_edges]),
+                        &self.device,
+                    );
+                    let masked_action_logits = action_logits + action_mask_tensor;
+                    let action_log_probs = log_softmax(masked_action_logits, 0);
+                    let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                        TensorData::new(vec![step.edge_index as i64], [1]),
+                        &self.device,
+                    );
+                    let action_log_prob = action_log_probs.clone().select(0, edge_index_tensor);
+
+                    let direction_probs = direction_log_probs.clone().exp();
+                    let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
+                    let action_probs = action_log_probs.clone().exp();
+                    let action_entropy = (action_probs * action_log_probs).neg().sum();
+
+                    (
+                        direction_log_prob,
+                        action_log_prob,
+                        direction_entropy,
+                        action_entropy,
+                    )
+                } else {
+                    let zero = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(vec![0.0f32], [1]),
+                        &self.device,
+                    );
+                    (zero.clone(), zero.clone(), zero.clone(), zero)
+                };
+
+            let entropy = direction_entropy + action_entropy + upgrade_entropy;
 
             // Build-power network.
             let edge_one_hot = Tensor::<TrainBackend, 2>::from_data(
@@ -784,8 +1041,11 @@ impl Trainer {
                 &self.device,
             );
 
-            let joint_log_prob =
-                direction_log_prob + action_log_prob + power_log_prob + squad_log_prob;
+            let joint_log_prob = upgrade_log_prob
+                + direction_log_prob
+                + action_log_prob
+                + power_log_prob
+                + squad_log_prob;
             let return_tensor = Tensor::<TrainBackend, 1>::from_data(
                 TensorData::new(vec![step.return_value], [1]),
                 &self.device,
@@ -848,12 +1108,6 @@ impl Trainer {
                 let base_features = state_features(&state, units, planner_config);
                 let num_edges = edge_index.len();
 
-                let category = edge_index
-                    .get(step.edge_index)
-                    .map(|e| e.category())
-                    .unwrap_or(EdgeCategory::Progress);
-                let direction_index = category as usize;
-
                 let macro_features: Vec<f32> = {
                     let mut v = base_features.clone();
                     v.extend_from_slice(&step.shortfall);
@@ -862,60 +1116,98 @@ impl Trainer {
                 let macro_input = tensor1d_from_vec(&macro_features);
                 let latent = self.model.latent(macro_input);
 
-                // Direction cross-entropy loss.
-                let direction_logits = self
-                    .model
-                    .direction_logits(latent.clone())
-                    .flatten::<1>(0, 1);
-                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
-                let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                // Upgrade cross-entropy loss (index 0 is "no upgrade").
+                let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units, planner_config);
+                let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
+                let upgrade_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
                     TensorData::new(
-                        direction_mask
+                        upgrade_legal_mask
                             .iter()
                             .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
                             .collect(),
-                        [DIRECTION_COUNT],
+                        [UPGRADE_OPTION_COUNT],
                     ),
                     &self.device,
                 );
-                let masked_direction_logits = direction_logits + direction_mask_tensor;
-                let direction_log_probs = log_softmax(masked_direction_logits, 0);
-                let direction_index_tensor =
-                    Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                        TensorData::new(vec![direction_index as i64], [1]),
+                let masked_upgrade_logits = upgrade_logits + upgrade_mask_tensor;
+                let upgrade_log_probs = log_softmax(masked_upgrade_logits, 0);
+                let upgrade_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                    TensorData::new(vec![step.upgrade_index as i64], [1]),
+                    &self.device,
+                );
+                let upgrade_ce = upgrade_log_probs.select(0, upgrade_index_tensor).neg();
+
+                // Direction and action losses are only meaningful when no upgrade
+                // was chosen for this step.
+                let (direction_ce, action_ce) = if step.upgrade_index == 0 {
+                    let category = edge_index
+                        .get(step.edge_index)
+                        .map(|e| e.category())
+                        .unwrap_or(EdgeCategory::Goal);
+                    let direction_index = category as usize;
+
+                    let direction_logits = self
+                        .model
+                        .direction_logits(latent.clone())
+                        .flatten::<1>(0, 1);
+                    let direction_mask =
+                        edge_index.legal_category_mask(&state, units, planner_config);
+                    let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(
+                            direction_mask
+                                .iter()
+                                .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                                .collect(),
+                            [DIRECTION_COUNT],
+                        ),
                         &self.device,
                     );
-                let direction_ce = direction_log_probs.select(0, direction_index_tensor).neg();
+                    let masked_direction_logits = direction_logits + direction_mask_tensor;
+                    let direction_log_probs = log_softmax(masked_direction_logits, 0);
+                    let direction_index_tensor =
+                        Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                            TensorData::new(vec![direction_index as i64], [1]),
+                            &self.device,
+                        );
+                    let direction_ce = direction_log_probs.select(0, direction_index_tensor).neg();
 
-                // Action cross-entropy loss (conditioned on the recorded direction).
-                let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
-                    TensorData::new(
-                        one_hot(direction_index, DIRECTION_COUNT),
-                        [1, DIRECTION_COUNT],
-                    ),
-                    &self.device,
-                );
-                let action_logits = self
-                    .model
-                    .action_logits(latent.clone(), direction_one_hot)
-                    .flatten::<1>(0, 1);
-                let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                    TensorData::new(
-                        current_mask
-                            .iter()
-                            .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
-                            .collect(),
-                        [num_edges],
-                    ),
-                    &self.device,
-                );
-                let masked_action_logits = action_logits + action_mask_tensor;
-                let action_log_probs = log_softmax(masked_action_logits, 0);
-                let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                    TensorData::new(vec![step.edge_index as i64], [1]),
-                    &self.device,
-                );
-                let action_ce = action_log_probs.select(0, edge_index_tensor).neg();
+                    let direction_one_hot = Tensor::<TrainBackend, 2>::from_data(
+                        TensorData::new(
+                            one_hot(direction_index, DIRECTION_COUNT),
+                            [1, DIRECTION_COUNT],
+                        ),
+                        &self.device,
+                    );
+                    let action_logits = self
+                        .model
+                        .action_logits(latent.clone(), direction_one_hot)
+                        .flatten::<1>(0, 1);
+                    let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(
+                            current_mask
+                                .iter()
+                                .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                                .collect(),
+                            [num_edges],
+                        ),
+                        &self.device,
+                    );
+                    let masked_action_logits = action_logits + action_mask_tensor;
+                    let action_log_probs = log_softmax(masked_action_logits, 0);
+                    let edge_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                        TensorData::new(vec![step.edge_index as i64], [1]),
+                        &self.device,
+                    );
+                    let action_ce = action_log_probs.select(0, edge_index_tensor).neg();
+
+                    (direction_ce, action_ce)
+                } else {
+                    let zero = Tensor::<TrainBackend, 1>::from_data(
+                        TensorData::new(vec![0.0f32], [1]),
+                        &self.device,
+                    );
+                    (zero.clone(), zero)
+                };
 
                 // Build-power MSE loss.
                 let edge_one_hot = Tensor::<TrainBackend, 2>::from_data(
@@ -949,7 +1241,7 @@ impl Trainer {
                 let squad_diff = squad_means - target_squad;
                 let squad_mse = (squad_diff.clone() * squad_diff).sum();
 
-                let step_loss = direction_ce + action_ce + power_mse + squad_mse;
+                let step_loss = direction_ce + action_ce + upgrade_ce + power_mse + squad_mse;
                 total_loss_value += step_loss.clone().into_data().as_slice::<f32>().unwrap()[0];
                 accumulated_loss = Some(match accumulated_loss {
                     Some(acc) => acc + step_loss,

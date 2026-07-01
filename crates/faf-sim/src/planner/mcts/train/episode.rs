@@ -7,9 +7,16 @@ pub(crate) struct EpisodeStep {
     pub(crate) base_features: Vec<f32>,
     /// Shortfall feedback fed into the direction head at this step.
     pub(crate) shortfall: [f32; 3],
+    /// Mask over factory-upgrade options indicating which upgrades are legal.
+    /// Index 0 is always `true` (no upgrade).
+    pub(crate) upgrade_mask: Vec<bool>,
+    /// Selected upgrade option (0 = no upgrade, 1 = T1->T2, 2 = T2->T3).
+    pub(crate) upgrade_index: usize,
     /// Mask over [`EdgeCategory::ALL`] indicating which directions are legal.
+    /// Only meaningful when `upgrade_index == 0`.
     pub(crate) direction_mask: Vec<bool>,
     /// Selected strategic direction index (into [`EdgeCategory::ALL`]).
+    /// Only meaningful when `upgrade_index == 0`.
     pub(crate) direction_index: usize,
     /// Mask over plan-graph edges indicating which edges in the chosen direction
     /// are legal.
@@ -33,6 +40,8 @@ pub(crate) struct TrajectoryStep {
     pub(crate) target_power: f32,
     pub(crate) desired_squad: [f32; 3],
     pub(crate) shortfall: [f32; 3],
+    /// Factory-upgrade option chosen at this step (0 = no upgrade).
+    pub(crate) upgrade_index: usize,
 }
 
 /// In-memory trajectory for the best training episode.

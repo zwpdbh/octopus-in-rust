@@ -22,7 +22,12 @@ cargo run --release --bin faf-sim -- plan
 cargo run --release --bin faf-sim -- train -e 10000 -m 5000 uef novaxcenter
 cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 uef novaxcenter
 cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 6000 -r uef novaxcenter
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 6000 --no-epsilon-decay -r uef novaxcenter
+
+cargo run --release --bin faf-sim -- train \
+  -e 30000 -m 5000 \
+  --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
+  --patience 10000 \
+  uef novaxcenter
 
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
 cargo run --bin faf-sim -- simulate uef novaxcenter
