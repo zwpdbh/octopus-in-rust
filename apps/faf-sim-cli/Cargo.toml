@@ -18,11 +18,10 @@ wgpu = ["faf-sim/wgpu", "faf-sim-tui/wgpu"]
 
 [dependencies]
 clap = { workspace = true }
-ctrlc = "3"
 faf-sim = { workspace = true, default-features = false }
 faf-sim-tui = { workspace = true, default-features = false, features = ["cuda"] }
 faf-units = { workspace = true }
 petgraph = { workspace = true }
 petgraph-svg = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "signal"] }

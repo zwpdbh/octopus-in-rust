@@ -1,5 +1,8 @@
 //! High-level training entry points and model persistence.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
@@ -52,11 +55,15 @@ pub fn load_policy(
 ///
 /// `observer` receives coarse-grained progress events and can be used to drive
 /// a dashboard or logger. Pass `()` if no observer is needed.
+///
+/// `stop_flag`, when provided, is shared with the trainer so an outside actor
+/// can request a graceful stop at the next episode boundary.
 pub fn train_policy(
     units: &Units,
     goal: &Goal,
     config: TrainConfig,
     observer: impl TrainingObserver + 'static,
+    stop_flag: Option<Arc<AtomicBool>>,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
@@ -66,23 +73,32 @@ pub fn train_policy(
         .expect("goal must have a plan graph")
         .len();
     let mut trainer = Trainer::new(config, num_edges).with_observer(observer);
+    if let Some(flag) = stop_flag {
+        trainer.stop_requested = flag;
+    }
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)
 }
 
 /// Continue training an existing policy for `goal`.
+///
+/// See [`train_policy`] for `stop_flag` semantics.
 pub fn train_policy_from(
     model: PolicyBundle<TrainBackend>,
     units: &Units,
     goal: &Goal,
     config: TrainConfig,
     observer: impl TrainingObserver + 'static,
+    stop_flag: Option<Arc<AtomicBool>>,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
     TrainStats,
 ) {
     let mut trainer = Trainer::from_model(config, model).with_observer(observer);
+    if let Some(flag) = stop_flag {
+        trainer.stop_requested = flag;
+    }
     trainer.best_model = Some(trainer.model.clone());
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)

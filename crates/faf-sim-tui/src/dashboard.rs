@@ -31,17 +31,21 @@ const MIN_HEIGHT: u16 = 12;
 /// The closure receives a [`TrainingObserver`] that forwards progress events to
 /// the dashboard renderer. When the closure returns, the dashboard is torn down
 /// and the result is returned to the caller.
+///
+/// `external_stop` is an optional shared stop flag. When provided, both the
+/// dashboard (on `Ctrl+D`) and the training closure can observe it, and an
+/// outside orchestration layer can set it to request a graceful stop.
 pub struct TrainingDashboard;
 
 impl TrainingDashboard {
     /// Run `training` while displaying the live training dashboard.
-    pub fn run<F, R>(training: F) -> R
+    pub fn run<F, R>(external_stop: Option<Arc<AtomicBool>>, training: F) -> R
     where
         F: FnOnce(DashboardObserver) -> R + Send + 'static,
         R: Send + 'static,
     {
         let (event_sender, event_receiver) = mpsc::channel::<DashboardEvent>();
-        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag = external_stop.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let observer = DashboardObserver::new(event_sender, Arc::clone(&stop_flag));
 
         let (result_sender, result_receiver) = mpsc::channel::<R>();
@@ -89,14 +93,6 @@ fn run_tui(
     let mut state = DashboardState::default();
     state.refresh_system();
 
-    let ctrlc_hint = Arc::new(AtomicBool::new(false));
-    {
-        let flag = Arc::clone(&ctrlc_hint);
-        let _ = ctrlc::set_handler(move || {
-            flag.store(true, Ordering::Relaxed);
-        });
-    }
-
     let mut last_render = Instant::now();
     let render_interval = Duration::from_millis(100);
     let system_refresh_interval = Duration::from_secs(1);
@@ -118,6 +114,10 @@ fn run_tui(
                     if is_ctrl_d || key.code == KeyCode::Esc {
                         stop_flag.store(true, Ordering::Relaxed);
                     } else if is_ctrl_c {
+                        // In raw mode Ctrl+C is delivered as a key event rather
+                        // than SIGINT, so treat it as a graceful-stop request and
+                        // show an informative hint.
+                        stop_flag.store(true, Ordering::Relaxed);
                         state.ctrl_c_hint = true;
                     }
                 }
@@ -126,10 +126,6 @@ fn run_tui(
 
         if state.last_system_refresh.elapsed() >= system_refresh_interval {
             state.refresh_system();
-        }
-
-        if ctrlc_hint.swap(false, Ordering::Relaxed) {
-            state.ctrl_c_hint = true;
         }
 
         if last_render.elapsed() >= render_interval {
@@ -586,7 +582,7 @@ fn render_footer(frame: &mut Frame, state: &DashboardState, area: Rect) {
                     "Ctrl+C",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
-                Span::from(" ignored."),
+                Span::from(" received."),
             ]),
             Line::from(vec![
                 Span::styled(
@@ -595,8 +591,9 @@ fn render_footer(frame: &mut Frame, state: &DashboardState, area: Rect) {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::from(" stops training gracefully."),
+                Span::from(" is the normal stop key."),
             ]),
+            Line::from("Stopping at the next episode."),
         ]
     } else {
         vec![

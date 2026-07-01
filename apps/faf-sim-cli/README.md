@@ -19,15 +19,21 @@ cargo run --release --bin faf-sim -- plan
 # --quiet        : suppress per-episode and progress output
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
 # --no-epsilon-decay : keep exploration probability constant (useful for resuming a search)
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 uef novaxcenter
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 uef novaxcenter
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 6000 -r uef novaxcenter
 
-cargo run --release --bin faf-sim -- train \
-  -e 30000 -m 5000 \
+# Recommended starting command for UEF Novax Center.
+# - 5000 episodes is a few hours at ~0.36 eps/s on CUDA.
+# - Epsilon decays from 30% random exploration down to 1% over the run.
+# - Training stops early if the policy reaches a 30-minute completion time.
+cargo run --release --bin faf-sim -- \
+  train -e 5000 -m 1000 -t 30m \
   --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
-  --patience 10000 \
   uef novaxcenter
+
+# Same run with patience-based early stopping (stops if no improvement for 1000 episodes).
+cargo run --release --bin faf-sim -- \
+  train -e 10000 -m 5000 --patience 1000 uef novaxcenter
+
+
 
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
 cargo run --bin faf-sim -- simulate uef novaxcenter
