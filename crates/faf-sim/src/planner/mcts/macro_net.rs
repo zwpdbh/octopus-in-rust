@@ -80,6 +80,14 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
         }
     }
 
+    /// Return a Graphviz DOT description of this network's architecture.
+    ///
+    /// `num_edges` is the number of plan-graph edges the action head scores.
+    /// The output can be rendered with `dot -Tsvg` or Graphviz tools.
+    pub fn to_dot(&self, num_edges: usize) -> String {
+        hierarchical_policy_net_dot(num_edges)
+    }
+
     /// Shared backbone that turns state features into a latent vector.
     pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.backbone1.forward(features);
@@ -284,6 +292,115 @@ pub fn shortfall_from_counts(desired: [usize; 3], available: [usize; 3]) -> [f32
         out[i] = diff;
     }
     out
+}
+
+/// Return a Graphviz DOT description of the hierarchical policy network
+/// architecture for a plan graph with `num_edges` edges.
+///
+/// This does not require a network instance or backend, so it can be used from
+/// tooling that only knows the number of plan-graph edges.
+pub fn hierarchical_policy_net_dot(num_edges: usize) -> String {
+    let input_dim = STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT;
+    let backbone_hidden = 128;
+    let latent_dim = 64;
+    let action_hidden = 128;
+    let power_hidden = 64;
+    let squad_hidden = 64;
+
+    format!(
+        r##"digraph HierarchicalPolicyNet {{
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fontname="Helvetica"];
+    edge [fontname="Helvetica", fontsize=10];
+
+    input [label="Input\n{} features\n({} state + {} shortfall)", fillcolor="#e3f2fd"];
+
+    backbone1 [label="backbone1\nLinear({}, {})", fillcolor="#fff3e0"];
+    relu1 [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
+    backbone2 [label="backbone2\nLinear({}, {})", fillcolor="#fff3e0"];
+    relu2 [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
+    latent [label="Latent vector\n{}", fillcolor="#e8f5e9"];
+
+    input -> backbone1;
+    backbone1 -> relu1;
+    relu1 -> backbone2;
+    backbone2 -> relu2;
+    relu2 -> latent;
+
+    direction_head [label="direction_head\nLinear({}, {})", fillcolor="#ffebee"];
+    direction_out [label="Direction logits\n{} (Mass/Energy/\nBuildPower/Progress)", fillcolor="#ffcdd2"];
+    latent -> direction_head;
+    direction_head -> direction_out;
+
+    concat_action [label="Concat\n{} + {}", shape=diamond, fillcolor="#e0f7fa"];
+    action_hidden [label="action_hidden\nLinear({}, {})", fillcolor="#fff3e0"];
+    relu_action [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
+    action_head [label="action_head\nLinear({}, {})", fillcolor="#fff3e0"];
+    action_out [label="Action logits\n{} plan-graph edges", fillcolor="#ffcdd2"];
+
+    latent -> concat_action;
+    direction_out -> concat_action [style=dashed, constraint=false];
+    concat_action -> action_hidden;
+    action_hidden -> relu_action;
+    relu_action -> action_head;
+    action_head -> action_out;
+
+    concat_power [label="Concat\n{} + {}", shape=diamond, fillcolor="#e0f7fa"];
+    power_hidden [label="power_hidden\nLinear({}, {})", fillcolor="#fff3e0"];
+    relu_power [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
+    power_head [label="power_head\nLinear({}, {})", fillcolor="#fff3e0"];
+    power_out [label="Target build power\n1 scalar", fillcolor="#ffcdd2"];
+
+    latent -> concat_power;
+    action_out -> concat_power [style=dashed, constraint=false];
+    concat_power -> power_hidden;
+    power_hidden -> relu_power;
+    relu_power -> power_head;
+    power_head -> power_out;
+
+    concat_squad [label="Concat\n{} + 1", shape=diamond, fillcolor="#e0f7fa"];
+    squad_hidden [label="squad_hidden\nLinear({}, {})", fillcolor="#fff3e0"];
+    relu_squad [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
+    squad_head [label="squad_head\nLinear({}, {})", fillcolor="#fff3e0"];
+    squad_out [label="Engineer counts\n[T1, T2, T3]", fillcolor="#ffcdd2"];
+
+    latent -> concat_squad;
+    power_out -> concat_squad [style=dashed, constraint=false];
+    concat_squad -> squad_hidden;
+    squad_hidden -> relu_squad;
+    relu_squad -> squad_head;
+    squad_head -> squad_out;
+}}"##,
+        input_dim,
+        STATE_FEATURE_COUNT,
+        SHORTFALL_FEATURE_COUNT,
+        input_dim,
+        backbone_hidden,
+        backbone_hidden,
+        latent_dim,
+        latent_dim,
+        latent_dim,
+        DIRECTION_COUNT,
+        DIRECTION_COUNT,
+        latent_dim,
+        DIRECTION_COUNT,
+        latent_dim + DIRECTION_COUNT,
+        action_hidden,
+        action_hidden,
+        num_edges,
+        num_edges,
+        latent_dim,
+        num_edges,
+        latent_dim + num_edges,
+        power_hidden,
+        power_hidden,
+        1,
+        latent_dim,
+        latent_dim,
+        squad_hidden,
+        squad_hidden,
+        3,
+    )
 }
 
 /// Infer the number of plan-graph edges for a goal.

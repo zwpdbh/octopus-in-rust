@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 
 use clap::Parser;
-use faf_sim::planner::mcts::macro_net::num_plan_edges;
+use faf_sim::planner::mcts::macro_net::{hierarchical_policy_net_dot, num_plan_edges};
 use faf_sim::planner::mcts::train::{
     load_policy, save_policy, train_policy, train_policy_from, TrainConfig,
 };
@@ -35,7 +35,7 @@ use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, NodeLabel, RenderOptions
 mod cmdline;
 mod target;
 
-use cmdline::{Cli, Command as CliCommand, FactionTarget, TrainArgs};
+use cmdline::{Cli, Command as CliCommand, DrawNetArgs, FactionTarget, TrainArgs};
 use target::{Faction, ResearchTarget, UnitKind};
 
 #[tokio::main(flavor = "current_thread")]
@@ -57,6 +57,11 @@ async fn main() {
             let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
             run_simulate(&units, target, args.strategy, args.output).await;
+        }
+        CliCommand::DrawNet(args) => {
+            let (faction, unit) = resolve_faction_target(&args.target);
+            let target = resolve_target(faction, unit);
+            run_draw_net(&units, target, args);
         }
     }
 }
@@ -174,6 +179,58 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         println!("Saved best-seen model to {}", path.display());
     } else {
         println!("Model saved to {}", path.display());
+    }
+}
+
+fn run_draw_net(units: &SimUnits, target: ResearchTarget, args: DrawNetArgs) {
+    let goal = target.to_goal(units);
+    let num_edges = num_plan_edges(units, &goal).expect("target must have a plan graph");
+    let dot = hierarchical_policy_net_dot(num_edges);
+
+    let dot_path = match args.output {
+        Some(path) => path,
+        None => {
+            let file_name = format!(
+                "faf-sim-net-{}-{}.dot",
+                target.faction.display_name().to_ascii_lowercase(),
+                target
+                    .unit
+                    .display_name()
+                    .to_ascii_lowercase()
+                    .replace(' ', "-")
+            );
+            std::env::temp_dir().join(file_name)
+        }
+    };
+
+    std::fs::write(&dot_path, dot).expect("write DOT file");
+    println!("Wrote network architecture DOT to {}", dot_path.display());
+
+    // Render to SVG if Graphviz `dot` is available.
+    let svg_path = dot_path.with_extension("svg");
+    match std::process::Command::new("dot")
+        .args([
+            "-Tsvg",
+            dot_path.to_str().unwrap(),
+            "-o",
+            svg_path.to_str().unwrap(),
+        ])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("Rendered SVG to {}", svg_path.display());
+            if let Ok(absolute) = std::fs::canonicalize(&svg_path) {
+                println!("  file://{}", absolute.display());
+            }
+        }
+        _ => {
+            eprintln!("Graphviz `dot` not available; SVG rendering skipped.");
+            eprintln!(
+                "You can render manually with: dot -Tsvg {} -o {}",
+                dot_path.display(),
+                svg_path.display()
+            );
+        }
     }
 }
 

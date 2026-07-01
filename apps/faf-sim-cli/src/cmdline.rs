@@ -75,6 +75,11 @@ pub enum Command {
     /// an estimated completion timeline. If a trained model exists for the
     /// target, it is loaded automatically.
     Simulate(SimulateArgs),
+    /// Draw the value-network architecture for a target unit.
+    ///
+    /// Emits a Graphviz DOT description of the hierarchical policy network and
+    /// renders it to SVG if Graphviz is installed.
+    DrawNet(DrawNetArgs),
 }
 
 /// Arguments for the `plan` subcommand.
@@ -129,6 +134,17 @@ pub struct TrainArgs {
     /// episodes. Counted only after the first successful episode.
     #[arg(long)]
     pub patience: Option<usize>,
+    /// Faction and unit to target.
+    #[command(subcommand)]
+    pub target: FactionTarget,
+}
+
+/// Arguments for the `draw-net` subcommand.
+#[derive(Parser)]
+pub struct DrawNetArgs {
+    /// Write the DOT source to this file instead of a temporary file.
+    #[arg(short = 'o', long)]
+    pub output: Option<std::path::PathBuf>,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

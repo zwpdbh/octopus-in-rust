@@ -121,6 +121,9 @@ impl SelectionPools {
                     {
                         continue;
                     }
+                    if is_obsolete_engineer_or_pgen(target_kind, state) {
+                        continue;
+                    }
 
                     match edge.weight() {
                         PlanEdgeKind::Build => {
@@ -414,6 +417,9 @@ fn is_edge_legal(
                     let target = edge
                         .target_unit()
                         .expect("build target must be unit or goal");
+                    if is_obsolete_engineer_or_pgen(target, state) {
+                        return false;
+                    }
                     !state.has_completed_unit(target)
                         && !state.active_target_unit_ids().contains(target)
                         && !would_exceed_storage_cap(target, state, config)
@@ -427,6 +433,32 @@ fn is_edge_legal(
             can_upgrade(state, units, source, target)
         }
     }
+}
+
+/// True if `target` is a lower-tier engineer or power generator made obsolete
+/// by owning a higher-tier factory.
+///
+/// The highest-tier engineer we can produce is determined by the highest-tier
+/// factory we own (T1 factory -> T1 engineer, T2 factory -> T2 engineer, etc.).
+/// Once a higher-tier factory is available, lower-tier engineers and the
+/// lower-tier power generators they build are no longer worth considering.
+fn is_obsolete_engineer_or_pgen(target: &UnitKind, state: &GraphState) -> bool {
+    let (UnitKind::Engineer(tech) | UnitKind::Pgen(tech)) = target else {
+        return false;
+    };
+
+    let Some(highest) = highest_completed_factory_tech(state) else {
+        return false;
+    };
+
+    *tech < highest
+}
+
+/// Highest tech level of any completed factory, if any.
+fn highest_completed_factory_tech(state: &GraphState) -> Option<TechLevel> {
+    [TechLevel::T3, TechLevel::T2, TechLevel::T1]
+        .into_iter()
+        .find(|&t| state.has_completed_unit(&UnitKind::Factory(t)))
 }
 
 /// True if `builder` is allowed to start the abstract `goal` project.
@@ -743,5 +775,85 @@ mod tests {
             from: UnitKind::Mex(TechLevel::T1),
             to: UnitKind::Mex(TechLevel::T2),
         }));
+    }
+
+    #[test]
+    fn obsolete_engineer_and_pgen_edges_are_pruned_when_enabled() {
+        let units = load_units();
+        let plan = units.plan_graph(t4_goal());
+        let edge_index = PlanEdgeIndex::new(&plan);
+
+        let t1_eng_idx = edge_index
+            .edges
+            .iter()
+            .position(|e| {
+                e.kind == PlanEdgeKind::Build
+                    && e.source_unit() == Some(&UnitKind::Factory(TechLevel::T1))
+                    && e.target_unit() == Some(&UnitKind::Engineer(TechLevel::T1))
+            })
+            .expect("T1 engineer edge exists");
+        let t2_eng_idx = edge_index
+            .edges
+            .iter()
+            .position(|e| {
+                e.kind == PlanEdgeKind::Build
+                    && e.source_unit() == Some(&UnitKind::Factory(TechLevel::T2))
+                    && e.target_unit() == Some(&UnitKind::Engineer(TechLevel::T2))
+            })
+            .expect("T2 engineer edge exists");
+        let t1_pgen_idx = edge_index
+            .edges
+            .iter()
+            .position(|e| {
+                e.kind == PlanEdgeKind::Build
+                    && e.source_unit() == Some(&UnitKind::Engineer(TechLevel::T1))
+                    && e.target_unit() == Some(&UnitKind::Pgen(TechLevel::T1))
+            })
+            .expect("T1 pgen edge exists");
+        let t2_pgen_idx = edge_index
+            .edges
+            .iter()
+            .position(|e| {
+                e.kind == PlanEdgeKind::Build
+                    && e.source_unit() == Some(&UnitKind::Engineer(TechLevel::T2))
+                    && e.target_unit() == Some(&UnitKind::Pgen(TechLevel::T2))
+            })
+            .expect("T2 pgen edge exists");
+
+        // Engineer pruning: T1 engineer is illegal once a T2 factory exists.
+        let engineer_state = GraphState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T1),
+                UnitKind::Factory(TechLevel::T2),
+            ],
+        );
+        let config = PlannerConfig::default();
+        let mask = edge_index.legal_mask(&engineer_state, &units, &config);
+        assert!(
+            !mask[t1_eng_idx],
+            "T1 engineer should be illegal once a T2 factory exists"
+        );
+        assert!(mask[t2_eng_idx], "T2 engineer should remain legal");
+
+        // Power generator pruning: T1 pgen is illegal once a T2 factory exists
+        // (because that factory can produce T2 engineers, which build T2 pgens).
+        let pgen_state = GraphState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T1),
+                UnitKind::Factory(TechLevel::T2),
+                UnitKind::Engineer(TechLevel::T1),
+                UnitKind::Engineer(TechLevel::T2),
+            ],
+        );
+        let mask = edge_index.legal_mask(&pgen_state, &units, &config);
+        assert!(
+            !mask[t1_pgen_idx],
+            "T1 pgen should be illegal once a T2 factory exists"
+        );
+        assert!(mask[t2_pgen_idx], "T2 pgen should remain legal");
     }
 }
