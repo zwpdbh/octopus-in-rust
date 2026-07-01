@@ -44,8 +44,6 @@ pub struct TrainConfig {
     /// Global gradient norm clipping threshold. `None` disables clipping.
     /// A value of `1.0` is a safe default for preventing REINFORCE divergence.
     pub grad_clip: Option<f32>,
-    /// Print per-episode progress to stderr.
-    pub verbose: bool,
 }
 
 impl Default for TrainConfig {
@@ -67,7 +65,6 @@ impl Default for TrainConfig {
             power_std: 2.0,
             squad_std: 0.5,
             grad_clip: None,
-            verbose: false,
         }
     }
 }

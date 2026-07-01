@@ -9,12 +9,14 @@ This chapter describes how the hierarchical policy is trained. The pipeline uses
 The training entry point is `train_policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 55 — train_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
 pub fn train_policy(
     units: &Units,
     goal: &Goal,
     config: TrainConfig,
-    observer: impl TrainingObserver + 'static,
+    metrics: FafSimMetrics,
+    stop_flag: Option<Arc<AtomicBool>>,
+    interrupter: Interrupter,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
@@ -23,7 +25,12 @@ pub fn train_policy(
     let num_edges = plan_edge_index(units, goal)
         .expect("goal must have a plan graph")
         .len();
-    let mut trainer = Trainer::new(config, num_edges).with_observer(observer);
+    let mut trainer = Trainer::new(config, num_edges)
+        .with_metrics(metrics)
+        .with_interrupter(interrupter);
+    if let Some(flag) = stop_flag {
+        trainer.stop_requested = flag;
+    }
     let stats = trainer.train(units, goal);
     fine_tune_best_model(trainer, units, goal, &config, stats)
 }
@@ -60,16 +67,16 @@ pub struct TrainConfig {
     pub target_time: Option<f64>,
     /// Evaluate greedily every N episodes and keep the best model.
     pub greedy_eval_interval: usize,
+    /// Stop early if no new best time for this many episodes.
+    pub patience: Option<usize>,
     /// Supervised fine-tuning epochs on the best trajectory.
     pub fine_tune_epochs: usize,
     /// Standard deviation for build-power sampling.
     pub power_std: f32,
     /// Standard deviation for engineer-count sampling.
     pub squad_std: f32,
-    /// Print per-episode progress to stderr.
-    pub verbose: bool,
-    /// Stop early if no new best time for this many episodes.
-    pub patience: Option<usize>,
+    /// Global gradient norm clipping threshold. `None` disables clipping.
+    pub grad_clip: Option<f32>,
 }
 ```
 
@@ -93,7 +100,7 @@ fn default() -> Self {
         fine_tune_epochs: 100,
         power_std: 2.0,
         squad_std: 0.5,
-        verbose: false,
+        grad_clip: None,
         patience: None,
     }
 }
@@ -106,7 +113,7 @@ You can increase `episodes`, `max_steps`, and the network sizes for harder goals
 The `Trainer` owns the model, optimizer, and best-seen state:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 43 — Trainer (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 21 — Trainer (abbreviated)
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
@@ -115,6 +122,8 @@ pub struct Trainer {
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
     pub(crate) rng: ThreadRng,
+    pub(crate) metrics: Option<FafSimMetrics>,
+    pub(crate) interrupter: Interrupter,
 }
 ```
 
@@ -309,15 +318,145 @@ pub fn load_policy(
 
 Old `.mpk` models saved before the abstract-goal change will not load; the universal plan graph now has a fixed edge count and a synthetic `Goal` node. Delete old checkpoints and retrain.
 
-## Monitoring progress
+## Monitoring progress with Burn's training traits
 
-When `verbose` is enabled, the trainer prints one line per episode and progress during greedy evaluations:
+Training progress is reported through Burn's standard `Metric`, `MetricsRenderer`, and `Interrupter` traits. If you are implementing RL with Burn, follow this pattern instead of inventing your own observer or dashboard code.
 
-```text
-ep=   1 steps=  42 eps=0.1000 reached=false time=             - best=             - loss=    2.3456
-ep= 100 steps=  38 eps=0.1000 reached= true time=      1243.50 best=      1243.50 loss=    1.8765
-  greedy eval at ep=100: time=1234.00 best=1234.00
+Burn splits progress reporting into three responsibilities:
+
+1. **`Metric`** — a pure numeric state machine. It consumes training events and produces a formatted value. It knows nothing about the terminal, files, or network.
+2. **`MetricsRenderer`** — a display sink. It receives formatted metric states and renders them (TUI, plain text, remote logger, etc.).
+3. **`Interrupter`** — a cooperative stop flag. A renderer can set it; the trainer checks it once per episode and stops cleanly.
+
+This is why the old custom `TrainingObserver`, `verbose` flag, and `faf-sim-tui` crate were removed. The new design keeps measurement, display, and cancellation separate.
+
+### A `Metric` implementation
+
+Each value we care about is a struct that implements `Metric<Input = TrainEvent>`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 18 — EpisodeLossMetric
+#[derive(Clone, Default)]
+pub struct EpisodeLossMetric {
+    name: MetricName,
+    state: NumericMetricState,
+}
+
+impl Metric for EpisodeLossMetric {
+    type Input = TrainEvent;
+
+    fn name(&self) -> MetricName {
+        self.name.clone()
+    }
+
+    fn attributes(&self) -> MetricAttributes {
+        NumericAttributes {
+            unit: None,
+            higher_is_better: false,
+        }
+        .into()
+    }
+
+    fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
+        let value = match item {
+            TrainEvent::Episode(EpisodeSummary { loss: Some(l), .. }) => *l as f64,
+            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
+        };
+        self.state.update(
+            value,
+            1,
+            FormatOptions::new(self.name()).precision(4),
+        )
+    }
+
+    fn clear(&mut self) {
+        self.state.reset();
+    }
+}
 ```
+
+Because a `Metric` is pure, you can test it in isolation by feeding it a few `TrainEvent` values. You do not need a running simulator, a terminal, or a backend.
+
+### The metric bundle
+
+`FafSimMetrics` owns all metric instances and forwards each event to every metric:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 582 — FafSimMetrics (abbreviated)
+pub struct FafSimMetrics {
+    renderer: Box<dyn MetricsRenderer>,
+    loss: EpisodeLossMetric,
+    steps: EpisodeStepsMetric,
+    completion_time: CompletionTimeMetric,
+    goal_reach: GoalReachMetric,
+    epsilon: EpsilonMetric,
+    best_time: BestTimeMetric,
+    greedy_time: GreedyEvalTimeMetric,
+    speed: EpisodeSpeedMetric,
+}
+```
+
+At the start of training it registers every metric with the renderer. After each episode it updates every metric and asks the renderer to redraw:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 614 — register
+pub fn register(&mut self) {
+    Self::register_metric(&mut *self.renderer, &self.loss);
+    Self::register_metric(&mut *self.renderer, &self.steps);
+    // ... one line per metric
+}
+
+// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 633 — update
+pub fn update(&mut self, event: &TrainEvent, metadata: &MetricMetadata) {
+    Self::update_metric(&mut *self.renderer, &mut self.loss, event, metadata);
+    // ... one line per metric
+}
+```
+
+### Emitting events from the training loop
+
+The trainer does not know which renderer is attached. It just emits a `TrainEvent` and calls `render`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 149 — episode event dispatch
+if let Some(ref mut metrics) = self.metrics {
+    let metadata = metric_metadata(ep + 1, self.config.episodes);
+    metrics.update(
+        &TrainEvent::Episode(EpisodeSummary {
+            episode: ep + 1,
+            total_episodes: self.config.episodes,
+            // ...
+        }),
+        &metadata,
+    );
+    metrics.render(training_progress(ep + 1, self.config.episodes, Some(ep + 1)), vec![]);
+}
+```
+
+### Graceful stop with `Interrupter`
+
+The trainer checks both the SIGINT flag and the Burn `Interrupter` once per episode:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 91 — should_stop
+pub(crate) fn should_stop(&self) -> bool {
+    self.stop_requested.load(Ordering::Relaxed)
+        || self.interrupter.is_stopped()
+}
+```
+
+If the user closes the TUI or sends SIGINT, the current episode finishes, the best model is fine-tuned, and the checkpoint is saved cleanly.
+
+### Why this matters for RL in Burn
+
+Following these conventions gives four concrete wins:
+
+- **Less code.** The custom `faf-sim-tui` crate and its Ratatui event loop are gone. Burn ships a production-ready TUI renderer.
+- **Easier to extend.** Adding a new metric means implementing one `Metric` struct and adding it to the bundle. Every renderer automatically receives the new value.
+- **Testable.** Metrics are pure, so you can assert on their numeric output without a running training loop.
+- **Better hardware utilization.** The old dashboard did terminal I/O on the training thread. Burn's `TuiMetricsRendererWrapper` runs the UI on its own thread, so the training loop spends almost all of its time on rollouts and gradient steps. The practical sign on this machine was that the GPU/CPU fans stayed at higher, steadier speeds — the backend was no longer waiting for the screen to redraw.
+
+The CLI wiring is covered in the [Integration and CLI](08-integration.md) chapter. Pass `--no-tui` for plain-text output or `--quiet` to suppress live output entirely.
 
 If progress stalls, try:
 
@@ -337,9 +476,10 @@ faf-sim train -e 5000 -m 10000 uef novaxcenter
 
 This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novax-center`. The same network shape is used for every target because the plan graph is universal; only the synthetic `Goal` node carries target-specific cost and build time.
 
-By default the CLI prints a line after every episode and a progress line every few seconds during long episodes. Pass `--quiet` to suppress this output:
+By default the CLI opens Burn's TUI dashboard when running in an interactive terminal. Use `--no-tui` to keep plain-text output, or `--quiet` to suppress live output entirely:
 
 ```text
+faf-sim train -e 5000 -m 10000 --no-tui uef novaxcenter
 faf-sim train -e 5000 -m 10000 --quiet uef novaxcenter
 ```
 

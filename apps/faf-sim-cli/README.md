@@ -14,10 +14,12 @@ cargo run --release --bin faf-sim -- plan
 # Train the hierarchical policy for a target unit.
 # -e  : number of training episodes
 # -m  : maximum simulator steps per episode (cap; episode ends early if the goal is reached)
+# --dt : fixed simulator timestep in seconds (default 1.0)
 # -r  : resume from an existing model file (optional)
 # --fresh        : delete any existing model checkpoint for this target before training
 # --patience <N> : stop early if no new best time for N episodes after the first success
 # --quiet        : suppress per-episode and progress output
+# --no-tui       : disable the live dashboard and print plain text progress instead
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
 # --no-epsilon-decay : keep exploration probability constant (useful for resuming a search)
 
@@ -29,12 +31,18 @@ cargo run --release --bin faf-sim -- plan
 cargo run --release --bin faf-sim -- \
   train -e 5000 -m 1000 -t 30m \
   --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
+  --dt 2.0 \
   --grad-clip 1.0 \
   uef novaxcenter
 
 # Start completely fresh by deleting any existing checkpoint first.
 cargo run --release --bin faf-sim -- \
   train -e 5000 -m 1000 --fresh --grad-clip 1.0 uef novaxcenter
+
+# Use the CPU backend instead of CUDA (useful when the GPU is not available
+# or when the tiny network is CPU-bound).
+cargo run --no-default-features --features cpu --release --bin faf-sim -- \
+  train -e 5000 -m 1000 --grad-clip 1.0 uef novaxcenter
 
 # Same run with patience-based early stopping (stops if no improvement for 1000 episodes).
 cargo run --release --bin faf-sim -- \

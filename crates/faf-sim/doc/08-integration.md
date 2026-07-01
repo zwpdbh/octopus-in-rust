@@ -345,14 +345,25 @@ if let Some(action) = result.first_action {
 Train a policy bundle programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 55 — train_policy
+// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 64 — train_policy
 let goal = Goal {
     tech_level: TechLevel::T4,
     mass_cost: 28_000.0,
     energy_cost: 340_000.0,
     build_time: 46_250.0,
 };
-let (bundle, best_bundle, stats) = train_policy(&units, &goal, TrainConfig::default(), ());
+let metrics = FafSimMetrics::new(Box::new(TuiMetricsRendererWrapper::new(
+    Interrupter::new(),
+    None,
+)));
+let (bundle, best_bundle, stats) = train_policy(
+    &units,
+    &goal,
+    TrainConfig::default(),
+    metrics,
+    None,
+    Interrupter::new(),
+);
 save_policy(
     best_bundle.as_ref().unwrap_or(&bundle),
     &PathBuf::from("data/models/mlp-cybran-monkeylord"),
@@ -374,20 +385,19 @@ The CLI wraps these calls with `train` and `simulate` subcommands. The programma
 
 ## Terminal dashboard
 
-For interactive training, the `faf-sim-cli` binary renders a [`ratatui`](https://ratatui.rs/) dashboard when stdout is a terminal. The dashboard lives in the separate `faf-sim-tui` crate so the core simulator does not depend on UI libraries.
+For interactive training, the `faf-sim-cli` binary uses Burn's built-in terminal UI renderer (`TuiMetricsRendererWrapper`) when stdout is a terminal. The renderer is created inside the training thread and shows the standard Burn metric dashboard.
 
 ```rust
-// crates/faf-sim-tui/src/dashboard.rs ~line 37 — TrainingDashboard::run
-pub fn run<F, R>(training: F) -> R
-where
-    F: FnOnce(DashboardObserver) -> R + Send + 'static,
-    R: Send + 'static,
-{
-    // ... spawn TUI thread, run training closure, return result ...
-}
+// apps/faf-sim-cli/src/main.rs ~line 175 — run_train
+let renderer: Box<dyn MetricsRenderer> = if let Some(inter) = interrupter_for_renderer {
+    Box::new(TuiMetricsRendererWrapper::new(inter, None))
+} else {
+    Box::new(TextMetricsRenderer::new())
+};
+let metrics = FafSimMetrics::new(renderer);
 ```
 
-Pass `--no-tui` to keep plain-text output, or `--quiet` to suppress live progress entirely. Press `q` or `Esc` in the dashboard to request a graceful stop at the next episode boundary.
+Pass `--no-tui` to keep plain-text output, or `--quiet` to suppress live progress entirely. Inside the Burn TUI, use the renderer's normal quit key to stop training gracefully at the next episode boundary.
 
 ## Model compatibility
 

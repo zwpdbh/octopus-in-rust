@@ -16,7 +16,7 @@ cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
 wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
 
 [dependencies]
-burn = { workspace = true }
+burn = { workspace = true, features = ["train", "tui"] }
 faf-units = { workspace = true }
 petgraph = { workspace = true }
 rand = { workspace = true }

@@ -7,12 +7,15 @@ use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
 use super::config::{TrainConfig, TrainStats};
-use super::observer::{FineTuneSummary, TrainingObserver};
+use super::metric::metrics::FafSimMetrics;
+use super::metric::{FineTuneSummary, TrainEvent};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::macro_net::{plan_edge_index, PolicyBundle};
 use crate::units::Units;
+use burn::train::metric::MetricMetadata;
+use burn::train::Interrupter;
 
 /// Save a trained policy bundle to disk.
 pub fn save_policy(
@@ -53,17 +56,21 @@ pub fn load_policy(
 /// Train a policy for `goal` and return the final model, best-seen model, and
 /// training statistics.
 ///
-/// `observer` receives coarse-grained progress events and can be used to drive
-/// a dashboard or logger. Pass `()` if no observer is needed.
+/// `metrics` is a Burn-style metric bundle that receives per-episode events and
+/// renders progress through any `MetricsRenderer`. Pass a no-op renderer if live
+/// output is not needed.
 ///
 /// `stop_flag`, when provided, is shared with the trainer so an outside actor
-/// can request a graceful stop at the next episode boundary.
+/// can request a graceful stop at the next episode boundary. `interrupter` is
+/// the Burn interrupter used by renderers such as the built-in TUI to request a
+/// graceful stop.
 pub fn train_policy(
     units: &Units,
     goal: &Goal,
     config: TrainConfig,
-    observer: impl TrainingObserver + 'static,
+    metrics: FafSimMetrics,
     stop_flag: Option<Arc<AtomicBool>>,
+    interrupter: Interrupter,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
@@ -72,7 +79,9 @@ pub fn train_policy(
     let num_edges = plan_edge_index(units, goal)
         .expect("goal must have a plan graph")
         .len();
-    let mut trainer = Trainer::new(config, num_edges).with_observer(observer);
+    let mut trainer = Trainer::new(config, num_edges)
+        .with_metrics(metrics)
+        .with_interrupter(interrupter);
     if let Some(flag) = stop_flag {
         trainer.stop_requested = flag;
     }
@@ -88,14 +97,17 @@ pub fn train_policy_from(
     units: &Units,
     goal: &Goal,
     config: TrainConfig,
-    observer: impl TrainingObserver + 'static,
+    metrics: FafSimMetrics,
     stop_flag: Option<Arc<AtomicBool>>,
+    interrupter: Interrupter,
 ) -> (
     PolicyBundle<TrainBackend>,
     Option<PolicyBundle<TrainBackend>>,
     TrainStats,
 ) {
-    let mut trainer = Trainer::from_model(config, model).with_observer(observer);
+    let mut trainer = Trainer::from_model(config, model)
+        .with_metrics(metrics)
+        .with_interrupter(interrupter);
     if let Some(flag) = stop_flag {
         trainer.stop_requested = flag;
     }
@@ -126,32 +138,34 @@ fn fine_tune_best_model(
         .take()
         .unwrap_or_else(|| trainer.model.clone());
     let mut tuner = Trainer::from_model(*config, model_to_tune);
-    tuner.observer = trainer.observer.take();
+    tuner.metrics = trainer.metrics.take();
+    tuner.interrupter = trainer.interrupter.clone();
     let planner_config = PlannerConfig::default();
 
-    let mut final_loss = 0.0f32;
     for epoch in 0..config.fine_tune_epochs {
         let loss = tuner.fine_tune_on_trajectory(&trajectory, units, goal, &planner_config);
-        final_loss = loss;
-        if let Some(ref mut observer) = tuner.observer {
-            observer.on_fine_tune_epoch(FineTuneSummary {
-                epoch: epoch + 1,
-                total_epochs: config.fine_tune_epochs,
-                loss,
-            });
+        if let Some(ref mut metrics) = tuner.metrics {
+            let metadata = MetricMetadata {
+                progress: burn::data::dataloader::Progress {
+                    items_processed: epoch + 1,
+                    items_total: config.fine_tune_epochs,
+                },
+                global_progress: burn::data::dataloader::Progress {
+                    items_processed: epoch + 1,
+                    items_total: config.fine_tune_epochs,
+                },
+                iteration: Some(epoch + 1),
+                lr: None,
+            };
+            metrics.update(
+                &TrainEvent::FineTuneEpoch(FineTuneSummary {
+                    epoch: epoch + 1,
+                    total_epochs: config.fine_tune_epochs,
+                    loss,
+                }),
+                &metadata,
+            );
         }
-        if config.verbose
-            && (epoch == 0 || epoch == config.fine_tune_epochs - 1 || (epoch + 1) % 10 == 0)
-        {
-            eprintln!("  fine-tune epoch {}: loss={:.4}", epoch + 1, loss);
-        }
-    }
-
-    if config.verbose {
-        eprintln!(
-            "Fine-tuned best model on trajectory: epochs={} loss={:.4}",
-            config.fine_tune_epochs, final_loss
-        );
     }
 
     let fine_tuned = tuner.into_model();

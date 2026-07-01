@@ -20,8 +20,10 @@ use std::sync::Arc;
 
 use clap::Parser;
 use faf_sim::planner::mcts::macro_net::{hierarchical_policy_net_dot, num_plan_edges};
+use faf_sim::planner::mcts::train::TuiMetricsRendererWrapper;
 use faf_sim::planner::mcts::train::{
-    load_policy, save_policy, train_policy, train_policy_from, TrainConfig,
+    load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
+    MetricsRenderer, TrainConfig,
 };
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::{
@@ -36,9 +38,11 @@ use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, NodeLabel, RenderOptions
 
 mod cmdline;
 mod target;
+mod text_renderer;
 
 use cmdline::{Cli, Command as CliCommand, DrawNetArgs, FactionTarget, TrainArgs};
 use target::{Faction, ResearchTarget, UnitKind};
+use text_renderer::TextMetricsRenderer;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -121,6 +125,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let config = TrainConfig {
         episodes: args.episodes,
         max_steps: args.max_steps,
+        dt: args.dt,
         target_time: args.target_time,
         epsilon: args.epsilon,
         epsilon_final: args.epsilon_final,
@@ -131,7 +136,6 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         },
         patience: args.patience,
         grad_clip: args.grad_clip,
-        verbose: !args.quiet && !use_tui,
         ..Default::default()
     };
 
@@ -147,79 +151,68 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         std::fs::remove_file(&model_file).expect("failed to remove existing model file");
     }
 
-    // Shared stop flag used by the trainer, the TUI, and the outer signal
-    // handler. Setting it requests a graceful stop at the next episode boundary.
+    // Shared stop flag used by the trainer and the outer signal handler.
     let stop_flag = Arc::new(AtomicBool::new(false));
-    // Hint flag for the TUI to display when the user presses Ctrl+C. Training
-    // does not stop on Ctrl+C in the TUI; Ctrl+D is the normal stop key.
-    let ctrl_c_hint = Arc::new(AtomicBool::new(false));
+    // Interrupter shared with Burn's built-in TUI renderer so the user can stop
+    // from inside the dashboard.
+    let tui_interrupter = if use_tui {
+        Some(Interrupter::new())
+    } else {
+        None
+    };
     let resume = args.resume;
+    let quiet = args.quiet;
 
     let start_time = std::time::Instant::now();
 
-    let (model, best_model, stats) = if use_tui {
-        // The training closure runs on its own thread, so it needs owned data.
+    let train_result = {
         let units = units.clone();
         let goal = goal;
         let path = path.clone();
         let model_file = model_file.clone();
         let flag = Arc::clone(&stop_flag);
-        let hint = Arc::clone(&ctrl_c_hint);
+        let interrupter_for_renderer = tui_interrupter.clone();
         run_training_with_shutdown(
             move || {
-                faf_sim_tui::TrainingDashboard::run(
-                    Some(Arc::clone(&flag)),
-                    Some(Arc::clone(&hint)),
-                    move |observer| {
-                        if resume && model_file.exists() {
-                            let model = load_policy(&path, num_edges).expect("load existing model");
-                            train_policy_from(
-                                model,
-                                &units,
-                                &goal,
-                                config,
-                                observer,
-                                Some(Arc::clone(&flag)),
-                            )
-                        } else {
-                            train_policy(&units, &goal, config, observer, Some(Arc::clone(&flag)))
-                        }
-                    },
-                )
+                let renderer: Box<dyn MetricsRenderer> =
+                    if let Some(inter) = interrupter_for_renderer {
+                        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+                    } else if quiet {
+                        Box::new(TextMetricsRenderer::quiet())
+                    } else {
+                        Box::new(TextMetricsRenderer::new())
+                    };
+                let metrics = FafSimMetrics::new(renderer);
+                let train_interrupter = tui_interrupter.unwrap_or_default();
+                if resume && model_file.exists() {
+                    println!("Resuming training from {}", model_file.display());
+                    let model = load_policy(&path, num_edges).expect("load existing model");
+                    train_policy_from(
+                        model,
+                        &units,
+                        &goal,
+                        config,
+                        metrics,
+                        Some(flag),
+                        train_interrupter,
+                    )
+                } else {
+                    train_policy(
+                        &units,
+                        &goal,
+                        config,
+                        metrics,
+                        Some(flag),
+                        train_interrupter,
+                    )
+                }
             },
             stop_flag,
-            Some(Arc::clone(&ctrl_c_hint)),
-            use_tui,
-        )
-        .await
-    } else if resume && model_file.exists() {
-        println!("Resuming training from {}", model_file.display());
-        let units = units.clone();
-        let goal = goal;
-        let path = path.clone();
-        let flag = Arc::clone(&stop_flag);
-        run_training_with_shutdown(
-            move || {
-                let model = load_policy(&path, num_edges).expect("load existing model");
-                train_policy_from(model, &units, &goal, config, (), Some(Arc::clone(&flag)))
-            },
-            stop_flag,
-            Some(Arc::clone(&ctrl_c_hint)),
-            use_tui,
-        )
-        .await
-    } else {
-        let units = units.clone();
-        let goal = goal;
-        let flag = Arc::clone(&stop_flag);
-        run_training_with_shutdown(
-            move || train_policy(&units, &goal, config, (), Some(Arc::clone(&flag))),
-            stop_flag,
-            Some(Arc::clone(&ctrl_c_hint)),
-            use_tui,
         )
         .await
     };
+
+    let (model, best_model, stats) = train_result;
 
     let elapsed = start_time.elapsed();
     let total_episodes = stats.episode_lengths.len();
@@ -288,15 +281,10 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
 /// Run a blocking training closure to completion.
 ///
-/// Outside the TUI, `Ctrl+C`/`SIGINT` requests a graceful stop and the best-seen
-/// model is saved. Inside the TUI, `Ctrl+C` only shows a warning; the user must
-/// press `Ctrl+D` to stop training gracefully.
-async fn run_training_with_shutdown<F, T>(
-    training: F,
-    stop_flag: Arc<AtomicBool>,
-    ctrl_c_hint: Option<Arc<AtomicBool>>,
-    use_tui: bool,
-) -> T
+/// `Ctrl+C`/`SIGINT` requests a graceful stop; the closure should observe
+/// `stop_flag` and return promptly. The final model is then saved by the
+/// caller.
+async fn run_training_with_shutdown<F, T>(training: F, stop_flag: Arc<AtomicBool>) -> T
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -308,18 +296,9 @@ where
         tokio::select! {
             res = &mut task => return res.expect("training task panicked"),
             _ = tokio::signal::ctrl_c() => {
-                if use_tui {
-                    // The TUI is in raw mode, so an actual SIGINT is unlikely to
-                    // come from the keyboard, but if it does, mirror the on-screen
-                    // Ctrl+C warning and keep running.
-                    if let Some(hint) = &ctrl_c_hint {
-                        hint.store(true, Ordering::Relaxed);
-                    }
-                } else {
-                    eprintln!("Ctrl+C received; stopping training gracefully.");
-                    stop_flag.store(true, Ordering::Relaxed);
-                    return task.await.expect("training task panicked");
-                }
+                eprintln!("Ctrl+C received; stopping training gracefully.");
+                stop_flag.store(true, Ordering::Relaxed);
+                return task.await.expect("training task panicked");
             }
         }
     }

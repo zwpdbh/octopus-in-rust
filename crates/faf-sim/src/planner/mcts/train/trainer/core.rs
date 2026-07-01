@@ -10,9 +10,10 @@ use rand::rngs::ThreadRng;
 
 use super::super::config::TrainConfig;
 use super::super::episode::BuildTrajectory;
-use super::super::observer::TrainingObserver;
+use super::super::metric::metrics::FafSimMetrics;
 use super::super::{TrainBackend, TrainDevice};
 use crate::planner::mcts::macro_net::PolicyBundle;
+use burn::train::Interrupter;
 
 /// Concrete optimizer type returned by `AdamConfig::init` for a full policy bundle.
 pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
@@ -25,12 +26,15 @@ pub struct Trainer {
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
     pub(crate) rng: ThreadRng,
-    /// Optional progress observer. Kept `pub(crate)` so that higher-level entry
-    /// points can move it to a fresh `Trainer` during supervised fine-tuning.
-    pub(crate) observer: Option<Box<dyn TrainingObserver>>,
+    /// Optional Burn-style metric bundle. Kept `pub(crate)` so that higher-level
+    /// entry points can move it to a fresh `Trainer` during supervised fine-tuning.
+    pub(crate) metrics: Option<FafSimMetrics>,
     /// Shared flag that can be set from another thread to request a graceful
     /// stop at the next episode boundary.
     pub(crate) stop_requested: Arc<AtomicBool>,
+    /// Burn interrupter; the built-in TUI renderer sets this when the user
+    /// requests a stop.
+    pub(crate) interrupter: Interrupter,
 }
 
 impl Trainer {
@@ -61,14 +65,21 @@ impl Trainer {
             config,
             device,
             rng: rand::rng(),
-            observer: None,
+            metrics: None,
             stop_requested: Arc::new(AtomicBool::new(false)),
+            interrupter: Interrupter::new(),
         }
     }
 
-    /// Attach a progress observer.
-    pub fn with_observer(mut self, observer: impl TrainingObserver + 'static) -> Self {
-        self.observer = Some(Box::new(observer));
+    /// Attach a Burn-style metric bundle.
+    pub fn with_metrics(mut self, metrics: FafSimMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// Attach a Burn interrupter so the built-in TUI renderer can request a stop.
+    pub fn with_interrupter(mut self, interrupter: Interrupter) -> Self {
+        self.interrupter = interrupter;
         self
     }
 
@@ -78,8 +89,7 @@ impl Trainer {
     }
 
     pub(crate) fn should_stop(&self) -> bool {
-        self.stop_requested.load(Ordering::Relaxed)
-            || self.observer.as_ref().map_or(false, |o| o.should_stop())
+        self.stop_requested.load(Ordering::Relaxed) || self.interrupter.should_stop()
     }
 
     /// Consume the trainer and return the trained policy bundle.

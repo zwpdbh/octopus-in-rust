@@ -12,14 +12,13 @@ path = "src/main.rs"
 
 [features]
 default = ["cuda"]
-cpu = ["faf-sim/cpu", "faf-sim-tui/cpu"]
-cuda = ["faf-sim/cuda", "faf-sim-tui/cuda"]
-wgpu = ["faf-sim/wgpu", "faf-sim-tui/wgpu"]
+cpu = ["faf-sim/cpu"]
+cuda = ["faf-sim/cuda"]
+wgpu = ["faf-sim/wgpu"]
 
 [dependencies]
 clap = { workspace = true }
 faf-sim = { workspace = true, default-features = false }
-faf-sim-tui = { workspace = true, default-features = false, features = ["cuda"] }
 faf-units = { workspace = true }
 petgraph = { workspace = true }
 petgraph-svg = { workspace = true }

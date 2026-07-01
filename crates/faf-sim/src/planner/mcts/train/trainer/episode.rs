@@ -1,11 +1,8 @@
 //! Trainer for the hierarchical policy networks.
 
-use std::time::{Duration, Instant};
-
 use rand::RngExt;
 
 use super::super::episode::{Episode, EpisodeStep};
-use super::super::math::format_time;
 use super::super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
 
 use crate::planner::core::{Goal, PlannerConfig};
@@ -44,7 +41,7 @@ impl Trainer {
     /// Run one episode and record the trajectory.
     pub(crate) fn run_episode(
         &mut self,
-        ep: usize,
+        _ep: usize,
         units: &Units,
         goal: &Goal,
         _plan: &PlanGraph,
@@ -62,20 +59,7 @@ impl Trainer {
         let mut shortfall = [0.0f32; 3];
         let mut milestones = MilestoneTracker::default();
 
-        let progress_interval = Duration::from_secs(2);
-        let mut last_progress = Instant::now();
-
-        for step in 0..self.config.max_steps {
-            if self.config.verbose && last_progress.elapsed() >= progress_interval {
-                eprintln!(
-                    "  progress: ep={:>4} step={:>5} sim_time={:>12}",
-                    ep + 1,
-                    step,
-                    format_time(state.time, true)
-                );
-                last_progress = Instant::now();
-            }
-
+        for _step in 0..self.config.max_steps {
             if state.goal_reached(goal) {
                 episode.reached_goal = true;
                 episode.completion_time = state.time;

@@ -51,6 +51,7 @@ pub(crate) fn gaussian_log_prob_vec(
 }
 
 /// Format a duration in seconds as "Xm Y.Ys", or "-" if `valid` is false.
+#[allow(dead_code)]
 pub(crate) fn format_time(seconds: f64, valid: bool) -> String {
     if !valid {
         return "-".to_string();

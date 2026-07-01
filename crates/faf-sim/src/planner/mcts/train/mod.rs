@@ -31,7 +31,7 @@ use burn::backend::{Autodiff, Wgpu};
 pub mod config;
 pub mod episode;
 pub mod math;
-pub mod observer;
+pub mod metric;
 pub mod policy;
 pub mod reward;
 pub mod trainer;
@@ -40,9 +40,20 @@ pub mod trainer;
 mod tests;
 
 pub use config::{TrainConfig, TrainStats};
-pub use observer::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary, TrainingObserver};
+pub use metric::{EpisodeSummary, FafSimMetrics, FineTuneSummary, GreedyEvalSummary, TrainEvent};
 pub use policy::{load_policy, save_policy, train_policy, train_policy_from};
 pub use trainer::Trainer;
+
+// Re-export Burn training/renderer types so the CLI can build a renderer without
+// depending directly on the `burn` crate and duplicating backend features.
+pub use burn::train::metric::{MetricDefinition, MetricEntry, MetricId, NumericEntry};
+pub use burn::train::renderer::tui::TuiMetricsRendererWrapper;
+pub use burn::train::renderer::{
+    EvaluationName, EvaluationProgress, MetricState, MetricsRenderer, MetricsRendererEvaluation,
+    MetricsRendererTraining, ProgressType, TrainingProgress,
+};
+pub use burn::train::Interrupter;
+pub use burn::train::LearnerSummary;
 
 /// Autodiff backend used for training.
 ///

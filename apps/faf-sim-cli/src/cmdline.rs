@@ -103,6 +103,10 @@ pub struct TrainArgs {
     /// Maximum simulator steps per episode.
     #[arg(short = 'm', long, default_value = "500")]
     pub max_steps: usize,
+    /// Fixed simulator timestep for rollouts, in seconds. Smaller values run the
+    /// simulator more finely but require more steps to cover the same game time.
+    #[arg(long, default_value = "1.0")]
+    pub dt: f64,
     /// Resume training from an existing model for this target, if one exists.
     #[arg(short = 'r', long, default_value = "false")]
     pub resume: bool,
