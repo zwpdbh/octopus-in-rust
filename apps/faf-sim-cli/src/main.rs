@@ -136,6 +136,10 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let model_file = path.with_extension("mpk");
     let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
 
+    if !use_tui {
+        install_ctrl_c_handler();
+    }
+
     let (model, best_model, stats) = if use_tui {
         // The training closure runs on its own thread, so it needs owned data.
         let units = units.clone();
@@ -180,6 +184,27 @@ fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     } else {
         println!("Model saved to {}", path.display());
     }
+}
+
+/// Install a Ctrl+C handler for non-TUI training.
+///
+/// The first press prints a reminder that Ctrl+D is the graceful quit key.
+/// A second press force-quits the process.
+fn install_ctrl_c_handler() {
+    use std::process::exit;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static PRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    let _ = ctrlc::set_handler(move || {
+        let count = PRESS_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count == 0 {
+            eprintln!("Ctrl+C ignored. Use Ctrl+D to stop training gracefully.");
+        } else {
+            eprintln!("Force quitting...");
+            exit(1);
+        }
+    });
 }
 
 fn run_draw_net(units: &SimUnits, target: ResearchTarget, args: DrawNetArgs) {

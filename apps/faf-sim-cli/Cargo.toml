@@ -18,6 +18,7 @@ wgpu = ["faf-sim/wgpu", "faf-sim-tui/wgpu"]
 
 [dependencies]
 clap = { workspace = true }
+ctrlc = "3"
 faf-sim = { workspace = true, default-features = false }
 faf-sim-tui = { workspace = true, default-features = false, features = ["cuda"] }
 faf-units = { workspace = true }

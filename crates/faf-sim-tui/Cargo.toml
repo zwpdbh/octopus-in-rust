@@ -13,6 +13,7 @@ cuda = ["faf-sim/cuda"]
 wgpu = ["faf-sim/wgpu"]
 
 [dependencies]
+ctrlc = "3"
 crossterm = { version = "0.28", features = ["event-stream"] }
 faf-sim = { workspace = true, default-features = false }
 ratatui = "0.29"

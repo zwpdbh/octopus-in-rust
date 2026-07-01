@@ -88,6 +88,15 @@ fn run_tui(
 
     let mut state = DashboardState::default();
     state.refresh_system();
+
+    let ctrlc_hint = Arc::new(AtomicBool::new(false));
+    {
+        let flag = Arc::clone(&ctrlc_hint);
+        let _ = ctrlc::set_handler(move || {
+            flag.store(true, Ordering::Relaxed);
+        });
+    }
+
     let mut last_render = Instant::now();
     let render_interval = Duration::from_millis(100);
     let system_refresh_interval = Duration::from_secs(1);
@@ -104,8 +113,12 @@ fn run_tui(
                 if key.kind == KeyEventKind::Press {
                     let is_ctrl_d = key.code == KeyCode::Char('d')
                         && key.modifiers.contains(KeyModifiers::CONTROL);
+                    let is_ctrl_c = key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
                     if is_ctrl_d || key.code == KeyCode::Esc {
                         stop_flag.store(true, Ordering::Relaxed);
+                    } else if is_ctrl_c {
+                        state.ctrl_c_hint = true;
                     }
                 }
             }
@@ -113,6 +126,10 @@ fn run_tui(
 
         if state.last_system_refresh.elapsed() >= system_refresh_interval {
             state.refresh_system();
+        }
+
+        if ctrlc_hint.swap(false, Ordering::Relaxed) {
+            state.ctrl_c_hint = true;
         }
 
         if last_render.elapsed() >= render_interval {
@@ -146,6 +163,7 @@ struct DashboardState {
     system: System,
     last_system_refresh: Instant,
     gpu_info: Option<String>,
+    ctrl_c_hint: bool,
 }
 
 impl Default for DashboardState {
@@ -166,6 +184,7 @@ impl Default for DashboardState {
             ),
             last_system_refresh: Instant::now(),
             gpu_info: None,
+            ctrl_c_hint: false,
         }
     }
 }
@@ -560,21 +579,44 @@ fn render_footer(frame: &mut Frame, state: &DashboardState, area: Rect) {
         .wrap(Wrap { trim: false });
     frame.render_widget(eval_paragraph, footer_layout[0]);
 
-    let controls = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                "Ctrl+D",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::from("  request stop"),
-        ]),
-        Line::from("Training will stop at the"),
-        Line::from("next episode boundary."),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Controls"))
-    .alignment(Alignment::Left);
+    let controls_text = if state.ctrl_c_hint {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "Ctrl+C",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::from(" ignored."),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "Ctrl+D",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::from(" stops training gracefully."),
+            ]),
+        ]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "Ctrl+D",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::from("  request stop"),
+            ]),
+            Line::from("Training will stop at the"),
+            Line::from("next episode boundary."),
+        ]
+    };
+
+    let controls = Paragraph::new(controls_text)
+        .block(Block::default().borders(Borders::ALL).title("Controls"))
+        .alignment(Alignment::Left);
     frame.render_widget(controls, footer_layout[1]);
 }
 
