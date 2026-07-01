@@ -155,6 +155,8 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let ctrl_c_hint = Arc::new(AtomicBool::new(false));
     let resume = args.resume;
 
+    let start_time = std::time::Instant::now();
+
     let (model, best_model, stats) = if use_tui {
         // The training closure runs on its own thread, so it needs owned data.
         let units = units.clone();
@@ -219,18 +221,60 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         .await
     };
 
-    println!(
-        "Training complete: {}/{} episodes reached the goal",
-        stats.goal_reaches,
-        stats.episode_lengths.len()
-    );
-    if let Some(&best) = stats
+    let elapsed = start_time.elapsed();
+    let total_episodes = stats.episode_lengths.len();
+    let goal_rate = if total_episodes == 0 {
+        0.0
+    } else {
+        stats.goal_reaches as f64 / total_episodes as f64
+    };
+    let avg_loss = if stats.losses.is_empty() {
+        None
+    } else {
+        Some(stats.losses.iter().sum::<f32>() / stats.losses.len() as f32)
+    };
+    let avg_steps = if total_episodes == 0 {
+        0.0
+    } else {
+        stats.episode_lengths.iter().sum::<usize>() as f64 / total_episodes as f64
+    };
+    let eps_per_sec = if elapsed.as_secs_f64() > 0.0 {
+        total_episodes as f64 / elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+    let best_time = stats
         .completion_times
         .iter()
         .min_by(|a, b| a.partial_cmp(b).unwrap())
-    {
-        println!("Best completion time: {}", format_time(best));
-    }
+        .copied();
+
+    println!("\nTraining summary:");
+    println!("  Total episodes:        {}", total_episodes);
+    println!(
+        "  Goal reaches:          {}/{} ({:.1}%)",
+        stats.goal_reaches,
+        total_episodes,
+        goal_rate * 100.0
+    );
+    println!(
+        "  Best completion time:  {}",
+        best_time
+            .map(format_time)
+            .unwrap_or_else(|| "---".to_string())
+    );
+    println!(
+        "  Average loss:          {}",
+        avg_loss
+            .map(|l| format!("{:.4}", l))
+            .unwrap_or_else(|| "---".to_string())
+    );
+    println!("  Average steps:         {:.1}", avg_steps);
+    println!("  Episodes/sec:          {:.2}", eps_per_sec);
+    println!(
+        "  Total time:            {}",
+        format_duration(elapsed.as_secs_f64())
+    );
 
     // Save the best-seen model if there is one, otherwise the final model.
     let model_to_save = best_model.as_ref().unwrap_or(&model);
@@ -353,6 +397,7 @@ async fn run_simulate(
         println!("Loading trained model from {}", model_file.display());
         let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
         let model = load_policy(&path, num_edges).expect("load trained model");
+        println!("Model loaded successfully.");
         Planner::with_value_net(strategy, PlannerConfig::default(), model)
     } else {
         println!("No trained model found; using random initialization");
@@ -364,13 +409,38 @@ async fn run_simulate(
         sim_dt: 1.0,
         max_sim_time: 8.0 * 60.0 * 60.0,
     };
+
+    println!("Running simulation (this may take a while)...");
+    let sim_done = Arc::new(AtomicBool::new(false));
+    let heartbeat_done = Arc::clone(&sim_done);
+    let heartbeat_handle = tokio::task::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        while !heartbeat_done.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if !heartbeat_done.load(Ordering::Relaxed) {
+                println!(
+                    "  ...simulation running for {}",
+                    format_duration(start.elapsed().as_secs_f64())
+                );
+            }
+        }
+    });
+
     let result = match run_build_order_simulation(units.clone(), goal, config).await {
         Ok(r) => r,
         Err(e) => {
+            sim_done.store(true, Ordering::Relaxed);
+            let _ = heartbeat_handle.await;
             eprintln!("Simulation error: {}", e);
             std::process::exit(1);
         }
     };
+
+    sim_done.store(true, Ordering::Relaxed);
+    if let Err(e) = heartbeat_handle.await {
+        eprintln!("Heartbeat task failed: {}", e);
+    }
+    println!("Simulation finished.");
 
     println!(
         "\nGoal completed at {} ({:.1}m)",
@@ -449,6 +519,20 @@ fn format_time(seconds: f64) -> String {
     let minutes = (seconds / 60.0).floor();
     let secs = seconds - minutes * 60.0;
     format!("{:.0}m {:.1}s", minutes, secs)
+}
+
+fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.1}s", secs)
+    } else if secs < 3600.0 {
+        let minutes = (secs / 60.0).floor() as u64;
+        let s = (secs % 60.0).floor() as u64;
+        format!("{}m {}s", minutes, s)
+    } else {
+        let hours = (secs / 3600.0).floor() as u64;
+        let minutes = ((secs % 3600.0) / 60.0).floor() as u64;
+        format!("{}h {}m", hours, minutes)
+    }
 }
 
 fn run_plan(units: &SimUnits, _index: &DataIndex, output: Option<std::path::PathBuf>) {
