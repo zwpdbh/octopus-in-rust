@@ -13,7 +13,7 @@ use crossterm::{execute, ExecutableCommand};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Sparkline, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Wrap};
 use ratatui::{Frame, Terminal};
 
 use faf_sim::planner::mcts::train::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary};
@@ -250,20 +250,39 @@ impl DashboardState {
         }
     }
 
-    fn loss_sparkline(&self) -> Vec<u64> {
-        self.recent_episodes
+    fn loss_stats(&self, window: usize) -> (usize, f32, f32, f32, f32) {
+        let slice: Vec<_> = self
+            .recent_window(window)
             .iter()
             .filter_map(|e| e.loss)
-            .map(|l| (l * 1000.0) as u64)
-            .collect()
+            .collect();
+        if slice.is_empty() {
+            return (0, 0.0, 0.0, 0.0, 0.0);
+        }
+        let count = slice.len();
+        let avg = slice.iter().sum::<f32>() / count as f32;
+        let min = slice.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let max = slice.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let latest = *slice.last().unwrap_or(&0.0);
+        (count, avg, min, max, latest)
     }
 
-    fn time_sparkline(&self) -> Vec<u64> {
-        self.recent_episodes
+    fn time_stats(&self, window: usize) -> (usize, f64, f64, f64, f64) {
+        let slice: Vec<_> = self
+            .recent_window(window)
             .iter()
             .filter(|e| e.reached_goal)
-            .map(|e| e.completion_time as u64)
-            .collect()
+            .map(|e| e.completion_time)
+            .collect();
+        if slice.is_empty() {
+            return (0, 0.0, 0.0, 0.0, 0.0);
+        }
+        let count = slice.len();
+        let avg = slice.iter().sum::<f64>() / count as f64;
+        let min = slice.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = slice.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let latest = *slice.last().unwrap_or(&0.0);
+        (count, avg, min, max, latest)
     }
 }
 
@@ -330,7 +349,7 @@ fn render_body(frame: &mut Frame, state: &DashboardState, area: Rect) {
         .split(area);
 
     render_metrics_table(frame, state, body_layout[0]);
-    render_plots(frame, state, body_layout[1]);
+    render_recent_table(frame, state, body_layout[1]);
 }
 
 fn render_metrics_table(frame: &mut Frame, state: &DashboardState, area: Rect) {
@@ -373,33 +392,69 @@ fn metric_row(label: &str, value: String) -> Row<'_> {
     ])
 }
 
-fn render_plots(frame: &mut Frame, state: &DashboardState, area: Rect) {
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+fn render_recent_table(frame: &mut Frame, state: &DashboardState, area: Rect) {
+    let (loss_count, loss_avg, loss_min, loss_max, loss_latest) = state.loss_stats(HISTORY_LEN);
+    let (time_count, time_avg, time_min, time_max, time_latest) = state.time_stats(HISTORY_LEN);
 
-    let loss_data = state.loss_sparkline();
-    let loss_spark = Sparkline::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Loss (last 200 episodes)"),
-        )
-        .data(&loss_data)
-        .style(Style::default().fg(Color::Magenta));
-    frame.render_widget(loss_spark, layout[0]);
+    let loss_avg_s = if loss_count == 0 {
+        "---".to_string()
+    } else {
+        format!("{:.4}", loss_avg)
+    };
+    let loss_min_s = if loss_count == 0 {
+        "---".to_string()
+    } else {
+        format!("{:.4}", loss_min)
+    };
+    let loss_max_s = if loss_count == 0 {
+        "---".to_string()
+    } else {
+        format!("{:.4}", loss_max)
+    };
+    let loss_latest_s = if loss_count == 0 {
+        "---".to_string()
+    } else {
+        format!("{:.4}", loss_latest)
+    };
 
-    let time_data = state.time_sparkline();
-    let time_spark = Sparkline::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Completion time / s (successful episodes)"),
-        )
-        .data(&time_data)
-        .style(Style::default().fg(Color::Green));
-    frame.render_widget(time_spark, layout[1]);
+    let time_avg_s = if time_count == 0 {
+        "---".to_string()
+    } else {
+        format_time(time_avg)
+    };
+    let time_min_s = if time_count == 0 {
+        "---".to_string()
+    } else {
+        format_time(time_min)
+    };
+    let time_max_s = if time_count == 0 {
+        "---".to_string()
+    } else {
+        format_time(time_max)
+    };
+    let time_latest_s = if time_count == 0 {
+        "---".to_string()
+    } else {
+        format_time(time_latest)
+    };
+
+    let rows = [
+        metric_row("Loss count", loss_count.to_string()),
+        metric_row("Loss avg", loss_avg_s),
+        metric_row("Loss min", loss_min_s),
+        metric_row("Loss max", loss_max_s),
+        metric_row("Loss latest", loss_latest_s),
+        metric_row("Time count", time_count.to_string()),
+        metric_row("Time avg", time_avg_s),
+        metric_row("Time min", time_min_s),
+        metric_row("Time max", time_max_s),
+        metric_row("Time latest", time_latest_s),
+    ];
+
+    let table = Table::new(rows, [Constraint::Length(18), Constraint::Min(10)])
+        .block(Block::default().borders(Borders::ALL).title("Recent stats"));
+
+    frame.render_widget(table, area);
 }
 
 fn render_footer(frame: &mut Frame, state: &DashboardState, area: Rect) {
