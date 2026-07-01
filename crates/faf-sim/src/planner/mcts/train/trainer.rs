@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use burn::optim::adaptor::OptimizerAdaptor;
+use burn::optim::grad_clipping::GradientClippingConfig;
 use burn::optim::{Adam, AdamConfig, Optimizer};
 use burn::tensor::activation::log_softmax;
 use burn::tensor::{Tensor, TensorData};
@@ -69,7 +70,15 @@ impl Trainer {
     /// Create a trainer that continues from an existing model.
     pub fn from_model(config: TrainConfig, model: PolicyBundle<TrainBackend>) -> Self {
         let device: TrainDevice = Default::default();
-        let optimizer = AdamConfig::new().init();
+        let optimizer = {
+            let adam = AdamConfig::new();
+            let adam = if let Some(clip) = config.grad_clip {
+                adam.with_grad_clipping(Some(GradientClippingConfig::Norm(clip)))
+            } else {
+                adam
+            };
+            adam.init()
+        };
         Self {
             model,
             best_model: None,

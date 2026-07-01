@@ -106,6 +106,10 @@ pub struct TrainArgs {
     /// Resume training from an existing model for this target, if one exists.
     #[arg(short = 'r', long, default_value = "false")]
     pub resume: bool,
+    /// Delete any existing model checkpoint for this target before training.
+    /// Useful for starting a fresh run without manually removing `data/models/`.
+    #[arg(long, default_value = "false")]
+    pub fresh: bool,
     /// Stop training early once the best completion time is at most this
     /// duration. Accepts plain seconds or a suffix (`30m`, `1h`, `1200s`).
     #[arg(short = 't', long, value_parser = parse_duration)]
@@ -134,6 +138,10 @@ pub struct TrainArgs {
     /// episodes. Counted only after the first successful episode.
     #[arg(long)]
     pub patience: Option<usize>,
+    /// Clip gradients by global L2 norm to this value. `1.0` is a good default
+    /// for preventing REINFORCE divergence; omit to disable clipping.
+    #[arg(long)]
+    pub grad_clip: Option<f32>,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

@@ -15,6 +15,7 @@ cargo run --release --bin faf-sim -- plan
 # -e  : number of training episodes
 # -m  : maximum simulator steps per episode (cap; episode ends early if the goal is reached)
 # -r  : resume from an existing model file (optional)
+# --fresh        : delete any existing model checkpoint for this target before training
 # --patience <N> : stop early if no new best time for N episodes after the first success
 # --quiet        : suppress per-episode and progress output
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
@@ -24,10 +25,16 @@ cargo run --release --bin faf-sim -- plan
 # - 5000 episodes is a few hours at ~0.36 eps/s on CUDA.
 # - Epsilon decays from 30% random exploration down to 1% over the run.
 # - Training stops early if the policy reaches a 30-minute completion time.
+# - --grad-clip 1.0 prevents REINFORCE gradients from exploding.
 cargo run --release --bin faf-sim -- \
   train -e 5000 -m 1000 -t 30m \
   --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
+  --grad-clip 1.0 \
   uef novaxcenter
+
+# Start completely fresh by deleting any existing checkpoint first.
+cargo run --release --bin faf-sim -- \
+  train -e 5000 -m 1000 --fresh --grad-clip 1.0 uef novaxcenter
 
 # Same run with patience-based early stopping (stops if no improvement for 1000 episodes).
 cargo run --release --bin faf-sim -- \

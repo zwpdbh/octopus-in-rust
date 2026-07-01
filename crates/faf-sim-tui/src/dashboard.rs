@@ -35,11 +35,19 @@ const MIN_HEIGHT: u16 = 12;
 /// `external_stop` is an optional shared stop flag. When provided, both the
 /// dashboard (on `Ctrl+D`) and the training closure can observe it, and an
 /// outside orchestration layer can set it to request a graceful stop.
+///
+/// `external_ctrl_c_hint` is an optional shared flag that the dashboard will
+/// display as a warning (the TUI does not stop on `Ctrl+C`; `Ctrl+D` is the
+/// normal stop key).
 pub struct TrainingDashboard;
 
 impl TrainingDashboard {
     /// Run `training` while displaying the live training dashboard.
-    pub fn run<F, R>(external_stop: Option<Arc<AtomicBool>>, training: F) -> R
+    pub fn run<F, R>(
+        external_stop: Option<Arc<AtomicBool>>,
+        external_ctrl_c_hint: Option<Arc<AtomicBool>>,
+        training: F,
+    ) -> R
     where
         F: FnOnce(DashboardObserver) -> R + Send + 'static,
         R: Send + 'static,
@@ -54,7 +62,12 @@ impl TrainingDashboard {
             let _ = result_sender.send(result);
         });
 
-        run_tui(event_receiver, stop_flag, training_handle);
+        run_tui(
+            event_receiver,
+            stop_flag,
+            external_ctrl_c_hint,
+            training_handle,
+        );
 
         result_receiver.recv().expect("training thread result")
     }
@@ -80,6 +93,7 @@ impl Drop for TerminalGuard {
 fn run_tui(
     receiver: Receiver<DashboardEvent>,
     stop_flag: Arc<AtomicBool>,
+    ctrl_c_hint: Option<Arc<AtomicBool>>,
     training_handle: JoinHandle<()>,
 ) {
     let mut stdout = io::stdout();
@@ -115,12 +129,17 @@ fn run_tui(
                         stop_flag.store(true, Ordering::Relaxed);
                     } else if is_ctrl_c {
                         // In raw mode Ctrl+C is delivered as a key event rather
-                        // than SIGINT, so treat it as a graceful-stop request and
-                        // show an informative hint.
-                        stop_flag.store(true, Ordering::Relaxed);
+                        // than SIGINT. Show a warning, but keep training running;
+                        // the user must press Ctrl+D to stop gracefully.
                         state.ctrl_c_hint = true;
                     }
                 }
+            }
+        }
+
+        if let Some(ref hint) = ctrl_c_hint {
+            if hint.swap(false, Ordering::Relaxed) {
+                state.ctrl_c_hint = true;
             }
         }
 

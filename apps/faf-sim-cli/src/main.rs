@@ -130,6 +130,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
             args.epsilon_decay_episodes.unwrap_or(args.episodes)
         },
         patience: args.patience,
+        grad_clip: args.grad_clip,
         verbose: !args.quiet && !use_tui,
         ..Default::default()
     };
@@ -138,9 +139,20 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let model_file = path.with_extension("mpk");
     let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
 
+    if args.fresh && model_file.exists() {
+        println!(
+            "Removing existing model checkpoint: {}",
+            model_file.display()
+        );
+        std::fs::remove_file(&model_file).expect("failed to remove existing model file");
+    }
+
     // Shared stop flag used by the trainer, the TUI, and the outer signal
     // handler. Setting it requests a graceful stop at the next episode boundary.
     let stop_flag = Arc::new(AtomicBool::new(false));
+    // Hint flag for the TUI to display when the user presses Ctrl+C. Training
+    // does not stop on Ctrl+C in the TUI; Ctrl+D is the normal stop key.
+    let ctrl_c_hint = Arc::new(AtomicBool::new(false));
     let resume = args.resume;
 
     let (model, best_model, stats) = if use_tui {
@@ -150,25 +162,31 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         let path = path.clone();
         let model_file = model_file.clone();
         let flag = Arc::clone(&stop_flag);
+        let hint = Arc::clone(&ctrl_c_hint);
         run_training_with_shutdown(
             move || {
-                faf_sim_tui::TrainingDashboard::run(Some(Arc::clone(&flag)), move |observer| {
-                    if resume && model_file.exists() {
-                        let model = load_policy(&path, num_edges).expect("load existing model");
-                        train_policy_from(
-                            model,
-                            &units,
-                            &goal,
-                            config,
-                            observer,
-                            Some(Arc::clone(&flag)),
-                        )
-                    } else {
-                        train_policy(&units, &goal, config, observer, Some(Arc::clone(&flag)))
-                    }
-                })
+                faf_sim_tui::TrainingDashboard::run(
+                    Some(Arc::clone(&flag)),
+                    Some(Arc::clone(&hint)),
+                    move |observer| {
+                        if resume && model_file.exists() {
+                            let model = load_policy(&path, num_edges).expect("load existing model");
+                            train_policy_from(
+                                model,
+                                &units,
+                                &goal,
+                                config,
+                                observer,
+                                Some(Arc::clone(&flag)),
+                            )
+                        } else {
+                            train_policy(&units, &goal, config, observer, Some(Arc::clone(&flag)))
+                        }
+                    },
+                )
             },
             stop_flag,
+            Some(Arc::clone(&ctrl_c_hint)),
             use_tui,
         )
         .await
@@ -184,6 +202,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
                 train_policy_from(model, &units, &goal, config, (), Some(Arc::clone(&flag)))
             },
             stop_flag,
+            Some(Arc::clone(&ctrl_c_hint)),
             use_tui,
         )
         .await
@@ -194,6 +213,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         run_training_with_shutdown(
             move || train_policy(&units, &goal, config, (), Some(Arc::clone(&flag))),
             stop_flag,
+            Some(Arc::clone(&ctrl_c_hint)),
             use_tui,
         )
         .await
@@ -222,15 +242,15 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     }
 }
 
-/// Run a blocking training closure to completion, shutting down gracefully on
-/// `Ctrl+C`.
+/// Run a blocking training closure to completion.
 ///
-/// When a signal is received, `stop_flag` is set so the trainer stops at the
-/// next episode boundary. The closure is then awaited so the caller can save
-/// the best-seen model.
+/// Outside the TUI, `Ctrl+C`/`SIGINT` requests a graceful stop and the best-seen
+/// model is saved. Inside the TUI, `Ctrl+C` only shows a warning; the user must
+/// press `Ctrl+D` to stop training gracefully.
 async fn run_training_with_shutdown<F, T>(
     training: F,
     stop_flag: Arc<AtomicBool>,
+    ctrl_c_hint: Option<Arc<AtomicBool>>,
     use_tui: bool,
 ) -> T
 where
@@ -240,25 +260,22 @@ where
     let task = tokio::task::spawn_blocking(training);
     tokio::pin!(task);
 
-    tokio::select! {
-        res = &mut task => res.expect("training task panicked"),
-        _ = tokio::signal::ctrl_c() => {
-            let msg = if use_tui {
-                "Ctrl+C received; stopping training gracefully. \
-                 (Use Ctrl+D to stop gracefully in the TUI.)"
-            } else {
-                "Ctrl+C received; stopping training gracefully."
-            };
-            stop_flag.store(true, Ordering::Relaxed);
-            if use_tui {
-                // The TUI owns the terminal screen, so print the message only
-                // after the dashboard has been torn down.
-                let result = task.await.expect("training task panicked");
-                eprintln!("{}", msg);
-                result
-            } else {
-                eprintln!("{}", msg);
-                task.await.expect("training task panicked")
+    loop {
+        tokio::select! {
+            res = &mut task => return res.expect("training task panicked"),
+            _ = tokio::signal::ctrl_c() => {
+                if use_tui {
+                    // The TUI is in raw mode, so an actual SIGINT is unlikely to
+                    // come from the keyboard, but if it does, mirror the on-screen
+                    // Ctrl+C warning and keep running.
+                    if let Some(hint) = &ctrl_c_hint {
+                        hint.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    eprintln!("Ctrl+C received; stopping training gracefully.");
+                    stop_flag.store(true, Ordering::Relaxed);
+                    return task.await.expect("training task panicked");
+                }
             }
         }
     }
