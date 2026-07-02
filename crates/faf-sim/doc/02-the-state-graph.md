@@ -111,15 +111,15 @@ For the current model:
 
 ## Featurizing the state
 
-Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into a 13-dimensional vector:
+Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into an 11-dimensional vector:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constants
-pub const STATE_FEATURE_COUNT: usize = 13;
+pub const STATE_FEATURE_COUNT: usize = 11;
 pub const SHORTFALL_FEATURE_COUNT: usize = 3;
 ```
 
-The 13 features are listed in `state_features`:
+The 11 features are listed in `state_features`:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/features.rs ~line 27 — state feature order
@@ -130,12 +130,10 @@ The 13 features are listed in `state_features`:
 // 4. total active build power (scaled by 100)
 // 5. simulation time (scaled by 3600 s)
 // 6. active mex fraction of cap
-// 7. active pgen fraction of cap
-// 8. active energy storage fraction of cap
-// 9. active project count (scaled by 10)
-// 10. has T2 factory
-// 11. has T3 factory
-// 12. has T3 engineer
+// 7. active project count (scaled by 10)
+// 8. has T2 factory
+// 9. has T3 factory
+// 10. has T3 engineer
 ```
 
 They are intentionally economy-centric. Build orders in FAF are driven mainly by income, build power, and tech tier, so the network gets those directly instead of a huge one-hot unit roster.

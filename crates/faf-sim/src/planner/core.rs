@@ -256,10 +256,6 @@ pub struct PlannerConfig {
     pub max_depth: usize,
     /// Maximum number of mass extractors (including upgrades) to build.
     pub max_mex_count: usize,
-    /// Maximum number of power generators to build.
-    pub max_pgen_count: usize,
-    /// Maximum number of energy storage buildings to build.
-    pub max_energy_storage_count: usize,
 }
 
 impl Default for PlannerConfig {
@@ -269,8 +265,6 @@ impl Default for PlannerConfig {
             dt: 1.0,
             max_depth: 400,
             max_mex_count: 12,
-            max_pgen_count: 30,
-            max_energy_storage_count: 80,
         }
     }
 }

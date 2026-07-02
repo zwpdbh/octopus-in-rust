@@ -27,8 +27,8 @@ use faf_sim::planner::mcts::train::{
 };
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::{
-    run_build_order_simulation, Goal, SimulationState, NodeId, EdgeAction, Planner, SimulationConfig,
-    Strategy, UnitKind as SimUnitKind, Units as SimUnits,
+    run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, SimulationConfig,
+    SimulationState, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;

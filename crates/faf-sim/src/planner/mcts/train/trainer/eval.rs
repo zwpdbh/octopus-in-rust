@@ -64,7 +64,7 @@ impl Trainer {
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
 
-            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units, planner_config);
+            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units);
             let upgrade_idx = if !upgrade_legal_mask.iter().all(|&b| !b) {
                 let upgrade_logits = model.evaluate_upgrade(macro_features.clone(), device);
                 masked_argmax(&upgrade_logits, &upgrade_legal_mask).unwrap_or(0)
@@ -125,7 +125,7 @@ impl Trainer {
 
                 (edge_idx, target_power, desired, builders, action)
             } else {
-                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+                let direction_mask = edge_index.legal_category_mask(&state, units);
                 if direction_mask.iter().all(|&b| !b) {
                     state.tick(units, dt);
                     continue;
@@ -135,8 +135,7 @@ impl Trainer {
                 let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
                 let category = EdgeCategory::ALL[direction_idx];
 
-                let action_mask =
-                    edge_index.legal_mask_for_category(&state, units, planner_config, category);
+                let action_mask = edge_index.legal_mask_for_category(&state, units, category);
                 if action_mask.iter().all(|&b| !b) {
                     state.tick(units, dt);
                     continue;

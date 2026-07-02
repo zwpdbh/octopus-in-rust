@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use petgraph::visit::EdgeRef;
 
-use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::core::Goal;
 use crate::planner::plan_graph::{EdgeAction, EdgeCategory, PlanGraph, PlanNode};
 
 use crate::sim::{NodeId, SimulationState, UnitNodeState};
@@ -78,12 +78,7 @@ impl SelectionPools {
     /// active, whose target is not yet owned or under construction, and for
     /// which a capable idle builder exists. Assist options are added for every
     /// active project when at least one idle engineer is available.
-    pub fn new(
-        plan: &PlanGraph,
-        state: &SimulationState,
-        units: &Units,
-        config: &PlannerConfig,
-    ) -> Self {
+    pub fn new(plan: &PlanGraph, state: &SimulationState, units: &Units) -> Self {
         let mut options: Vec<SelectionOption> = Vec::new();
         let mut seen: HashSet<UnitOptionKey> = HashSet::new();
         let mut goal_added = false;
@@ -125,9 +120,7 @@ impl SelectionPools {
                     match edge.weight() {
                         EdgeAction::Build => {
                             // Source in a build edge is the builder.
-                            if is_idle_builder(state, units, source_kind)
-                                && !would_exceed_storage_cap(target_kind, state, config)
-                            {
+                            if is_idle_builder(state, units, source_kind) {
                                 let opt = SelectionOption::Build(target_kind.clone());
                                 if let Some(key) = unit_option_key(&opt) {
                                     if seen.insert(key) {
@@ -275,15 +268,10 @@ impl PlanEdgeIndex {
     }
 
     /// Return a boolean mask indicating which edges are legal in `state`.
-    pub fn legal_mask(
-        &self,
-        state: &SimulationState,
-        units: &Units,
-        config: &PlannerConfig,
-    ) -> Vec<bool> {
+    pub fn legal_mask(&self, state: &SimulationState, units: &Units) -> Vec<bool> {
         self.edges
             .iter()
-            .map(|e| is_edge_legal(e, state, units, config))
+            .map(|e| is_edge_legal(e, state, units))
             .collect()
     }
 
@@ -301,29 +289,23 @@ impl PlanEdgeIndex {
         &self,
         state: &SimulationState,
         units: &Units,
-        config: &PlannerConfig,
         category: EdgeCategory,
     ) -> Vec<bool> {
         self.edges
             .iter()
-            .map(|e| e.category() == category && is_edge_legal(e, state, units, config))
+            .map(|e| e.category() == category && is_edge_legal(e, state, units))
             .collect()
     }
 
     /// Return a mask over [`EdgeCategory::ALL`] indicating which categories have
     /// at least one legal edge in `state`.
-    pub fn legal_category_mask(
-        &self,
-        state: &SimulationState,
-        units: &Units,
-        config: &PlannerConfig,
-    ) -> Vec<bool> {
+    pub fn legal_category_mask(&self, state: &SimulationState, units: &Units) -> Vec<bool> {
         EdgeCategory::ALL
             .iter()
             .map(|c| {
                 self.edges
                     .iter()
-                    .any(|e| e.category() == *c && is_edge_legal(e, state, units, config))
+                    .any(|e| e.category() == *c && is_edge_legal(e, state, units))
             })
             .collect()
     }
@@ -337,10 +319,9 @@ impl PlanEdgeIndex {
         idx: usize,
         state: &SimulationState,
         units: &Units,
-        config: &PlannerConfig,
     ) -> Option<SelectionOption> {
         let edge = self.edges.get(idx)?;
-        if !is_edge_legal(edge, state, units, config) {
+        if !is_edge_legal(edge, state, units) {
             return None;
         }
         match edge.kind {
@@ -362,7 +343,6 @@ impl PlanEdgeIndex {
         option: &SelectionOption,
         state: &SimulationState,
         units: &Units,
-        config: &PlannerConfig,
     ) -> Option<usize> {
         self.edges
             .iter()
@@ -381,19 +361,14 @@ impl PlanEdgeIndex {
                     }
                     _ => false,
                 };
-                same && is_edge_legal(e, state, units, config)
+                same && is_edge_legal(e, state, units)
             })
             .map(|(i, _)| i)
     }
 }
 
 /// True if `edge` can be executed in `state`.
-fn is_edge_legal(
-    edge: &PlanEdge,
-    state: &SimulationState,
-    units: &Units,
-    config: &PlannerConfig,
-) -> bool {
+fn is_edge_legal(edge: &PlanEdge, state: &SimulationState, units: &Units) -> bool {
     let Some(source_kind) = edge.source_unit() else {
         return false;
     };
@@ -416,7 +391,6 @@ fn is_edge_legal(
                         .expect("build target must be unit or goal");
                     !state.has_completed_unit(target)
                         && !state.active_target_unit_ids().contains(target)
-                        && !would_exceed_storage_cap(target, state, config)
                 }
             };
             can_build && is_idle_builder(state, units, source_kind)
@@ -434,20 +408,6 @@ fn is_edge_legal(
 /// For now all goals are built by a T3 engineer.
 fn can_build_goal(builder: &UnitKind, _goal: &Goal) -> bool {
     matches!(builder, UnitKind::Engineer(TechLevel::T3))
-}
-
-/// True if building `target` would exceed the configured storage cap.
-fn would_exceed_storage_cap(
-    target: &UnitKind,
-    state: &SimulationState,
-    config: &PlannerConfig,
-) -> bool {
-    match target {
-        UnitKind::EnergyStorage => {
-            state.count_active_energy_storage() >= config.max_energy_storage_count
-        }
-        _ => false,
-    }
 }
 
 /// True if the state has an active, idle builder of the given kind.
@@ -717,8 +677,7 @@ mod tests {
         let plan = units.plan_graph(t1_goal());
         let state = SimulationState::new(&units, &[UnitKind::Commander]);
 
-        let config = PlannerConfig::default();
-        let pools = SelectionPools::new(&plan, &state, &units, &config);
+        let pools = SelectionPools::new(&plan, &state, &units);
 
         // ACU can build T1 factory, mex, and pgen.
         assert!(pools
@@ -750,8 +709,7 @@ mod tests {
             ],
         );
 
-        let config = PlannerConfig::default();
-        let pools = SelectionPools::new(&plan, &state, &units, &config);
+        let pools = SelectionPools::new(&plan, &state, &units);
 
         // We own Mex_T1 and have an idle builder, so mex upgrade is a candidate.
         assert!(pools.options().contains(&SelectionOption::Upgrade {
@@ -788,8 +746,6 @@ mod tests {
         // Even with a T2 factory available, T1 engineer and T1 pgen edges remain
         // legal. The policy must learn by itself that higher-tier units are more
         // efficient; we do not hardcode the preference.
-        let config = PlannerConfig::default();
-
         let engineer_state = SimulationState::new(
             &units,
             &[
@@ -798,7 +754,7 @@ mod tests {
                 UnitKind::Factory(TechLevel::T2),
             ],
         );
-        let mask = edge_index.legal_mask(&engineer_state, &units, &config);
+        let mask = edge_index.legal_mask(&engineer_state, &units);
         assert!(
             mask[t1_eng_idx],
             "T1 engineer should remain legal even when T2 factory exists"
@@ -813,7 +769,7 @@ mod tests {
                 UnitKind::Engineer(TechLevel::T1),
             ],
         );
-        let mask = edge_index.legal_mask(&pgen_state, &units, &config);
+        let mask = edge_index.legal_mask(&pgen_state, &units);
         assert!(
             mask[t1_pgen_idx],
             "T1 pgen should remain legal even when T2 factory exists"

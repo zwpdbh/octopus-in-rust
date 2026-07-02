@@ -72,7 +72,7 @@ impl Trainer {
 
             // The upgrade head decides whether to tech up a factory before the
             // normal direction/action pipeline runs.
-            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units, planner_config);
+            let upgrade_legal_mask = upgrade_mask(edge_index, &state, units);
             let upgrade_logits = self
                 .model
                 .evaluate_upgrade(macro_features.clone(), &self.device);
@@ -184,7 +184,7 @@ impl Trainer {
                     action,
                 }
             } else {
-                let direction_mask = edge_index.legal_category_mask(&state, units, planner_config);
+                let direction_mask = edge_index.legal_category_mask(&state, units);
                 if direction_mask.iter().all(|&b| !b) {
                     state.tick(units, self.config.dt);
                     continue;
@@ -212,8 +212,7 @@ impl Trainer {
                     (idx, EdgeCategory::ALL[idx])
                 };
 
-                let action_mask =
-                    edge_index.legal_mask_for_category(&state, units, planner_config, category);
+                let action_mask = edge_index.legal_mask_for_category(&state, units, category);
                 if action_mask.iter().all(|&b| !b) {
                     state.tick(units, self.config.dt);
                     continue;

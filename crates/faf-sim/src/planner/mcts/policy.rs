@@ -88,15 +88,12 @@ pub(crate) fn upgrade_mask(
     edge_index: &PlanEdgeIndex,
     state: &SimulationState,
     units: &Units,
-    _config: &PlannerConfig,
 ) -> Vec<bool> {
     let mut mask = vec![true; UPGRADE_OPTION_COUNT];
     for (i, (source, target)) in FACTORY_UPGRADE_OPTIONS.iter().enumerate() {
         let edge_idx = find_upgrade_edge_idx(edge_index, source, target);
         mask[i + 1] = edge_idx.map_or(false, |idx| {
-            edge_index
-                .to_selection_option(idx, state, units, _config)
-                .is_some()
+            edge_index.to_selection_option(idx, state, units).is_some()
                 && can_upgrade(state, units, source, target)
         });
     }
@@ -126,7 +123,7 @@ pub(crate) fn macro_policy_plan(
     // from the direction head because teching up is a distinct strategic
     // decision from choosing an economic focus.
     let upgrade_logits = bundle.evaluate_upgrade(macro_features.clone(), &device);
-    let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units, config);
+    let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units);
 
     if !upgrade_legal_mask.iter().all(|&b| !b) {
         let upgrade_idx = if deterministic {
@@ -156,7 +153,7 @@ pub(crate) fn macro_policy_plan(
 
     // No upgrade chosen: fall through to the normal direction -> action pipeline.
     let direction_logits = bundle.evaluate_direction(macro_features.clone(), &device);
-    let direction_mask = edge_index.legal_category_mask(&state, units, config);
+    let direction_mask = edge_index.legal_category_mask(&state, units);
 
     if direction_mask.iter().all(|&b| !b) {
         state.tick(units, config.dt);
@@ -173,7 +170,7 @@ pub(crate) fn macro_policy_plan(
     let category = EdgeCategory::ALL[direction_idx];
 
     let action_logits = bundle.evaluate_action(macro_features.clone(), category, &device);
-    let action_mask = edge_index.legal_mask_for_category(&state, units, config, category);
+    let action_mask = edge_index.legal_mask_for_category(&state, units, category);
 
     if action_mask.iter().all(|&b| !b) {
         state.tick(units, config.dt);

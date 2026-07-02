@@ -320,7 +320,7 @@ fn evaluate_edge_priors(
     let features = state_features_with_shortfall(state, units, config, shortfall);
 
     let mut direction_logits = model.evaluate_direction(features.clone(), device);
-    let direction_mask = edge_index.legal_category_mask(state, units, config);
+    let direction_mask = edge_index.legal_category_mask(state, units);
     apply_mask(&mut direction_logits, &direction_mask);
     let direction_probs = softmax_probs(&direction_logits);
 
@@ -331,7 +331,7 @@ fn evaluate_edge_priors(
         }
         let category = EdgeCategory::ALL[d];
         let mut action_logits = model.evaluate_action(features.clone(), category, device);
-        let action_mask = edge_index.legal_mask_for_category(state, units, config, category);
+        let action_mask = edge_index.legal_mask_for_category(state, units, category);
         apply_mask(&mut action_logits, &action_mask);
         let action_probs = softmax_probs(&action_logits);
         for (edge_idx, &p) in action_probs.iter().enumerate() {

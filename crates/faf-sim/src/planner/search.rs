@@ -48,10 +48,6 @@ pub(crate) struct SearchConfig {
     pub dt: f64,
     /// Maximum number of mass extractors (including upgrades) to build.
     pub max_mex_count: usize,
-    /// Maximum number of power generators to build.
-    pub max_pgen_count: usize,
-    /// Maximum number of energy storage buildings to build.
-    pub max_energy_storage_count: usize,
 }
 
 impl SearchConfig {
@@ -81,8 +77,6 @@ impl SearchConfig {
         // Pre-compute filters used for construction candidates.
         let active_targets = state.active_target_unit_ids();
         let mex_count = state.count_active_mex();
-        let pgen_count = state.count_active_pgen();
-        let energy_storage_count = state.count_active_energy_storage();
 
         // Ask the heuristic for a small menu of units worth building next.
         let candidates = candidate_units(units, state, goal_id, goal_chain);
@@ -99,8 +93,6 @@ impl SearchConfig {
             &candidates,
             &active_targets,
             mex_count,
-            pgen_count,
-            energy_storage_count,
         );
         add_upgrade_candidates(&mut successors, state, units, self, &idle_builders);
         add_assist_candidates(&mut successors, state, units, self, &idle_builders);
@@ -113,7 +105,7 @@ impl SearchConfig {
 /// Rule 1: try building each candidate unit with a single builder.
 ///
 /// A candidate is skipped if it is already built, already under construction,
-/// or would exceed the configured caps (`max_mex_count` / `max_pgen_count`).
+/// or would exceed the configured mex cap.
 /// For each legal candidate we emit exactly one build action: start the project
 /// with the fastest capable idle builder.  If the planner wants more build
 /// power on the project later, it can use an `Assist` action.
@@ -126,8 +118,6 @@ fn add_build_candidates(
     candidates: &[UnitKind],
     active_targets: &HashSet<UnitKind>,
     mex_count: usize,
-    pgen_count: usize,
-    energy_storage_count: usize,
 ) {
     for unit_id in candidates {
         if state.has_completed_unit(unit_id) {
@@ -139,15 +129,6 @@ fn add_build_candidates(
         if matches!(unit_id, UnitKind::Mex(_)) && mex_count >= config.max_mex_count {
             continue;
         }
-        if matches!(unit_id, UnitKind::Pgen(_)) && pgen_count >= config.max_pgen_count {
-            continue;
-        }
-        if *unit_id == UnitKind::EnergyStorage
-            && energy_storage_count >= config.max_energy_storage_count
-        {
-            continue;
-        }
-
         // Start the project with the single fastest capable idle builder.
         // Additional builders can be added later with `Assist`.
         if let Some(builder) = fastest_idle_builder(idle_builders, state, unit_id, units) {

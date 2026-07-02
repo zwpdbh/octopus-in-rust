@@ -12,7 +12,7 @@ use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Number of base state features.
-pub const STATE_FEATURE_COUNT: usize = 13;
+pub const STATE_FEATURE_COUNT: usize = 11;
 
 /// Number of engineer shortfall feedback features appended to the macro network's
 /// input ([T1, T2, T3]).
@@ -32,12 +32,10 @@ pub const SHORTFALL_FEATURE_COUNT: usize = 3;
 /// 4. total active build power (scaled by 100)
 /// 5. simulation time (scaled by 3600 s)
 /// 6. active mex fraction of cap
-/// 7. active pgen fraction of cap
-/// 8. active energy storage fraction of cap
-/// 9. active project count (scaled by 10)
-/// 10. has T2 factory
-/// 11. has T3 factory
-/// 12. has T3 engineer
+/// 7. active project count (scaled by 10)
+/// 8. has T2 factory
+/// 9. has T3 factory
+/// 10. has T3 engineer
 pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerConfig) -> Vec<f32> {
     let mut features = Vec::with_capacity(STATE_FEATURE_COUNT);
     let economy = &state.economy;
@@ -69,16 +67,10 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     // Game time gives the network a sense of phase. Scaled by one hour.
     features.push(clamp((state.time / 3600.0) as f32));
 
-    // Eco-structure saturation: fractions of the configured caps. Near 1.0
-    // means building more mexes/pgens is low-value or impossible.
+    // Eco-structure saturation: fraction of the configured mex cap. Near 1.0
+    // means building more mexes is low-value or impossible.
     features.push(clamp(
         state.count_active_mex() as f32 / config.max_mex_count as f32,
-    ));
-    features.push(clamp(
-        state.count_active_pgen() as f32 / config.max_pgen_count as f32,
-    ));
-    features.push(clamp(
-        state.count_active_energy_storage() as f32 / config.max_energy_storage_count as f32,
     ));
 
     // Parallelism: how many builders are already committed. A high count means

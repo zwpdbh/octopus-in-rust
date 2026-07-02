@@ -46,7 +46,7 @@ impl Trainer {
         for step in &trajectory.steps {
             let mut executable = false;
             for _ in 0..self.config.max_steps {
-                let current_mask = edge_index.legal_mask(&state, units, planner_config);
+                let current_mask = edge_index.legal_mask(&state, units);
                 if step.edge_index >= current_mask.len() || !current_mask[step.edge_index] {
                     state.tick(units, planner_config.dt);
                     continue;
@@ -64,7 +64,7 @@ impl Trainer {
                 let latent = self.model.latent(macro_input);
 
                 // Upgrade cross-entropy loss (index 0 is "no upgrade").
-                let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units, planner_config);
+                let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units);
                 let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
                 let upgrade_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
                     TensorData::new(
@@ -97,8 +97,7 @@ impl Trainer {
                         .model
                         .direction_logits(latent.clone())
                         .flatten::<1>(0, 1);
-                    let direction_mask =
-                        edge_index.legal_category_mask(&state, units, planner_config);
+                    let direction_mask = edge_index.legal_category_mask(&state, units);
                     let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
                         TensorData::new(
                             direction_mask
@@ -197,7 +196,7 @@ impl Trainer {
                 step_count += 1;
 
                 let option = edge_index
-                    .to_selection_option(step.edge_index, &state, units, planner_config)
+                    .to_selection_option(step.edge_index, &state, units)
                     .expect("legal edge must produce a selection option");
                 let available = idle_engineer_counts(&state, units);
                 let mut desired = clamp_squad(step.desired_squad, available);

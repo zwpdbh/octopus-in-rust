@@ -605,11 +605,9 @@ mod tests {
         let plan = units.plan_graph(goal);
         let edge_index = PlanEdgeIndex::new(&plan);
         let state = SimulationState::new(&units, &[UnitKind::Commander]);
-        let config = PlannerConfig::default();
-
         let mut found_build = false;
         for i in 0..edge_index.len() {
-            if let Some(option) = edge_index.to_selection_option(i, &state, &units, &config) {
+            if let Some(option) = edge_index.to_selection_option(i, &state, &units) {
                 if matches!(
                     option,
                     SelectionOption::Build(UnitKind::Factory(TechLevel::T1))
@@ -620,13 +618,13 @@ mod tests {
         }
         assert!(found_build, "ACU should be able to build a T1 factory");
 
-        let pools = SelectionPools::new(&plan, &state, &units, &config);
+        let pools = SelectionPools::new(&plan, &state, &units);
         for option in pools.options() {
             let idx = edge_index
-                .find_edge_for_option(option, &state, &units, &config)
+                .find_edge_for_option(option, &state, &units)
                 .expect("every pool option should map to an edge");
             let back = edge_index
-                .to_selection_option(idx, &state, &units, &config)
+                .to_selection_option(idx, &state, &units)
                 .expect("mapped edge should be legal");
             assert_eq!(*option, back);
         }

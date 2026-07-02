@@ -44,4 +44,5 @@ You should be comfortable with Rust and with the basics of neural networks and p
 ## Important notes
 
 - Old `.mpk` model files saved before the abstract-goal redesign are incompatible and must be deleted and retrained. The universal plan graph now has a fixed edge count and a synthetic `Goal` node.
+- Models saved after the abstract-goal redesign but before the removal of pgen/energy-storage caps are also incompatible. The state feature vector was reduced from 13 to 11 dimensions, which changes the policy network's input layer. Retrain from scratch.
 - Only `ValueNetKind::Mlp` (the hierarchical network) is implemented. `Gnn` returns an error if selected.
