@@ -21,7 +21,7 @@ use crate::economy::{
 };
 use crate::planner::core::Goal;
 use crate::sim::adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
-use crate::units::{TechLevel, UnitCost, UnitDef, UnitKind, Units};
+use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
 /// A single event in the simulated build timeline.
 #[derive(Debug, Clone, PartialEq)]

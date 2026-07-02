@@ -43,17 +43,32 @@ impl Goal {
     }
 }
 
-/// Result of running a planner to completion.
+/// Result of running a planner from a single state.
+///
+/// The planner searches a trajectory from the current state to the goal. Most
+/// consumers should treat this as a **one-step lookahead**: execute
+/// [`PlanResult::first_action`], advance the simulator, and call the planner
+/// again. The remaining fields (`events`, `completion_time`, `final_economy`)
+/// are the projected full trajectory used internally by MCTS for value
+/// estimation; they are not a fixed schedule and are typically ignored by the
+/// reactive execution loop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanResult {
-    /// Completion events in chronological order.
+    /// Projected completion events in chronological order.
+    ///
+    /// This is what MCTS expects to happen if the current best action sequence
+    /// is followed to the goal. In a reactive loop the simulator produces its
+    /// own authoritative events; use those instead.
     pub events: Vec<BuildEvent>,
-    /// In-game seconds when the goal unit finished.
+    /// Projected in-game seconds when the goal unit would finish.
     pub completion_time: f64,
-    /// Economy state at the end of the plan.
+    /// Projected economy state at the end of the plan.
     pub final_economy: EconomyState,
-    /// First action of the best path. Useful for reactive planners that only
-    /// commit to the immediate next step.
+    /// Immediate next action chosen by the planner.
+    ///
+    /// In the closed-loop actor design this is the only field the executor
+    /// commits to. It is converted into a [`crate::actors::message::SimulationMsg`]
+    /// and sent to the simulator; the rest of the plan is recomputed next tick.
     pub first_action: Option<crate::planner::search::SimAction>,
 }
 
@@ -318,7 +333,19 @@ impl Planner {
         }
     }
 
-    /// Run the planner from `initial_state` until `goal` is completed.
+    /// Run the planner from `initial_state` toward `goal`.
+    ///
+    /// This is the public entry point for planning. It dispatches to the selected
+    /// strategy (currently only MCTS) and returns a [`PlanResult`] that contains
+    /// both a projected full trajectory and the immediate next action.
+    ///
+    /// The result is designed for **closed-loop, reactive** use: the caller should
+    /// execute only [`PlanResult::first_action`], advance the simulator, and call
+    /// `plan` again on the new state. The projected `events`, `completion_time`,
+    /// and `final_economy` are MCTS's best estimate of what would happen if the
+    /// current policy were followed to the goal, but they are not a fixed schedule.
+    /// Replanning every tick prevents discrete timing drift (stalls, builder
+    /// rounding, completed projects) from compounding.
     pub fn plan(
         &mut self,
         units: &Units,

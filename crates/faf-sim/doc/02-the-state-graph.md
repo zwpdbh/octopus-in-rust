@@ -27,6 +27,40 @@ pub struct SimulationState {
 
 The RL planner does not need to invent this representation; it reuses the existing simulator state as its node payload. It also does not need to read raw FAF data; all unit knowledge comes through the `Units` repository.
 
+## Two graphs: plan graph and build graph
+
+There are two graphs in this system. Keeping them separate prevents the common confusion of thinking the planner adds nodes to the state graph to "estimate" completion time.
+
+| Graph | Lives in | Changes during an episode? | Purpose |
+| --- | --- | --- | --- |
+| **Plan graph** (`PlanGraph`) | `Units` + `Goal` | No | Static catalogue of every legal build/upgrade edge. Used to enumerate legal actions and to mask network outputs. |
+| **Build graph** (`BuildGraph`) | `SimulationState` | Yes | Dynamic record of the actual units and projects in the current game. Grows naturally as the simulator executes actions. |
+
+```mermaid
+graph LR
+    subgraph "PlanGraph (static, derived from Units + Goal)"
+        ACU_P["ACU"]
+        MEX_P["T1 Mex"]
+        PGEN_P["T1 Pgen"]
+        T2F_P["T2 Factory"]
+        GOAL_P["Goal"]
+        ACU_P --> MEX_P
+        ACU_P --> PGEN_P
+        ACU_P --> T2F_P
+        T2F_P --> GOAL_P
+    end
+
+    subgraph "BuildGraph (dynamic, inside SimulationState)"
+        ACU_B["ACU (completed)"]
+        MEX_B["T1 Mex (constructing)"]
+        PGEN_B["T1 Pgen (constructing)"]
+        ACU_B --> MEX_B
+        ACU_B --> PGEN_B
+    end
+```
+
+The plan graph is the menu of possible actions. The build graph is the plate: it contains only what has actually been ordered. When the simulator executes `SimAction::Build { unit_id: "ueb1103", ... }`, a new node is added to the build graph and construction begins. The plan graph itself never changes.
+
 ## Nodes and edges
 
 Each node in the build graph represents one built-unit slot. It stores at least:
@@ -124,26 +158,22 @@ pub fn state_features_with_shortfall(
 
 ## What the policy sees
 
-From the network's point of view, a state is a snapshot it can evaluate and expand:
+From the network's point of view, a state is a snapshot it can evaluate and expand. **The policy does not consume the build graph as a graph.** It consumes a fixed-size feature vector extracted from the state:
 
-```text
-SimulationState
-├── time
-├── graph of completed and under-construction units
-├── economy
-└── events
-    │
-    ▼
-state_features()  →  [f32; 13]
-    │
-    ▼
-state_features_with_shortfall()  →  [f32; 16]
-    │
-    ▼
-HierarchicalPolicyNet
+```mermaid
+flowchart LR
+    A["SimulationState"] --> B["BuildGraph<br/>(graph of units/projects)"]
+    A --> C["EconomyState<br/>(income, storage)"]
+    A --> D["time"]
+    B --> E["state_features()<br/>counts active projects,<br/>tech milestones"]
+    C --> E
+    D --> E
+    E --> F["[f32; 13]"]
+    F --> G["+ shortfall [f32; 3]"]
+    G --> H["HierarchicalPolicyNet"]
 ```
 
-The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)).
+The 13 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)); the tree itself is the MCTS search tree, not the build graph.
 
 ## Objectives
 

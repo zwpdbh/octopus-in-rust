@@ -38,6 +38,36 @@ pub fn train_policy(
 
 It returns the final model, an optional best-seen model, and statistics. The optional best model comes from greedy evaluation: whenever the greedy rollout beats the previous best time, the current parameters are stored. After training, the best stored model is fine-tuned on the best trajectory and returned as the final model.
 
+## How training interacts with the simulator
+
+A training episode is a direct interaction between the current policy and the simulator. There is **no MCTS tree** during training. At each step:
+
+1. The trainer observes the current `SimulationState`.
+2. It samples an action from the policy network (with epsilon-greedy exploration).
+3. It executes that action on the **real episode state** via `execute_action`.
+4. The simulator's `tick` advances time, drains resources, and completes projects.
+5. The trainer records the transition and reward.
+
+```mermaid
+sequenceDiagram
+    participant T as Trainer
+    participant N as Policy Network
+    participant S as Simulator (SimulationState)
+
+    loop every step until goal or max_steps
+        T->>S: read SimulationState
+        T->>N: state_features + masks
+        N-->>T: upgrade / direction / edge / power / squad
+        T->>T: epsilon-greedy sample
+        T->>S: execute_action(action)
+        S->>S: tick()
+        S-->>T: next SimulationState + reward
+        T->>T: record EpisodeStep
+    end
+```
+
+Because `execute_action` and `tick` are the same functions used by MCTS rollouts, the build graph grows the same way during training and during search. The difference is the state object: training advances the **episode state** that survives for the whole episode, while MCTS rollouts advance a **temporary clone** that is discarded after the rollout returns its value.
+
 ## Configuration
 
 Training is controlled by `TrainConfig`:
@@ -166,18 +196,14 @@ If the episode exceeds `max_steps` without reaching the goal, it terminates.
 
 ## REINFORCE update
 
-After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has five parts:
+After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has three groups:
 
-1. **Upgrade loss.** Categorical log-likelihood of the sampled upgrade option, weighted by advantage, plus an entropy bonus. Computed for every step because index 0 ("no upgrade") is also a decision.
-2. **Direction loss.** Categorical log-likelihood of the sampled direction, weighted by advantage, plus an entropy bonus. Only computed when no upgrade was chosen.
-3. **Action loss.** Categorical log-likelihood of the sampled edge conditioned on the direction, weighted by advantage, plus an entropy bonus. Only computed when no upgrade was chosen.
-4. **Build-power loss.** Gaussian log-likelihood of the sampled target power, weighted by advantage.
-5. **Engineer-squad loss.** Gaussian log-likelihood of the sampled `[T1, T2, T3]` counts, weighted by advantage.
-
-All five losses share the same advantage, so a single scalar drives the gradient through every head.
+1. **Discrete policy loss (REINFORCE).** The upgrade, direction, and action log-probabilities are summed and multiplied by the normalized return. This is the policy-gradient term: increase the log-probability of choices that led to high return, decrease it for low-return choices.
+2. **Entropy bonus.** The entropy of the discrete heads is subtracted (with coefficient `entropy_coef`) to encourage exploration and prevent premature collapse to a single action.
+3. **Continuous negative log-likelihood.** The power and squad heads are trained with maximum-likelihood on the sampled targets. Their negative log-likelihoods are added directly; they are **not** multiplied by the return. Multiplying continuous log-probabilities by the return would reverse their gradients on negative returns and cause the continuous predictions to diverge.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 897 — update (abbreviated)
+// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 43 — update (abbreviated)
 pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
     for step in &episode.steps {
         // ... build macro input, run latent backbone once ...
@@ -185,10 +211,8 @@ pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
 
         // Upgrade log-prob (always computed; index 0 is "no upgrade").
         let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
-        let masked_upgrade_logits = upgrade_logits + upgrade_mask_tensor;
-        let upgrade_log_probs = log_softmax(masked_upgrade_logits, 0);
+        // ... mask, softmax, select sampled index ...
         let upgrade_log_prob = upgrade_log_probs.select(0, upgrade_index_tensor);
-        let upgrade_entropy = (upgrade_probs * upgrade_log_probs).neg().sum();
 
         // Direction and action log-probs are only computed when no upgrade was chosen.
         let (direction_log_prob, action_log_prob, direction_entropy, action_entropy) =
@@ -207,14 +231,15 @@ pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
         let power_log_prob = gaussian_log_prob_scalar(power_mean, step.target_power, ...);
         let squad_log_prob = gaussian_log_prob_vec(squad_means, &step.desired_squad, ...);
 
-        let joint_log_prob = upgrade_log_prob
-            + direction_log_prob
-            + action_log_prob
-            + power_log_prob
-            + squad_log_prob;
-        let policy_loss = joint_log_prob.neg().mul(return_tensor);
+        // REINFORCE only on discrete decisions.
+        let discrete_log_prob = upgrade_log_prob + direction_log_prob + action_log_prob;
+        let policy_loss = discrete_log_prob.neg().mul(return_tensor);
+
+        // Continuous heads: maximum likelihood, not weighted by return.
+        let continuous_nll = power_log_prob.neg() + squad_log_prob.neg();
+
         let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
-        let loss = policy_loss + entropy_loss;
+        let loss = policy_loss + entropy_loss + continuous_nll;
 
         // ... accumulate loss over the episode ...
     }
@@ -226,7 +251,7 @@ pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
 }
 ```
 
-This is the standard REINFORCE pattern, extended to a hierarchical policy. The discrete heads use `log_softmax` and `.select` to extract the log-probability of the sampled choice. The continuous heads use Gaussian log-probability helpers.
+The discrete heads use `log_softmax` and `.select` to extract the log-probability of the sampled choice. The continuous heads use Gaussian log-probability helpers. Only the discrete choices receive the REINFORCE return signal.
 
 ## Greedy evaluation
 
@@ -269,6 +294,40 @@ fn fine_tune_best_model(
 ```
 
 The function returns the fine-tuned model as the final model. If no trajectory was recorded, it returns the final REINFORCE model and whatever `best_model` was stored.
+
+## Training versus MCTS rollout
+
+Training episodes and MCTS rollouts both advance the simulator, but they serve different purposes and differ in three key ways:
+
+| | Training episode | MCTS rollout |
+| --- | --- | --- |
+| **State object** | The real episode state, kept for the whole episode. | A clone of the MCTS leaf state, discarded after the rollout. |
+| **Action selection** | Stochastic sampling plus epsilon-greedy exploration. | Greedy argmax from the policy network. |
+| **Outcome** | A full trajectory used to update network weights. | A single scalar value estimate backed up into the MCTS tree. |
+| **Build graph growth** | Same `execute_action` + `tick` path; nodes are added naturally. | Same `execute_action` + `tick` path; nodes are added to the clone. |
+
+```mermaid
+flowchart LR
+    subgraph "Training episode"
+        TE1["Episode state"] --> TE2["sample action (stochastic + epsilon)"]
+        TE2 --> TE3["execute_action"]
+        TE3 --> TE4["tick"]
+        TE4 --> TE5["record step"]
+        TE5 --> TE1
+        TE5 -.-> TE6["REINFORCE update"]
+    end
+
+    subgraph "MCTS rollout"
+        MR1["Leaf state"] --> MR2["clone()"]
+        MR2 --> MR3["greedy action"]
+        MR3 --> MR4["execute_action"]
+        MR4 --> MR5["tick"]
+        MR5 --> MR3
+        MR5 -.-> MR6["return scalar value"]
+    end
+```
+
+The shared simulator path is why the policy trained on episodes can be used directly inside MCTS rollouts: both see the same consequences of every action.
 
 ## Saving and loading
 

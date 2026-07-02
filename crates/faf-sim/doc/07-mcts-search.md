@@ -20,9 +20,18 @@ Training uses the one-step policy directly because it is fast enough to run thou
 Each MCTS iteration repeats four steps:
 
 1. **Select.** Traverse from the root to a leaf using the UCT formula.
-2. **Expand.** Add one or more children to the leaf using the legal plan-graph edges.
-3. **Evaluate.** Run the policy/value network on each new child (or use the terminal outcome if the state is done).
+2. **Expand.** Add one child to the leaf using the highest-priority legal plan-graph edge.
+3. **Evaluate.** Estimate the value of the new child with a rollout (or use the terminal outcome if the state is done).
 4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
+
+```mermaid
+flowchart TD
+    Root["Root: current SimulationState"] --> Select["1. Select: UCT to leaf"]
+    Select --> Expand["2. Expand: add one child via highest prior"]
+    Expand --> Rollout["3. Evaluate: rollout from child"]
+    Rollout --> Backup["4. Backup: propagate value to root path"]
+    Backup --> Root
+```
 
 These four steps are implemented in `MctsSearch::search`:
 
@@ -196,7 +205,7 @@ If expansion fails (for example, because no idle builder is available), the sear
 
 ## Rollout evaluation
 
-If a node is already fully expanded, or immediately after expanding a new child, the search estimates the leaf's value with a rollout. The rollout plays out the greedy hierarchical policy for up to `max_rollout_steps` simulator ticks, accumulating discounted per-step rewards plus a terminal bonus:
+If a node is already fully expanded, or immediately after expanding a new child, the search estimates the leaf's value with a rollout. A rollout is **not** a shortcut that manipulates the build graph to estimate time. It is a full simulation on a **cloned** `SimulationState`, running the same `execute_action` + `tick` code used everywhere else.
 
 ```rust
 // crates/faf-sim/src/planner/mcts/search.rs ~line 439 — rollout_value
@@ -210,9 +219,65 @@ fn rollout_value(
     _device: &TrainDevice,
     max_steps: usize,
 ) -> f64 {
-    // ... run macro_policy_plan greedily, accumulate discounted rewards ...
+    let mut s = state.clone();          // copy of the leaf state
+    let mut total = 0.0f32;
+    let mut discount = 1.0f32;
+    // ...
+    for _ in 0..max_steps {
+        if s.goal_reached(goal) { break; }
+
+        let prev = s.clone();
+        let result = macro_policy_plan(
+            units,
+            s.clone(),
+            goal,
+            Some(model.clone()),
+            true,                       // deterministic / greedy
+            &mut shortfall,
+            config,
+        );
+
+        let action = result.first_action.unwrap_or(SimAction::Wait);
+        if execute_action(&mut s, &action, units, config.dt).is_err() {
+            s.tick(units, config.dt);
+        }
+
+        total += discount * compute_step_reward(&prev, &s, units);
+        discount *= 0.99f32;
+    }
+    // ...
 }
 ```
+
+### How the rollout chooses actions
+
+During rollout, actions are chosen by the **hierarchical policy network**, not by the MCTS tree search. The tree search already selected and expanded the leaf; the rollout simply asks the policy network "what would you do from here?" and lets it play the game out.
+
+The policy network decides each rollout action in four stages:
+
+1. **Upgrade head:** decide whether to upgrade a factory (`NoUpgrade`, `T1→T2`, `T2→T3`).
+2. **Direction head:** pick a strategic focus (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `Goal`).
+3. **Action head:** pick a concrete plan-graph edge inside that direction.
+4. **Power + squad heads:** decide target build power and the `[T1, T2, T3]` engineer squad.
+
+In training the policy samples these choices stochastically; during MCTS rollout it uses the greedy mode (`deterministic: true`) so the value estimate is stable.
+
+### What the rollout modifies
+
+The rollout does **not** add nodes to the MCTS tree. It adds nodes to the **cloned build graph** through normal simulator execution, exactly the same way training adds nodes to the real episode state:
+
+```mermaid
+flowchart LR
+    A["MCTS leaf state"] --> B["clone()"]
+    B --> C["rollout loop"]
+    C --> D["macro_policy_plan chooses action"]
+    D --> E["execute_action adds node to cloned BuildGraph"]
+    E --> F["tick advances time, drains resources, completes projects"]
+    F --> C
+    F -.-> G["clone discarded after terminal bonus"]
+```
+
+After the rollout finishes, the cloned state is discarded. Only the **final scalar value** (discounted rewards + terminal bonus) is backed up into the MCTS tree.
 
 The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. That means rollouts use the full hierarchical policy, including the `upgrade_head`, to choose factory upgrades. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
 
@@ -284,15 +349,53 @@ Mcts {
 
 You can extend this later with a time budget and a parallel search worker.
 
+## Why MCTS returns only `first_action`
+
+`PlanResult` exposes a single action, not a full future plan:
+
+```rust
+// crates/faf-sim/src/planner/core.rs ~line 50 — PlanResult
+pub struct PlanResult {
+    pub events: Vec<BuildEvent>,
+    pub completion_time: f64,
+    pub final_economy: EconomyState,
+    /// The only field the reactive executor commits to.
+    pub first_action: Option<crate::planner::search::SimAction>,
+}
+```
+
+The full action sequences produced during selection, expansion, and rollout exist only to **evaluate** the immediate candidates. The real executor commits to `first_action`, applies it to the real simulator state, and then calls `Planner::plan` again from the new state.
+
+```mermaid
+sequenceDiagram
+    participant E as Executor
+    participant P as Planner
+    participant S as Simulator
+
+    E->>P: plan(state, goal)
+    Note over P: MCTS explores many futures<br/>(selection, expansion, rollout)
+    P-->>E: PlanResult { first_action }
+    E->>S: execute_action(first_action)
+    S-->>E: new state
+    E->>P: plan(new_state, goal)
+    Note over P: re-plan from actual state
+    P-->>E: PlanResult { first_action }
+    E->>S: execute_action(first_action)
+```
+
+This design is closed-loop reactive control. It handles deviations such as economy stalls, enemy interference, or units being destroyed, because the planner never reasons from a stale expected state.
+
 ## MCTS as a closed-loop planner
 
 MCTS is the final piece that makes the system closed-loop:
 
-```text
-loop:
-    action = mcts.search(state, goal)
-    state.apply(action)
-    if goal_reached(state, goal): break
+```mermaid
+flowchart LR
+    A["Current SimulationState"] --> B["MCTS.search(state, goal)"]
+    B --> C["first_action"]
+    C --> D["execute_action on real state"]
+    D --> E["new SimulationState"]
+    E --> B
 ```
 
 Because the search is rooted in the current state and recomputes every tick, small deviations from the expected plan do not compound. The planner always reasons from the latest observation.

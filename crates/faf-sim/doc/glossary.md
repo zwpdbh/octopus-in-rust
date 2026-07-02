@@ -8,13 +8,14 @@
 | **Backend** | The Burn compute backend. The `faf-sim` library defaults to CPU (`NdArray`); the `faf-sim-cli` package defaults to CUDA for training. Cross-platform GPU training can also use `Wgpu`. Aliased as `TrainBackend` in the training modules. |
 | **Baseline** | Moving average of recent episode returns used to center REINFORCE advantages and reduce variance. |
 | **Build order** | A sequence of construction actions that takes the economy from the starting commander to a target unit. |
+| **BuildGraph** | Dynamic graph inside `SimulationState` that records the actual units and projects in the current game. It starts with the ACU and grows as the simulator executes actions. Not to be confused with the static `PlanGraph`. |
 | **BuildPower** | Total construction rate contributed by idle engineers, measured in build points per second. |
 | **Burn** | The Rust deep-learning framework used by `faf-sim` for training and inference. |
 | **SimulationMsg** | An actor message sent from the planner to the simulator. It tells the simulator to execute a build, upgrade, assist, or goal action with a specific squad of builders. |
 | **C_puct** | UCT exploration constant controlling the trade-off between exploitation and exploration. |
 | **Deterministic policy** | At inference time, always picks the highest-scoring macro edge and rounds power/squad values. Used for evaluation. |
-| **Direction head** | Learned Burn head that picks a strategic focus: `Mass`, `Energy`, `BuildPower`, or `Progress`. |
-| **EdgeCategory** | Strategic focus tag (`Mass`, `Energy`, `BuildPower`, `Progress`) attached to every plan-graph edge. |
+| **Direction head** | Learned Burn head that picks a strategic focus: `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, or `Goal`. |
+| **EdgeCategory** | Strategic focus tag (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `Goal`) attached to every plan-graph edge. |
 | **Episode** | One full rollout from the starting state until the goal is reached or `max_steps` is exceeded. |
 | **Faction** | One of UEF, Cybran, Aeon, or Seraphim. Determines available units and build trees. |
 | **Feature vector** | Fixed-size numerical representation of a `SimulationState` plus optional shortfall feedback, fed into the learned networks. |
@@ -29,11 +30,11 @@
 | **Observation** | Actor message carrying either a `BuildEvent` or the full `SimulationState` from the simulator to the decision actor. |
 | **PlanEdge** | A typed, stable action candidate with source, target, kind, and strategic category. |
 | **PlanEdgeIndex** | Stable ordered list of `PlanEdge`s derived from a `PlanGraph`, used to index network outputs. |
-| **PlanGraph** | Directed acyclic graph of units and prerequisites used to enumerate legal macro edges. |
+| **PlanGraph** | Static directed acyclic graph derived from `Units` and the `Goal`. It catalogues every legal build/upgrade edge and is used to enumerate legal actions and to mask network outputs. It does not change during an episode or rollout. See also `BuildGraph`. |
 | **Planner** | The public facade that owns the strategy, configuration, policy bundle, and shortfall state. |
 | **Policy bundle** | The learned hierarchical network saved and loaded together; macro alias for `HierarchicalPolicyNet`. |
 | **Power head** | Learned Burn head that outputs a scalar target build power for the selected edge. |
-| **Progress** | `EdgeCategory` for edges that move toward the goal (factories, tech structures, and the synthetic goal node). |
+| **Rollout** | In MCTS, a full simulation from a leaf node using the greedy policy network on a cloned `SimulationState`. The rollout adds nodes to the cloned build graph through normal simulator execution and returns a scalar value estimate. |
 | **REINFORCE** | Policy-gradient algorithm used to train the four heads from Monte Carlo returns. |
 | **Patience** | Number of episodes without a new best completion time after which training stops early. |
 | **PUCT** | UCT variant that incorporates a learned prior probability into the exploration bonus. |
