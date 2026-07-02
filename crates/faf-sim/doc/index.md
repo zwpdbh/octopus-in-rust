@@ -18,7 +18,7 @@ You should be comfortable with Rust and with the basics of neural networks and p
 
 1. **[Why RL for build orders?](00-why-mcts.md)** — What makes build-order optimization hard, and why we combine MCTS with a learned policy.
 2. **[Burn basics for RL](01-burn-basics.md)** — `Backend`, `Tensor`, `Module`, `Autodiff`, optimizers, devices, and recordings. Everything you need to read the rest of the code.
-3. **[Modeling the environment](02-the-state-graph.md)** — `GraphState`, the economy, featurization, and what the network sees.
+3. **[Modeling the environment](02-the-state-graph.md)** — `SimulationState`, the economy, featurization, and what the network sees.
 4. **[Actions and the plan graph](03-actions-and-successors.md)** — How we reduce a huge raw action space to a small set of legal plan-graph edges.
 5. **[Building the policy network in Burn](04-value-network.md)** — A hierarchical `Module` with shared backbone, upgrade head, direction head, action head, build-power head, and engineer-squad head.
 6. **[Reward shaping](05-reward-shaping.md)** — Per-step rewards for build-power, mass/power income, storage pressure, and stalls, plus one-time tech milestones and a terminal bonus.

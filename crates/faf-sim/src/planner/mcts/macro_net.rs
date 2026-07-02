@@ -520,7 +520,7 @@ mod tests {
     use super::*;
     use crate::planner::core::PlannerConfig;
     use crate::planner::mcts::selections::{SelectionOption, SelectionPools};
-    use crate::sim::GraphState;
+    use crate::sim::SimulationState;
     use crate::units::{TechLevel, UnitKind, Units};
 
     /// Inference-only backend for tests. Prefer CPU when available so unit tests
@@ -604,7 +604,7 @@ mod tests {
         };
         let plan = units.plan_graph(goal);
         let edge_index = PlanEdgeIndex::new(&plan);
-        let state = GraphState::new(&units, &[UnitKind::Commander]);
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
 
         let mut found_build = false;

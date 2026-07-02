@@ -1,6 +1,6 @@
 //! State featurization for the hierarchical policy networks.
 //!
-//! Converts a variable-size [`GraphState`] into a fixed-size `Vec<f32>` that
+//! Converts a variable-size [`SimulationState`] into a fixed-size `Vec<f32>` that
 //! the macro network, build-power network, and engineer-squad network consume.
 //! The base feature vector is shared; the macro network additionally receives
 //! the previous-tick engineer shortfall, the power network receives a one-hot
@@ -8,7 +8,7 @@
 //! build power.
 
 use crate::planner::core::PlannerConfig;
-use crate::sim::GraphState;
+use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Number of base state features.
@@ -38,7 +38,7 @@ pub const SHORTFALL_FEATURE_COUNT: usize = 3;
 /// 10. has T2 factory
 /// 11. has T3 factory
 /// 12. has T3 engineer
-pub fn state_features(state: &GraphState, units: &Units, config: &PlannerConfig) -> Vec<f32> {
+pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerConfig) -> Vec<f32> {
     let mut features = Vec::with_capacity(STATE_FEATURE_COUNT);
     let economy = &state.economy;
 
@@ -121,7 +121,7 @@ pub fn state_features(state: &GraphState, units: &Units, config: &PlannerConfig)
 /// available. This helps it learn to build/upgrade engineers before retrying
 /// an edge that previously starved.
 pub fn state_features_with_shortfall(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
     shortfall: [f32; SHORTFALL_FEATURE_COUNT],
@@ -179,7 +179,7 @@ mod tests {
             build_time: 46_250.0,
         };
         let _plan = units.plan_graph(goal);
-        let state = GraphState::new(&units, &[UnitKind::Commander]);
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
 
         let features = state_features(&state, &units, &config);

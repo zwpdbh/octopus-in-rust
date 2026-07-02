@@ -15,7 +15,7 @@ pub mod sim;
 pub mod units;
 
 pub use actors::decision_actor::DecisionActor;
-pub use actors::message::{Command, Observation};
+pub use actors::message::{Observation, SimulationMsg};
 pub use actors::sim_actor::SimActor;
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
@@ -23,12 +23,12 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use planner::{
-    build_operators, build_plan_graph, Fact, Goal, Operator, PlanEdgeKind, PlanGraph, PlanResult,
+    build_operators, build_plan_graph, EdgeAction, Fact, Goal, Operator, PlanGraph, PlanResult,
     Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
-    GraphState, NodeId, SimulationConfig, SimulationError, SimulationResult, UnitNode,
+    NodeId, SimulationConfig, SimulationError, SimulationResult, SimulationState, UnitNode,
 };
 
 pub use units::{

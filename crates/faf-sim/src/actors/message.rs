@@ -5,15 +5,15 @@
 //! human player observes the game and sends discrete commands.
 
 use crate::planner::core::Goal;
-use crate::sim::{BuildEvent, GraphState, NodeId};
+use crate::sim::{BuildEvent, NodeId, SimulationState};
 use crate::units::UnitKind;
 
-/// Command sent from the planner to the simulation.
+/// Message sent from the planner to the simulation.
 ///
 /// The planner never advances time directly; it only tells the simulation what
 /// to build or assist. The simulation advances fixed ticks and reports back.
 #[derive(Debug, Clone)]
-pub enum Command {
+pub enum SimulationMsg {
     /// Start building a unit with the given idle builders.
     Build {
         /// Blueprint id of the unit to build.
@@ -48,12 +48,12 @@ pub enum Command {
 
 /// Observation sent from the simulation to the planner.
 ///
-/// The simulation owns the authoritative `GraphState`. After each tick it sends
+/// The simulation owns the authoritative `SimulationState`. After each tick it sends
 /// a snapshot to the planner so the planner can decide the next command.
 #[derive(Debug, Clone)]
 pub enum Observation {
     /// A build event occurred during the last tick.
     Event(BuildEvent),
     /// The current simulation state at the end of a tick.
-    State(GraphState),
+    State(SimulationState),
 }

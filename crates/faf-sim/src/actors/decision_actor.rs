@@ -5,20 +5,20 @@
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::actors::message::{Command, Observation};
+use crate::actors::message::{Observation, SimulationMsg};
 use crate::planner::core::Goal;
 use crate::planner::search::SimAction;
 use crate::planner::Planner;
 use crate::units::Units;
 
-fn sim_action_to_command(action: SimAction) -> Option<Command> {
+fn sim_action_to_command(action: SimAction) -> Option<SimulationMsg> {
     match action {
-        SimAction::Build { unit_id, builders } => Some(Command::Build { unit_id, builders }),
+        SimAction::Build { unit_id, builders } => Some(SimulationMsg::Build { unit_id, builders }),
         SimAction::Upgrade {
             target_unit_id,
             old_node,
             builders,
-        } => Some(Command::Upgrade {
+        } => Some(SimulationMsg::Upgrade {
             target_unit_id,
             old_node,
             builders,
@@ -26,11 +26,13 @@ fn sim_action_to_command(action: SimAction) -> Option<Command> {
         SimAction::Assist {
             project_node,
             builders,
-        } => Some(Command::Assist {
+        } => Some(SimulationMsg::Assist {
             project_node,
             builders,
         }),
-        SimAction::BuildGoal { goal, builders } => Some(Command::BuildGoal { goal, builders }),
+        SimAction::BuildGoal { goal, builders } => {
+            Some(SimulationMsg::BuildGoal { goal, builders })
+        }
         SimAction::Wait => None,
     }
 }
@@ -41,7 +43,7 @@ pub struct DecisionActor {
     units: Units,
     goal: Goal,
     obs_rx: Receiver<Observation>,
-    cmd_tx: Sender<Command>,
+    cmd_tx: Sender<SimulationMsg>,
 }
 
 impl DecisionActor {
@@ -51,7 +53,7 @@ impl DecisionActor {
         units: Units,
         goal: Goal,
         obs_rx: Receiver<Observation>,
-        cmd_tx: Sender<Command>,
+        cmd_tx: Sender<SimulationMsg>,
     ) -> Self {
         Self {
             planner,
@@ -91,7 +93,7 @@ impl DecisionActor {
 mod tests {
     use tokio::sync::mpsc;
 
-    use crate::actors::message::{Command, Observation};
+    use crate::actors::message::{Observation, SimulationMsg};
     use crate::actors::sim_actor::SimActor;
     use crate::units::{UnitKind, Units};
 
@@ -106,7 +108,7 @@ mod tests {
         let dt = 0.1;
 
         let (obs_tx, mut obs_rx) = mpsc::channel::<Observation>(64);
-        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<SimulationMsg>(64);
 
         let sim = SimActor::new(
             &[UnitKind::Commander],

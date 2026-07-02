@@ -18,7 +18,7 @@ use crate::planner::mcts::selections::{
 };
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::search::SimAction;
-use crate::sim::GraphState;
+use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
 use super::Trainer;
@@ -38,7 +38,7 @@ impl Trainer {
 
         let plan = units.plan_graph(*goal);
         let edge_index = PlanEdgeIndex::new(&plan);
-        let mut state = GraphState::new(units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
         let mut total_loss_value = 0.0f32;
         let mut step_count = 0usize;

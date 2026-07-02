@@ -19,8 +19,8 @@ The per-step reward is computed from the state before and after the action:
 ```rust
 // crates/faf-sim/src/planner/mcts/train/reward.rs ~line 22 — compute_step_reward
 pub(crate) fn compute_step_reward(
-    prev_state: &GraphState,
-    next_state: &GraphState,
+    prev_state: &SimulationState,
+    next_state: &SimulationState,
     units: &Units,
 ) -> f32 {
     let mut reward = 0.0f32;
@@ -83,7 +83,7 @@ At the end of an episode, the agent receives a terminal bonus that depends on wh
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/reward.rs ~line 10 — compute_terminal_bonus
-pub(crate) fn compute_terminal_bonus(state: &GraphState, goal_reached: bool) -> f32 {
+pub(crate) fn compute_terminal_bonus(state: &SimulationState, goal_reached: bool) -> f32 {
     if goal_reached {
         1000.0 - state.time as f32 * 0.2
     } else {
@@ -111,7 +111,7 @@ pub(crate) struct MilestoneTracker {
 }
 
 impl MilestoneTracker {
-    pub(crate) fn update(&mut self, state: &GraphState, _units: &Units) -> f32 {
+    pub(crate) fn update(&mut self, state: &SimulationState, _units: &Units) -> f32 {
         let mut bonus = 0.0f32;
 
         if !self.t2_factory && state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)) {

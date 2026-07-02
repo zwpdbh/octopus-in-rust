@@ -199,7 +199,7 @@ The core inference function is `macro_policy_plan` in `mcts::policy`:
 // crates/faf-sim/src/planner/mcts/policy.rs ~line 107 — macro_policy_plan
 fn macro_policy_plan(
     units: &Units,
-    mut state: GraphState,
+    mut state: SimulationState,
     goal: &Goal,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     deterministic: bool,

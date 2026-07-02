@@ -6,7 +6,7 @@
 //! subset that is both:
 //!
 //! 1. Reachable on the static [`PlanGraph`] from units the state currently owns.
-//! 2. Executable given the current [`GraphState`] (idle builders, active
+//! 2. Executable given the current [`SimulationState`] (idle builders, active
 //!    projects, etc.).
 //!
 //! The resulting [`SelectionPools`] is therefore a plan-graph-constrained,
@@ -18,9 +18,9 @@ use std::collections::HashSet;
 use petgraph::visit::EdgeRef;
 
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind, PlanGraph, PlanNode};
+use crate::planner::plan_graph::{EdgeAction, EdgeCategory, PlanGraph, PlanNode};
 
-use crate::sim::{GraphState, NodeId, UnitNodeState};
+use crate::sim::{NodeId, SimulationState, UnitNodeState};
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// A single selectable action option.
@@ -80,7 +80,7 @@ impl SelectionPools {
     /// active project when at least one idle engineer is available.
     pub fn new(
         plan: &PlanGraph,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
     ) -> Self {
@@ -123,7 +123,7 @@ impl SelectionPools {
                     }
 
                     match edge.weight() {
-                        PlanEdgeKind::Build => {
+                        EdgeAction::Build => {
                             // Source in a build edge is the builder.
                             if is_idle_builder(state, units, source_kind)
                                 && !would_exceed_storage_cap(target_kind, state, config)
@@ -136,7 +136,7 @@ impl SelectionPools {
                                 }
                             }
                         }
-                        PlanEdgeKind::Upgrade => {
+                        EdgeAction::Upgrade => {
                             // Source in an upgrade edge is the unit being upgraded.
                             if can_upgrade(state, units, source_kind, target_kind) {
                                 let opt = SelectionOption::Upgrade {
@@ -195,13 +195,13 @@ pub const ENGINEER_TECH_LEVELS: usize = 3;
 /// a concrete edge, and the source requirement is checked when testing legality.
 #[derive(Debug, Clone)]
 pub struct PlanEdge {
-    /// Source node of the edge (builder for [`PlanEdgeKind::Build`], unit being
-    /// upgraded for [`PlanEdgeKind::Upgrade`]).
+    /// Source node of the edge (builder for [`EdgeAction::Build`], unit being
+    /// upgraded for [`EdgeAction::Upgrade`]).
     pub source: PlanNode,
     /// Target node of the edge.
     pub target: PlanNode,
-    /// Edge kind.
-    pub kind: PlanEdgeKind,
+    /// Edge action: build a new unit/goal, or upgrade an existing unit.
+    pub kind: EdgeAction,
     /// Strategic focus of this edge.
     category: EdgeCategory,
 }
@@ -277,7 +277,7 @@ impl PlanEdgeIndex {
     /// Return a boolean mask indicating which edges are legal in `state`.
     pub fn legal_mask(
         &self,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
     ) -> Vec<bool> {
@@ -299,7 +299,7 @@ impl PlanEdgeIndex {
     /// `category`.
     pub fn legal_mask_for_category(
         &self,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
         category: EdgeCategory,
@@ -314,7 +314,7 @@ impl PlanEdgeIndex {
     /// at least one legal edge in `state`.
     pub fn legal_category_mask(
         &self,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
     ) -> Vec<bool> {
@@ -335,7 +335,7 @@ impl PlanEdgeIndex {
     pub fn to_selection_option(
         &self,
         idx: usize,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
     ) -> Option<SelectionOption> {
@@ -344,11 +344,11 @@ impl PlanEdgeIndex {
             return None;
         }
         match edge.kind {
-            PlanEdgeKind::Build => match edge.target_goal() {
+            EdgeAction::Build => match edge.target_goal() {
                 Some(goal) => Some(SelectionOption::BuildGoal(*goal)),
                 None => Some(SelectionOption::Build(edge.target_unit()?.clone())),
             },
-            PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
+            EdgeAction::Upgrade => Some(SelectionOption::Upgrade {
                 from: edge.source_unit()?.clone(),
                 to: edge.target_unit()?.clone(),
             }),
@@ -360,7 +360,7 @@ impl PlanEdgeIndex {
     pub fn find_edge_for_option(
         &self,
         option: &SelectionOption,
-        state: &GraphState,
+        state: &SimulationState,
         units: &Units,
         config: &PlannerConfig,
     ) -> Option<usize> {
@@ -369,13 +369,13 @@ impl PlanEdgeIndex {
             .enumerate()
             .find(|(_, e)| {
                 let same = match (option, e.kind) {
-                    (SelectionOption::Build(t), PlanEdgeKind::Build) => {
+                    (SelectionOption::Build(t), EdgeAction::Build) => {
                         e.target_unit().map_or(false, |u| *t == *u)
                     }
-                    (SelectionOption::BuildGoal(g), PlanEdgeKind::Build) => {
+                    (SelectionOption::BuildGoal(g), EdgeAction::Build) => {
                         e.target_goal().map_or(false, |tg| *g == *tg)
                     }
-                    (SelectionOption::Upgrade { from, to }, PlanEdgeKind::Upgrade) => {
+                    (SelectionOption::Upgrade { from, to }, EdgeAction::Upgrade) => {
                         e.source_unit().map_or(false, |u| *from == *u)
                             && e.target_unit().map_or(false, |u| *to == *u)
                     }
@@ -390,7 +390,7 @@ impl PlanEdgeIndex {
 /// True if `edge` can be executed in `state`.
 fn is_edge_legal(
     edge: &PlanEdge,
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
 ) -> bool {
@@ -403,7 +403,7 @@ fn is_edge_legal(
     }
 
     match edge.kind {
-        PlanEdgeKind::Build => {
+        EdgeAction::Build => {
             let can_build = match edge.target_goal() {
                 Some(goal) => {
                     !state.goal_reached(goal)
@@ -421,7 +421,7 @@ fn is_edge_legal(
             };
             can_build && is_idle_builder(state, units, source_kind)
         }
-        PlanEdgeKind::Upgrade => {
+        EdgeAction::Upgrade => {
             let source = edge.source_unit().expect("upgrade source must be a unit");
             let target = edge.target_unit().expect("upgrade target must be a unit");
             can_upgrade(state, units, source, target)
@@ -437,7 +437,11 @@ fn can_build_goal(builder: &UnitKind, _goal: &Goal) -> bool {
 }
 
 /// True if building `target` would exceed the configured storage cap.
-fn would_exceed_storage_cap(target: &UnitKind, state: &GraphState, config: &PlannerConfig) -> bool {
+fn would_exceed_storage_cap(
+    target: &UnitKind,
+    state: &SimulationState,
+    config: &PlannerConfig,
+) -> bool {
     match target {
         UnitKind::EnergyStorage => {
             state.count_active_energy_storage() >= config.max_energy_storage_count
@@ -447,7 +451,7 @@ fn would_exceed_storage_cap(target: &UnitKind, state: &GraphState, config: &Plan
 }
 
 /// True if the state has an active, idle builder of the given kind.
-fn is_idle_builder(state: &GraphState, units: &Units, kind: &UnitKind) -> bool {
+fn is_idle_builder(state: &SimulationState, units: &Units, kind: &UnitKind) -> bool {
     state
         .idle_builders(units)
         .iter()
@@ -459,7 +463,7 @@ fn is_idle_builder(state: &GraphState, units: &Units, kind: &UnitKind) -> bool {
 /// The source unit must be active and not already busy, and there must be an
 /// idle builder capable of performing the upgrade.
 pub(crate) fn can_upgrade(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     source: &UnitKind,
     target: &UnitKind,
@@ -496,7 +500,7 @@ pub(crate) fn can_upgrade(
 }
 
 /// True if there is at least one idle engineer in the state.
-fn has_idle_engineer(state: &GraphState, units: &Units) -> bool {
+fn has_idle_engineer(state: &SimulationState, units: &Units) -> bool {
     state
         .idle_builders(units)
         .iter()
@@ -504,7 +508,10 @@ fn has_idle_engineer(state: &GraphState, units: &Units) -> bool {
 }
 
 /// Count idle engineers per tech level [T1, T2, T3].
-pub fn idle_engineer_counts(state: &GraphState, units: &Units) -> [usize; ENGINEER_TECH_LEVELS] {
+pub fn idle_engineer_counts(
+    state: &SimulationState,
+    units: &Units,
+) -> [usize; ENGINEER_TECH_LEVELS] {
     let mut counts = [0usize; ENGINEER_TECH_LEVELS];
     for &id in &state.idle_builders(units) {
         if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
@@ -528,7 +535,7 @@ fn tech_index(t: TechLevel) -> Option<usize> {
 
 /// Collect idle engineer nodes grouped by tech level, highest build-rate first.
 fn idle_engineers_by_tech(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     predicate: &impl Fn(NodeId) -> bool,
 ) -> [Vec<NodeId>; ENGINEER_TECH_LEVELS] {
@@ -570,11 +577,11 @@ fn idle_engineers_by_tech(
 pub fn select_squad_for_edge(
     edge: &PlanEdge,
     desired: [usize; ENGINEER_TECH_LEVELS],
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
 ) -> Vec<NodeId> {
     let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
-        PlanEdgeKind::Build => {
+        EdgeAction::Build => {
             if let Some(goal) = edge.target_goal() {
                 Box::new(move |id: NodeId| can_build_goal(&state.graph[id].unit_id, goal))
             } else {
@@ -585,7 +592,7 @@ pub fn select_squad_for_edge(
                 Box::new(move |id: NodeId| units.can_build(&state.graph[id].unit_id, &target))
             }
         }
-        PlanEdgeKind::Upgrade => {
+        EdgeAction::Upgrade => {
             let source = edge
                 .source_unit()
                 .expect("upgrade source must be a unit")
@@ -648,7 +655,10 @@ pub fn select_squad_for_edge(
 }
 
 /// Find an active source node of the given kind for an upgrade edge.
-pub(crate) fn find_upgrade_source(state: &GraphState, source_kind: &UnitKind) -> Option<NodeId> {
+pub(crate) fn find_upgrade_source(
+    state: &SimulationState,
+    source_kind: &UnitKind,
+) -> Option<NodeId> {
     state
         .graph
         .graph
@@ -658,7 +668,7 @@ pub(crate) fn find_upgrade_source(state: &GraphState, source_kind: &UnitKind) ->
 }
 
 /// Count assigned engineers per tech level from a list of builder node ids.
-pub(crate) fn assigned_squad_counts(state: &GraphState, builders: &[NodeId]) -> [usize; 3] {
+pub(crate) fn assigned_squad_counts(state: &SimulationState, builders: &[NodeId]) -> [usize; 3] {
     let mut counts = [0usize; 3];
     for &id in builders {
         if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
@@ -705,7 +715,7 @@ mod tests {
     fn initial_pools_from_acu() {
         let units = load_units();
         let plan = units.plan_graph(t1_goal());
-        let state = GraphState::new(&units, &[UnitKind::Commander]);
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
 
         let config = PlannerConfig::default();
         let pools = SelectionPools::new(&plan, &state, &units, &config);
@@ -731,7 +741,7 @@ mod tests {
     fn upgrade_pool_appears_when_source_exists() {
         let units = load_units();
         let plan = units.plan_graph(t4_goal());
-        let state = GraphState::new(
+        let state = SimulationState::new(
             &units,
             &[
                 UnitKind::Commander,
@@ -760,7 +770,7 @@ mod tests {
             .edges
             .iter()
             .position(|e| {
-                e.kind == PlanEdgeKind::Build
+                e.kind == EdgeAction::Build
                     && e.source_unit() == Some(&UnitKind::Factory(TechLevel::T1))
                     && e.target_unit() == Some(&UnitKind::Engineer(TechLevel::T1))
             })
@@ -769,7 +779,7 @@ mod tests {
             .edges
             .iter()
             .position(|e| {
-                e.kind == PlanEdgeKind::Build
+                e.kind == EdgeAction::Build
                     && e.source_unit() == Some(&UnitKind::Engineer(TechLevel::T1))
                     && e.target_unit() == Some(&UnitKind::Pgen(TechLevel::T1))
             })
@@ -780,7 +790,7 @@ mod tests {
         // efficient; we do not hardcode the preference.
         let config = PlannerConfig::default();
 
-        let engineer_state = GraphState::new(
+        let engineer_state = SimulationState::new(
             &units,
             &[
                 UnitKind::Commander,
@@ -794,7 +804,7 @@ mod tests {
             "T1 engineer should remain legal even when T2 factory exists"
         );
 
-        let pgen_state = GraphState::new(
+        let pgen_state = SimulationState::new(
             &units,
             &[
                 UnitKind::Commander,

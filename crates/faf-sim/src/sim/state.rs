@@ -278,7 +278,7 @@ pub struct GoalProject {
     pub completed: bool,
 }
 
-/// Errors that can occur when manipulating a `GraphState`.
+/// Errors that can occur when manipulating a `SimulationState`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphSimError {
     /// A requested builder is already assigned to another project.
@@ -314,7 +314,7 @@ impl std::error::Error for GraphSimError {}
 
 /// Mutable simulation state for the graph model.
 #[derive(Debug, Clone)]
-pub struct GraphState {
+pub struct SimulationState {
     /// Current simulation time in seconds.
     pub time: f64,
     /// The build graph.
@@ -347,7 +347,7 @@ pub(crate) fn builder_power(node_id: NodeId, graph: &BuildGraph, units: &Units) 
     units.def(&node.unit_id).map_or(0.0, |d| d.build_rate)
 }
 
-impl GraphState {
+impl SimulationState {
     /// Create a new simulation state from the given starting unit kinds.
     ///
     /// All starting units are treated as already completed at time 0. Any
@@ -602,53 +602,6 @@ impl GraphState {
             active.into_iter(),
             |node_id| AdjacencyKind::Energy.is_producer(&self.graph[node_id].unit_id),
         );
-    }
-
-    /// Estimate the remaining time until `goal` is completed from this state.
-    ///
-    /// `chain` lists the prerequisite units that still need to be built before
-    /// the goal. The estimate aggregates their remaining cost and work, then
-    /// uses [`EconomyState::estimate_remaining_time`] to model how income,
-    /// storage, and build power interact.
-    ///
-    /// This is a heuristic, not an exact simulation. Lower is better.
-    pub fn estimate_remaining_time_to_goal(
-        &self,
-        goal: &Goal,
-        chain: &[UnitKind],
-        units: &Units,
-    ) -> f64 {
-        let mut total_mass = 0.0;
-        let mut total_energy = 0.0;
-        let mut total_work = 0.0;
-
-        for kind in chain {
-            if self.has_completed_unit(kind) {
-                continue;
-            }
-            if let Some(cost) = units.build_cost(kind) {
-                total_mass += cost.mass;
-                total_energy += cost.energy;
-                total_work += cost.build_time;
-            }
-        }
-
-        if !self.goal_reached(goal) {
-            let cost = goal.cost();
-            total_mass += cost.mass;
-            total_energy += cost.energy;
-            total_work += cost.build_time;
-        }
-
-        self.economy.estimate_remaining_time(
-            UnitCost {
-                mass: total_mass,
-                energy: total_energy,
-                build_time: total_work,
-            }
-            .to_target_stats(),
-            self.total_active_build_power(units),
-        )
     }
 
     /// Return the set of builders currently assigned to an active project.
@@ -962,9 +915,47 @@ impl GraphState {
             return Vec::new();
         }
 
-        // Collect active project nodes directly from the graph.
-        let active_projects: Vec<NodeId> = self
-            .graph
+        let active_projects = self.collect_active_projects();
+        if active_projects.is_empty() && !self.goal_project_active() {
+            self.apply_idle_income(dt);
+            self.time += dt;
+            return Vec::new();
+        }
+
+        // 1. Compute resource drain from all active work.
+        let (project_powers, project_mass_drain, project_energy_drain) =
+            self.compute_project_drain(&active_projects, units);
+        let (goal_power, goal_mass_drain, goal_energy_drain) = self.compute_goal_drain(units);
+
+        let total_mass_drain = project_mass_drain + goal_mass_drain;
+        let total_energy_drain = project_energy_drain + goal_energy_drain;
+
+        // 2. Apply economy tick: storage changes and effective progress factor.
+        let tick_result = apply_tick_graph(total_mass_drain, total_energy_drain, &self.economy, dt);
+
+        // 3. Apply progress to projects and the abstract goal.
+        let completed_nodes = self.apply_project_progress(
+            &active_projects,
+            &project_powers,
+            tick_result.effective_factor,
+            dt,
+        );
+        self.apply_goal_progress(goal_power, tick_result.effective_factor, dt);
+
+        // 4. Commit storage and time advances.
+        self.economy.mass_storage = tick_result.new_mass_storage;
+        self.economy.energy_storage = tick_result.new_energy_storage;
+        self.time += dt;
+
+        // 5. Handle side effects of completed nodes.
+        self.process_completed_nodes(&completed_nodes, units);
+
+        completed_nodes
+    }
+
+    /// Collect all nodes currently under construction or upgrade.
+    fn collect_active_projects(&self) -> Vec<NodeId> {
+        self.graph
             .graph
             .node_weights()
             .filter(|n| {
@@ -974,27 +965,28 @@ impl GraphState {
                 )
             })
             .map(|n| n.id)
-            .collect();
+            .collect()
+    }
 
-        let goal_active = self.goal_project_active();
-
-        if active_projects.is_empty() && !goal_active {
-            self.apply_idle_income(dt);
-            self.time += dt;
-            return Vec::new();
-        }
-
-        // Compute total drain across all active projects.
+    /// Compute build power and resource drain for each active project.
+    ///
+    /// Returns a parallel vector of project powers and the total mass/energy drain.
+    fn compute_project_drain(
+        &self,
+        active_projects: &[NodeId],
+        units: &Units,
+    ) -> (Vec<f64>, f64, f64) {
+        let mut project_powers: Vec<f64> = Vec::with_capacity(active_projects.len());
         let mut total_mass_drain = 0.0;
         let mut total_energy_drain = 0.0;
-        let mut project_powers: Vec<f64> = Vec::with_capacity(active_projects.len());
 
-        for &target_node in &active_projects {
+        for &target_node in active_projects {
             let target_id = &self.graph[target_node].unit_id;
             let Some(cost) = units.build_cost(target_id) else {
                 project_powers.push(0.0);
                 continue;
             };
+
             let power: f64 = self
                 .graph
                 .graph
@@ -1002,6 +994,7 @@ impl GraphState {
                 .map(|edge| builder_power(NodeId::new(edge.source().index()), &self.graph, units))
                 .sum();
             project_powers.push(power);
+
             let Some(drain) = compute_drain(&cost.to_target_stats(), RequestedBuildPower(power))
             else {
                 continue;
@@ -1010,38 +1003,59 @@ impl GraphState {
             total_energy_drain += drain.energy_per_second;
         }
 
+        (project_powers, total_mass_drain, total_energy_drain)
+    }
+
+    /// Compute build power and resource drain for the active abstract goal project, if any.
+    fn compute_goal_drain(&self, units: &Units) -> (f64, f64, f64) {
         let mut goal_power = 0.0;
-        if let Some(ref gp) = self.goal_project {
-            if !gp.completed {
-                let power: f64 = gp
-                    .started_by
-                    .iter()
-                    .chain(gp.assisted_by.iter())
-                    .map(|&id| builder_power(id, &self.graph, units))
-                    .sum();
-                goal_power = power;
-                if let Some(drain) = compute_drain(
-                    &gp.goal.cost().to_target_stats(),
-                    RequestedBuildPower(power),
-                ) {
-                    total_mass_drain += drain.mass_per_second;
-                    total_energy_drain += drain.energy_per_second;
-                } else {
-                    goal_power = 0.0;
-                }
-            }
+        let mut mass_drain = 0.0;
+        let mut energy_drain = 0.0;
+
+        let Some(ref gp) = self.goal_project else {
+            return (goal_power, mass_drain, energy_drain);
+        };
+        if gp.completed {
+            return (goal_power, mass_drain, energy_drain);
         }
 
-        let tick_result = apply_tick_graph(total_mass_drain, total_energy_drain, &self.economy, dt);
+        let power: f64 = gp
+            .started_by
+            .iter()
+            .chain(gp.assisted_by.iter())
+            .map(|&id| builder_power(id, &self.graph, units))
+            .sum();
+        goal_power = power;
 
-        // Apply progress and record exact finish times for completed projects.
+        if let Some(drain) = compute_drain(
+            &gp.goal.cost().to_target_stats(),
+            RequestedBuildPower(power),
+        ) {
+            mass_drain = drain.mass_per_second;
+            energy_drain = drain.energy_per_second;
+        } else {
+            goal_power = 0.0;
+        }
+
+        (goal_power, mass_drain, energy_drain)
+    }
+
+    /// Apply progress to all active projects and return any that finished.
+    fn apply_project_progress(
+        &mut self,
+        active_projects: &[NodeId],
+        project_powers: &[f64],
+        effective_factor: f64,
+        dt: f64,
+    ) -> Vec<NodeId> {
         let mut completed_nodes = Vec::new();
+
         for (i, &target_node) in active_projects.iter().enumerate() {
             let power = project_powers[i];
             if power <= 0.0 {
                 continue;
             }
-            let progress = tick_result.effective_factor * power * dt;
+            let progress = effective_factor * power * dt;
 
             let (finished, work_before) = match &mut self.graph[target_node].state {
                 UnitNodeState::Constructing { remaining_work, .. }
@@ -1060,72 +1074,84 @@ impl GraphState {
                     1.0
                 };
                 let finish_time = self.time + fraction * dt;
-
-                // Transition the target node to its finished state.
-                let node = &mut self.graph[target_node];
-                let (start_time, from_unit_id) = match &node.state {
-                    UnitNodeState::Constructing { start, .. } => (*start, None),
-                    UnitNodeState::Upgrading {
-                        start,
-                        from_unit_id,
-                        ..
-                    } => (*start, Some(from_unit_id.clone())),
-                    _ => (self.time, None),
-                };
-                node.state = match from_unit_id {
-                    Some(from_unit_id) => UnitNodeState::Upgraded {
-                        start_time,
-                        finish_time,
-                        from_unit_id,
-                    },
-                    None => UnitNodeState::Constructed {
-                        start_time,
-                        finish_time,
-                    },
-                };
-
-                // Record the finish time on every builder assignment edge.
-                let edge_ids: Vec<_> = self
-                    .graph
-                    .graph
-                    .edges_directed(target_node.0, Direction::Incoming)
-                    .map(|edge| edge.id())
-                    .collect();
-                for edge_id in edge_ids {
-                    if let Some(weight) = self.graph.graph.edge_weight_mut(edge_id) {
-                        weight.finish_time = finish_time;
-                    }
-                }
-
+                self.finish_project_node(target_node, finish_time);
                 completed_nodes.push(target_node);
             }
         }
 
-        // Apply progress to the abstract goal project, if active.
-        let mut _goal_completed = false;
-        if goal_power > 0.0 {
-            if let Some(ref mut gp) = self.goal_project {
-                if !gp.completed {
-                    let progress = tick_result.effective_factor * goal_power * dt;
-                    gp.remaining_work -= progress;
-                    if gp.remaining_work <= 0.0 {
-                        gp.completed = true;
-                        _goal_completed = true;
-                    }
-                }
+        completed_nodes
+    }
+
+    /// Transition a single project node from in-progress to finished and record builder-edge finish times.
+    fn finish_project_node(&mut self, target_node: NodeId, finish_time: f64) {
+        let node = &mut self.graph[target_node];
+        let (start_time, from_unit_id) = match &node.state {
+            UnitNodeState::Constructing { start, .. } => (*start, None),
+            UnitNodeState::Upgrading {
+                start,
+                from_unit_id,
+                ..
+            } => (*start, Some(from_unit_id.clone())),
+            _ => (self.time, None),
+        };
+        node.state = match from_unit_id {
+            Some(from_unit_id) => UnitNodeState::Upgraded {
+                start_time,
+                finish_time,
+                from_unit_id,
+            },
+            None => UnitNodeState::Constructed {
+                start_time,
+                finish_time,
+            },
+        };
+
+        // Record the finish time on every builder assignment edge.
+        let edge_ids: Vec<_> = self
+            .graph
+            .graph
+            .edges_directed(target_node.0, Direction::Incoming)
+            .map(|edge| edge.id())
+            .collect();
+        for edge_id in edge_ids {
+            if let Some(weight) = self.graph.graph.edge_weight_mut(edge_id) {
+                weight.finish_time = finish_time;
             }
         }
+    }
 
-        // Update storage. Net income remains the base value; scaling is
-        // recomputed each tick based on current conditions.
-        self.economy.mass_storage = tick_result.new_mass_storage;
-        self.economy.energy_storage = tick_result.new_energy_storage;
+    /// Apply progress to the abstract goal project, if it is active and affordable.
+    fn apply_goal_progress(&mut self, goal_power: f64, effective_factor: f64, dt: f64) {
+        if goal_power <= 0.0 {
+            return;
+        }
+        let Some(ref mut gp) = self.goal_project else {
+            return;
+        };
+        if gp.completed {
+            return;
+        }
 
-        self.time += dt;
+        let progress = effective_factor * goal_power * dt;
+        gp.remaining_work -= progress;
+        if gp.remaining_work <= 0.0 {
+            gp.completed = true;
+        }
+    }
 
-        // Assign completed storage buildings to the least-capped matching producer,
-        // and record the implicit max mass-storage adjacency for capped mex upgrades.
-        for &target_node in &completed_nodes {
+    /// Handle side effects of completed nodes: adjacency, build events, and economy rebuild.
+    fn process_completed_nodes(&mut self, completed_nodes: &[NodeId], units: &Units) {
+        self.apply_completion_adjacency(completed_nodes);
+        self.emit_build_events(completed_nodes, units);
+
+        if !completed_nodes.is_empty() {
+            self.rebuild_economy(units);
+        }
+    }
+
+    /// Apply adjacency bonuses for newly completed storage and capped mexes.
+    fn apply_completion_adjacency(&mut self, completed_nodes: &[NodeId]) {
+        for &target_node in completed_nodes {
             let kind = self.graph[target_node].unit_id.clone();
             if matches!(kind, UnitKind::EnergyStorage) {
                 self.assign_energy_storage_cap();
@@ -1138,9 +1164,11 @@ impl GraphState {
                 );
             }
         }
+    }
 
-        // Emit build events for completed nodes.
-        for &target_node in &completed_nodes {
+    /// Emit build events for all nodes that completed this tick.
+    fn emit_build_events(&mut self, completed_nodes: &[NodeId], units: &Units) {
+        for &target_node in completed_nodes {
             let node = &self.graph[target_node];
             let unit_id = node.unit_id.clone();
             let finish_time = match &node.state {
@@ -1156,13 +1184,6 @@ impl GraphState {
                 node_id: target_node,
             });
         }
-
-        // Re-derive economy from all active (completed and not replaced) units.
-        if !completed_nodes.is_empty() {
-            self.rebuild_economy(units);
-        }
-
-        completed_nodes
     }
 
     /// Collect income for one tick with no active projects.
@@ -1180,7 +1201,7 @@ impl GraphState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::TechLevel;
+    use crate::units::{TechLevel, UnitId};
 
     fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
@@ -1216,7 +1237,7 @@ mod tests {
             .def(&UnitKind::Pgen(TechLevel::T1))
             .expect("T1 pgen exists");
 
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         let acu_node = NodeId::new(0);
         state
             .start_project(&UnitKind::Pgen(TechLevel::T1), &[acu_node], &units)
@@ -1244,7 +1265,7 @@ mod tests {
     #[test]
     fn capped_t2_mex_boosts_income() {
         let units = load_units();
-        let mut state = GraphState::new(
+        let mut state = SimulationState::new(
             &units,
             &[
                 UnitKind::Commander,
@@ -1282,7 +1303,7 @@ mod tests {
     #[test]
     fn energy_storage_boosts_pgen_income() {
         let units = load_units();
-        let mut state = GraphState::new(
+        let mut state = SimulationState::new(
             &units,
             &[
                 UnitKind::Commander,
@@ -1320,7 +1341,7 @@ mod tests {
     fn build_edge_records_interval() {
         let units = load_units();
 
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         let acu_node = NodeId::new(0);
         let pgen_node = state
             .start_project(&UnitKind::Pgen(TechLevel::T1), &[acu_node], &units)
@@ -1367,7 +1388,7 @@ mod tests {
     #[test]
     fn t3_engineer_builds_abstract_goal() {
         let units = load_units();
-        let mut state = GraphState::new(
+        let mut state = SimulationState::new(
             &units,
             &[UnitKind::Commander, UnitKind::Engineer(TechLevel::T3)],
         );
@@ -1393,10 +1414,59 @@ mod tests {
     }
 
     #[test]
+    fn t3_engineer_builds_monkeylord_in_expected_time() {
+        let units = load_units();
+        let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
+        let t3_eng = UnitKind::Engineer(TechLevel::T3);
+
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander, t3_eng.clone()]);
+        let eng_node = NodeId::new(1);
+
+        // Provide a huge, non-stalling economy so progress runs at full build power.
+        state.economy.mass_storage = 1_000_000.0;
+        state.economy.energy_storage = 10_000_000.0;
+        state.economy.mass_storage_cap = 1_000_000.0;
+        state.economy.energy_storage_cap = 10_000_000.0;
+        state.economy.net_mass_income = 100_000.0;
+        state.economy.net_energy_income = 1_000_000.0;
+
+        let ml_node = state
+            .start_project(&monkeylord, &[eng_node], &units)
+            .expect("T3 engineer can build Monkeylord");
+
+        let cost = units
+            .build_cost(&monkeylord)
+            .expect("Monkeylord has a cost");
+        let build_power = units.def(&t3_eng).unwrap().build_rate;
+        let expected_time = cost.build_time / build_power;
+
+        let mut completed = Vec::new();
+        for _ in 0..(expected_time.ceil() as usize + 100) {
+            completed.extend(state.tick(&units, 1.0));
+            if !completed.is_empty() {
+                break;
+            }
+        }
+
+        assert_eq!(completed.len(), 1, "Monkeylord should complete");
+        assert_eq!(completed[0], ml_node);
+
+        let finish_time = state.graph[ml_node]
+            .finish_time()
+            .expect("Monkeylord has a finish time");
+        assert!(
+            (finish_time - expected_time).abs() < 1e-6,
+            "expected finish time ~{}, got {}",
+            expected_time,
+            finish_time
+        );
+    }
+
+    #[test]
     fn builders_are_indivisible() {
         let units = load_units();
 
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         let acu_node = NodeId::new(0);
         state
             .start_project(&UnitKind::Pgen(TechLevel::T1), &[acu_node], &units)
@@ -1414,7 +1484,7 @@ mod tests {
     fn concurrent_projects_with_disjoint_builders() {
         let units = load_units();
 
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         let acu_node = NodeId::new(0);
         let factory_node = state
             .start_project(&UnitKind::Factory(TechLevel::T1), &[acu_node], &units)
@@ -1467,7 +1537,7 @@ mod tests {
         let t1_mex = UnitKind::Mex(TechLevel::T1);
         let t2_mex = UnitKind::Mex(TechLevel::T2);
 
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         let acu_node = NodeId::new(0);
 
         // Build a T1 mex.
@@ -1549,7 +1619,7 @@ mod tests {
 
         // Force an energy-stalled project by starting a huge drain with no
         // energy income. We do this by creating a fake project state manually.
-        let mut state = GraphState::new(&units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
         state.economy.net_mass_income = 10.0;
         state.economy.net_energy_income = 0.0;
         state.economy.energy_storage = 0.0;

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use crate::planner::core::{Goal, PlanResult};
 use crate::planner::heuristic::candidate_units;
-use crate::sim::{GraphSimError, GraphState, NodeId};
+use crate::sim::{GraphSimError, NodeId, SimulationState};
 use crate::units::{UnitKind, Units};
 
 /// Action that produced a successor state during search.
@@ -66,10 +66,10 @@ impl SearchConfig {
     pub fn successors(
         self,
         units: &Units,
-        state: &GraphState,
+        state: &SimulationState,
         goal_id: &UnitKind,
         goal_chain: &[UnitKind],
-    ) -> Vec<(GraphState, SimAction)> {
+    ) -> Vec<(SimulationState, SimAction)> {
         // If nothing is idle, the only legal move is to let time advance.
         let idle_builders = state.idle_builders(units);
         if idle_builders.is_empty() {
@@ -87,7 +87,7 @@ impl SearchConfig {
         // Ask the heuristic for a small menu of units worth building next.
         let candidates = candidate_units(units, state, goal_id, goal_chain);
 
-        let mut successors: Vec<(GraphState, SimAction)> = Vec::new();
+        let mut successors: Vec<(SimulationState, SimAction)> = Vec::new();
 
         // Apply the four successor-generation rules.
         add_build_candidates(
@@ -118,8 +118,8 @@ impl SearchConfig {
 /// with the fastest capable idle builder.  If the planner wants more build
 /// power on the project later, it can use an `Assist` action.
 fn add_build_candidates(
-    successors: &mut Vec<(GraphState, SimAction)>,
-    state: &GraphState,
+    successors: &mut Vec<(SimulationState, SimAction)>,
+    state: &SimulationState,
     units: &Units,
     config: SearchConfig,
     idle_builders: &[NodeId],
@@ -170,8 +170,8 @@ fn add_build_candidates(
 /// one action: start the upgrade with the fastest capable idle builder.
 /// Additional builders can be added later with `Assist`.
 fn add_upgrade_candidates(
-    successors: &mut Vec<(GraphState, SimAction)>,
-    state: &GraphState,
+    successors: &mut Vec<(SimulationState, SimAction)>,
+    state: &SimulationState,
     units: &Units,
     config: SearchConfig,
     idle_builders: &[NodeId],
@@ -202,8 +202,8 @@ fn add_upgrade_candidates(
 
 /// Rule 3: try assisting each active project with all idle builders.
 fn add_assist_candidates(
-    successors: &mut Vec<(GraphState, SimAction)>,
-    state: &GraphState,
+    successors: &mut Vec<(SimulationState, SimAction)>,
+    state: &SimulationState,
     units: &Units,
     config: SearchConfig,
     idle_builders: &[NodeId],
@@ -239,8 +239,8 @@ fn add_assist_candidates(
 
 /// Rule 4: always allow advancing time without issuing a command.
 fn add_wait_successor(
-    successors: &mut Vec<(GraphState, SimAction)>,
-    state: &GraphState,
+    successors: &mut Vec<(SimulationState, SimAction)>,
+    state: &SimulationState,
     units: &Units,
     dt: f64,
 ) {
@@ -252,7 +252,7 @@ fn add_wait_successor(
 /// Compact visited-state key.
 pub(crate) type VisitedKey = (Vec<UnitKind>, Vec<(UnitKind, i64)>);
 
-pub(crate) fn visited_key(state: &GraphState) -> VisitedKey {
+pub(crate) fn visited_key(state: &SimulationState) -> VisitedKey {
     let mut owned: Vec<UnitKind> = state
         .graph
         .graph
@@ -289,12 +289,12 @@ pub(crate) fn visited_key(state: &GraphState) -> VisitedKey {
 /// On success, returns the state after the project is started and one tick has
 /// elapsed.  On failure (busy builder, cannot build, etc.) returns `None`.
 pub(crate) fn try_start_project(
-    state: &GraphState,
+    state: &SimulationState,
     target: &UnitKind,
     builder: NodeId,
     units: &Units,
     dt: f64,
-) -> Option<GraphState> {
+) -> Option<SimulationState> {
     let mut next = state.clone();
     match next.start_project(target, &[builder], units) {
         Ok(_) => {
@@ -315,13 +315,13 @@ pub(crate) fn try_start_project(
 /// On success, returns the state after the upgrade is started and one tick has
 /// elapsed.  On failure returns `None`.
 pub(crate) fn try_upgrade_project(
-    state: &GraphState,
+    state: &SimulationState,
     target: &UnitKind,
     old_node: NodeId,
     builder: NodeId,
     units: &Units,
     dt: f64,
-) -> Option<GraphState> {
+) -> Option<SimulationState> {
     let mut next = state.clone();
     match next.start_upgrade_project(target, old_node, &[builder], units) {
         Ok(_) => {
@@ -338,12 +338,12 @@ pub(crate) fn try_upgrade_project(
 }
 
 pub(crate) fn try_assist_project(
-    state: &GraphState,
+    state: &SimulationState,
     project_node: NodeId,
     builders: &[NodeId],
     units: &Units,
     dt: f64,
-) -> Option<(GraphState, Vec<NodeId>)> {
+) -> Option<(SimulationState, Vec<NodeId>)> {
     if builders.is_empty() {
         return None;
     }
@@ -365,7 +365,7 @@ pub(crate) fn try_assist_project(
 
 pub(crate) fn fastest_idle_builder(
     idle_builders: &[NodeId],
-    state: &GraphState,
+    state: &SimulationState,
     target: &UnitKind,
     units: &Units,
 ) -> Option<NodeId> {
@@ -389,7 +389,10 @@ pub(crate) fn fastest_idle_builder(
         .copied()
 }
 
-pub(crate) fn to_plan_result(state: GraphState, first_action: Option<SimAction>) -> PlanResult {
+pub(crate) fn to_plan_result(
+    state: SimulationState,
+    first_action: Option<SimAction>,
+) -> PlanResult {
     PlanResult {
         completion_time: state.time,
         final_economy: state.economy,

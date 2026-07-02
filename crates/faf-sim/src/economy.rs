@@ -833,6 +833,33 @@ mod tests {
     }
 
     #[test]
+    fn tick_stalls_when_mass_insufficient() {
+        let units = load_units();
+        let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
+        let drain = compute_drain(
+            &units.build_cost(&monkeylord).unwrap().to_target_stats(),
+            RequestedBuildPower(10.0),
+        )
+        .expect("valid drain");
+
+        // Very little mass income and storage, plenty of energy.
+        let state = EconomyState {
+            net_mass_income: 0.0,
+            net_energy_income: 1000.0,
+            mass_storage: drain.mass_per_second * 0.5, // only half a second worth
+            energy_storage: 500000.0,
+            mass_storage_cap: 100000.0,
+            energy_storage_cap: 1000000.0,
+        };
+
+        let result = apply_tick(&drain, &state, 1.0);
+        assert!(result.effective_build_power.0 < 10.0);
+        assert!(result.mass_stalled);
+        assert!(!result.energy_stalled);
+        assert!(result.new_mass_storage.abs() < 1e-6);
+    }
+
+    #[test]
     fn build_project_completes_with_constant_power() {
         let units = load_units();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);

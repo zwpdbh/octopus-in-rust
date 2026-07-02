@@ -10,11 +10,11 @@ use tokio::sync::mpsc;
 use tokio::time;
 
 use crate::actors::decision_actor::DecisionActor;
-use crate::actors::message::{Command, Observation};
+use crate::actors::message::{Observation, SimulationMsg};
 use crate::actors::sim_actor::SimActor;
 use crate::planner::core::Goal;
 use crate::planner::Planner;
-use crate::sim::state::{GraphSimError, GraphState};
+use crate::sim::state::{GraphSimError, SimulationState};
 use crate::units::{UnitKind, Units};
 
 /// Default simulation timestep in seconds.
@@ -50,7 +50,7 @@ impl SimulationConfig {
 #[derive(Debug)]
 pub struct SimulationResult {
     /// Final authoritative simulation state.
-    pub final_state: GraphState,
+    pub final_state: SimulationState,
     /// Number of simulation ticks that elapsed.
     pub elapsed_ticks: usize,
 }
@@ -126,7 +126,7 @@ pub async fn run_build_order_simulation(
     let tick = Duration::from_secs_f64(config.sim_dt);
 
     let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<SimulationMsg>(64);
 
     let sim = SimActor::new(
         &[UnitKind::Commander],

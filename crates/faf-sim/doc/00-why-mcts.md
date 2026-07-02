@@ -57,7 +57,7 @@ During simulation MCTS still explores the tree, but it selects concrete edges wi
 The combination looks like this:
 
 ```text
-        current GraphState
+        current SimulationState
                 │
                 ▼
         ┌─────────────────────────────────┐
@@ -76,7 +76,7 @@ The combination looks like this:
                 simulator tick
                          │
                          ▼
-                next GraphState
+                next SimulationState
 ```
 
 ## Why MCTS if the policy can act alone?
@@ -118,7 +118,7 @@ MCTS adds lookahead and averaging. It can find actions that look slightly worse 
 - **Deterministic simulator.** The same state and action always produce the same next state, so MCTS rollouts are exact and reproducible.
 - **Known rules.** Unit stats, build powers, tech requirements, and upgrade costs come from the `Units` repository; there is no hidden physics.
 - **Clear objective.** Minimize completion time, with a secondary efficiency metric.
-- **Compact state.** `GraphState` is structured data, not raw pixels, so featurization is straightforward.
+- **Compact state.** `SimulationState` is structured data, not raw pixels, so featurization is straightforward.
 
 ## What this tutorial is not
 

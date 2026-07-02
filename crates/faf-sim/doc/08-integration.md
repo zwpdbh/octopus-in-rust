@@ -41,7 +41,7 @@ Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if sel
 pub fn plan(
     &mut self,
     units: &Units,
-    initial_state: GraphState,
+    initial_state: SimulationState,
     goal: &Goal,
 ) -> Result<PlanResult, PlannerError> {
     match self.strategy {
@@ -75,7 +75,7 @@ pub fn plan(
 // crates/faf-sim/src/planner/mcts/policy.rs ~line 26 — mcts::policy::plan
 pub fn plan(
     units: &Units,
-    initial_state: GraphState,
+    initial_state: SimulationState,
     goal: &Goal,
     _iterations: usize,
     value_net_kind: ValueNetKind,
@@ -134,15 +134,15 @@ A reactive actor reads `first_action`, executes it, and ignores the projected `e
 
 The reactive loop is implemented as two Tokio actors that communicate over channels. The actor code lives in `crates/faf-sim/src/actors/`:
 
-- `actors/sim_actor.rs` — owns the authoritative `GraphState` and ticks on a timer.
-- `actors/decision_actor.rs` — owns the `Planner` and converts `first_action` into a `Command`.
-- `actors/message.rs` — defines the `Command` and `Observation` messages exchanged between them.
+- `actors/sim_actor.rs` — owns the authoritative `SimulationState` and ticks on a timer.
+- `actors/decision_actor.rs` — owns the `Planner` and converts `first_action` into a `SimulationMsg`.
+- `actors/message.rs` — defines the `SimulationMsg` and `Observation` messages exchanged between them.
 
 The message protocol is intentionally small:
 
 ```rust
-// crates/faf-sim/src/actors/message.rs ~line 15 — Command
-pub enum Command {
+// crates/faf-sim/src/actors/message.rs ~line 16 — SimulationMsg
+pub enum SimulationMsg {
     Build { unit_id: UnitKind, builders: Vec<NodeId> },
     Assist { project_node: NodeId, builders: Vec<NodeId> },
     Upgrade { target_unit_id: UnitKind, old_node: NodeId, builders: Vec<NodeId> },
@@ -152,7 +152,7 @@ pub enum Command {
 // crates/faf-sim/src/actors/message.rs ~line 54 — Observation
 pub enum Observation {
     Event(BuildEvent),
-    State(GraphState),
+    State(SimulationState),
 }
 ```
 
@@ -162,7 +162,7 @@ pub enum Observation {
 
 ```rust
 // crates/faf-sim/src/actors/sim_actor.rs ~line 74 — SimActor::run
-pub async fn run(mut self) -> Result<GraphState, GraphSimError> {
+pub async fn run(mut self) -> Result<SimulationState, GraphSimError> {
     loop {
         tokio::select! {
             _ = self.timer.tick() => {
@@ -215,7 +215,7 @@ pub async fn run_build_order_simulation(
     time::pause();
 
     let (obs_tx, obs_rx) = mpsc::channel::<Observation>(64);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<SimulationMsg>(64);
 
     let sim = SimActor::new(
         &[UnitKind::Commander],
@@ -237,7 +237,7 @@ pub async fn run_build_order_simulation(
 }
 ```
 
-All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so callers can use `faf_sim::SimActor`, `faf_sim::DecisionActor`, `faf_sim::Command`, and `faf_sim::Observation` directly.
+All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so callers can use `faf_sim::SimActor`, `faf_sim::DecisionActor`, `faf_sim::SimulationMsg`, and `faf_sim::Observation` directly.
 
 ## CLI usage
 

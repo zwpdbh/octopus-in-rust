@@ -18,7 +18,7 @@
 //! estimates.
 //!
 //! The state-level wrapper
-//! [`GraphState::estimate_remaining_time_to_goal`](crate::sim::GraphState::estimate_remaining_time_to_goal)
+//! [`SimulationState::estimate_remaining_time_to_goal`](crate::sim::SimulationState::estimate_remaining_time_to_goal)
 //! aggregates the remaining work for a goal and its prerequisites, then calls
 //! the economy estimate.
 //!
@@ -36,7 +36,7 @@
 use std::collections::HashSet;
 
 use crate::sim::adjacency::production_multiplier;
-use crate::sim::GraphState;
+use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
 /// Candidate units to consider building next.
@@ -50,7 +50,7 @@ use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 ///    of each category per tech tier.
 pub(crate) fn candidate_units(
     units: &Units,
-    state: &GraphState,
+    state: &SimulationState,
     goal_id: &UnitKind,
     goal_chain: &[UnitKind],
 ) -> Vec<UnitKind> {
@@ -70,7 +70,7 @@ pub(crate) fn candidate_units(
 /// final target as soon as it becomes legal.
 fn add_goal_path_candidates(
     ids: &mut HashSet<UnitKind>,
-    state: &GraphState,
+    state: &SimulationState,
     goal_id: &UnitKind,
     goal_chain: &[UnitKind],
 ) {

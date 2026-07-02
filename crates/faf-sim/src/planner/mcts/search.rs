@@ -19,7 +19,7 @@ use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_
 use crate::planner::mcts::train::{TrainBackend, TrainDevice};
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::search::SimAction;
-use crate::sim::GraphState;
+use crate::sim::SimulationState;
 use crate::units::Units;
 
 /// Configuration for an MCTS search.
@@ -46,7 +46,7 @@ impl Default for MctsConfig {
 /// A node in the MCTS tree.
 struct MctsNode {
     /// Simulator state at this node.
-    state: GraphState,
+    state: SimulationState,
     /// Total value accumulated from backpropagation.
     total_value: f64,
     /// Number of times this node has been visited.
@@ -64,7 +64,7 @@ struct MctsNode {
 impl MctsNode {
     /// Create a new node and compute edge priors from the policy network.
     fn new(
-        state: GraphState,
+        state: SimulationState,
         goal: &Goal,
         units: &Units,
         config: &PlannerConfig,
@@ -114,7 +114,7 @@ impl MctsSearch {
     /// * `model` - The learned hierarchical policy used for priors and rollouts.
     pub fn search(
         &self,
-        initial_state: GraphState,
+        initial_state: SimulationState,
         goal: &Goal,
         units: &Units,
         planner_config: &PlannerConfig,
@@ -309,7 +309,7 @@ fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
 /// Evaluate the policy network at `state` and return prior probabilities over
 /// legal plan-graph edges.
 fn evaluate_edge_priors(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
@@ -374,7 +374,7 @@ fn softmax_probs(logits: &[f32]) -> Vec<f32> {
 
 /// Apply a concrete plan-graph edge to `state` and return the resulting state.
 fn expand_edge(
-    state: &GraphState,
+    state: &SimulationState,
     edge_idx: usize,
     _goal: &Goal,
     units: &Units,
@@ -382,7 +382,7 @@ fn expand_edge(
     edge_index: &PlanEdgeIndex,
     model: &PolicyBundle<TrainBackend>,
     device: &TrainDevice,
-) -> Option<GraphState> {
+) -> Option<SimulationState> {
     let edge = edge_index.get(edge_idx)?;
 
     let shortfall = [0.0f32; 3];
@@ -405,7 +405,7 @@ fn expand_edge(
     }
 
     let action = match edge.kind {
-        crate::planner::plan_graph::PlanEdgeKind::Build => {
+        crate::planner::plan_graph::EdgeAction::Build => {
             if let Some(target_goal) = edge.target_goal() {
                 SimAction::BuildGoal {
                     goal: *target_goal,
@@ -418,7 +418,7 @@ fn expand_edge(
                 }
             }
         }
-        crate::planner::plan_graph::PlanEdgeKind::Upgrade => SimAction::Upgrade {
+        crate::planner::plan_graph::EdgeAction::Upgrade => SimAction::Upgrade {
             target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
             old_node: find_upgrade_source(state, edge.source_unit().expect("upgrade source unit"))
                 .unwrap_or_else(|| crate::sim::NodeId::new(0)),
@@ -437,7 +437,7 @@ fn expand_edge(
 /// Run a rollout from `state` using the hierarchical policy and return the
 /// discounted sum of step rewards plus a terminal bonus.
 fn rollout_value(
-    state: &GraphState,
+    state: &SimulationState,
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
@@ -493,8 +493,8 @@ fn rollout_value(
 /// The MCTS node stores the state after applying the best edge. This helper
 /// returns the corresponding action so the caller can build a `PlanResult`.
 fn infer_action_from_states(
-    before: &GraphState,
-    after: &GraphState,
+    before: &SimulationState,
+    after: &SimulationState,
     edge_idx: usize,
     edge_index: &PlanEdgeIndex,
 ) -> SimAction {
@@ -545,7 +545,7 @@ fn infer_action_from_states(
 }
 
 /// Build a [`PlanResult`] that commits to a single immediate action.
-fn plan_result_with_action(state: GraphState, action: SimAction) -> PlanResult {
+fn plan_result_with_action(state: SimulationState, action: SimAction) -> PlanResult {
     PlanResult {
         events: Vec::new(),
         completion_time: state.time,

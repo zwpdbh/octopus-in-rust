@@ -17,9 +17,9 @@ use crate::planner::mcts::selections::{
     assigned_squad_counts, find_upgrade_source, idle_engineer_counts, select_squad_for_edge,
     PlanEdgeIndex,
 };
-use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind, PlanGraph};
+use crate::planner::plan_graph::{EdgeAction, EdgeCategory, PlanGraph};
 use crate::planner::search::SimAction;
-use crate::sim::{GraphState, NodeId};
+use crate::sim::{NodeId, SimulationState};
 use crate::units::{UnitKind, Units};
 
 use super::Trainer;
@@ -49,7 +49,7 @@ impl Trainer {
         planner_config: &PlannerConfig,
         epsilon: f32,
     ) -> Episode {
-        let mut state = GraphState::new(units, &[UnitKind::Commander]);
+        let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut episode = Episode {
             reached_goal: false,
             completion_time: 0.0,
@@ -300,7 +300,7 @@ impl Trainer {
                 }
 
                 let action = match edge.kind {
-                    PlanEdgeKind::Build => {
+                    EdgeAction::Build => {
                         if let Some(target_goal) = edge.target_goal() {
                             SimAction::BuildGoal {
                                 goal: *target_goal,
@@ -313,7 +313,7 @@ impl Trainer {
                             }
                         }
                     }
-                    PlanEdgeKind::Upgrade => SimAction::Upgrade {
+                    EdgeAction::Upgrade => SimAction::Upgrade {
                         target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
                         old_node: find_upgrade_source(
                             &state,

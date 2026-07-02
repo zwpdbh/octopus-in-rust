@@ -1,6 +1,6 @@
 # 1. Modeling the Environment
 
-In RL, every decision is made from a **state**. For FAF build-order optimization, the state is the simulator's `GraphState`. This chapter explains the structure of that state and how we turn it into a fixed-size feature vector that a Burn network can consume.
+In RL, every decision is made from a **state**. For FAF build-order optimization, the state is the simulator's `SimulationState`. This chapter explains the structure of that state and how we turn it into a fixed-size feature vector that a Burn network can consume.
 
 For the full formal model — exact definitions, constraints, and assumptions — see [`model.md`](./model.md). This chapter focuses on the RL-relevant view.
 
@@ -16,8 +16,8 @@ The simulator starts with a single completed unit: the ACU (Armored Command Unit
 Active construction projects are not stored separately; they are the graph nodes currently in the `Constructing` or `Upgrading` state.
 
 ```rust
-// crates/faf-sim/src/sim/state.rs ~line 317 — GraphState (abbreviated)
-pub struct GraphState {
+// crates/faf-sim/src/sim/state.rs ~line 317 — SimulationState (abbreviated)
+pub struct SimulationState {
     pub time: f64,
     pub graph: BuildGraph,
     pub economy: EconomyState,
@@ -77,7 +77,7 @@ For the current model:
 
 ## Featurizing the state
 
-Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `GraphState` into a 13-dimensional vector:
+Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into a 13-dimensional vector:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constants
@@ -111,7 +111,7 @@ The macro network also receives a three-dimensional **shortfall** vector, which 
 ```rust
 // crates/faf-sim/src/planner/mcts/features.rs ~line 123 — state_features_with_shortfall
 pub fn state_features_with_shortfall(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
     shortfall: [f32; SHORTFALL_FEATURE_COUNT],
@@ -127,7 +127,7 @@ pub fn state_features_with_shortfall(
 From the network's point of view, a state is a snapshot it can evaluate and expand:
 
 ```text
-GraphState
+SimulationState
 ├── time
 ├── graph of completed and under-construction units
 ├── economy

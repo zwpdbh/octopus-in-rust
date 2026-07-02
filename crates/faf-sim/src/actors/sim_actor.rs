@@ -1,7 +1,7 @@
 //! Simulation actor that runs the graph-growth model and exchanges messages
 //! with a planner actor.
 //!
-//! The actor owns the authoritative [`GraphState`] and advances it in fixed
+//! The actor owns the authoritative [`SimulationState`] and advances it in fixed
 //! ticks. It is decoupled from the planner: it keeps ticking even when no
 //! command arrives, which lets it simulate an AFK player or a slow planner.
 //!
@@ -17,15 +17,15 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, Interval};
 
-use crate::actors::message::{Command, Observation};
+use crate::actors::message::{Observation, SimulationMsg};
 use crate::planner::core::Goal;
-use crate::sim::{BuildEvent, GraphSimError, GraphState, NodeId};
+use crate::sim::{BuildEvent, GraphSimError, NodeId, SimulationState};
 use crate::units::{UnitKind, Units};
 
 /// Actor that runs the simulation.
 pub struct SimActor {
     /// Authoritative simulation state.
-    pub state: GraphState,
+    pub state: SimulationState,
     /// Unified unit knowledge repository.
     pub units: Units,
     /// Abstract goal that, when completed, stops the simulation.
@@ -37,7 +37,7 @@ pub struct SimActor {
     /// Channel on which to send observations to the planner.
     pub obs_tx: Sender<Observation>,
     /// Channel on which to receive commands from the planner.
-    pub cmd_rx: Receiver<Command>,
+    pub cmd_rx: Receiver<SimulationMsg>,
 }
 
 impl SimActor {
@@ -51,9 +51,9 @@ impl SimActor {
         goal: Option<Goal>,
         dt: f64,
         obs_tx: Sender<Observation>,
-        cmd_rx: Receiver<Command>,
+        cmd_rx: Receiver<SimulationMsg>,
     ) -> Self {
-        let state = GraphState::new(&units, starting_units);
+        let state = SimulationState::new(&units, starting_units);
         let timer = interval(Duration::from_secs_f64(dt));
         Self {
             state,
@@ -69,9 +69,9 @@ impl SimActor {
     /// Run the actor until the goal is reached, the planner disconnects, or a
     /// fatal error occurs.
     ///
-    /// On success the final authoritative [`GraphState`] is returned, including
+    /// On success the final authoritative [`SimulationState`] is returned, including
     /// the completion timeline and final economy.
-    pub async fn run(mut self) -> Result<GraphState, GraphSimError> {
+    pub async fn run(mut self) -> Result<SimulationState, GraphSimError> {
         loop {
             tokio::select! {
                 // Internal timer: advance the simulation regardless of whether
@@ -133,15 +133,15 @@ impl SimActor {
     }
 
     /// Apply a planner command to the simulation state.
-    fn apply_command(&mut self, command: Command) -> Result<(), GraphSimError> {
+    fn apply_command(&mut self, command: SimulationMsg) -> Result<(), GraphSimError> {
         match command {
-            Command::Build { unit_id, builders } => {
+            SimulationMsg::Build { unit_id, builders } => {
                 if builders.is_empty() {
                     return Ok(());
                 }
                 self.state.start_project(&unit_id, &builders, &self.units)?;
             }
-            Command::Assist {
+            SimulationMsg::Assist {
                 project_node,
                 builders,
             } => {
@@ -151,7 +151,7 @@ impl SimActor {
                 self.state
                     .assist_project(project_node, &builders, &self.units)?;
             }
-            Command::Upgrade {
+            SimulationMsg::Upgrade {
                 target_unit_id,
                 old_node,
                 builders,
@@ -166,7 +166,7 @@ impl SimActor {
                     &self.units,
                 )?;
             }
-            Command::BuildGoal { goal, builders } => {
+            SimulationMsg::BuildGoal { goal, builders } => {
                 if builders.is_empty() {
                     return Ok(());
                 }

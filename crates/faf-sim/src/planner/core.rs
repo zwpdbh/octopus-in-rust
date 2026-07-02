@@ -1,6 +1,6 @@
 //! Planner abstraction for build-order generation.
 //!
-//! A [`Planner`] turns an initial [`GraphState`] into a [`PlanResult`]
+//! A [`Planner`] turns an initial [`SimulationState`] into a [`PlanResult`]
 //! (timeline + completion time). It dispatches to the MCTS strategy.
 
 use std::error::Error;
@@ -11,7 +11,7 @@ use crate::economy::EconomyState;
 use crate::planner::mcts::macro_net::{num_plan_edges, PolicyBundle};
 use crate::planner::mcts::search::{MctsConfig, MctsSearch};
 use crate::planner::mcts::train::{TrainBackend, TrainDevice};
-use crate::sim::{BuildEvent, GraphState};
+use crate::sim::{BuildEvent, SimulationState};
 use crate::units::{TechLevel, UnitCost, Units};
 
 /// Abstract target for planning and training.
@@ -322,7 +322,7 @@ impl Planner {
     pub fn plan(
         &mut self,
         units: &Units,
-        initial_state: GraphState,
+        initial_state: SimulationState,
         goal: &Goal,
     ) -> Result<PlanResult, PlannerError> {
         match self.strategy {

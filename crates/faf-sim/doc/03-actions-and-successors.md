@@ -7,28 +7,50 @@ The raw action space of a build-order game is huge: at every tick you could buil
 `faf-sim` builds one **universal plan graph** that contains all common units up to T3 (commander, factories, engineers, mexes, pgens, storages) plus the prerequisite factory and engineer upgrades. A goal-specific view is created by attaching a single synthetic `Goal` node to the T3 engineer. The same fixed graph shape is used for every target of the same tech level; only the synthetic goal's cost and build time change. The `faf-sim plan` command renders this graph with a placeholder **Target** node so the T3-engineer-only goal edge is visible.
 
 ```rust
-// crates/faf-sim/src/planner/plan_graph.rs ~line 40 — EdgeCategory
+// crates/faf-sim/src/planner/plan_graph.rs ~line 42 — EdgeCategory
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeCategory {
-    Mass,
-    Energy,
-    BuildPower,
-    Progress,
+    /// Edges that increase mass income.
+    IncreaseMass,
+    /// Edges that increase energy income or storage.
+    IncreaseEnergy,
+    /// Edges that increase build power.
+    IncreaseBP,
+    /// The single edge that builds the abstract goal.
+    Goal,
 }
 ```
 
 Every edge in the plan graph is tagged with one of these four categories. The category tells the network what strategic focus the edge serves:
 
-- `Mass` — edges that increase mass income (extractors and storage caps).
-- `Energy` — edges that increase energy income (power generators and energy storage).
-- `BuildPower` — edges that increase total build rate (engineers and engineer upgrades).
-- `Progress` — edges that move toward the goal (factories, tech structures, and the synthetic goal node).
+- `IncreaseMass` — edges that increase mass income (extractors and mass-storage caps).
+- `IncreaseEnergy` — edges that increase energy income or storage (power generators and energy storage).
+- `IncreaseBP` — edges that increase total build rate (commander, factories, factory upgrades, engineers, and engineer upgrades).
+- `Goal` — the single synthetic edge that builds the abstract goal.
 
 The network first picks a direction, then scores only the edges inside that direction. This factorization keeps the action head small and interpretable.
 
 ## Plan edges
 
-A `PlanEdge` is a stable, typed action candidate:
+A `PlanEdge` is a stable, typed action candidate. Each edge carries two orthogonal labels:
+
+- `kind` — an [`EdgeAction`] that says *how* the action is executed.
+- `category` — an [`EdgeCategory`] that says *what strategic focus* the edge serves.
+
+```rust
+// crates/faf-sim/src/planner/plan_graph.rs ~line 23 — EdgeAction
+/// Concrete action an edge represents in the plan graph.
+///
+/// This describes *how* the action is executed. It is orthogonal to
+/// `EdgeCategory`, which describes the strategic focus of the edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EdgeAction {
+    /// Source unit constructs the target unit or goal.
+    Build,
+    /// Source unit is upgraded into the target unit.
+    Upgrade,
+}
+```
 
 ```rust
 // crates/faf-sim/src/planner/mcts/selections.rs ~line 197 — PlanEdge
@@ -38,13 +60,15 @@ pub struct PlanEdge {
     pub source: PlanNode,
     /// Target node (unit to build/upgrade into, or the abstract goal).
     pub target: PlanNode,
-    /// Edge kind.
-    pub kind: PlanEdgeKind,
+    /// Edge action: build a new unit/goal, or upgrade an existing unit.
+    pub kind: EdgeAction,
     /// Strategic focus of this edge.
     category: EdgeCategory,
 }
 
 impl PlanEdge {
+    /// Strategic focus of this edge.
+    pub fn category(&self) -> EdgeCategory { self.category }
     /// Source unit kind, if the source is a concrete unit.
     pub fn source_unit(&self) -> Option<&UnitKind> { self.source.as_unit() }
     /// Target unit kind, if the target is a concrete unit.
@@ -56,8 +80,10 @@ impl PlanEdge {
 
 - `source` is the builder required for a build edge, or the unit being upgraded for an upgrade edge.
 - `target` is either a concrete unit or the abstract `Goal` node.
-- `kind` is either `Build` or `Upgrade`.
-- `category` is the strategic focus. `EdgeCategory::categorize` treats a `Goal` target as `Progress`.
+- `kind` is `Build` (construct target) or `Upgrade` (transform source into target).
+- `category` is the strategic focus. `EdgeCategory::categorize` treats a `Goal` target as `EdgeCategory::Goal`.
+
+For example, upgrading `Factory(T1) → Factory(T2)` has `kind = Upgrade` and `category = IncreaseBP`, while building `Factory(T1) → Engineer(T1)` has `kind = Build` and `category = IncreaseBP`.
 
 The macro network outputs one logit per edge, so the edge list must have a stable order. `PlanEdgeIndex` builds that list once from a `PlanGraph`:
 
@@ -72,7 +98,7 @@ impl PlanEdgeIndex {
     pub fn new(plan: &PlanGraph) -> Self;
     pub fn len(&self) -> usize;
     pub fn get(&self, idx: usize) -> Option<&PlanEdge>;
-    pub fn legal_mask(&self, state: &GraphState, units: &Units, config: &PlannerConfig) -> Vec<bool>;
+    pub fn legal_mask(&self, state: &SimulationState, units: &Units, config: &PlannerConfig) -> Vec<bool>;
     pub fn category_mask(&self, category: EdgeCategory) -> Vec<bool>;
     pub fn legal_mask_for_category(&self, state, units, config, category) -> Vec<bool>;
     pub fn legal_category_mask(&self, state, units, config) -> Vec<bool>;
@@ -111,7 +137,7 @@ pub enum SelectionOption {
 pub fn to_selection_option(
     &self,
     idx: usize,
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
 ) -> Option<SelectionOption> {
@@ -120,11 +146,11 @@ pub fn to_selection_option(
         return None;
     }
     match edge.kind {
-        PlanEdgeKind::Build => match edge.target_goal() {
+        EdgeAction::Build => match edge.target_goal() {
             Some(goal) => Some(SelectionOption::BuildGoal(*goal)),
             None => Some(SelectionOption::Build(edge.target_unit()?.clone())),
         },
-        PlanEdgeKind::Upgrade => Some(SelectionOption::Upgrade {
+        EdgeAction::Upgrade => Some(SelectionOption::Upgrade {
             from: edge.source_unit()?.clone(),
             to: edge.target_unit()?.clone(),
         }),
@@ -143,11 +169,11 @@ After the macro network selects an edge, the build-power head outputs a scalar t
 pub fn select_squad_for_edge(
     edge: &PlanEdge,
     desired: [usize; ENGINEER_TECH_LEVELS],
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
 ) -> Vec<NodeId> {
     let predicate: Box<dyn Fn(NodeId) -> bool> = match edge.kind {
-        PlanEdgeKind::Build => {
+        EdgeAction::Build => {
             if let Some(goal) = edge.target_goal() {
                 Box::new(move |id: NodeId| can_build_goal(&state.graph[id].unit_id, goal))
             } else {
@@ -155,7 +181,7 @@ pub fn select_squad_for_edge(
                 Box::new(move |id: NodeId| units.can_build(&state.graph[id].unit_id, &target))
             }
         }
-        PlanEdgeKind::Upgrade => { /* ... */ }
+        EdgeAction::Upgrade => { /* ... */ }
     };
 
     let buckets = idle_engineers_by_tech(state, units, predicate);

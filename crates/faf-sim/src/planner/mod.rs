@@ -15,5 +15,5 @@ pub(crate) mod search;
 pub mod strips;
 
 pub use core::{Goal, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, ValueNetKind};
-pub use plan_graph::{build_plan_graph, PlanEdgeKind, PlanGraph, PlanNode};
+pub use plan_graph::{build_plan_graph, EdgeAction, PlanGraph, PlanNode};
 pub use strips::{build_operators, Fact, Operator, StripsAction};

@@ -27,7 +27,7 @@ use faf_sim::planner::mcts::train::{
 };
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::{
-    run_build_order_simulation, Goal, GraphState, NodeId, PlanEdgeKind, Planner, SimulationConfig,
+    run_build_order_simulation, Goal, SimulationState, NodeId, EdgeAction, Planner, SimulationConfig,
     Strategy, UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
@@ -575,14 +575,14 @@ struct VisualEdge {
 }
 
 impl VisualEdge {
-    fn for_kind(kind: PlanEdgeKind) -> Self {
+    fn for_kind(kind: EdgeAction) -> Self {
         match kind {
-            PlanEdgeKind::Build => Self {
+            EdgeAction::Build => Self {
                 label: String::new(),
                 color: "#94a3b8".to_string(),
                 dash: None,
             },
-            PlanEdgeKind::Upgrade => Self {
+            EdgeAction::Upgrade => Self {
                 label: String::new(),
                 color: "#3b82f6".to_string(),
                 dash: Some("5,5".to_string()),
@@ -628,7 +628,7 @@ impl NodeLabel for VisualNode {
 /// human-readable labels, edge styles, and tier-based fill colours.
 fn build_visual_graph(
     units: &SimUnits,
-    plan_graph: &petgraph::graph::DiGraph<PlanNode, PlanEdgeKind>,
+    plan_graph: &petgraph::graph::DiGraph<PlanNode, EdgeAction>,
 ) -> petgraph::graph::DiGraph<VisualNode, VisualEdge> {
     let mut graph = petgraph::graph::DiGraph::<VisualNode, VisualEdge>::new();
     let mut indices: Vec<NodeIndex> = Vec::with_capacity(plan_graph.node_count());
@@ -743,7 +743,7 @@ impl EdgeLabel for SimVisualEdge {
 /// their label shows the final unit and the upgrade time.
 fn build_simulation_visual_graph(
     units: &SimUnits,
-    state: &GraphState,
+    state: &SimulationState,
 ) -> petgraph::graph::DiGraph<SimVisualNode, SimVisualEdge> {
     let mut graph = petgraph::graph::DiGraph::<SimVisualNode, SimVisualEdge>::new();
 

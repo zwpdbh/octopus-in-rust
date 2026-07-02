@@ -8,7 +8,7 @@ use burn::tensor::Device;
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::search::SimAction;
-use crate::sim::{GraphSimError, GraphState, NodeId};
+use crate::sim::{GraphSimError, NodeId, SimulationState};
 use crate::units::Units;
 
 use super::features::state_features_with_shortfall;
@@ -21,13 +21,13 @@ use super::selections::{
     select_squad_for_edge, PlanEdgeIndex,
 };
 use super::train::TrainBackend;
-use crate::planner::plan_graph::{EdgeCategory, PlanEdgeKind};
+use crate::planner::plan_graph::{EdgeAction, EdgeCategory};
 use crate::units::{TechLevel, UnitKind};
 
 /// Run the one-step hierarchical policy from `initial_state` toward `goal_id`.
 pub fn plan(
     units: &Units,
-    initial_state: GraphState,
+    initial_state: SimulationState,
     goal: &Goal,
     _iterations: usize,
     value_net_kind: ValueNetKind,
@@ -74,7 +74,7 @@ pub(crate) fn find_upgrade_edge_idx(
     target_kind: &UnitKind,
 ) -> Option<usize> {
     edge_index.edges().iter().position(|e| {
-        e.kind == PlanEdgeKind::Upgrade
+        e.kind == EdgeAction::Upgrade
             && e.source_unit() == Some(source_kind)
             && e.target_unit() == Some(target_kind)
     })
@@ -86,7 +86,7 @@ pub(crate) fn find_upgrade_edge_idx(
 /// are `true` when the corresponding factory upgrade is currently legal.
 pub(crate) fn upgrade_mask(
     edge_index: &PlanEdgeIndex,
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     _config: &PlannerConfig,
 ) -> Vec<bool> {
@@ -106,7 +106,7 @@ pub(crate) fn upgrade_mask(
 /// One-step planner guided by the hierarchical policy networks.
 pub(crate) fn macro_policy_plan(
     units: &Units,
-    mut state: GraphState,
+    mut state: SimulationState,
     goal: &Goal,
     policy_bundle: Option<PolicyBundle<TrainBackend>>,
     deterministic: bool,
@@ -206,7 +206,7 @@ fn execute_selected_edge(
     bundle: &PolicyBundle<TrainBackend>,
     edge_index: &PlanEdgeIndex,
     edge_idx: usize,
-    mut state: GraphState,
+    mut state: SimulationState,
     units: &Units,
     macro_features: Vec<f32>,
     shortfall: &mut [f32; 3],
@@ -246,7 +246,7 @@ fn execute_selected_edge(
 
     let assigned_counts = assigned_squad_counts(&state, &builders);
     let action = match edge.kind {
-        PlanEdgeKind::Build => {
+        EdgeAction::Build => {
             if let Some(target_goal) = edge.target_goal() {
                 SimAction::BuildGoal {
                     goal: *target_goal,
@@ -259,7 +259,7 @@ fn execute_selected_edge(
                 }
             }
         }
-        PlanEdgeKind::Upgrade => SimAction::Upgrade {
+        EdgeAction::Upgrade => SimAction::Upgrade {
             target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
             old_node: find_upgrade_source(&state, edge.source_unit().expect("upgrade source unit"))
                 .unwrap_or_else(|| NodeId::new(0)),
@@ -279,7 +279,7 @@ fn execute_selected_edge(
 
 /// Apply a [`SimAction`] to a mutable simulator state.
 pub(crate) fn execute_action(
-    state: &mut GraphState,
+    state: &mut SimulationState,
     action: &SimAction,
     units: &Units,
     dt: f64,
@@ -315,7 +315,7 @@ pub(crate) fn execute_action(
 }
 
 /// Build a [`PlanResult`] that commits to a single immediate action.
-fn plan_result_with_action(state: GraphState, action: SimAction) -> PlanResult {
+fn plan_result_with_action(state: SimulationState, action: SimAction) -> PlanResult {
     PlanResult {
         events: Vec::new(),
         completion_time: state.time,
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn macro_plan_selects_build_action_from_acu() {
         let units = load_units();
-        let state = GraphState::new(&units, &[UnitKind::Commander]);
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
         let mut shortfall = [0.0f32; 3];
 

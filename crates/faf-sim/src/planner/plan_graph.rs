@@ -20,9 +20,18 @@ use petgraph::visit::EdgeRef;
 use crate::planner::core::Goal;
 use crate::units::{TechLevel, UnitKind, Units};
 
-/// Kind of action represented by an edge in the plan graph.
+/// Concrete action an edge represents in the plan graph.
+///
+/// This describes *how* the action is executed: either a builder constructs a
+/// new unit/goal, or an existing unit is upgraded in-place. It is orthogonal to
+/// [`EdgeCategory`], which describes the *strategic focus* of the edge (mass,
+/// energy, build power, or goal).
+///
+/// For example, a factory-upgrade edge has `EdgeAction::Upgrade` and
+/// `EdgeCategory::IncreaseBP`, while a factory building an engineer has
+/// `EdgeAction::Build` and `EdgeCategory::IncreaseBP`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PlanEdgeKind {
+pub enum EdgeAction {
     /// Source unit constructs the target unit or goal.
     Build,
     /// Source unit is upgraded into the target unit.
@@ -34,6 +43,10 @@ pub enum PlanEdgeKind {
 /// This is used by the hierarchical policy network: the direction head picks
 /// a focus, and the action head then scores only the legal edges that belong
 /// to that focus.
+///
+/// This is orthogonal to [`EdgeAction`]. `EdgeAction` describes *how* an edge
+/// is executed (build vs upgrade); `EdgeCategory` describes *what strategic
+/// bucket* the edge falls into.
 ///
 /// Factory upgrades are *not* a direction. They are handled by a dedicated
 /// `upgrade_head` because teching up is a separate strategic decision from
@@ -107,13 +120,13 @@ impl PlanNode {
 /// A simplified, ACU-rooted plan graph for a goal.
 #[derive(Debug, Clone)]
 pub struct PlanGraph {
-    plan: DiGraph<PlanNode, PlanEdgeKind>,
+    plan: DiGraph<PlanNode, EdgeAction>,
     goal: Goal,
 }
 
 impl PlanGraph {
     /// Wrap an existing graph and its goal.
-    pub fn new(plan: DiGraph<PlanNode, PlanEdgeKind>, goal: Goal) -> Self {
+    pub fn new(plan: DiGraph<PlanNode, EdgeAction>, goal: Goal) -> Self {
         Self { plan, goal }
     }
 
@@ -123,7 +136,7 @@ impl PlanGraph {
     }
 
     /// Borrow the underlying petgraph structure.
-    pub fn graph(&self) -> &DiGraph<PlanNode, PlanEdgeKind> {
+    pub fn graph(&self) -> &DiGraph<PlanNode, EdgeAction> {
         &self.plan
     }
 }
@@ -133,19 +146,19 @@ impl PlanGraph {
 /// [`Goal`] node to the T3 engineer.
 #[derive(Debug, Clone, Default)]
 pub struct UniversalPlanGraph {
-    graph: DiGraph<UnitKind, PlanEdgeKind>,
+    graph: DiGraph<UnitKind, EdgeAction>,
 }
 
 impl UniversalPlanGraph {
     /// Borrow the underlying petgraph structure.
-    pub fn graph(&self) -> &DiGraph<UnitKind, PlanEdgeKind> {
+    pub fn graph(&self) -> &DiGraph<UnitKind, EdgeAction> {
         &self.graph
     }
 
     /// Return a plan graph for `goal` by attaching a synthetic goal node to the
     /// T3 engineer in the fixed tech/economy tree.
     pub fn with_goal(&self, goal: Goal) -> PlanGraph {
-        let mut graph = DiGraph::<PlanNode, PlanEdgeKind>::new();
+        let mut graph = DiGraph::<PlanNode, EdgeAction>::new();
         let mut indices: HashMap<UnitKind, NodeIndex> = HashMap::new();
 
         for node in self.graph.node_indices() {
@@ -164,7 +177,7 @@ impl UniversalPlanGraph {
             .get(&t3_eng)
             .expect("fixed plan graph must contain T3 engineer");
         let goal_idx = graph.add_node(PlanNode::Goal(goal));
-        graph.add_edge(t3_eng_idx, goal_idx, PlanEdgeKind::Build);
+        graph.add_edge(t3_eng_idx, goal_idx, EdgeAction::Build);
 
         PlanGraph::new(graph, goal)
     }
@@ -180,7 +193,7 @@ pub fn build_plan_graph(units: &Units, goal: Goal) -> PlanGraph {
 
 /// Build the universal plan graph containing the fixed tech/economy tree.
 pub fn build_universal_plan_graph(_units: &Units) -> UniversalPlanGraph {
-    let mut graph = DiGraph::<UnitKind, PlanEdgeKind>::new();
+    let mut graph = DiGraph::<UnitKind, EdgeAction>::new();
     let mut indices: HashMap<UnitKind, NodeIndex> = HashMap::new();
 
     let kinds = common_unit_kinds();
@@ -212,7 +225,7 @@ fn common_unit_kinds() -> Vec<UnitKind> {
 /// Add the fixed set of natural build edges to the tech/economy tree.
 fn add_natural_build_edges(
     indices: &HashMap<UnitKind, NodeIndex>,
-    graph: &mut DiGraph<UnitKind, PlanEdgeKind>,
+    graph: &mut DiGraph<UnitKind, EdgeAction>,
 ) {
     let edges: Vec<(UnitKind, UnitKind)> = vec![
         // ACU bootstraps T1 infrastructure.
@@ -267,7 +280,7 @@ fn add_natural_build_edges(
         let &from_idx = indices.get(&from).expect("from node exists");
         let &to_idx = indices.get(&to).expect("to node exists");
         if graph.find_edge(from_idx, to_idx).is_none() {
-            graph.add_edge(from_idx, to_idx, PlanEdgeKind::Build);
+            graph.add_edge(from_idx, to_idx, EdgeAction::Build);
         }
     }
 }
@@ -275,7 +288,7 @@ fn add_natural_build_edges(
 /// Add the fixed set of upgrade edges to the tech/economy tree.
 fn add_upgrade_edges(
     indices: &HashMap<UnitKind, NodeIndex>,
-    graph: &mut DiGraph<UnitKind, PlanEdgeKind>,
+    graph: &mut DiGraph<UnitKind, EdgeAction>,
 ) {
     let edges: Vec<(UnitKind, UnitKind)> = vec![
         (
@@ -298,7 +311,7 @@ fn add_upgrade_edges(
         let &from_idx = indices.get(&from).expect("from node exists");
         let &to_idx = indices.get(&to).expect("to node exists");
         if graph.find_edge(from_idx, to_idx).is_none() {
-            graph.add_edge(from_idx, to_idx, PlanEdgeKind::Upgrade);
+            graph.add_edge(from_idx, to_idx, EdgeAction::Upgrade);
         }
     }
 }
@@ -351,7 +364,7 @@ mod tests {
         let plan_graph = build_plan_graph(&units, fatboy_goal());
         let graph = plan_graph.graph();
 
-        let contains_edge = |from: &UnitKind, to: &UnitKind, kind: PlanEdgeKind| {
+        let contains_edge = |from: &UnitKind, to: &UnitKind, kind: EdgeAction| {
             graph.edge_indices().any(|e| {
                 let edge = graph.edge_endpoints(e).unwrap();
                 graph[edge.0].as_unit() == Some(from)
@@ -363,22 +376,22 @@ mod tests {
         assert!(contains_edge(
             &UnitKind::Factory(TechLevel::T1),
             &UnitKind::Engineer(TechLevel::T1),
-            PlanEdgeKind::Build
+            EdgeAction::Build
         ));
         assert!(contains_edge(
             &UnitKind::Factory(TechLevel::T1),
             &UnitKind::Factory(TechLevel::T2),
-            PlanEdgeKind::Upgrade
+            EdgeAction::Upgrade
         ));
         assert!(contains_edge(
             &UnitKind::Mex(TechLevel::T2),
             &UnitKind::CapT2Mex,
-            PlanEdgeKind::Upgrade
+            EdgeAction::Upgrade
         ));
         assert!(contains_edge(
             &UnitKind::Engineer(TechLevel::T1),
             &UnitKind::EnergyStorage,
-            PlanEdgeKind::Build
+            EdgeAction::Build
         ));
     }
 

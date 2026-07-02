@@ -30,7 +30,7 @@ These four steps are implemented in `MctsSearch::search`:
 // crates/faf-sim/src/planner/mcts/search.rs ~line 115 — MctsSearch::search
 pub fn search(
     &self,
-    initial_state: GraphState,
+    initial_state: SimulationState,
     goal: &Goal,
     units: &Units,
     planner_config: &PlannerConfig,
@@ -70,7 +70,7 @@ Each MCTS node stores the simulator state at that point in the tree plus statist
 // crates/faf-sim/src/planner/mcts/search.rs ~line 47 — MctsNode
 struct MctsNode {
     /// Simulator state at this node.
-    state: GraphState,
+    state: SimulationState,
     /// Total value accumulated from backpropagation.
     total_value: f64,
     /// Number of times this node has been visited.
@@ -121,7 +121,7 @@ The policy network supplies a prior probability for every legal edge. The prior 
 ```rust
 // crates/faf-sim/src/planner/mcts/search.rs ~line 311 — evaluate_edge_priors
 fn evaluate_edge_priors(
-    state: &GraphState,
+    state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
@@ -177,7 +177,7 @@ match expand_edge(
 ```rust
 // crates/faf-sim/src/planner/mcts/search.rs ~line 376 — expand_edge
 fn expand_edge(
-    state: &GraphState,
+    state: &SimulationState,
     edge_idx: usize,
     _goal: &Goal,
     units: &Units,
@@ -185,7 +185,7 @@ fn expand_edge(
     edge_index: &PlanEdgeIndex,
     model: &PolicyBundle<TrainBackend>,
     device: &TrainDevice,
-) -> Option<GraphState> {
+) -> Option<SimulationState> {
     let edge = edge_index.get(edge_idx)?;
     // ... evaluate power and squad heads, resolve builders, execute action ...
     // BuildGoal edges produce SimAction::BuildGoal, unit edges produce SimAction::Build.
@@ -201,7 +201,7 @@ If a node is already fully expanded, or immediately after expanding a new child,
 ```rust
 // crates/faf-sim/src/planner/mcts/search.rs ~line 439 — rollout_value
 fn rollout_value(
-    state: &GraphState,
+    state: &SimulationState,
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,

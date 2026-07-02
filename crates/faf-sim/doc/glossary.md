@@ -3,30 +3,30 @@
 | Term | Meaning |
 | --- | --- |
 | **Action head** | Learned Burn head that scores concrete plan-graph edges inside a chosen direction. |
-| **Action space** | All legal plan-graph edges from the current `GraphState`, plus the wait action. |
+| **Action space** | All legal plan-graph edges from the current `SimulationState`, plus the wait action. |
 | **Adjacency bonus** | Reduced energy/mass cost or build time when structures are placed near each other. Encoded in `Units` and applied to build projects. |
 | **Backend** | The Burn compute backend. The `faf-sim` library defaults to CPU (`NdArray`); the `faf-sim-cli` package defaults to CUDA for training. Cross-platform GPU training can also use `Wgpu`. Aliased as `TrainBackend` in the training modules. |
 | **Baseline** | Moving average of recent episode returns used to center REINFORCE advantages and reduce variance. |
 | **Build order** | A sequence of construction actions that takes the economy from the starting commander to a target unit. |
 | **BuildPower** | Total construction rate contributed by idle engineers, measured in build points per second. |
 | **Burn** | The Rust deep-learning framework used by `faf-sim` for training and inference. |
-| **Command** | An actor message that tells the simulator to execute a build, upgrade, or assist action with a specific squad of builders. |
+| **SimulationMsg** | An actor message sent from the planner to the simulator. It tells the simulator to execute a build, upgrade, assist, or goal action with a specific squad of builders. |
 | **C_puct** | UCT exploration constant controlling the trade-off between exploitation and exploration. |
 | **Deterministic policy** | At inference time, always picks the highest-scoring macro edge and rounds power/squad values. Used for evaluation. |
 | **Direction head** | Learned Burn head that picks a strategic focus: `Mass`, `Energy`, `BuildPower`, or `Progress`. |
 | **EdgeCategory** | Strategic focus tag (`Mass`, `Energy`, `BuildPower`, `Progress`) attached to every plan-graph edge. |
 | **Episode** | One full rollout from the starting state until the goal is reached or `max_steps` is exceeded. |
 | **Faction** | One of UEF, Cybran, Aeon, or Seraphim. Determines available units and build trees. |
-| **Feature vector** | Fixed-size numerical representation of a `GraphState` plus optional shortfall feedback, fed into the learned networks. |
+| **Feature vector** | Fixed-size numerical representation of a `SimulationState` plus optional shortfall feedback, fed into the learned networks. |
 | **Fine-tuning** | Supervised training on the best trajectory found during REINFORCE, run after the main loop. |
-| **GraphState** | The authoritative discrete simulator state: units, projects, economy, completed structures. |
+| **SimulationState** | The authoritative discrete simulator state: units, projects, economy, completed structures. |
 | **GNN** | Graph Neural Network. A planned alternative value head that reasons directly over the plan graph. Not yet implemented. |
 | **Goal** | The abstract target the planner is trying to reach: `{ tech_level, mass_cost, energy_cost, build_time }`. The CLI resolves a concrete unit such as `novaxcenter` into a `Goal`. |
 | **HierarchicalPolicyNet** | The single Burn `Module` that implements the five-head policy network. |
 | **MCTS** | Monte Carlo Tree Search. Uses UCT selection, expansion, rollout, and backup to choose actions. |
 | **Module** | Burn derive macro that makes a struct recordable, loadable, optimizable, and device-movable. |
-| **NodeId** | Opaque identifier for a node in `GraphState` (a unit instance or project). |
-| **Observation** | Actor message carrying either a `BuildEvent` or the full `GraphState` from the simulator to the decision actor. |
+| **NodeId** | Opaque identifier for a node in `SimulationState` (a unit instance or project). |
+| **Observation** | Actor message carrying either a `BuildEvent` or the full `SimulationState` from the simulator to the decision actor. |
 | **PlanEdge** | A typed, stable action candidate with source, target, kind, and strategic category. |
 | **PlanEdgeIndex** | Stable ordered list of `PlanEdge`s derived from a `PlanGraph`, used to index network outputs. |
 | **PlanGraph** | Directed acyclic graph of units and prerequisites used to enumerate legal macro edges. |

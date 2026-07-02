@@ -1,13 +1,13 @@
 //! Reward shaping for policy-gradient training.
 
-use crate::sim::GraphState;
+use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Compute a terminal bonus for reaching the goal.
 ///
 /// A large positive reward encourages finishing, while a small time penalty
 /// discourages very slow completions.
-pub(crate) fn compute_terminal_bonus(state: &GraphState, goal_reached: bool) -> f32 {
+pub(crate) fn compute_terminal_bonus(state: &SimulationState, goal_reached: bool) -> f32 {
     if goal_reached {
         1000.0 - state.time as f32 * 0.2
     } else {
@@ -20,8 +20,8 @@ pub(crate) fn compute_terminal_bonus(state: &GraphState, goal_reached: bool) -> 
 /// The agent is rewarded for increasing total active build power and punished
 /// for resource stalls and mass overflow.
 pub(crate) fn compute_step_reward(
-    prev_state: &GraphState,
-    next_state: &GraphState,
+    prev_state: &SimulationState,
+    next_state: &SimulationState,
     units: &Units,
 ) -> f32 {
     let mut reward = 0.0f32;
@@ -83,7 +83,7 @@ pub(crate) struct MilestoneTracker {
 impl MilestoneTracker {
     /// Update milestone state after a successful action and return any newly
     /// earned bonuses.
-    pub(crate) fn update(&mut self, state: &GraphState, _units: &Units) -> f32 {
+    pub(crate) fn update(&mut self, state: &SimulationState, _units: &Units) -> f32 {
         let mut bonus = 0.0f32;
 
         if !self.t2_factory && state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)) {
