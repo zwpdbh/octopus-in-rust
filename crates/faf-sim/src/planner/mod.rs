@@ -9,7 +9,6 @@
 
 pub(crate) mod action;
 pub mod core;
-pub(crate) mod heuristic;
 pub mod mcts;
 pub mod plan_graph;
 
