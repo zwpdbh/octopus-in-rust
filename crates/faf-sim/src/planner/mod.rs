@@ -12,9 +12,7 @@ pub mod core;
 pub(crate) mod heuristic;
 pub mod mcts;
 pub mod plan_graph;
-pub mod strips;
 
 pub use action::SimAction;
 pub use core::{Goal, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, ValueNetKind};
 pub use plan_graph::{build_plan_graph, EdgeAction, PlanGraph, PlanNode};
-pub use strips::{build_operators, Fact, Operator, StripsAction};

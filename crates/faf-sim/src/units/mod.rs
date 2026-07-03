@@ -22,7 +22,6 @@ use faf_units::DataIndex;
 
 use crate::planner::core::Goal;
 use crate::planner::plan_graph::{build_universal_plan_graph, PlanGraph, UniversalPlanGraph};
-use crate::planner::strips::{build_operators, Operator};
 
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UpgradeRecipe,
@@ -223,11 +222,6 @@ impl Units {
     /// True if the unit has at least one registered upgrade target.
     pub fn is_upgradeable(&self, kind: &UnitKind) -> bool {
         !self.upgrade_recipes(kind).is_empty()
-    }
-
-    /// Return all build operators for this unit repository.
-    pub fn operators(&self) -> Vec<Operator> {
-        build_operators(self)
     }
 
     /// Borrow the universal plan graph shared across all goals.

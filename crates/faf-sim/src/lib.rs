@@ -23,8 +23,8 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use planner::{
-    build_operators, build_plan_graph, EdgeAction, Fact, Goal, Operator, PlanGraph, PlanResult,
-    Planner, PlannerConfig, PlannerError, Strategy, StripsAction, ValueNetKind,
+    build_plan_graph, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,
+    PlannerError, Strategy, ValueNetKind,
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
