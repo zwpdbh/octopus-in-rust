@@ -101,7 +101,7 @@ Common operations we use:
 A model in Burn is just a Rust struct whose fields are Burn layers, plus a `#[derive(Module)]` attribute:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 40 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 49 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -133,7 +133,7 @@ pub trait ValueNet: std::fmt::Debug + Send + Sync {
 Burn layers are constructed with a config object. For example, a `Linear` layer is initialized from a `LinearConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 63 — constructing linear layers
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 80 — constructing linear layers
 backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 ```
 
@@ -144,7 +144,7 @@ backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 A forward method is ordinary Rust. The only Burn-specific part is the tensor operations:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 79 — latent backbone forward
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent backbone forward
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -156,7 +156,7 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 The direction head consumes the latent vector and produces logits over the six strategic directions:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 92 — direction head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 137 — direction head
 pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
     self.direction_head.forward(latent)
 }
@@ -165,7 +165,7 @@ pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
 For inference we provide a helper that takes a host `Vec<f32>` and returns host `Vec<f32>`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 97 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 146 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     let tensor = tensor_from_vec(&features, device);
     let logits = self.direction_logits(self.latent(tensor));
@@ -178,12 +178,12 @@ pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<
 In RL the set of legal actions changes every step. We implement action masking by adding a large negative value to the logits of illegal directions before the softmax:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 29 — mask value
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 30 — mask value
 pub(crate) const MASK_VALUE: f32 = -1e9;
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 114 — apply_mask
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 163 — apply_mask
 pub fn apply_mask(logits: &mut [f32], mask: &[bool]) {
     for (l, legal) in logits.iter_mut().zip(mask.iter()) {
         if !legal {

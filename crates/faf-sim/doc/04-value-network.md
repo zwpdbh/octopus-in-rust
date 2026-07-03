@@ -20,7 +20,7 @@ A separate deterministic heuristic layer converts the chosen direction into a co
 ## The `HierarchicalPolicyNet` struct
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 40 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 49 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -37,7 +37,7 @@ pub struct HierarchicalPolicyNet<B: Backend> {
 The constructor sizes the backbone and direction head from the feature count, hidden sizes, and number of directions.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 57 — HierarchicalPolicyNet::new
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 74 — HierarchicalPolicyNet::new
 pub fn new(device: &B::Device) -> Self {
     let backbone_input = STATE_FEATURE_COUNT;
     let backbone_hidden = 128;
@@ -56,12 +56,46 @@ Burn layer configs (`LinearConfig::new(in, out).init(device)`) create the weight
 
 - `direction_head`: 64-D latent → 6 directions.
 
+## From struct fields to forward pass
+
+The struct owns the learned parameters; the `impl` block wires them together:
+
+| Struct field | Used in | Role |
+| --- | --- | --- |
+| `backbone1` | `latent()` | Linear layer: 11 → 128 |
+| `activation` | `latent()` | ReLU after each linear layer |
+| `backbone2` | `latent()` | Linear layer: 128 → 64 |
+| `direction_head` | `direction_logits()` | Linear layer: 64 → 6 |
+
+So the full forward path is:
+
+```text
+[batch, 11]
+    │
+    ▼
+backbone1.forward()  →  [batch, 128]
+    │
+    ▼
+activation.forward() →  [batch, 128]
+    │
+    ▼
+backbone2.forward()  →  [batch, 64]   ← this is the latent vector
+    │
+    ▼
+activation.forward() →  [batch, 64]
+    │
+    ▼
+direction_head.forward() → [batch, 6] ← these are the direction logits
+```
+
+`evaluate_direction()` is the public convenience wrapper that runs `latent()` followed by `direction_logits()` and converts the result back to a `Vec<f32>`.
+
 ## Shared backbone
 
 The backbone turns the 11-D input vector into a 64-D latent vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 79 — latent backbone
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent backbone
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -70,12 +104,40 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 }
 ```
 
-This is a plain two-layer MLP. The direction head consumes the latent vector produced by the backbone.
+A few things to notice:
+
+- **`pub(crate)`** means this is an internal building block. External callers use `evaluate_direction`, which wraps a single feature vector into a batch and runs both the backbone and the direction head. The trainer calls `latent` + `direction_logits` separately so it can reuse the latent vector when computing losses.
+- **`Tensor<B, 2>`** is a two-dimensional Burn tensor on backend `B`. The first dimension is the batch size, the second is the feature count. Inference is usually shape `[1, 11]`; training currently also uses one step at a time, but keeping the batch dimension lets the same code support mini-batch training later.
+- This is a plain two-layer MLP. The direction head consumes the latent vector produced by the backbone.
+
+### Backbone and activation are not fixed
+
+There is nothing magical about "two layers" or "ReLU":
+
+- **Backbone** just means "the feature-extraction layers before the final task-specific head." You could have one layer, three layers, or a residual block. The current network uses two because the decision problem is small.
+- **Activation** is a non-linear function applied between linear layers. Without it, a stack of linear layers would collapse into a single linear transform and the network could not learn non-linear mappings. ReLU is the common default (`max(0, x)`); alternatives include `GELU`, `Sigmoid`, `Tanh`, etc.
+- If you changed the architecture, you would change `latent()` accordingly. For example, a three-layer backbone with `GELU` would look like:
+
+```rust
+// Conceptual pseudo-code: three-layer backbone with GELU
+pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
+    let x = self.backbone1.forward(features);
+    let x = self.gelu.forward(x);
+    let x = self.backbone2.forward(x);
+    let x = self.gelu.forward(x);
+    let x = self.backbone3.forward(x);
+    self.gelu.forward(x)
+}
+```
+
+The only hard constraint is that the last backbone output has the same dimension as the `direction_head` input (currently 64).
+
+In short: **however many backbone `Linear` layers the struct owns, `latent()` calls each one's `.forward()` once, in order, and applies an activation after each one.**
 
 ## Direction head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 92 — direction head
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 137 — direction head
 pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
     self.direction_head.forward(latent)
 }
@@ -88,7 +150,7 @@ Output shape: `[batch, DIRECTION_COUNT]` where `DIRECTION_COUNT = 6`.
 During MCTS and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 97 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 146 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     let tensor = tensor_from_vec(&features, device);
     let logits = self.direction_logits(self.latent(tensor));

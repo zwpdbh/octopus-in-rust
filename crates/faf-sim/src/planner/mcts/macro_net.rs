@@ -37,15 +37,31 @@ pub(crate) const MASK_VALUE: f32 = -1e9;
 ///
 /// The architecture is intentionally tiny: a shared two-layer backbone
 /// ([`STATE_FEATURE_COUNT`] -> 128 -> 64) followed by a single direction head (64 -> 6).
+///
+/// The struct owns the learned parameters (the four fields below). The forward
+/// pass is split into two methods so the trainer can reuse the backbone output:
+///
+/// - `latent` uses `backbone1`, `backbone2`, and `activation`.
+/// - `direction_logits` uses `direction_head`.
+/// - [`evaluate_direction`](Self::evaluate_direction) is the public convenience
+///   wrapper that runs both and returns host-side logits.
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     /// First shared backbone layer: input features -> 128-dim hidden space.
+    ///
+    /// Used by `latent`.
     backbone1: Linear<B>,
     /// Second shared backbone layer: 128-dim hidden -> 64-dim latent vector.
+    ///
+    /// Used by `latent`.
     backbone2: Linear<B>,
     /// ReLU activation used after every backbone layer.
+    ///
+    /// Used by `latent`.
     activation: Relu,
     /// Direction head: latent (64) -> 6 logits over `EdgeCategory`.
+    ///
+    /// Used by `direction_logits`.
     direction_head: Linear<B>,
 }
 
@@ -76,7 +92,31 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     /// Shared backbone that turns a batch of state feature vectors into a batch
     /// of 64-dimensional latent vectors.
     ///
-    /// Input shape: `[batch_size, 11]`. Output shape: `[batch_size, 64]`.
+    /// `pub(crate)` because this is an internal building block. Callers outside
+    /// `faf-sim` should use [`evaluate_direction`](Self::evaluate_direction), which
+    /// wraps a single feature vector into a batch and runs both the backbone and
+    /// the direction head. The training code calls `latent` + `direction_logits`
+    /// separately so it can reuse the latent vector when computing multiple losses.
+    ///
+    /// `Tensor<B, 2>` means a two-dimensional tensor on backend `B`. The first
+    /// dimension is the batch size and the second is the feature count. For
+    /// inference that is usually `[1, STATE_FEATURE_COUNT]`; during training it is
+    /// also `[1, STATE_FEATURE_COUNT]` because REINFORCE updates one step at a
+    /// time, but the batch dimension keeps the API compatible with future
+    /// mini-batch training.
+    ///
+    /// Input shape: `[batch_size, STATE_FEATURE_COUNT]`. Output shape: `[batch_size, 64]`.
+    ///
+    /// This is just a stack of linear layers separated by activations. "Backbone"
+    /// means the feature-extraction part before the task-specific head. You could
+    /// add a `backbone3` layer, change the hidden sizes, or swap `Relu` for
+    /// `Gelu`, `Sigmoid`, etc. — the only requirement is that the final output
+    /// shape matches whatever `direction_head` expects.
+    ///
+    /// Rule of thumb: if the struct has `n` backbone `Linear` layers, call
+    /// `.forward()` on each of them once, in order, and apply an activation
+    /// after each one. The current code has two backbone layers, so `latent()`
+    /// contains two `Linear::forward` calls and two `activation.forward` calls.
     pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.backbone1.forward(features);
         let x = self.activation.forward(x);
@@ -85,6 +125,10 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     }
 
     /// Direction logits from a latent vector.
+    ///
+    /// `pub(crate)` for the same reason as [`latent`](Self::latent): it is an
+    /// internal piece of the forward pass. Public consumers use
+    /// [`evaluate_direction`](Self::evaluate_direction).
     ///
     /// Input shape: `[batch_size, 64]`. Output shape: `[batch_size, 6]`.
     /// The six values correspond to `EdgeCategory::ALL` in order:
@@ -95,6 +139,10 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     }
 
     /// Convenience: evaluate the direction head on a single feature vector.
+    ///
+    /// This is the public inference entry point. It adds the batch dimension,
+    /// runs the backbone and direction head, and returns the raw logits as a
+    /// host-side `Vec<f32>`.
     pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
         let tensor = tensor_from_vec(&features, device);
         let logits = self.direction_logits(self.latent(tensor));
