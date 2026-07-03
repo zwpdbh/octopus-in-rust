@@ -28,7 +28,7 @@ use crate::units::{TechLevel, UnitKind, Units};
 /// energy, build power, or goal).
 ///
 /// For example, a factory-upgrade edge has `EdgeAction::Upgrade` and
-/// `EdgeCategory::IncreaseBP`, while a factory building an engineer has
+/// `EdgeCategory::UpgradeTech`, while a factory building an engineer has
 /// `EdgeAction::Build` and `EdgeCategory::IncreaseBP`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeAction {
@@ -40,52 +40,68 @@ pub enum EdgeAction {
 
 /// Strategic focus of a plan-graph edge.
 ///
-/// This is used by the hierarchical policy network: the direction head picks
-/// a focus, and the action head then scores only the legal edges that belong
-/// to that focus.
+/// This is now also the output space of the direction-only policy network.
+/// The network picks one of these high-level directions, and a heuristic layer
+/// turns it into a concrete `SimAction`.
 ///
 /// This is orthogonal to [`EdgeAction`]. `EdgeAction` describes *how* an edge
 /// is executed (build vs upgrade); `EdgeCategory` describes *what strategic
 /// bucket* the edge falls into.
-///
-/// Factory upgrades are *not* a direction. They are handled by a dedicated
-/// `upgrade_head` because teching up is a separate strategic decision from
-/// choosing an economic focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeCategory {
     /// Edges that increase mass income.
     IncreaseMass,
-    /// Edges that increase energy income or storage.
+    /// Edges that increase energy income.
     IncreaseEnergy,
     /// Edges that increase build power.
     IncreaseBP,
+    /// Edges that build energy storage.
+    IncreaseEnergyStorage,
     /// The single edge that builds the abstract goal.
     Goal,
+    /// Edges that upgrade factory tech.
+    UpgradeTech,
 }
 
 impl EdgeCategory {
     /// All possible strategic directions.
-    pub const ALL: [EdgeCategory; 4] = [
+    pub const ALL: [EdgeCategory; 6] = [
         EdgeCategory::IncreaseMass,
         EdgeCategory::IncreaseEnergy,
         EdgeCategory::IncreaseBP,
+        EdgeCategory::IncreaseEnergyStorage,
         EdgeCategory::Goal,
+        EdgeCategory::UpgradeTech,
     ];
 
-    /// Categorise an edge based on what the target node contributes.
-    pub fn categorize(target: &PlanNode) -> EdgeCategory {
-        match target {
-            PlanNode::Goal(_) => EdgeCategory::Goal,
-            PlanNode::Unit(UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex) => {
-                EdgeCategory::IncreaseMass
-            }
-            PlanNode::Unit(UnitKind::Pgen(_) | UnitKind::EnergyStorage) => {
-                EdgeCategory::IncreaseEnergy
-            }
-            PlanNode::Unit(UnitKind::Engineer(_) | UnitKind::Factory(_) | UnitKind::Commander) => {
-                EdgeCategory::IncreaseBP
-            }
-            PlanNode::Unit(UnitKind::Unique(_)) => EdgeCategory::IncreaseBP,
+    /// Categorise an edge based on its action and what the target node contributes.
+    ///
+    /// Upgrade edges are split out separately: factory upgrades are the
+    /// [`EdgeCategory::UpgradeTech`] direction, while mex and power-generator
+    /// upgrades fall under [`EdgeCategory::IncreaseMass`] and
+    /// [`EdgeCategory::IncreaseEnergy`] respectively.
+    pub fn categorize(action: EdgeAction, target: &PlanNode) -> EdgeCategory {
+        match action {
+            EdgeAction::Upgrade => match target {
+                PlanNode::Unit(UnitKind::Factory(_)) => EdgeCategory::UpgradeTech,
+                PlanNode::Unit(UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex) => {
+                    EdgeCategory::IncreaseMass
+                }
+                PlanNode::Unit(UnitKind::Pgen(_)) => EdgeCategory::IncreaseEnergy,
+                _ => EdgeCategory::IncreaseBP,
+            },
+            EdgeAction::Build => match target {
+                PlanNode::Goal(_) => EdgeCategory::Goal,
+                PlanNode::Unit(UnitKind::EnergyStorage) => EdgeCategory::IncreaseEnergyStorage,
+                PlanNode::Unit(UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex) => {
+                    EdgeCategory::IncreaseMass
+                }
+                PlanNode::Unit(UnitKind::Pgen(_)) => EdgeCategory::IncreaseEnergy,
+                PlanNode::Unit(
+                    UnitKind::Engineer(_) | UnitKind::Factory(_) | UnitKind::Commander,
+                ) => EdgeCategory::IncreaseBP,
+                PlanNode::Unit(UnitKind::Unique(_)) => EdgeCategory::IncreaseBP,
+            },
         }
     }
 }

@@ -1,0 +1,521 @@
+//! Heuristic action layer for the direction-only policy network.
+//!
+//! The network now chooses only a high-level strategic direction. This module
+//! turns that direction into a concrete [`SimAction`] by picking the best legal
+//! target and assigning a greedy high-tech builder squad.
+
+use crate::economy::{compute_drain, RequestedBuildPower};
+use crate::planner::core::Goal;
+use crate::planner::mcts::selections::{find_upgrade_source, SelectionPools};
+use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::SimAction;
+use crate::sim::{NodeId, SimulationState};
+use crate::units::{TechLevel, UnitKind, Units};
+
+/// Turn a network direction into a concrete simulator action.
+///
+/// Returns `None` if the direction has no legal execution right now.
+pub fn direction_to_action(
+    direction: EdgeCategory,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+    goal: &Goal,
+) -> Option<SimAction> {
+    let pools = SelectionPools::new(
+        &crate::planner::plan_graph::build_plan_graph(units, *goal),
+        state,
+        units,
+    );
+
+    match direction {
+        EdgeCategory::IncreaseMass => pick_mass_action(&pools, state, units, config),
+        EdgeCategory::IncreaseEnergy => pick_energy_action(&pools, state, units, config),
+        EdgeCategory::IncreaseBP => pick_bp_action(&pools, state, units, config),
+        EdgeCategory::IncreaseEnergyStorage => pick_storage_action(&pools, state, units, config),
+        EdgeCategory::Goal => pick_goal_action(state, units, config, goal),
+        EdgeCategory::UpgradeTech => pick_upgrade_action(&pools, state, units, config),
+    }
+}
+
+/// Pick the mass action with the shortest payback time.
+fn pick_mass_action(
+    pools: &SelectionPools,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    let candidates: Vec<_> = pools
+        .options()
+        .iter()
+        .filter_map(|opt| match opt {
+            crate::planner::mcts::selections::SelectionOption::Build(u)
+                if matches!(
+                    u,
+                    UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
+                ) =>
+            {
+                Some((u.clone(), None))
+            }
+            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
+                if matches!(
+                    to,
+                    UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
+                ) =>
+            {
+                Some((to.clone(), Some(from.clone())))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let best = candidates
+        .into_iter()
+        .filter_map(|(target, source)| {
+            let cost = project_cost(units, &target, source.as_ref())?;
+            let gain = mass_income_gain(units, &target, source.as_ref())?;
+            if gain <= 0.0 {
+                return None;
+            }
+            Some((target, source, cost.mass / gain))
+        })
+        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))?;
+
+    build_or_upgrade(best.0, best.1, state, units, config)
+}
+
+/// Pick the highest-tech legal energy action.
+fn pick_energy_action(
+    pools: &SelectionPools,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    let candidates: Vec<_> = pools
+        .options()
+        .iter()
+        .filter_map(|opt| match opt {
+            crate::planner::mcts::selections::SelectionOption::Build(u)
+                if matches!(u, UnitKind::Pgen(_)) =>
+            {
+                Some((u.clone(), None))
+            }
+            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
+                if matches!(to, UnitKind::Pgen(_)) =>
+            {
+                Some((to.clone(), Some(from.clone())))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let best = candidates
+        .into_iter()
+        .max_by(|a, b| pgen_tier(&a.0).cmp(&pgen_tier(&b.0)))?;
+
+    build_or_upgrade(best.0, best.1, state, units, config)
+}
+
+/// Pick the highest-tier engineer build action.
+fn pick_bp_action(
+    pools: &SelectionPools,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    let candidates: Vec<_> = pools
+        .options()
+        .iter()
+        .filter_map(|opt| match opt {
+            crate::planner::mcts::selections::SelectionOption::Build(u)
+                if matches!(u, UnitKind::Engineer(_)) =>
+            {
+                Some(u.clone())
+            }
+            _ => None,
+        })
+        .collect();
+
+    let target = candidates
+        .into_iter()
+        .max_by(|a, b| engineer_tier(a).cmp(&engineer_tier(b)))?;
+
+    let builders = assign_builders(target.clone(), state, units, config.dt);
+    if builders.is_empty() {
+        return None;
+    }
+    Some(SimAction::Build {
+        unit_id: target,
+        builders,
+    })
+}
+
+/// Build energy storage if legal.
+fn pick_storage_action(
+    pools: &SelectionPools,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    pools.options().iter().find_map(|opt| match opt {
+        crate::planner::mcts::selections::SelectionOption::Build(UnitKind::EnergyStorage) => {
+            let builders = assign_builders(UnitKind::EnergyStorage, state, units, config.dt);
+            if builders.is_empty() {
+                return None;
+            }
+            Some(SimAction::Build {
+                unit_id: UnitKind::EnergyStorage,
+                builders,
+            })
+        }
+        _ => None,
+    })
+}
+
+/// Start the abstract goal with T3 engineers.
+fn pick_goal_action(
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+    goal: &Goal,
+) -> Option<SimAction> {
+    if state.goal_reached(goal) || state.goal_project_active() {
+        return None;
+    }
+
+    let target = UnitKind::Engineer(TechLevel::T3);
+    let builders = assign_builders(target, state, units, config.dt);
+    if builders.is_empty() {
+        return None;
+    }
+    Some(SimAction::BuildGoal {
+        goal: *goal,
+        builders,
+    })
+}
+
+/// Pick the lowest-tier legal factory upgrade.
+fn pick_upgrade_action(
+    pools: &SelectionPools,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    let candidates: Vec<_> = pools
+        .options()
+        .iter()
+        .filter_map(|opt| match opt {
+            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
+                if matches!(from, UnitKind::Factory(_)) && matches!(to, UnitKind::Factory(_)) =>
+            {
+                Some((from.clone(), to.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let (from, to) = candidates
+        .into_iter()
+        .min_by(|a, b| factory_tier(&a.0).cmp(&factory_tier(&b.0)))?;
+
+    let old_node = find_upgrade_source(state, &from)?;
+    let builders = assign_upgrade_builders(&from, &to, state, units, config.dt);
+    if builders.is_empty() {
+        return None;
+    }
+    Some(SimAction::Upgrade {
+        target_unit_id: to,
+        old_node,
+        builders,
+    })
+}
+
+/// Helper: build or upgrade a target, returning the matching `SimAction`.
+fn build_or_upgrade(
+    target: UnitKind,
+    source: Option<UnitKind>,
+    state: &SimulationState,
+    units: &Units,
+    config: &crate::planner::core::PlannerConfig,
+) -> Option<SimAction> {
+    if let Some(from) = source {
+        let old_node = find_upgrade_source(state, &from)?;
+        let builders = assign_upgrade_builders(&from, &target, state, units, config.dt);
+        if builders.is_empty() {
+            return None;
+        }
+        Some(SimAction::Upgrade {
+            target_unit_id: target,
+            old_node,
+            builders,
+        })
+    } else {
+        let builders = assign_builders(target.clone(), state, units, config.dt);
+        if builders.is_empty() {
+            return None;
+        }
+        Some(SimAction::Build {
+            unit_id: target,
+            builders,
+        })
+    }
+}
+
+/// Assign capable idle builders to a build target, high-tech first, with a hard
+/// stall gate.
+fn assign_builders(
+    target: UnitKind,
+    state: &SimulationState,
+    units: &Units,
+    dt: f64,
+) -> Vec<NodeId> {
+    let cost = match units.build_cost(&target) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    let mut candidates: Vec<NodeId> = state
+        .idle_builders(units)
+        .into_iter()
+        .filter(|&id| units.can_build(&state.graph[id].unit_id, &target))
+        .collect();
+
+    candidates.sort_by(|&a, &b| {
+        let rate_a = units
+            .def(&state.graph[a].unit_id)
+            .map(|d| d.build_rate)
+            .unwrap_or(0.0);
+        let rate_b = units
+            .def(&state.graph[b].unit_id)
+            .map(|d| d.build_rate)
+            .unwrap_or(0.0);
+        rate_b.total_cmp(&rate_a)
+    });
+
+    greedy_with_stall_gate(candidates, &cost.to_target_stats(), state, units, dt)
+}
+
+/// Assign capable idle builders to an upgrade target, high-tech first, with a
+/// hard stall gate.
+fn assign_upgrade_builders(
+    from: &UnitKind,
+    to: &UnitKind,
+    state: &SimulationState,
+    units: &Units,
+    dt: f64,
+) -> Vec<NodeId> {
+    let recipe = match units.upgrade_recipes(from).iter().find(|r| r.to == *to) {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+
+    let mut candidates: Vec<NodeId> = state
+        .idle_builders(units)
+        .into_iter()
+        .filter(|&id| recipe.builder_options.contains(&state.graph[id].unit_id))
+        .collect();
+
+    candidates.sort_by(|&a, &b| {
+        let rate_a = units
+            .def(&state.graph[a].unit_id)
+            .map(|d| d.build_rate)
+            .unwrap_or(0.0);
+        let rate_b = units
+            .def(&state.graph[b].unit_id)
+            .map(|d| d.build_rate)
+            .unwrap_or(0.0);
+        rate_b.total_cmp(&rate_a)
+    });
+
+    greedy_with_stall_gate(candidates, &recipe.cost.to_target_stats(), state, units, dt)
+}
+
+/// Greedily add builders until the next one would drive storage to zero within
+/// one tick. Always keeps at least one builder if any candidate is legal.
+fn greedy_with_stall_gate(
+    candidates: Vec<NodeId>,
+    target_stats: &faf_units::BuildTargetStats,
+    state: &SimulationState,
+    units: &Units,
+    dt: f64,
+) -> Vec<NodeId> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut squad = Vec::new();
+    for &candidate in &candidates {
+        let trial = {
+            let mut s = squad.clone();
+            s.push(candidate);
+            s
+        };
+        let power = total_build_power_of_nodes(&trial, state, units);
+        if let Some(drain) = compute_drain(target_stats, RequestedBuildPower(power)) {
+            let mass_ok = state.economy.mass_storage <= 0.0
+                || drain.mass_per_second * dt <= state.economy.mass_storage;
+            let energy_ok = state.economy.energy_storage <= 0.0
+                || drain.energy_per_second * dt <= state.economy.energy_storage;
+            if !mass_ok || !energy_ok {
+                // Stall gate triggered; stop adding builders.
+                break;
+            }
+        }
+        squad.push(candidate);
+    }
+
+    // If no builder was added because even the first one fails the gate, fall
+    // back to a single builder so the caller can still attempt the action. This
+    // matches the rule "assign all capable idle builders, but check to prevent
+    // stall": if there is no non-stalling assignment, we try the smallest one.
+    if squad.is_empty() && !candidates.is_empty() {
+        squad.push(candidates[0]);
+    }
+
+    squad
+}
+
+fn total_build_power_of_nodes(nodes: &[NodeId], state: &SimulationState, units: &Units) -> f64 {
+    nodes
+        .iter()
+        .filter_map(|&id| units.def(&state.graph[id].unit_id))
+        .map(|d| d.build_rate)
+        .sum()
+}
+
+fn project_cost(
+    units: &Units,
+    target: &UnitKind,
+    source: Option<&UnitKind>,
+) -> Option<crate::units::UnitCost> {
+    match source {
+        Some(from) => units
+            .upgrade_recipes(from)
+            .iter()
+            .find(|r| r.to == *target)
+            .map(|r| r.cost),
+        None => units.build_cost(target),
+    }
+}
+
+fn mass_income_gain(units: &Units, target: &UnitKind, source: Option<&UnitKind>) -> Option<f64> {
+    let target_income = units.def(target)?.mass_income;
+    let source_income = source
+        .and_then(|s| units.def(s))
+        .map_or(0.0, |d| d.mass_income);
+    Some(target_income - source_income)
+}
+
+fn engineer_tier(kind: &UnitKind) -> u8 {
+    match kind {
+        UnitKind::Engineer(TechLevel::T1) => 1,
+        UnitKind::Engineer(TechLevel::T2) => 2,
+        UnitKind::Engineer(TechLevel::T3) => 3,
+        _ => 0,
+    }
+}
+
+fn factory_tier(kind: &UnitKind) -> u8 {
+    match kind {
+        UnitKind::Factory(TechLevel::T1) => 1,
+        UnitKind::Factory(TechLevel::T2) => 2,
+        UnitKind::Factory(TechLevel::T3) => 3,
+        _ => 0,
+    }
+}
+
+fn pgen_tier(kind: &UnitKind) -> u8 {
+    match kind {
+        UnitKind::Pgen(TechLevel::T1) => 1,
+        UnitKind::Pgen(TechLevel::T2) => 2,
+        UnitKind::Pgen(TechLevel::T3) => 3,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::core::Goal;
+    use crate::units::{TechLevel, Units};
+
+    fn load_units() -> Units {
+        let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
+        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
+    }
+
+    fn t4_goal() -> Goal {
+        Goal {
+            tech_level: TechLevel::T4,
+            mass_cost: 28_000.0,
+            energy_cost: 340_000.0,
+            build_time: 46_250.0,
+        }
+    }
+
+    #[test]
+    fn mass_direction_builds_t1_mex_from_acu() {
+        let units = load_units();
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let config = crate::planner::core::PlannerConfig::default();
+        let goal = t4_goal();
+
+        let action =
+            direction_to_action(EdgeCategory::IncreaseMass, &state, &units, &config, &goal);
+        assert!(
+            matches!(action, Some(SimAction::Build { unit_id, .. }) if unit_id == UnitKind::Mex(TechLevel::T1)),
+            "ACU should build a T1 mex as the shortest-payback mass option"
+        );
+    }
+
+    #[test]
+    fn bp_direction_prefers_highest_tier_engineer() {
+        let units = load_units();
+        let state = SimulationState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T1),
+                UnitKind::Factory(TechLevel::T2),
+                UnitKind::Factory(TechLevel::T3),
+            ],
+        );
+        let config = crate::planner::core::PlannerConfig::default();
+        let goal = t4_goal();
+
+        let action = direction_to_action(EdgeCategory::IncreaseBP, &state, &units, &config, &goal);
+        assert!(
+            matches!(action, Some(SimAction::Build { unit_id, .. }) if unit_id == UnitKind::Engineer(TechLevel::T3)),
+            "IncreaseBP should build the highest-tier engineer"
+        );
+    }
+
+    #[test]
+    fn upgrade_direction_prefers_lower_tier_factory() {
+        let units = load_units();
+        let state = SimulationState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T1),
+                UnitKind::Factory(TechLevel::T2),
+            ],
+        );
+        let config = crate::planner::core::PlannerConfig::default();
+        let goal = t4_goal();
+
+        let action = direction_to_action(EdgeCategory::UpgradeTech, &state, &units, &config, &goal);
+        let actual = action.as_ref().map(|a| match a {
+            SimAction::Upgrade { target_unit_id, .. } => target_unit_id.clone(),
+            SimAction::Build { unit_id, .. } => unit_id.clone(),
+            SimAction::BuildGoal { .. } => UnitKind::Commander,
+            _ => UnitKind::Commander,
+        });
+        assert_eq!(
+            actual,
+            Some(UnitKind::Factory(TechLevel::T2)),
+            "UpgradeTech should prefer T1->T2 over T2->T3, got {:?}",
+            action
+        );
+    }
+}

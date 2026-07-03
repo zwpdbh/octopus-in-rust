@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::Parser;
-use faf_sim::planner::mcts::macro_net::{hierarchical_policy_net_dot, num_plan_edges};
+use faf_sim::planner::mcts::macro_net::hierarchical_policy_net_dot;
 use faf_sim::planner::mcts::train::TuiMetricsRendererWrapper;
 use faf_sim::planner::mcts::train::{
     load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
@@ -142,7 +142,6 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     let path = model_path(&target);
     let model_file = path.with_extension("mpk");
-    let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
 
     if args.fresh && model_file.exists() {
         println!(
@@ -187,7 +186,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
                 let train_interrupter = tui_interrupter.unwrap_or_default();
                 if resume && model_file.exists() {
                     println!("Resuming training from {}", model_file.display());
-                    let model = load_policy(&path, num_edges).expect("load existing model");
+                    let model = load_policy(&path).expect("load existing model");
                     train_policy_from(
                         model,
                         &units,
@@ -306,9 +305,8 @@ where
 }
 
 fn run_draw_net(units: &SimUnits, target: ResearchTarget, args: DrawNetArgs) {
-    let goal = target.to_goal(units);
-    let num_edges = num_plan_edges(units, &goal).expect("target must have a plan graph");
-    let dot = hierarchical_policy_net_dot(num_edges);
+    let _goal = target.to_goal(units);
+    let dot = hierarchical_policy_net_dot();
 
     let dot_path = match args.output {
         Some(path) => path,
@@ -383,8 +381,7 @@ async fn run_simulate(
     }
 
     println!("Loading trained model from {}", model_file.display());
-    let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
-    let model = load_policy(&path, num_edges).expect("load trained model");
+    let model = load_policy(&path).expect("load trained model");
     println!("Model loaded successfully.");
     let value_net = Box::new(MlpValueNet::from_net(model));
     let planner = Planner::with_config(strategy, PlannerConfig::default(), value_net);

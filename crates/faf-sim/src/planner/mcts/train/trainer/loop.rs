@@ -1,11 +1,10 @@
-//! Trainer for the hierarchical policy networks.
+//! Trainer main loop for the direction-only policy network.
 
 use super::super::config::TrainStats;
 use super::super::episode::{BuildTrajectory, TrajectoryStep};
 use super::super::metric::metrics::training_progress;
 use super::super::metric::{EpisodeSummary, GreedyEvalSummary, TrainEvent};
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::selections::PlanEdgeIndex;
 use crate::units::Units;
 use burn::data::dataloader::Progress;
 use burn::train::metric::MetricMetadata;
@@ -15,8 +14,6 @@ use super::Trainer;
 impl Trainer {
     /// Train the policy on the given goal.
     pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
-        let plan = units.plan_graph(*goal);
-        let edge_index = PlanEdgeIndex::new(&plan);
         let planner_config = PlannerConfig::default();
         let mut stats = TrainStats::default();
 
@@ -25,18 +22,15 @@ impl Trainer {
         }
 
         let mut best_time: Option<f64> = if let Some(ref model) = self.best_model {
-            let baseline = Trainer::evaluate_greedy_with_model(
+            Trainer::evaluate_greedy_with_model(
                 model,
                 units,
                 goal,
-                &plan,
-                &edge_index,
                 &planner_config,
                 self.config.max_steps,
                 self.config.dt,
                 &self.device,
-            );
-            baseline
+            )
         } else {
             None
         };
@@ -55,15 +49,7 @@ impl Trainer {
             }
 
             let epsilon = self.current_epsilon(ep);
-            let episode = self.run_episode(
-                ep,
-                units,
-                goal,
-                &plan,
-                &edge_index,
-                &planner_config,
-                epsilon,
-            );
+            let episode = self.run_episode(ep, units, goal, &planner_config, epsilon);
 
             let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);
@@ -88,11 +74,8 @@ impl Trainer {
                             .steps
                             .iter()
                             .map(|s| TrajectoryStep {
-                                edge_index: s.edge_index,
-                                target_power: s.target_power,
-                                desired_squad: s.desired_squad,
+                                direction_index: s.direction_index,
                                 shortfall: s.shortfall,
-                                upgrade_index: s.upgrade_index,
                             })
                             .collect(),
                     });
@@ -106,9 +89,7 @@ impl Trainer {
 
             let interval = self.config.greedy_eval_interval;
             if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
-                if let Some(greedy_time) =
-                    self.evaluate_greedy(units, goal, &plan, &edge_index, &planner_config)
-                {
+                if let Some(greedy_time) = self.evaluate_greedy(units, goal, &planner_config) {
                     let is_new_best = best_time.map_or(true, |t| greedy_time < t);
                     if is_new_best {
                         best_time = Some(greedy_time);
@@ -132,23 +113,21 @@ impl Trainer {
                             vec![],
                         );
                     }
-                } else {
-                    if let Some(ref mut metrics) = self.metrics {
-                        let metadata = metric_metadata(ep + 1, self.config.episodes);
-                        metrics.update(
-                            &TrainEvent::GreedyEval(GreedyEvalSummary {
-                                episode: ep + 1,
-                                reached_goal: false,
-                                completion_time: None,
-                                best_time,
-                            }),
-                            &metadata,
-                        );
-                        metrics.render(
-                            training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
-                            vec![],
-                        );
-                    }
+                } else if let Some(ref mut metrics) = self.metrics {
+                    let metadata = metric_metadata(ep + 1, self.config.episodes);
+                    metrics.update(
+                        &TrainEvent::GreedyEval(GreedyEvalSummary {
+                            episode: ep + 1,
+                            reached_goal: false,
+                            completion_time: None,
+                            best_time,
+                        }),
+                        &metadata,
+                    );
+                    metrics.render(
+                        training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
+                        vec![],
+                    );
                 }
             }
 

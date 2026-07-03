@@ -1,18 +1,15 @@
 //! Monte Carlo Tree Search planner.
 //!
-//! UCT search over plan-graph actions. Each node stores a simulator state. The
-//! hierarchical policy network supplies prior probabilities over legal edges;
-//! rollouts use the same network greedily to estimate leaf values.
-
-use std::collections::HashSet;
+//! UCT search over the six high-level directions. Each node stores a simulator
+//! state. The direction-only policy network supplies prior probabilities over
+//! legal directions; rollouts use the same network greedily to estimate leaf
+//! values.
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::mcts::features::state_features_with_shortfall;
-use crate::planner::mcts::macro_net::{apply_mask, clamp_squad, ensure_minimum_squad};
-use crate::planner::mcts::policy::{execute_action, macro_policy_plan};
-use crate::planner::mcts::selections::{
-    find_upgrade_source, idle_engineer_counts, select_squad_for_edge, PlanEdgeIndex,
-};
+use crate::planner::mcts::heuristic::direction_to_action;
+use crate::planner::mcts::macro_net::{apply_mask, masked_argmax};
+use crate::planner::mcts::policy::{execute_action, plan_result_with_action};
 use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_bonus};
 use crate::planner::mcts::value_net::ValueNet;
 use crate::planner::plan_graph::EdgeCategory;
@@ -49,31 +46,30 @@ struct MctsNode {
     total_value: f64,
     /// Number of times this node has been visited.
     visits: usize,
-    /// Child nodes, keyed by the plan-graph edge used to reach them.
+    /// Child nodes, keyed by direction index.
     children: Vec<(usize, Box<MctsNode>)>,
-    /// Legal edges that have not been expanded yet.
-    untried_edges: Vec<usize>,
-    /// Prior probability for each plan-graph edge (sparse: legal edges only).
-    edge_priors: Vec<f32>,
+    /// Legal directions that have not been expanded yet.
+    untried_directions: Vec<usize>,
+    /// Prior probability for each direction (sparse: legal directions only).
+    direction_priors: Vec<f32>,
     /// True if the state has reached the goal.
     is_terminal: bool,
 }
 
 impl MctsNode {
-    /// Create a new node and compute edge priors from the policy network.
+    /// Create a new node and compute direction priors from the policy network.
     fn new(
         state: SimulationState,
         goal: &Goal,
         units: &Units,
         config: &PlannerConfig,
-        edge_index: &PlanEdgeIndex,
         model: &dyn ValueNet,
     ) -> Self {
         let is_terminal = state.goal_reached(goal);
-        let (edge_priors, untried_edges) = if is_terminal {
-            (vec![0.0f32; edge_index.len()], Vec::new())
+        let (direction_priors, untried_directions) = if is_terminal {
+            (vec![0.0f32; EdgeCategory::ALL.len()], Vec::new())
         } else {
-            evaluate_edge_priors(&state, units, config, edge_index, model)
+            evaluate_direction_priors(&state, goal, units, config, model)
         };
 
         Self {
@@ -81,8 +77,8 @@ impl MctsNode {
             total_value: 0.0,
             visits: 0,
             children: Vec::new(),
-            untried_edges,
-            edge_priors,
+            untried_directions,
+            direction_priors,
             is_terminal,
         }
     }
@@ -100,15 +96,7 @@ impl MctsSearch {
         Self { config }
     }
 
-    /// Run MCTS from `initial_state` toward `goal_id` and return the best plan.
-    ///
-    /// # Arguments
-    ///
-    /// * `initial_state` - The current simulator state (root of the tree).
-    /// * `goal` - The abstract target being planned or trained for.
-    /// * `units` - Unified unit knowledge repository.
-    /// * `planner_config` - Shared planner configuration.
-    /// * `model` - The learned hierarchical policy used for priors and rollouts.
+    /// Run MCTS from `initial_state` toward `goal` and return the best plan.
     pub fn search(
         &self,
         initial_state: SimulationState,
@@ -117,18 +105,9 @@ impl MctsSearch {
         planner_config: &PlannerConfig,
         model: &dyn ValueNet,
     ) -> Result<PlanResult, PlannerError> {
-        let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
+        let mut root = MctsNode::new(initial_state, goal, units, planner_config, model);
 
-        let mut root = MctsNode::new(
-            initial_state,
-            goal,
-            units,
-            planner_config,
-            &edge_index,
-            model,
-        );
-
-        if root.untried_edges.is_empty() && !root.is_terminal {
+        if root.untried_directions.is_empty() && !root.is_terminal {
             // No legal actions from the root.
             let mut state = root.state.clone();
             state.tick(units, planner_config.dt);
@@ -146,7 +125,7 @@ impl MctsSearch {
 
             let value = if leaf.is_terminal {
                 compute_terminal_bonus(&leaf.state, true) as f64
-            } else if leaf.untried_edges.is_empty() {
+            } else if leaf.untried_directions.is_empty() {
                 // Fully expanded leaf: run a rollout from this state.
                 rollout_value(
                     &leaf.state,
@@ -154,33 +133,24 @@ impl MctsSearch {
                     units,
                     planner_config,
                     model,
-                    &edge_index,
                     self.config.max_rollout_steps,
                 )
             } else {
-                // Expand one untried edge, then rollout from the child.
-                let edge_idx = leaf
-                    .untried_edges
+                // Expand one untried direction, then rollout from the child.
+                let direction_idx = leaf
+                    .untried_directions
                     .iter()
                     .copied()
                     .max_by(|a, b| {
-                        leaf.edge_priors[*a]
-                            .partial_cmp(&leaf.edge_priors[*b])
+                        leaf.direction_priors[*a]
+                            .partial_cmp(&leaf.direction_priors[*b])
                             .unwrap_or(std::cmp::Ordering::Equal)
                     })
-                    .unwrap_or(leaf.untried_edges[0]);
+                    .unwrap_or(leaf.untried_directions[0]);
 
-                leaf.untried_edges.retain(|&e| e != edge_idx);
+                leaf.untried_directions.retain(|&d| d != direction_idx);
 
-                match expand_edge(
-                    &leaf.state,
-                    edge_idx,
-                    goal,
-                    units,
-                    planner_config,
-                    &edge_index,
-                    model,
-                ) {
+                match expand_direction(&leaf.state, direction_idx, goal, units, planner_config) {
                     Some(child_state) => {
                         let child_value = if child_state.goal_reached(goal) {
                             compute_terminal_bonus(&child_state, true) as f64
@@ -191,19 +161,18 @@ impl MctsSearch {
                                 units,
                                 planner_config,
                                 model,
-                                &edge_index,
                                 self.config.max_rollout_steps,
                             )
                         };
                         leaf.children.push((
-                            edge_idx,
+                            direction_idx,
                             Box::new(MctsNode {
                                 state: child_state,
                                 total_value: child_value,
                                 visits: 1,
                                 children: Vec::new(),
-                                untried_edges: Vec::new(),
-                                edge_priors: vec![0.0f32; edge_index.len()],
+                                untried_directions: Vec::new(),
+                                direction_priors: vec![0.0f32; EdgeCategory::ALL.len()],
                                 is_terminal: true,
                             }),
                         ));
@@ -231,26 +200,22 @@ impl MctsSearch {
         }
 
         // Pick the root child with the highest visit count.
-        let best_edge = root
+        let best_direction = root
             .children
             .iter()
             .max_by(|(_, a), (_, b)| a.visits.cmp(&b.visits))
-            .map(|(edge_idx, _)| *edge_idx);
+            .map(|(direction_idx, _)| *direction_idx);
 
         let mut final_state = root.state.clone();
-        let action = if let Some(edge_idx) = best_edge {
-            match expand_edge(
-                &root.state,
-                edge_idx,
-                goal,
-                units,
-                planner_config,
-                &edge_index,
-                model,
-            ) {
-                Some(s) => {
-                    final_state = s;
-                    infer_action_from_states(&root.state, &final_state, edge_idx, &edge_index)
+        let action = if let Some(direction_idx) = best_direction {
+            let direction = EdgeCategory::ALL[direction_idx];
+            match direction_to_action(direction, &root.state, units, planner_config, goal) {
+                Some(action) => {
+                    if execute_action(&mut final_state, &action, units, planner_config.dt).is_ok() {
+                        action
+                    } else {
+                        SimAction::Wait
+                    }
                 }
                 None => SimAction::Wait,
             }
@@ -263,21 +228,21 @@ impl MctsSearch {
 }
 
 /// Select a path from the root to a leaf using UCB1/PUCT.
-///
-/// Returns the indices of the child chosen at each level. The leaf is the node
-/// reached after following all indices.
 fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
     let mut path = Vec::new();
     let mut current = node;
 
-    while !current.is_terminal && current.untried_edges.is_empty() && !current.children.is_empty() {
+    while !current.is_terminal
+        && current.untried_directions.is_empty()
+        && !current.children.is_empty()
+    {
         let parent_visits = current.visits as f64;
         let best = current
             .children
             .iter()
             .enumerate()
-            .map(|(i, (edge_idx, child))| {
-                let prior = current.edge_priors[*edge_idx] as f64;
+            .map(|(i, (direction_idx, child))| {
+                let prior = current.direction_priors[*direction_idx] as f64;
                 let q = if child.visits == 0 {
                     0.0
                 } else {
@@ -298,54 +263,44 @@ fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
 }
 
 /// Evaluate the policy network at `state` and return prior probabilities over
-/// legal plan-graph edges.
-fn evaluate_edge_priors(
+/// legal directions.
+fn evaluate_direction_priors(
     state: &SimulationState,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    edge_index: &PlanEdgeIndex,
     model: &dyn ValueNet,
 ) -> (Vec<f32>, Vec<usize>) {
     let shortfall = [0.0f32; 3];
     let features = state_features_with_shortfall(state, units, config, shortfall);
 
-    let mut direction_logits = model.evaluate_direction(features.clone());
-    let direction_mask = edge_index.legal_category_mask(state, units);
+    let mut direction_logits = model.evaluate_direction(features);
+    let direction_mask = legal_direction_mask(state, units, config, goal);
     apply_mask(&mut direction_logits, &direction_mask);
     let direction_probs = softmax_probs(&direction_logits);
 
-    let mut edge_prior = vec![0.0f32; edge_index.len()];
-    for (d, &dp) in direction_probs.iter().enumerate() {
-        if dp <= 0.0 {
-            continue;
-        }
-        let category = EdgeCategory::ALL[d];
-        let mut action_logits = model.evaluate_action(features.clone(), category);
-        let action_mask = edge_index.legal_mask_for_category(state, units, category);
-        apply_mask(&mut action_logits, &action_mask);
-        let action_probs = softmax_probs(&action_logits);
-        for (edge_idx, &p) in action_probs.iter().enumerate() {
-            if p > 0.0 {
-                edge_prior[edge_idx] += dp * p;
-            }
-        }
-    }
-
-    let total: f32 = edge_prior.iter().sum();
-    if total > 0.0 {
-        for p in &mut edge_prior {
-            *p /= total;
-        }
-    }
-
-    let untried: Vec<usize> = edge_prior
+    let untried: Vec<usize> = direction_probs
         .iter()
         .enumerate()
         .filter(|(_, &p)| p > 0.0)
         .map(|(i, _)| i)
         .collect();
 
-    (edge_prior, untried)
+    (direction_probs, untried)
+}
+
+/// Build a boolean mask over [`EdgeCategory::ALL`] indicating which directions
+/// have at least one legal concrete action right now.
+fn legal_direction_mask(
+    state: &SimulationState,
+    units: &Units,
+    config: &PlannerConfig,
+    goal: &Goal,
+) -> Vec<bool> {
+    EdgeCategory::ALL
+        .iter()
+        .map(|&d| direction_to_action(d, state, units, config, goal).is_some())
+        .collect()
 }
 
 /// Compute a softmax probability vector from masked logits.
@@ -362,58 +317,16 @@ fn softmax_probs(logits: &[f32]) -> Vec<f32> {
     exps.iter().map(|&e| e / sum).collect()
 }
 
-/// Apply a concrete plan-graph edge to `state` and return the resulting state.
-fn expand_edge(
+/// Apply a concrete direction to `state` and return the resulting state.
+fn expand_direction(
     state: &SimulationState,
-    edge_idx: usize,
-    _goal: &Goal,
+    direction_idx: usize,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    edge_index: &PlanEdgeIndex,
-    model: &dyn ValueNet,
 ) -> Option<SimulationState> {
-    let edge = edge_index.get(edge_idx)?;
-
-    let shortfall = [0.0f32; 3];
-    let features = state_features_with_shortfall(state, units, config, shortfall);
-    let power_mean = model.evaluate_power(features.clone(), edge_idx, edge_index.len());
-    let target_power = power_mean.max(0.0).round();
-
-    let squad_raw = model.evaluate_squad(features, target_power);
-    let squad_raw_arr = [
-        squad_raw.get(0).copied().unwrap_or(0.0),
-        squad_raw.get(1).copied().unwrap_or(0.0),
-        squad_raw.get(2).copied().unwrap_or(0.0),
-    ];
-
-    let available = idle_engineer_counts(state, units);
-    let desired = ensure_minimum_squad(clamp_squad(squad_raw_arr, available), available);
-    let builders = select_squad_for_edge(edge, desired, state, units);
-    if builders.is_empty() {
-        return None;
-    }
-
-    let action = match edge.kind {
-        crate::planner::plan_graph::EdgeAction::Build => {
-            if let Some(target_goal) = edge.target_goal() {
-                SimAction::BuildGoal {
-                    goal: *target_goal,
-                    builders: builders.clone(),
-                }
-            } else {
-                SimAction::Build {
-                    unit_id: edge.target_unit().expect("build target unit").clone(),
-                    builders: builders.clone(),
-                }
-            }
-        }
-        crate::planner::plan_graph::EdgeAction::Upgrade => SimAction::Upgrade {
-            target_unit_id: edge.target_unit().expect("upgrade target unit").clone(),
-            old_node: find_upgrade_source(state, edge.source_unit().expect("upgrade source unit"))
-                .unwrap_or_else(|| crate::sim::NodeId::new(0)),
-            builders: builders.clone(),
-        },
-    };
+    let direction = EdgeCategory::ALL.get(direction_idx)?;
+    let action = direction_to_action(*direction, state, units, config, goal)?;
 
     let mut new_state = state.clone();
     if execute_action(&mut new_state, &action, units, config.dt).is_err() {
@@ -423,7 +336,7 @@ fn expand_edge(
     Some(new_state)
 }
 
-/// Run a rollout from `state` using the hierarchical policy and return the
+/// Run a rollout from `state` using the direction-only policy and return the
 /// discounted sum of step rewards plus a terminal bonus.
 fn rollout_value(
     state: &SimulationState,
@@ -431,14 +344,12 @@ fn rollout_value(
     units: &Units,
     config: &PlannerConfig,
     model: &dyn ValueNet,
-    _edge_index: &PlanEdgeIndex,
     max_steps: usize,
 ) -> f64 {
     let mut s = state.clone();
     let mut total = 0.0f32;
     let mut discount = 1.0f32;
     let gamma = 0.99f32;
-    let mut shortfall = [0.0f32; 3];
 
     for _ in 0..max_steps {
         if s.goal_reached(goal) {
@@ -446,26 +357,10 @@ fn rollout_value(
         }
 
         let prev = s.clone();
-        let result = macro_policy_plan(
-            units,
-            s.clone(),
-            goal,
-            Some(model),
-            true,
-            &mut shortfall,
-            config,
-        );
 
-        match result {
-            Ok(plan_result) => {
-                let action = plan_result.first_action.unwrap_or(SimAction::Wait);
-                if execute_action(&mut s, &action, units, config.dt).is_err() {
-                    s.tick(units, config.dt);
-                }
-            }
-            Err(_) => {
-                s.tick(units, config.dt);
-            }
+        let action = greedy_direction_action(&s, goal, units, config, model);
+        if execute_action(&mut s, &action, units, config.dt).is_err() {
+            s.tick(units, config.dt);
         }
 
         total += discount * compute_step_reward(&prev, &s, units);
@@ -476,68 +371,25 @@ fn rollout_value(
     (total + discount * terminal) as f64
 }
 
-/// Reconstruct the `SimAction` that transformed `before` into `after`.
-///
-/// The MCTS node stores the state after applying the best edge. This helper
-/// returns the corresponding action so the caller can build a `PlanResult`.
-fn infer_action_from_states(
-    before: &SimulationState,
-    after: &SimulationState,
-    edge_idx: usize,
-    edge_index: &PlanEdgeIndex,
+/// Greedily pick a direction using the policy network and heuristic layer.
+fn greedy_direction_action(
+    state: &SimulationState,
+    goal: &Goal,
+    units: &Units,
+    config: &PlannerConfig,
+    model: &dyn ValueNet,
 ) -> SimAction {
-    let Some(edge) = edge_index.get(edge_idx) else {
-        return SimAction::Wait;
-    };
+    let shortfall = [0.0f32; 3];
+    let features = state_features_with_shortfall(state, units, config, shortfall);
+    let direction_logits = model.evaluate_direction(features);
+    let direction_mask = legal_direction_mask(state, units, config, goal);
 
-    if let Some(goal) = edge.target_goal() {
-        if !before.goal_project_active() && after.goal_project_active() {
-            let builders = after
-                .goal_project
-                .as_ref()
-                .map(|gp| gp.started_by.clone())
-                .unwrap_or_default();
-            return SimAction::BuildGoal {
-                goal: *goal,
-                builders,
-            };
-        }
-        return SimAction::Wait;
-    }
-
-    let Some(target_unit) = edge.target_unit() else {
-        return SimAction::Wait;
-    };
-
-    let before_active: HashSet<_> = before
-        .graph
-        .graph
-        .node_weights()
-        .filter(|n| n.is_active())
-        .map(|n| n.id)
-        .collect();
-
-    // Find a newly active node that matches the edge target.
-    for node in after.graph.graph.node_weights() {
-        if node.is_active() && !before_active.contains(&node.id) {
-            if node.unit_id == *target_unit {
-                return SimAction::Build {
-                    unit_id: target_unit.clone(),
-                    builders: Vec::new(),
-                };
-            }
+    if let Some(direction_idx) = masked_argmax(&direction_logits, &direction_mask) {
+        let direction = EdgeCategory::ALL[direction_idx];
+        if let Some(action) = direction_to_action(direction, state, units, config, goal) {
+            return action;
         }
     }
 
     SimAction::Wait
-}
-
-/// Build a [`PlanResult`] that commits to a single immediate action.
-fn plan_result_with_action(state: SimulationState, action: SimAction) -> PlanResult {
-    PlanResult {
-        events: Vec::new(),
-        completion_time: state.time,
-        final_economy: state.economy,
-        first_action: Some(action),
-    }
 }

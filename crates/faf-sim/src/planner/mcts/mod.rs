@@ -1,10 +1,12 @@
-//! Monte Carlo Tree Search planner guided by a learned hierarchical policy.
+//! Monte Carlo Tree Search planner guided by a learned direction-only policy.
 //!
-//! The concrete one-step planner lives in [`policy`]; the three learned
-//! networks live in [`macro_net`]; the abstract value-net interface lives in
-//! [`value_net`]; training lives in [`train`].
+//! The concrete one-step planner lives in [`policy`]; the learned direction
+//! network lives in [`macro_net`]; the heuristic that turns directions into
+//! concrete actions lives in [`heuristic`]; the abstract value-net interface
+//! lives in [`value_net`]; training lives in [`train`].
 
 pub mod features;
+pub mod heuristic;
 pub mod macro_net;
 pub mod policy;
 pub mod search;

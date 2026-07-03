@@ -37,10 +37,6 @@ pub struct TrainConfig {
     /// Number of supervised fine-tuning epochs to run on the best discovered
     /// trajectory after REINFORCE training.
     pub fine_tune_epochs: usize,
-    /// Standard deviation for build-power sampling.
-    pub power_std: f32,
-    /// Standard deviation for engineer-count sampling.
-    pub squad_std: f32,
     /// Global gradient norm clipping threshold. `None` disables clipping.
     /// A value of `1.0` is a safe default for preventing REINFORCE divergence.
     pub grad_clip: Option<f32>,
@@ -62,8 +58,6 @@ impl Default for TrainConfig {
             greedy_eval_interval: 100,
             patience: None,
             fine_tune_epochs: 100,
-            power_std: 2.0,
-            squad_std: 0.5,
             grad_clip: None,
         }
     }

@@ -112,13 +112,16 @@ impl SelectionPools {
                     }
                 }
                 PlanNode::Unit(target_kind) => {
-                    if state.has_completed_unit(target_kind) || active_targets.contains(target_kind)
-                    {
-                        continue;
-                    }
-
                     match edge.weight() {
                         EdgeAction::Build => {
+                            // Avoid duplicate concrete units / parallel builds of
+                            // the same abstract kind.
+                            if state.has_completed_unit(target_kind)
+                                || active_targets.contains(target_kind)
+                            {
+                                continue;
+                            }
+
                             // Source in a build edge is the builder.
                             if is_idle_builder(state, units, source_kind) {
                                 let opt = SelectionOption::Build(target_kind.clone());
@@ -131,6 +134,8 @@ impl SelectionPools {
                         }
                         EdgeAction::Upgrade => {
                             // Source in an upgrade edge is the unit being upgraded.
+                            // Owning another instance of the target kind does not
+                            // prevent upgrading this source.
                             if can_upgrade(state, units, source_kind, target_kind) {
                                 let opt = SelectionOption::Upgrade {
                                     from: source_kind.clone(),
@@ -240,7 +245,7 @@ impl PlanEdgeIndex {
                     source: source.clone(),
                     target: target.clone(),
                     kind: *e.weight(),
-                    category: EdgeCategory::categorize(&target),
+                    category: EdgeCategory::categorize(*e.weight(), &target),
                 }
             })
             .collect();
@@ -625,22 +630,6 @@ pub(crate) fn find_upgrade_source(
         .node_weights()
         .find(|n| n.is_active() && n.unit_id == *source_kind)
         .map(|n| n.id)
-}
-
-/// Count assigned engineers per tech level from a list of builder node ids.
-pub(crate) fn assigned_squad_counts(state: &SimulationState, builders: &[NodeId]) -> [usize; 3] {
-    let mut counts = [0usize; 3];
-    for &id in builders {
-        if let UnitKind::Engineer(t) = &state.graph[id].unit_id {
-            match *t {
-                TechLevel::T1 => counts[0] += 1,
-                TechLevel::T2 => counts[1] += 1,
-                TechLevel::T3 => counts[2] += 1,
-                _ => {}
-            }
-        }
-    }
-    counts
 }
 
 #[cfg(test)]

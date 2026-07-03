@@ -12,7 +12,7 @@ use super::metric::{FineTuneSummary, TrainEvent};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::macro_net::{plan_edge_index, PolicyBundle};
+use crate::planner::mcts::macro_net::PolicyBundle;
 use crate::units::Units;
 use burn::train::metric::MetricMetadata;
 use burn::train::Interrupter;
@@ -32,24 +32,13 @@ pub fn save_policy(
 }
 
 /// Load a trained policy bundle from disk.
-pub fn load_policy(
-    path: &std::path::Path,
-    num_edges: usize,
-) -> Result<PolicyBundle<TrainBackend>, String> {
+pub fn load_policy(path: &std::path::Path) -> Result<PolicyBundle<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();
     let record = recorder
         .load(path.to_path_buf(), &device)
         .map_err(|e| format!("failed to load model: {e}"))?;
-    let model = PolicyBundle::new(&device, num_edges).load_record(record);
-
-    if model.num_edges() != num_edges {
-        return Err(format!(
-            "action head output dimension mismatch: expected {num_edges}, got {}; retrain the model",
-            model.num_edges()
-        ));
-    }
-
+    let model = PolicyBundle::new(&device).load_record(record);
     Ok(model)
 }
 
@@ -76,10 +65,7 @@ pub fn train_policy(
     Option<PolicyBundle<TrainBackend>>,
     TrainStats,
 ) {
-    let num_edges = plan_edge_index(units, goal)
-        .expect("goal must have a plan graph")
-        .len();
-    let mut trainer = Trainer::new(config, num_edges)
+    let mut trainer = Trainer::new(config)
         .with_metrics(metrics)
         .with_interrupter(interrupter);
     if let Some(flag) = stop_flag {

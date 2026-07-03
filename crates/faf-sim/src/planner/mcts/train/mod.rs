@@ -1,8 +1,7 @@
-//! Policy-gradient training for the hierarchical macro-edge + build-power +
-//! engineer-squad policy.
+//! Policy-gradient training for the direction-only policy.
 //!
-//! Uses REINFORCE: roll out episodes with the current policy, then update all
-//! four heads jointly from shaped rewards.
+//! Uses REINFORCE: roll out episodes with the current policy, then update the
+//! single direction head from shaped rewards.
 //!
 //! The training backend is selected by Cargo feature. The library default is
 //! `cpu` so tests and library users can run without a GPU. The `faf-sim-cli`

@@ -1,4 +1,4 @@
-//! Trainer for the hierarchical policy networks.
+//! Trainer for the direction-only policy network.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -39,9 +39,9 @@ pub struct Trainer {
 
 impl Trainer {
     /// Create a new trainer with random initialization.
-    pub fn new(config: TrainConfig, num_edges: usize) -> Self {
+    pub fn new(config: TrainConfig) -> Self {
         let device: TrainDevice = Default::default();
-        let model = PolicyBundle::new(&device, num_edges);
+        let model = PolicyBundle::new(&device);
         Self::from_model(config, model)
     }
 

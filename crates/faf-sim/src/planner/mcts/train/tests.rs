@@ -1,6 +1,5 @@
 use crate::planner::core::Goal;
 use crate::planner::mcts::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
-use crate::planner::mcts::macro_net::plan_edge_index;
 use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
 use crate::units::{TechLevel, Units};
 
@@ -18,15 +17,11 @@ fn trainer_runs_episodes_without_panic() {
         energy_cost: 340_000.0,
         build_time: 46_250.0,
     };
-    let num_edges = plan_edge_index(&units, &goal).unwrap().len();
-    let mut trainer = Trainer::new(
-        TrainConfig {
-            episodes: 3,
-            max_steps: 50,
-            ..Default::default()
-        },
-        num_edges,
-    );
+    let mut trainer = Trainer::new(TrainConfig {
+        episodes: 3,
+        max_steps: 50,
+        ..Default::default()
+    });
 
     let stats = trainer.train(&units, &goal);
 
@@ -42,15 +37,11 @@ fn save_and_load_policy_round_trip() {
         energy_cost: 340_000.0,
         build_time: 46_250.0,
     };
-    let num_edges = plan_edge_index(&units, &goal).unwrap().len();
-    let mut trainer = Trainer::new(
-        TrainConfig {
-            episodes: 2,
-            max_steps: 20,
-            ..Default::default()
-        },
-        num_edges,
-    );
+    let mut trainer = Trainer::new(TrainConfig {
+        episodes: 2,
+        max_steps: 20,
+        ..Default::default()
+    });
     trainer.train(&units, &goal);
     let model = trainer.into_model();
 
@@ -59,7 +50,7 @@ fn save_and_load_policy_round_trip() {
     let path = dir.join("test-policy");
 
     save_policy(&model, &path).expect("save should succeed");
-    let loaded = load_policy(&path, num_edges).expect("load should succeed");
+    let loaded = load_policy(&path).expect("load should succeed");
 
     let device: TrainDevice = Default::default();
     let dummy = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];

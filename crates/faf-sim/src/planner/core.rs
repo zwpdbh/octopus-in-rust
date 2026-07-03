@@ -8,7 +8,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
-use crate::planner::mcts::macro_net::num_plan_edges;
 use crate::planner::mcts::search::{MctsConfig, MctsSearch};
 use crate::planner::mcts::value_net::ValueNet;
 use crate::sim::{BuildEvent, SimulationState};
@@ -347,31 +346,17 @@ impl Planner {
                 iterations,
                 value_net: _,
                 deterministic: _,
-            } => {
-                let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
-                    PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
-                })?;
-
-                if self.value_net.num_edges() != num_edges {
-                    return Err(PlannerError::Other(format!(
-                        "value net was built for {} edges but goal has {}",
-                        self.value_net.num_edges(),
-                        num_edges
-                    )));
-                }
-
-                MctsSearch::new(MctsConfig {
-                    iterations,
-                    ..MctsConfig::default()
-                })
-                .search(
-                    initial_state,
-                    goal,
-                    units,
-                    &self.config,
-                    self.value_net.as_ref(),
-                )
-            }
+            } => MctsSearch::new(MctsConfig {
+                iterations,
+                ..MctsConfig::default()
+            })
+            .search(
+                initial_state,
+                goal,
+                units,
+                &self.config,
+                self.value_net.as_ref(),
+            ),
         }
     }
 }
