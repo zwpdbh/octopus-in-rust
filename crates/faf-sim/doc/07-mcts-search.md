@@ -1,287 +1,217 @@
-# 7. MCTS Search
+# 7. MCTS Search with a Burn Policy Prior
 
-This chapter describes the UCT (Upper Confidence Bound applied to Trees) search loop that sits on top of the trained hierarchical policy. The policy provides prior probabilities over plan-graph edges and a default rollout policy; MCTS turns those into a closed-loop planner.
+During training the policy acts alone. During simulation we wrap it in **Monte Carlo Tree Search (MCTS)** to look ahead. MCTS keeps a search tree rooted in the current state, explores promising directions, and returns the action with the highest visit count.
 
-**MCTS is used during simulation, not during training.** Training uses REINFORCE to optimize the policy network directly (see [chapter 7](06-training-pipeline.md)). MCTS is what you run when you call `faf-sim simulate` with a trained model.
+This chapter explains UCT/PUCT selection, 6-way expansion, how the Burn network supplies prior probabilities, and how greedy policy rollouts estimate leaf values.
 
-## MCTS vs the one-step policy
+## Why MCTS over directions?
 
-MCTS is not the only way to use the trained network. The network can act by itself through `macro_policy_plan`, which runs one forward pass and immediately returns a `SimAction`. MCTS is an optional search layer on top of that one-step policy.
+The policy outputs a distribution over six high-level directions. MCTS therefore searches over those same six directions. Each tree edge is a direction, not a concrete build order. The heuristic layer resolves a direction into a `SimAction` only when the edge is expanded.
 
-The difference is lookahead:
+This has two benefits:
 
-- **One-step policy:** picks the best action for the current state only. Fast, but myopic.
-- **MCTS:** simulates many future trajectories, each one using the one-step policy to choose actions, and picks the root action with the best empirical average.
+1. **Small branching factor.** Six is much smaller than the number of concrete plan-graph edges, so the tree stays manageable.
+2. **Reuses the trained network.** The same `evaluate_direction` call provides both the prior probabilities for selection and the greedy policy for rollouts.
 
-Training uses the one-step policy directly because it is fast enough to run thousands of episodes. The CLI `simulate` command uses MCTS to get stronger play from the same trained weights.
+## Configuration
 
-## Search loop
-
-Each MCTS iteration repeats four steps:
-
-1. **Select.** Traverse from the root to a leaf using the UCT formula.
-2. **Expand.** Add one child to the leaf using the highest-priority legal plan-graph edge.
-3. **Evaluate.** Estimate the value of the new child with a rollout (or use the terminal outcome if the state is done).
-4. **Backup.** Add the evaluated value to every node on the path from the new child back to the root.
-
-```mermaid
-flowchart TD
-    Root["Root: current SimulationState"] --> Select["1. Select: UCT to leaf"]
-    Select --> Expand["2. Expand: add one child via highest prior"]
-    Expand --> Rollout["3. Evaluate: rollout from child"]
-    Rollout --> Backup["4. Backup: propagate value to root path"]
-    Backup --> Root
-```
-
-These four steps are implemented in `MctsSearch::search`:
+`MctsConfig` controls the search budget:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 115 — MctsSearch::search
-pub fn search(
-    &self,
-    initial_state: SimulationState,
-    goal: &Goal,
-    units: &Units,
-    planner_config: &PlannerConfig,
-    model: &dyn ValueNet,
-) -> Result<PlanResult, PlannerError> {
-    let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
-    let mut root = MctsNode::new(
-        initial_state,
-        goal,
-        units,
-        planner_config,
-        &edge_index,
-        model,
-    );
-
-    for _ in 0..self.config.iterations {
-        let path = select_path(&root, self.config.c_puct);
-        // ... walk to leaf, expand or rollout, backup value ...
-    }
-
-    // Pick the root child with the highest visit count.
-    // ...
+// crates/faf-sim/src/planner/mcts/search.rs ~line 22 — MctsConfig
+pub struct MctsConfig {
+    pub iterations: usize,
+    pub c_puct: f64,
+    pub max_rollout_steps: usize,
 }
 ```
 
-If `iterations` is zero, the loop body is skipped and the search picks the root child with the highest prior probability (because no visits have occurred yet). This is different from the one-step hierarchical policy; if you want the one-step policy, use `mcts::policy::plan` directly with `iterations == 0`.
+- `iterations` — how many selection/expansion/rollout/backup loops to run.
+- `c_puct` — UCT exploration constant. Higher values explore more.
+- `max_rollout_steps` — maximum length of a rollout from a leaf.
 
-The final root move is chosen by **visit count**, not by the policy directly. MCTS aggregates the results of many rollouts and picks the action that was explored most often, which is usually the most robust action.
+## Tree nodes
 
-## Node structure
-
-Each MCTS node stores the simulator state at that point in the tree plus statistics:
+Each MCTS node stores the simulator state at that node, visit statistics, and the legal directions that have not yet been expanded:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 47 — MctsNode
+// crates/faf-sim/src/planner/mcts/search.rs ~line 42 — MctsNode
 struct MctsNode {
-    /// Simulator state at this node.
     state: SimulationState,
-    /// Total value accumulated from backpropagation.
     total_value: f64,
-    /// Number of times this node has been visited.
     visits: usize,
-    /// Child nodes, keyed by the plan-graph edge used to reach them.
     children: Vec<(usize, Box<MctsNode>)>,
-    /// Legal edges that have not been expanded yet.
-    untried_edges: Vec<usize>,
-    /// Prior probability for each plan-graph edge (sparse: legal edges only).
-    edge_priors: Vec<f32>,
-    /// True if the state has reached the goal.
+    untried_directions: Vec<usize>,
+    direction_priors: Vec<f32>,
     is_terminal: bool,
 }
 ```
 
-- `state` is the simulator state after applying the edge that leads to this node.
-- `total_value` is the sum of all backed-up values.
-- `visits` is the number of times the node has been visited.
-- `children` maps each expanded edge index to its child node.
-- `untried_edges` lists legal edges that have not been expanded yet.
-- `edge_priors` stores the network's prior probability for each edge.
-- `is_terminal` is true if the state has reached the goal.
-
-## Selection
-
-At each internal node, `select_path` picks the child that maximizes the PUCT formula:
-
-```text
-PUCT(child) = (child.total_value / child.visits)
-              + c_puct * prior * sqrt(parent.visits) / (1.0 + child.visits)
-```
+When a node is created, the policy network evaluates the state and produces a prior probability for each legal direction:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 278 — select_path
-fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
-    // ... while not at leaf, pick child with best q + u ...
-}
-```
-
-The first term is exploitation: children with high average value are preferred. The second term is exploration: children with high prior probability and few visits get a bonus. `c_puct` controls the balance.
-
-A larger `c_puct` makes the search explore more aggressively. A smaller `c_puct` makes it greedier. The right value depends on the noise in your value estimates; start near `sqrt(2)` and tune on benchmarks.
-
-## Edge priors
-
-The policy network supplies a prior probability for every legal edge. The prior is computed by evaluating the direction head, converting it to a softmax over legal directions, then for each direction evaluating the action head and converting it to a softmax over legal edges in that direction. The direction and action probabilities are multiplied and summed to get a single prior per edge.
-
-```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 309 — evaluate_edge_priors
-fn evaluate_edge_priors(
+// crates/faf-sim/src/planner/mcts/search.rs ~line 275 — evaluate_direction_priors
+fn evaluate_direction_priors(
     state: &SimulationState,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    edge_index: &PlanEdgeIndex,
     model: &dyn ValueNet,
+    plan: &PlanGraph,
 ) -> (Vec<f32>, Vec<usize>) {
-    // ... direction softmax over legal directions ...
-    // ... action softmax for each direction over legal edges ...
-    // ... combine into edge_prior[edge_idx] ...
+    let features = state_features(state, units, config);
+
+    let mut direction_logits = model.evaluate_direction(features);
+    let direction_mask = legal_direction_mask(state, units, config, goal, plan);
+    apply_mask(&mut direction_logits, &direction_mask);
+    let direction_probs = softmax_probs(&direction_logits);
+
+    let untried: Vec<usize> = direction_probs
+        .iter()
+        .enumerate()
+        .filter(|(_, &p)| p > 0.0)
+        .map(|(i, _)| i)
+        .collect();
+
+    (direction_probs, untried)
 }
 ```
 
-This prior is what makes PUCT explore sensible edges first. Untrained networks still produce a prior, but it is essentially random; after training, the prior concentrates on high-value edges.
+The prior probabilities come from the trained Burn network. Illegal directions are masked to near-zero probability before softmax.
 
-**Upgrade note:** the prior computation uses the direction and action heads only. Factory-upgrade edges are reached through the `IncreaseBP` direction. The dedicated `upgrade_head` is **not** used when computing MCTS priors, although it is used during rollouts (see below).
+## Selection with PUCT
+
+Selection walks down the tree from the root to a leaf using the PUCT formula. PUCT is like UCB1 but incorporates the learned prior:
+
+```text
+score(child) = Q(child) + c_puct * prior(child) * sqrt(parent_visits) / (1 + child_visits)
+```
+
+```rust
+// crates/faf-sim/src/planner/mcts/search.rs ~line 239 — select_path
+fn select_path(node: &MctsNode, c_puct: f64) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut current = node;
+
+    while !current.is_terminal
+        && current.untried_directions.is_empty()
+        && !current.children.is_empty()
+    {
+        let parent_visits = current.visits as f64;
+        let best = current
+            .children
+            .iter()
+            .enumerate()
+        .map(|(i, (direction_idx, child))| {
+            let prior = current.direction_priors[*direction_idx] as f64;
+            let q = if child.visits == 0 {
+                0.0
+            } else {
+                child.total_value / child.visits as f64
+            };
+            let u = c_puct * prior * parent_visits.sqrt() / (1.0 + child.visits as f64);
+            (i, q + u)
+        })
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+        path.push(best);
+        current = &current.children[best].1;
+    }
+
+    path
+}
+```
+
+The prior term `u` is large when:
+
+- the network assigns high probability to the direction,
+- the parent has been visited many times,
+- the child has been visited few times.
+
+This biases exploration toward directions the network thinks are good, while still allowing visits to low-prior directions if their empirical value `q` becomes high.
 
 ## Expansion
 
-When the selected node has untried edges, the search expands the one with the highest prior:
+When selection reaches a node with untried directions, MCTS expands the highest-prior untried direction:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 168 — expansion inside search
-let edge_idx = leaf
-    .untried_edges
-    .iter()
-    .copied()
-    .max_by(|a, b| {
-        leaf.edge_priors[*a]
-            .partial_cmp(&leaf.edge_priors[*b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
-    .unwrap_or(leaf.untried_edges[0]);
-
-leaf.untried_edges.retain(|&e| e != edge_idx);
-
-match expand_edge(
-    &leaf.state,
-    edge_idx,
-    goal,
-    units,
-    planner_config,
-    &edge_index,
-    model,
-) {
-    Some(child_state) => { /* create child node */ }
-    None => { /* expansion failed, treat as neutral value */ }
-}
-```
-
-`expand_edge` resolves the selected edge into a concrete action using the power and squad heads, just like the one-step policy:
-
-```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 365 — expand_edge
-fn expand_edge(
+// crates/faf-sim/src/planner/mcts/search.rs ~line 331 — expand_direction
+fn expand_direction(
     state: &SimulationState,
-    edge_idx: usize,
-    _goal: &Goal,
+    direction_idx: usize,
+    goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    edge_index: &PlanEdgeIndex,
-    model: &dyn ValueNet,
+    plan: &PlanGraph,
 ) -> Option<SimulationState> {
-    let edge = edge_index.get(edge_idx)?;
-    // ... evaluate power and squad heads, resolve builders, execute action ...
-    // BuildGoal edges produce SimAction::BuildGoal, unit edges produce SimAction::Build.
+    let direction = EdgeCategory::ALL.get(direction_idx)?;
+    let action = direction_to_action(*direction, state, units, config, goal, plan);
+    if matches!(action, SimAction::Wait) {
+        return None;
+    }
+
+    let mut new_state = state.clone();
+    if execute_action(&mut new_state, &action, units, config.dt).is_err() {
+        return None;
+    }
+
+    Some(new_state)
 }
 ```
 
-If expansion fails (for example, because no idle builder is available), the search treats the result as a neutral value rather than crashing.
+Expansion fails if the chosen direction maps to `SimAction::Wait` (no legal concrete action) or if the simulator rejects the action. In that case the expansion contributes a neutral value of `0.0`.
 
-## Rollout evaluation
+## Rollouts
 
-If a node is already fully expanded, or immediately after expanding a new child, the search estimates the leaf's value with a rollout. A rollout is **not** a shortcut that manipulates the build graph to estimate time. It is a full simulation on a **cloned** `SimulationState`, running the same `execute_action` + `tick` code used everywhere else.
+If a leaf is fully expanded but not terminal, MCTS estimates its value by running a **rollout**: a greedy policy playout from the leaf state until the goal is reached or a step limit is hit.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 427 — rollout_value
+// crates/faf-sim/src/planner/mcts/search.rs ~line 355 — rollout_value
 fn rollout_value(
     state: &SimulationState,
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
     model: &dyn ValueNet,
-    _edge_index: &PlanEdgeIndex,
     max_steps: usize,
+    plan: &PlanGraph,
 ) -> f64 {
-    let mut s = state.clone();          // copy of the leaf state
+    let mut s = state.clone();
     let mut total = 0.0f32;
     let mut discount = 1.0f32;
-    // ...
+    let gamma = 0.99f32;
+
     for _ in 0..max_steps {
-        if s.goal_reached(goal) { break; }
+        if s.goal_reached(goal) {
+            break;
+        }
 
         let prev = s.clone();
-        let result = macro_policy_plan(
-            units,
-            s.clone(),
-            goal,
-            Some(model),
-            true,                       // deterministic / greedy
-            config,
-        );
 
-        let action = result.first_action.unwrap_or(SimAction::Wait);
+        let action = greedy_direction_action(&s, goal, units, config, model, plan);
         if execute_action(&mut s, &action, units, config.dt).is_err() {
             s.tick(units, config.dt);
         }
 
         total += discount * compute_step_reward(&prev, &s, units);
-        discount *= 0.99f32;
+        discount *= gamma;
     }
-    // ...
+
+    let terminal = compute_terminal_bonus(&s, s.goal_reached(goal));
+    (total + discount * terminal) as f64
 }
 ```
 
-### How the rollout chooses actions
-
-During rollout, actions are chosen by the **hierarchical policy network**, not by the MCTS tree search. The tree search already selected and expanded the leaf; the rollout simply asks the policy network "what would you do from here?" and lets it play the game out.
-
-The policy network decides each rollout action in two stages:
-
-1. **Direction head:** pick a strategic focus (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `IncreaseEnergyStorage`, `Goal`, or `UpgradeTech`).
-2. **Heuristic layer:** convert the selected direction into a concrete `SimAction` and execute it.
-
-In training the policy samples the direction stochastically; during MCTS rollout it uses the greedy mode (`deterministic: true`) so the value estimate is stable.
-
-### What the rollout modifies
-
-The rollout does **not** add nodes to the MCTS tree. It adds nodes to the **cloned build graph** through normal simulator execution, exactly the same way training adds nodes to the real episode state:
-
-```mermaid
-flowchart LR
-    A["MCTS leaf state"] --> B["clone()"]
-    B --> C["rollout loop"]
-    C --> D["macro_policy_plan chooses action"]
-    D --> E["execute_action adds node to cloned BuildGraph"]
-    E --> F["tick advances time, drains resources, completes projects"]
-    F --> C
-    F -.-> G["clone discarded after terminal bonus"]
-```
-
-After the rollout finishes, the cloned state is discarded. Only the **final scalar value** (discounted rewards + terminal bonus) is backed up into the MCTS tree.
-
-The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. That means rollouts use the direction network plus the deterministic heuristic to choose build/upgrade actions. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
-
-## MCTS does not guarantee success
-
-MCTS only searches `iterations` root-level expansions. A bad trained network will still produce bad priors and bad rollouts, so MCTS cannot magically fix an undertrained policy. It can only amplify a good policy into better move selection. If the network has never learned to tech up or build a T3 engineer, `simulate` will fail just like training does.
+The rollout uses the same network as the tree, but greedily (`masked_argmax`) instead of sampling. This gives a deterministic value estimate that can be averaged across many MCTS iterations.
 
 ## Backup
 
-After expansion and rollout, the search adds the resulting value to `total_value` and increments `visits` for the leaf and every node on the selection path:
+After expansion or rollout, the resulting value is added to every node on the selection path:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 228 — backup
+// crates/faf-sim/src/planner/mcts/search.rs ~line 200 — backup
 leaf.total_value += value;
 leaf.visits += 1;
 let mut current = &mut root;
@@ -294,101 +224,93 @@ for &child_idx in &path {
 }
 ```
 
-This is what makes UCB1/PUCT work: averages are updated, and exploration bonuses shrink as visit counts grow.
+Backup is what makes MCTS a multi-step lookahead: every node accumulates the outcomes of the futures explored below it.
 
 ## Choosing the final action
 
-After the iteration budget is exhausted, the search picks the root child with the **highest visit count**, not necessarily the highest average value. Visit count is a more robust signal because it reflects how much search effort was directed at the move.
+After all iterations, the planner picks the root child with the highest visit count:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 241 — final action selection
-let best_edge = root
+// crates/faf-sim/src/planner/mcts/search.rs ~line 214 — final action selection
+let best_direction = root
     .children
     .iter()
     .max_by(|(_, a), (_, b)| a.visits.cmp(&b.visits))
-    .map(|(edge_idx, _)| *edge_idx);
+    .map(|(direction_idx, _)| *direction_idx);
 ```
 
-The selected edge is expanded one more time to produce the `SimAction` returned in the `PlanResult`.
+Visit count is more robust than raw value because it incorporates both the network's prior and the empirical quality discovered during search.
 
-## Tree reuse
+## The full search function
 
-Because the planner runs every tick, you can reuse parts of the previous tree. After executing the chosen action, the corresponding child becomes the new root; its siblings and their subtrees are discarded. This saves the search effort already invested in the branch you actually follow.
-
-Tree reuse is optional but valuable when you have a tight per-tick time budget. The main complication is that the simulator state must match the stored child state exactly; any drift requires rebuilding from scratch.
-
-## Search budget
-
-Two common budget modes:
-
-- **Iteration budget:** run exactly `N` iterations. Simple and reproducible.
-- **Time budget:** run as many iterations as possible within `T` milliseconds. Better for real-time use.
-
-The `Strategy::Mcts` variant exposes the iteration count, the value-net kind, and a deterministic flag:
+The pieces come together in `MctsSearch::search`:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 128 — Strategy::Mcts variant
-Mcts {
-    /// Number of MCTS iterations to run per decision.
-    iterations: usize,
-    /// Kind of learned value network to use inside MCTS.
-    value_net: ValueNetKind,
-    /// If true, always pick the highest-scoring plan-graph edge.
-    deterministic: bool,
-},
-```
+// crates/faf-sim/src/planner/mcts/search.rs ~line 101 — MctsSearch::search
+pub fn search(
+    &self,
+    initial_state: SimulationState,
+    goal: &Goal,
+    units: &Units,
+    planner_config: &PlannerConfig,
+    model: &dyn ValueNet,
+) -> Result<PlanResult, PlannerError> {
+    let plan = build_plan_graph(units, *goal);
+    let mut root = MctsNode::new(initial_state, goal, units, planner_config, model, &plan);
 
-You can extend this later with a time budget and a parallel search worker.
+    // If no legal actions from root, just wait.
+    if root.untried_directions.is_empty() && !root.is_terminal {
+        let mut state = root.state.clone();
+        state.tick(units, planner_config.dt);
+        return Ok(plan_result_with_action(state, SimAction::Wait));
+    }
 
-## Why MCTS returns only `first_action`
+    for _ in 0..self.config.iterations {
+        let path = select_path(&root, self.config.c_puct);
 
-`PlanResult` exposes a single action, not a full future plan:
+        // Walk to the selected leaf.
+        let mut leaf = &mut root;
+        for &child_idx in &path {
+            leaf = &mut leaf.children[child_idx].1;
+        }
 
-```rust
-// crates/faf-sim/src/planner/core.rs ~line 50 — PlanResult
-pub struct PlanResult {
-    pub events: Vec<BuildEvent>,
-    pub completion_time: f64,
-    pub final_economy: EconomyState,
-    /// The only field the reactive executor commits to.
-    pub first_action: Option<crate::planner::SimAction>,
+        let value = if leaf.is_terminal {
+            compute_terminal_bonus(&leaf.state, true) as f64
+        } else if leaf.untried_directions.is_empty() {
+            rollout_value(&leaf.state, goal, units, planner_config, model, self.config.max_rollout_steps, &plan)
+        } else {
+            // Expand one untried direction, then rollout from the child.
+            // ...
+        };
+
+        // Backup value along the path.
+        // ...
+    }
+
+    // Pick the root child with the highest visit count.
+    // ...
 }
 ```
 
-The full action sequences produced during selection, expansion, and rollout exist only to **evaluate** the immediate candidates. The real executor commits to `first_action`, applies it to the real simulator state, and then calls `Planner::plan` again from the new state.
+If `iterations` is zero, the loop body is skipped and the search picks the root child with the highest prior probability (because no visits have occurred yet). This is a cheap one-step policy fallback.
 
-```mermaid
-sequenceDiagram
-    participant E as Executor
-    participant P as Planner
-    participant S as Simulator
+## MCTS vs training
 
-    E->>P: plan(state, goal)
-    Note over P: MCTS explores many futures<br/>(selection, expansion, rollout)
-    P-->>E: PlanResult { first_action }
-    E->>S: execute_action(first_action)
-    S-->>E: new state
-    E->>P: plan(new_state, goal)
-    Note over P: re-plan from actual state
-    P-->>E: PlanResult { first_action }
-    E->>S: execute_action(first_action)
-```
+| | Training | MCTS |
+| --- | --- | --- |
+| **Action selection** | Sample from the masked policy, with epsilon-greedy noise. | PUCT selection over the tree, then greedy argmax in rollouts. |
+| **Tree** | None. | Maintains a tree rooted in the current state. |
+| **Network use** | One forward pass per step. | One forward pass per node expansion plus one per rollout step. |
+| **Goal** | Generate gradients. | Pick the best action from the current observed state. |
 
-This design is closed-loop reactive control. It handles deviations such as economy stalls, enemy interference, or units being destroyed, because the planner never reasons from a stale expected state.
+## When MCTS helps
 
-## MCTS as a closed-loop planner
+MCTS is not magic. If the trained policy has never learned to build a T3 engineer, MCTS cannot invent that path because its priors and rollouts both come from the policy. MCTS amplifies a good policy into better move selection; it cannot fix a bad one.
 
-MCTS is the final piece that makes the system closed-loop:
+MCTS is most useful when:
 
-```mermaid
-flowchart LR
-    A["Current SimulationState"] --> B["MCTS.search(state, goal)"]
-    B --> C["first_action"]
-    C --> D["execute_action on real state"]
-    D --> E["new SimulationState"]
-    E --> B
-```
+- the policy is roughly right but makes local mistakes,
+- a small short-term sacrifice leads to a large long-term gain,
+- the simulator state has drifted and the policy's greedy choice is no longer optimal.
 
-Because the search is rooted in the current state and recomputes every tick, small deviations from the expected plan do not compound. The planner always reasons from the latest observation.
-
-Now that the search is defined, we can wire it into the simulator actor loop and the CLI.
+With MCTS in place, the next chapter shows how the planner is wired into the CLI and actor loop.

@@ -4,7 +4,7 @@
 //!
 //! - The [`Planner`] type and [`Strategy`] registry for searching the
 //!   graph-growth model in [`crate::sim`].
-//! - A STRIPS/goal-oriented planning layer ([`strips`], [`plan_graph`]) for
+//! - A STRIPS/goal-oriented planning layer (`plan_graph`) for
 //!   reasoning about build/upgrade dependencies symbolically.
 
 pub(crate) mod action;

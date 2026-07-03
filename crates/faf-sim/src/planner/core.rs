@@ -276,7 +276,7 @@ impl Default for PlannerConfig {
 /// are not part of the public surface.
 ///
 /// A planner must be created with a value net. If you do not have a trained
-/// model, pass a freshly-initialized net (e.g. [`MlpValueNet::new`]); the
+/// model, pass a freshly-initialized net (e.g. `MlpValueNet::new`); the
 /// planner itself will not silently fall back to a random policy.
 #[derive(Debug)]
 pub struct Planner {

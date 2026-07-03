@@ -1,4 +1,4 @@
-# 1. Modeling the Environment
+# 2. Modeling the Environment
 
 In RL, every decision is made from a **state**. For FAF build-order optimization, the state is the simulator's `SimulationState`. This chapter explains the structure of that state and how we turn it into a fixed-size feature vector that a Burn network can consume.
 
@@ -114,7 +114,7 @@ For the current model:
 Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into an 11-dimensional vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constant
+// crates/faf-sim/src/planner/mcts/features.rs ~line 11 — feature constant
 pub const STATE_FEATURE_COUNT: usize = 11;
 ```
 
@@ -154,6 +154,15 @@ flowchart LR
 ```
 
 The 11 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)); the tree itself is the MCTS search tree, not the build graph.
+
+## Why not a GNN?
+
+A graph neural network could consume the build graph directly, but we chose an MLP for two practical reasons:
+
+1. **The relevant state is small.** Income, storage, build power, and the few tech milestones that unlock the goal chain explain most of the variance in good decisions. An 11-D vector captures them compactly.
+2. **Training is cheaper.** MLP forward and backward passes are simple and fast, so we can roll out many more episodes per hour. For this problem the extra capacity of a GNN is not worth the cost.
+
+If the state were much larger — for example if we included unit positions, terrain, or an opponent's army — a GNN or transformer would become attractive. For pure build-order optimization, the featurized MLP is enough.
 
 ## Objectives
 

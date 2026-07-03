@@ -1,6 +1,6 @@
 # 4. Building the Policy Network in Burn
 
-This chapter is the heart of the tutorial: a single `burn::module::Module` that implements the hierarchical policy. We will see how Burn's typed tensors and `Module` derive make it possible to express a four-head policy in ordinary Rust.
+This chapter is the heart of the tutorial: a single `burn::module::Module` that implements the direction-only policy. We will see how Burn's typed tensors and `Module` derive make it possible to express a small MLP policy in ordinary Rust, and why that small network is enough for this problem.
 
 ## Design overview
 
@@ -110,7 +110,7 @@ The core inference function is `macro_policy_plan` in `mcts::policy`:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/policy.rs ~line 44 — macro_policy_plan
-fn macro_policy_plan(
+pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,
     goal: &Goal,
@@ -131,6 +131,6 @@ The same `HierarchicalPolicyNet` is used in two places:
 1. **Training rollouts** — sample a direction from the masked softmax. No tree is built; the policy is sampled directly.
 2. **MCTS priors and rollouts** — convert direction softmax probabilities into prior probabilities for legal directions, and play out the greedy policy from a leaf to estimate its value.
 
-Because the network is a single `Module`, all three usages share one set of weights and one serialization format.
+Because the network is a single `Module`, training, MCTS priors, and MCTS rollouts all share one set of weights and one serialization format.
 
 Next we look at the reward signal that tells the policy whether its decisions are good.

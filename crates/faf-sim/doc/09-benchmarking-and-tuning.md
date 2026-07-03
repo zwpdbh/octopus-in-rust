@@ -54,10 +54,9 @@ The `iterations` field of `Strategy::Mcts` is now meaningful: each positive valu
 
 ## Tuning the network
 
-The hierarchical network is small by default (128-D hidden, 64-D latent). If the policy underfits:
+The direction-only network is small by default (11 inputs, 128-D hidden, 64-D latent, 6 outputs). If the policy underfits:
 
 - Increase `backbone_hidden` and `latent_dim` in `macro_net.rs`.
-- Increase `action_hidden` and `power_hidden` sizes.
 - Train for more episodes with a larger `max_steps` budget.
 
 If the policy overfits:
@@ -83,9 +82,10 @@ Because the return is standardized per-episode, the relative scale of coefficien
 | MCTS is much slower than the one-step policy | Too many iterations or expensive per-iteration inference | Reduce iterations, batch inference, or use a smaller network. |
 | MCTS finds worse plans | Policy/value network is inaccurate or undertrained | Add more training data, especially from MCTS states. |
 | MCTS explores silly actions | `c_puct` too high or policy network overconfident | Lower `c_puct`, add candidate pruning, or train a stronger policy prior. |
-| MCTS gets stuck repeating actions | SelectionOption generation bug or successor bug | Verify `Wait` is always legal and successors cover the goal path, including upgrade targets. |
-| Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling and validation loss. |
+| MCTS gets stuck repeating actions | Heuristic returns `Wait` for every direction, or successor bug | Verify `Wait` is always legal, the direction mask is non-empty when actions exist, and the heuristic covers the goal path. |
+| Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling, learning rate, and validation loss. |
 | Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |
+| Heuristic always returns `Wait` for a direction | `is_direction_legal` or `direction_to_action` mismatch | Add a unit test for that direction from the ACU start state and step through the heuristic. |
 | MCTS with random weights is very slow | No trained model was found; MCTS explores a huge horizon with random priors | Train a policy first, or use a tiny iteration budget for smoke tests. |
 
 ## Robustness checks

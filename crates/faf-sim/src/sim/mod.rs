@@ -2,8 +2,9 @@
 //!
 //! This module combines three responsibilities:
 //!
-//! 1. **Economy derivation** — computing an [`EconomyState`] from a snapshot of
-//!    owned units (production, storage, maintenance) in [`state::derive_economy`].
+//! 1. **Economy derivation** — computing an [`EconomyState`](crate::economy::EconomyState)
+//!    from a snapshot of owned units (production, storage, maintenance) in
+//!    [`state::derive_economy`].
 //! 2. **Graph-growth simulation** — the model where nodes are built units, edges
 //!    record builder assignments, and builders are indivisible (one target at a
 //!    time). See [`state::SimulationState`].

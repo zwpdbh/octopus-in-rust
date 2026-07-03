@@ -15,6 +15,7 @@ use crate::sim::{GraphSimError, SimulationState};
 use crate::units::Units;
 
 /// Run the one-step direction-only policy from `initial_state` toward `goal`.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     units: &Units,
     initial_state: SimulationState,

@@ -23,7 +23,7 @@ use super::features::STATE_FEATURE_COUNT;
 ///
 /// The directions are `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`,
 /// `IncreaseEnergyStorage`, `Goal`, and `UpgradeTech`, in the order defined by
-/// [`EdgeCategory::ALL`].
+/// [`EdgeCategory::ALL`](crate::planner::plan_graph::EdgeCategory::ALL).
 pub const DIRECTION_COUNT: usize = 6;
 
 /// Mask value that makes a logit numerically irrelevant after softmax.
@@ -32,7 +32,8 @@ pub(crate) const MASK_VALUE: f32 = -1e9;
 /// Direction-only policy network.
 ///
 /// Input: state features ([`STATE_FEATURE_COUNT`] floats).
-/// Output: direction logits (6) over [`EdgeCategory::ALL`].
+/// Output: direction logits (6) over
+/// [`EdgeCategory::ALL`](crate::planner::plan_graph::EdgeCategory::ALL).
 ///
 /// The architecture is intentionally tiny: a shared two-layer backbone
 /// ([`STATE_FEATURE_COUNT`] -> 128 -> 64) followed by a single direction head (64 -> 6).

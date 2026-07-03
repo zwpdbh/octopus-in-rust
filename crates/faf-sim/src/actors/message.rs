@@ -51,6 +51,7 @@ pub enum SimulationMsg {
 /// The simulation owns the authoritative `SimulationState`. After each tick it sends
 /// a snapshot to the planner so the planner can decide the next command.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Observation {
     /// A build event occurred during the last tick.
     Event(BuildEvent),

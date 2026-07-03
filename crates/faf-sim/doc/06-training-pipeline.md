@@ -1,576 +1,496 @@
 # 6. Training with REINFORCE
 
-This chapter describes how the hierarchical policy is trained. The pipeline uses REINFORCE with epsilon-greedy exploration and entropy regularization, periodically evaluates the policy greedily, and fine-tunes the best discovered trajectory at the end.
+This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover entropy regularization, return normalization, greedy evaluation, and supervised fine-tuning on the best trajectory.
 
-**Important:** training does **not** use MCTS. The trainer samples actions directly from the current policy network and rolls out full episodes in the simulator. MCTS is used later, during simulation, to search on top of the trained network.
+## The training loop at a glance
 
-## Overview
+The full training pipeline has five stages:
 
-The training entry point is `train_policy`:
+1. **Configuration** — `TrainConfig` holds hyperparameters.
+2. **Episode generation** — `run_episode` rolls out one trajectory with the current policy.
+3. **Return computation** — `compute_returns` discounts and standardizes rewards.
+4. **Policy update** — `update` computes the REINFORCE loss and applies one gradient step.
+5. **Fine-tuning** — `fine_tune_on_trajectory` distills the best discovered trajectory into the final model.
 
-```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 60 — train_policy
-pub fn train_policy(
-    units: &Units,
-    goal: &Goal,
-    config: TrainConfig,
-    metrics: FafSimMetrics,
-    stop_flag: Option<Arc<AtomicBool>>,
-    interrupter: Interrupter,
-) -> (
-    PolicyBundle<TrainBackend>,
-    Option<PolicyBundle<TrainBackend>>,
-    TrainStats,
-) {
-    let num_edges = plan_edge_index(units, goal)
-        .expect("goal must have a plan graph")
-        .len();
-    let mut trainer = Trainer::new(config, num_edges)
-        .with_metrics(metrics)
-        .with_interrupter(interrupter);
-    if let Some(flag) = stop_flag {
-        trainer.stop_requested = flag;
-    }
-    let stats = trainer.train(units, goal);
-    fine_tune_best_model(trainer, units, goal, &config, stats)
-}
-```
-
-It returns the final model, an optional best-seen model, and statistics. The optional best model comes from greedy evaluation: whenever the greedy rollout beats the previous best time, the current parameters are stored. After training, the best stored model is fine-tuned on the best trajectory and returned as the final model.
-
-## How training interacts with the simulator
-
-A training episode is a direct interaction between the current policy and the simulator. There is **no MCTS tree** during training. At each step:
-
-1. The trainer observes the current `SimulationState`.
-2. It samples an action from the policy network (with epsilon-greedy exploration).
-3. It executes that action on the **real episode state** via `execute_action`.
-4. The simulator's `tick` advances time, drains resources, and completes projects.
-5. The trainer records the transition and reward.
-
-```mermaid
-sequenceDiagram
-    participant T as Trainer
-    participant N as Policy Network
-    participant S as Simulator (SimulationState)
-
-    loop every step until goal or max_steps
-        T->>S: read SimulationState
-        T->>N: state_features + masks
-        N-->>T: upgrade / direction / edge / power / squad
-        T->>T: epsilon-greedy sample
-        T->>S: execute_action(action)
-        S->>S: tick()
-        S-->>T: next SimulationState + reward
-        T->>T: record EpisodeStep
-    end
-```
-
-Because `execute_action` and `tick` are the same functions used by MCTS rollouts, the build graph grows the same way during training and during search. The difference is the state object: training advances the **episode state** that survives for the whole episode, while MCTS rollouts advance a **temporary clone** that is discarded after the rollout returns its value.
+The whole loop is driven by `Trainer::train`.
 
 ## Configuration
 
-Training is controlled by `TrainConfig`:
+`TrainConfig` groups the hyperparameters you will tune most often:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/config.rs ~line 5 — TrainConfig
 pub struct TrainConfig {
-    /// Number of episodes to run.
     pub episodes: usize,
-    /// Maximum simulator steps per episode.
     pub max_steps: usize,
-    /// Fixed simulator timestep for rollouts.
     pub dt: f64,
-    /// Learning rate for Adam.
     pub learning_rate: f64,
-    /// Discount factor for future rewards.
     pub gamma: f32,
-    /// Initial probability of taking a random action during training.
     pub epsilon: f32,
-    /// Final epsilon value after decay.
     pub epsilon_final: f32,
-    /// Number of episodes over which to linearly decay `epsilon`.
     pub epsilon_decay_episodes: usize,
-    /// Entropy bonus coefficient.
     pub entropy_coef: f32,
-    /// Stop early when the best completion time is at most this many seconds.
     pub target_time: Option<f64>,
-    /// Evaluate greedily every N episodes and keep the best model.
     pub greedy_eval_interval: usize,
-    /// Stop early if no new best time for this many episodes.
     pub patience: Option<usize>,
-    /// Supervised fine-tuning epochs on the best trajectory.
     pub fine_tune_epochs: usize,
-    /// Standard deviation for build-power sampling.
-    pub power_std: f32,
-    /// Standard deviation for engineer-count sampling.
-    pub squad_std: f32,
-    /// Global gradient norm clipping threshold. `None` disables clipping.
     pub grad_clip: Option<f32>,
 }
 ```
 
-The default configuration is conservative and CPU-friendly:
+Key knobs:
+
+- `learning_rate` — Adam step size. Start around `1e-3`.
+- `gamma` — discount factor for future rewards. We use `0.99`.
+- `epsilon` / `epsilon_final` — probability of taking a random legal direction instead of sampling the policy. Decaying epsilon from `0.1` to `0.01` over a few hundred episodes is common.
+- `entropy_coef` — entropy bonus coefficient. Higher values keep the policy exploratory for longer.
+- `grad_clip` — global gradient norm clipping. A value of `1.0` can stabilize REINFORCE early in training.
+
+## Trainer setup
+
+The `Trainer` owns the model, optimizer, device, and RNG. It is constructed with a fresh random model or from an existing one:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/config.rs ~line 48 — TrainConfig::default
-fn default() -> Self {
-    Self {
-        episodes: 200,
-        max_steps: 500,
-        dt: 1.0,
-        learning_rate: 1e-3,
-        gamma: 0.99,
-        epsilon: 0.1,
-        epsilon_final: 0.1,
-        epsilon_decay_episodes: 0,
-        entropy_coef: 0.01,
-        target_time: None,
-        greedy_eval_interval: 100,
-        fine_tune_epochs: 100,
-        power_std: 2.0,
-        squad_std: 0.5,
-        grad_clip: None,
-        patience: None,
-    }
+// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 42 — Trainer::new
+pub fn new(config: TrainConfig) -> Self {
+    let device: TrainDevice = Default::default();
+    let model = PolicyBundle::new(&device);
+    Self::from_model(config, model)
 }
 ```
 
-You can increase `episodes`, `max_steps`, and the network sizes for harder goals. The default is intended for quick experiments and unit tests.
-
-## Trainer structure
-
-The `Trainer` owns the model, optimizer, and best-seen state:
-
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 21 — Trainer (abbreviated)
-pub struct Trainer {
-    pub(crate) model: PolicyBundle<TrainBackend>,
-    pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
-    pub(crate) best_trajectory: Option<BuildTrajectory>,
-    pub(crate) optimizer: AdamOptimizer,
-    pub(crate) config: TrainConfig,
-    pub(crate) device: TrainDevice,
-    pub(crate) rng: ThreadRng,
-    pub(crate) metrics: Option<FafSimMetrics>,
-    pub(crate) interrupter: Interrupter,
+// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 49 — Trainer::from_model
+pub fn from_model(config: TrainConfig, model: PolicyBundle<TrainBackend>) -> Self {
+    let device: TrainDevice = Default::default();
+    let optimizer = {
+        let adam = AdamConfig::new();
+        let adam = if let Some(clip) = config.grad_clip {
+            adam.with_grad_clipping(Some(GradientClippingConfig::Norm(clip)))
+        } else {
+            adam
+        };
+        adam.init()
+    };
+    // ... store model, optimizer, config, device, rng ...
 }
 ```
 
-`Trainer::new` builds a fresh bundle and an Adam optimizer. `Trainer::from_model` continues from an existing bundle, which is useful for resuming training or fine-tuning.
+Notice that Burn's optimizer is initialized with a model reference (`adam.init()`), but in our case we use the default `AdamConfig` and Burn infers parameter shapes later when we call `step`. The `OptimizerAdaptor` type alias ties the optimizer to the model type:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 19 — AdamOptimizer
+pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
+```
 
 ## Episode generation
 
-Each episode rolls out the current policy in the simulator. The trainer gathers a trajectory of recorded steps:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/episode.rs ~line 5 — EpisodeStep
-pub(crate) struct EpisodeStep {
-    pub(crate) base_features: Vec<f32>,
-    pub(crate) direction_mask: Vec<bool>,
-    pub(crate) direction_index: usize,
-    pub(crate) step_reward: f32,
-    pub(crate) return_value: f32,
-}
-```
-
-At each step the trainer:
+`run_episode` is the simulator loop. At each step it:
 
 1. Featurizes the state.
-2. Computes the legal factory-upgrade mask.
-3. Samples an upgrade option from the upgrade head (or a random legal upgrade with probability `epsilon`).
-4. If no upgrade was chosen, computes the legal direction mask and the legal edge mask for that direction, then samples a direction and edge (again with epsilon-greedy noise).
-5. If an upgrade was chosen, resolves it to the corresponding plan-graph upgrade edge.
-6. Samples target build power and engineer counts from the power and squad heads, adding Gaussian noise.
-7. Resolves the squad into concrete builder nodes and executes the action.
-8. Records the step, including the per-step reward and any newly earned milestone bonus.
-
-If the episode exceeds `max_steps` without reaching the goal, it terminates.
-
-## REINFORCE update
-
-After each episode, the trainer calls `update` to perform one gradient step on all recorded steps. The combined loss has three groups:
-
-1. **Discrete policy loss (REINFORCE).** The upgrade, direction, and action log-probabilities are summed and multiplied by the normalized return. This is the policy-gradient term: increase the log-probability of choices that led to high return, decrease it for low-return choices.
-2. **Entropy bonus.** The entropy of the discrete heads is subtracted (with coefficient `entropy_coef`) to encourage exploration and prevent premature collapse to a single action.
-3. **Continuous negative log-likelihood.** The power and squad heads are trained with maximum-likelihood on the sampled targets. Their negative log-likelihoods are added directly; they are **not** multiplied by the return. Multiplying continuous log-probabilities by the return would reverse their gradients on negative returns and cause the continuous predictions to diverge.
+2. Builds the legal-direction mask.
+3. Samples a direction (epsilon-greedy over the masked softmax).
+4. Resolves the direction to a concrete action via the heuristic layer.
+5. Executes the action and records the reward.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 43 — update (abbreviated)
-pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
-    for step in &episode.steps {
-        // ... build macro input, run latent backbone once ...
-        let latent = self.model.latent(macro_input);
+// crates/faf-sim/src/planner/mcts/train/trainer/run_episode.rs ~line 21 — run_episode
+pub(crate) fn run_episode(
+    &mut self,
+    _ep: usize,
+    units: &Units,
+    goal: &Goal,
+    planner_config: &PlannerConfig,
+    epsilon: f32,
+) -> Episode {
+    let plan = build_plan_graph(units, *goal);
+    let mut state = SimulationState::new(units, &[UnitKind::Commander]);
+    let mut episode = Episode { reached_goal: false, completion_time: 0.0, final_reward: 0.0, steps: Vec::new() };
+    let mut milestones = MilestoneTracker::default();
 
-        // Upgrade log-prob (always computed; index 0 is "no upgrade").
-        let upgrade_logits = self.model.upgrade_logits(latent.clone()).flatten::<1>(0, 1);
-        // ... mask, softmax, select sampled index ...
-        let upgrade_log_prob = upgrade_log_probs.select(0, upgrade_index_tensor);
+    for _step in 0..self.config.max_steps {
+        if state.goal_reached(goal) {
+            episode.reached_goal = true;
+            episode.completion_time = state.time;
+            break;
+        }
 
-        // Direction and action log-probs are only computed when no upgrade was chosen.
-        let (direction_log_prob, action_log_prob, direction_entropy, action_entropy) =
-            if step.upgrade_index == 0 {
-                // ... direction log-prob ...
-                // ... action log-prob conditioned on sampled direction ...
-                (dir_lp, act_lp, dir_ent, act_ent)
-            } else {
-                // Zero tensors: no gradient through unused heads on upgrade steps.
-                (zero.clone(), zero.clone(), zero.clone(), zero)
-            };
+        let base_features = state_features(&state, units, planner_config);
+        let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
+        if direction_mask.iter().all(|&b| !b) {
+            state.tick(units, self.config.dt);
+            continue;
+        }
 
-        let entropy = direction_entropy + action_entropy + upgrade_entropy;
+        let direction_logits = self
+            .model
+            .evaluate_direction(base_features.clone(), &self.device);
 
-        // Continuous log-probs for power and squad.
-        let power_log_prob = gaussian_log_prob_scalar(power_mean, step.target_power, ...);
-        let squad_log_prob = gaussian_log_prob_vec(squad_means, &step.desired_squad, ...);
+        let direction_idx = if self.rng.random::<f32>() < epsilon {
+            let legal_directions: Vec<usize> = direction_mask
+                .iter()
+                .enumerate()
+                .filter(|(_, &legal)| legal)
+                .map(|(i, _)| i)
+                .collect();
+            *legal_directions
+                .get(self.rng.random_range(0..legal_directions.len()))
+                .unwrap_or(&0)
+        } else {
+            masked_sample_index(&direction_logits, &direction_mask, &mut self.rng).unwrap_or(0)
+        };
+        let direction = EdgeCategory::ALL[direction_idx];
 
-        // REINFORCE only on discrete decisions.
-        let discrete_log_prob = upgrade_log_prob + direction_log_prob + action_log_prob;
-        let policy_loss = discrete_log_prob.neg().mul(return_tensor);
+        let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
 
-        // Continuous heads: maximum likelihood, not weighted by return.
-        let continuous_nll = power_log_prob.neg() + squad_log_prob.neg();
+        let prev_state = state.clone();
+        if execute_action(&mut state, &action, units, self.config.dt).is_err() {
+            state.tick(units, self.config.dt);
+            continue;
+        }
 
-        let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
-        let loss = policy_loss + entropy_loss + continuous_nll;
+        let mut step_reward = compute_step_reward(&prev_state, &state, units);
+        step_reward += milestones.update(&state, units);
 
-        // ... accumulate loss over the episode ...
+        episode.steps.push(EpisodeStep {
+            base_features,
+            direction_mask,
+            direction_index: direction_idx,
+            step_reward,
+            return_value: 0.0,
+        });
     }
 
-    let grads = loss.backward();
-    let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-    self.model = self.optimizer
-        .step(self.config.learning_rate.into(), self.model.clone(), grads);
+    episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);
+    self.compute_returns(&mut episode);
+    episode
 }
 ```
 
-The discrete heads use `log_softmax` and `.select` to extract the log-probability of the sampled choice. The continuous heads use Gaussian log-probability helpers. Only the discrete choices receive the REINFORCE return signal.
+There are two important Burn patterns here:
+
+- **Host-side sampling.** `evaluate_direction` returns a plain `Vec<f32>` of logits. We build the mask and sample on the CPU, then feed the sampled index back into Burn as a tensor for the loss. This is common in RL: the environment interaction happens on the host; only the gradient computation needs tensors.
+- **Action masking.** `legal_direction_mask` tells us which of the six directions are currently feasible. Masking is applied twice: once during sampling (so the policy only picks legal directions) and once during the loss (so gradients do not push toward illegal directions).
+
+## Return computation
+
+REINFORCE uses the discounted return from each step as the weight on its log-probability. `compute_returns` walks backward through the episode, applies the discount factor `gamma`, and then standardizes the returns:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 15 — compute_returns
+pub(crate) fn compute_returns(&mut self, episode: &mut Episode) {
+    let step_count = episode.steps.len();
+    if step_count == 0 {
+        return;
+    }
+
+    let gamma = self.config.gamma;
+    let mut returns = Vec::with_capacity(step_count);
+    let mut g = episode.final_reward;
+    for step in episode.steps.iter().rev() {
+        g = step.step_reward + gamma * g;
+        returns.push(g);
+    }
+    returns.reverse();
+
+    let mean = returns.iter().sum::<f32>() / step_count as f32;
+    let std = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f32>() / step_count as f32)
+        .sqrt()
+        .max(1e-6);
+
+    for (step, ret) in episode.steps.iter_mut().zip(returns) {
+        step.return_value = (ret - mean) / std;
+    }
+}
+```
+
+Standardization (subtract mean, divide by standard deviation) is a classic REINFORCE variance-reduction trick. It makes the optimizer less sensitive to the absolute reward scale and helps early training when returns can be noisy.
+
+## The REINFORCE update
+
+The update step is where Burn really shines. For each recorded step we:
+
+1. Build a `[1, 11]` input tensor from the stored features.
+2. Run the backbone and direction head to get 6 logits.
+3. Apply the legal-direction mask.
+4. Compute `log_softmax` and extract the log-probability of the selected direction.
+5. Compute the entropy of the masked distribution.
+6. Combine policy loss and entropy loss.
+7. Accumulate losses across the episode and apply one gradient step.
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 41 — update
+pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
+    let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
+    let mut total_loss = 0.0f32;
+    let mut step_count = 0usize;
+
+    for step in &episode.steps {
+        let features = step.base_features.clone();
+        let macro_input = tensor1d_from_vec(&features);
+        let latent = self.model.latent(macro_input);
+
+        let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
+        let direction_mask: Vec<f32> = step
+            .direction_mask
+            .iter()
+            .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+            .collect();
+        let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::new(direction_mask, [DIRECTION_COUNT]),
+            &self.device,
+        );
+        let masked_direction_logits = direction_logits + direction_mask_tensor;
+        let direction_log_probs = log_softmax(masked_direction_logits, 0);
+        let direction_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+            TensorData::new(vec![step.direction_index as i64], [1]),
+            &self.device,
+        );
+        let direction_log_prob = direction_log_probs
+            .clone()
+            .select(0, direction_index_tensor);
+
+        let direction_probs = direction_log_probs.clone().exp();
+        let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
+
+        let return_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::new(vec![step.return_value], [1]),
+            &self.device,
+        );
+        let policy_loss = direction_log_prob.neg().mul(return_tensor);
+        let entropy_loss = direction_entropy.neg().mul_scalar(self.config.entropy_coef);
+        let loss = policy_loss + entropy_loss;
+
+        total_loss += loss.clone().into_data().as_slice::<f32>().unwrap()[0];
+        accumulated_loss = Some(match accumulated_loss {
+            Some(acc) => acc + loss,
+            None => loss,
+        });
+        step_count += 1;
+    }
+
+    if let Some(loss) = accumulated_loss {
+        let grads = loss.backward();
+        let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
+        self.model = self
+            .optimizer
+            .step(self.config.learning_rate, self.model.clone(), grads);
+    }
+
+    total_loss / step_count.max(1) as f32
+}
+```
+
+The policy-gradient objective for a single step is:
+
+```text
+loss = -log π(direction | state) * return - entropy_coef * entropy(π)
+```
+
+- `direction_log_prob.neg().mul(return_tensor)` implements `-log π * return`. If the return is positive, this term pushes the network to increase the probability of the selected direction; if negative, it pushes the network to decrease it.
+- `entropy.neg().mul_scalar(entropy_coef)` is the entropy bonus. Entropy is computed from the masked distribution as `Σ -p * log p`. Maximizing entropy keeps the policy spread across legal directions and slows premature convergence.
+
+Accumulating the loss over the whole episode and then calling `backward()` once is equivalent to averaging gradients over the episode. It is also efficient: Burn only builds one computation graph (albeit large) per update.
+
+## Masking inside the loss
+
+Notice that the mask is applied inside the loss, not just during sampling. This is crucial: if we only masked during sampling, the loss would compare the network's unmasked distribution against a legal direction that the unmasked distribution might assign very low probability to. Masking inside the loss ensures the softmax is computed only over legal directions, so the gradient is well-behaved even when most directions are illegal.
 
 ## Greedy evaluation
 
-Every `greedy_eval_interval` episodes, the trainer runs a deterministic greedy rollout with the current parameters. If the greedy rollout reaches the goal faster than any previous greedy rollout, the current model is saved as `best_model`:
+During training we periodically evaluate the current model greedily (argmax over masked logits). If the greedy rollout reaches the goal faster than any previous greedy rollout, we save that model as `best_model`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 520 — greedy evaluation
-if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
-    if let Some(greedy_time) =
-        self.evaluate_greedy(units, goal, &plan, &edge_index, &planner_config)
-    {
-        let is_new_best = best_time.map_or(true, |t| greedy_time < t);
-        if is_new_best {
-            best_time = Some(greedy_time);
-            episodes_since_best = 0;
-            self.best_model = Some(self.model.clone());
-            self.best_trajectory = None;
+// crates/faf-sim/src/planner/mcts/train/trainer/eval.rs ~line 33 — evaluate_greedy_with_model
+pub(crate) fn evaluate_greedy_with_model(
+    model: &PolicyBundle<TrainBackend>,
+    units: &Units,
+    goal: &Goal,
+    planner_config: &PlannerConfig,
+    max_steps: usize,
+    dt: f64,
+    device: &TrainDevice,
+) -> Option<f64> {
+    let plan = build_plan_graph(units, *goal);
+    let mut state = SimulationState::new(units, &[UnitKind::Commander]);
+
+    for _ in 0..max_steps {
+        if state.goal_reached(goal) {
+            return Some(state.time);
+        }
+
+        let features = state_features(&state, units, planner_config);
+        let direction_logits = model.evaluate_direction(features, device);
+        let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
+
+        if direction_mask.iter().all(|&b| !b) {
+            state.tick(units, dt);
+            continue;
+        }
+
+        let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
+        let direction = EdgeCategory::ALL[direction_idx];
+        let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
+
+        if execute_action(&mut state, &action, units, dt).is_err() {
+            state.tick(units, dt);
         }
     }
+
+    None
 }
 ```
 
-Greedy evaluation is the source of the best model; REINFORCE alone does not guarantee that the final parameters are the best ones seen.
+Greedy evaluation is the source of the best model. REINFORCE alone does not guarantee that the final parameters are the best ones seen.
 
 ## Fine-tuning on the best trajectory
 
-After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes cross-entropy loss on the recorded `direction` targets.
+After REINFORCE finishes, the trainer runs supervised fine-tuning on the best trajectory discovered during training. This is a Burn cross-entropy (negative log-likelihood) loss that distills the best episode into the model:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 91 — fine_tune_best_model
-fn fine_tune_best_model(
-    mut trainer: Trainer,
+// crates/faf-sim/src/planner/mcts/train/trainer/fine_tune.rs ~line 23 — fine_tune_on_trajectory
+pub(crate) fn fine_tune_on_trajectory(
+    &mut self,
+    trajectory: &BuildTrajectory,
     units: &Units,
     goal: &Goal,
-    config: &TrainConfig,
-    stats: TrainStats,
-) -> (PolicyBundle<TrainBackend>, Option<PolicyBundle<TrainBackend>>, TrainStats) {
-    // ... run fine_tune_epochs of supervised updates on the best trajectory ...
-}
-```
-
-The function returns the fine-tuned model as the final model. If no trajectory was recorded, it returns the final REINFORCE model and whatever `best_model` was stored.
-
-## Training versus MCTS rollout
-
-Training episodes and MCTS rollouts both advance the simulator, but they serve different purposes and differ in three key ways:
-
-| | Training episode | MCTS rollout |
-| --- | --- | --- |
-| **State object** | The real episode state, kept for the whole episode. | A clone of the MCTS leaf state, discarded after the rollout. |
-| **Action selection** | Stochastic sampling plus epsilon-greedy exploration. | Greedy argmax from the policy network. |
-| **Outcome** | A full trajectory used to update network weights. | A single scalar value estimate backed up into the MCTS tree. |
-| **Build graph growth** | Same `execute_action` + `tick` path; nodes are added naturally. | Same `execute_action` + `tick` path; nodes are added to the clone. |
-
-```mermaid
-flowchart LR
-    subgraph "Training episode"
-        TE1["Episode state"] --> TE2["sample action (stochastic + epsilon)"]
-        TE2 --> TE3["execute_action"]
-        TE3 --> TE4["tick"]
-        TE4 --> TE5["record step"]
-        TE5 --> TE1
-        TE5 -.-> TE6["REINFORCE update"]
-    end
-
-    subgraph "MCTS rollout"
-        MR1["Leaf state"] --> MR2["clone()"]
-        MR2 --> MR3["greedy action"]
-        MR3 --> MR4["execute_action"]
-        MR4 --> MR5["tick"]
-        MR5 --> MR3
-        MR5 -.-> MR6["return scalar value"]
-    end
-```
-
-The shared simulator path is why the policy trained on episodes can be used directly inside MCTS rollouts: both see the same consequences of every action.
-
-## Saving and loading
-
-Save the full bundle with `save_policy`:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 15 — save_policy
-pub fn save_policy(
-    model: &PolicyBundle<TrainBackend>,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create model dir: {e}"))?;
-    }
-    let recorder = CompactRecorder::new();
-    recorder
-        .record(model.clone().into_record(), path.to_path_buf())
-        .map_err(|e| format!("failed to save model: {e}"))
-}
-```
-
-Load it with `load_policy`, passing the number of plan-graph edges so the network dimensions can be validated:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 29 — load_policy
-pub fn load_policy(
-    path: &std::path::Path,
-    num_edges: usize,
-) -> Result<PolicyBundle<TrainBackend>, String> {
-    let device: TrainDevice = Default::default();
-    let recorder = CompactRecorder::new();
-    let record = recorder
-        .load(path.to_path_buf(), &device)
-        .map_err(|e| format!("failed to load model: {e}"))?;
-    let model = PolicyBundle::new(&device, num_edges).load_record(record);
-
-    if model.num_edges() != num_edges {
-        return Err(format!(
-            "action head output dimension mismatch: expected {num_edges}, got {}; retrain the model",
-            model.num_edges()
-        ));
+    planner_config: &PlannerConfig,
+) -> f32 {
+    if trajectory.steps.is_empty() {
+        return 0.0;
     }
 
-    Ok(model)
-}
-```
+    let plan = build_plan_graph(units, *goal);
+    let mut state = SimulationState::new(units, &[UnitKind::Commander]);
+    let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
+    let mut total_loss_value = 0.0f32;
+    let mut step_count = 0usize;
 
-Old `.mpk` models saved before the abstract-goal change will not load; the universal plan graph now has a fixed edge count and a synthetic `Goal` node. Delete old checkpoints and retrain.
+    for step in &trajectory.steps {
+        let mut executable = false;
+        for _ in 0..self.config.max_steps {
+            let direction_mask =
+                legal_direction_mask(&state, units, planner_config, goal, &plan);
+            if !direction_mask[step.direction_index] {
+                state.tick(units, planner_config.dt);
+                continue;
+            }
 
-## Monitoring progress with Burn's training traits
+            let base_features = state_features(&state, units, planner_config);
+            let macro_input = tensor1d_from_vec(&base_features);
+            let latent = self.model.latent(macro_input);
 
-Training progress is reported through Burn's standard `Metric`, `MetricsRenderer`, and `Interrupter` traits. If you are implementing RL with Burn, follow this pattern instead of inventing your own observer or dashboard code.
+            let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
+            let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+                TensorData::new(
+                    direction_mask
+                        .iter()
+                        .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+                        .collect(),
+                    [DIRECTION_COUNT],
+                ),
+                &self.device,
+            );
+            let masked_direction_logits = direction_logits + direction_mask_tensor;
+            let direction_log_probs = log_softmax(masked_direction_logits, 0);
+            let direction_index_tensor =
+                Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+                    TensorData::new(vec![step.direction_index as i64], [1]),
+                    &self.device,
+                );
+            let direction_ce = direction_log_probs.select(0, direction_index_tensor).neg();
 
-Burn splits progress reporting into three responsibilities:
+            total_loss_value += direction_ce.clone().into_data().as_slice::<f32>().unwrap()[0];
+            accumulated_loss = Some(match accumulated_loss {
+                Some(acc) => acc + direction_ce,
+                None => direction_ce,
+            });
+            step_count += 1;
 
-1. **`Metric`** — a pure numeric state machine. It consumes training events and produces a formatted value. It knows nothing about the terminal, files, or network.
-2. **`MetricsRenderer`** — a display sink. It receives formatted metric states and renders them (TUI, plain text, remote logger, etc.).
-3. **`Interrupter`** — a cooperative stop flag. A renderer can set it; the trainer checks it once per episode and stops cleanly.
-
-This is why the old custom `TrainingObserver`, `verbose` flag, and `faf-sim-tui` crate were removed. The new design keeps measurement, display, and cancellation separate.
-
-### A `Metric` implementation
-
-Each value we care about is a struct that implements `Metric<Input = TrainEvent>`:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 18 — EpisodeLossMetric
-#[derive(Clone, Default)]
-pub struct EpisodeLossMetric {
-    name: MetricName,
-    state: NumericMetricState,
-}
-
-impl Metric for EpisodeLossMetric {
-    type Input = TrainEvent;
-
-    fn name(&self) -> MetricName {
-        self.name.clone()
-    }
-
-    fn attributes(&self) -> MetricAttributes {
-        NumericAttributes {
-            unit: None,
-            higher_is_better: false,
+            let direction = EdgeCategory::ALL[step.direction_index];
+            let action =
+                direction_to_action(direction, &state, units, planner_config, goal, &plan);
+            let _ = execute_action(&mut state, &action, units, planner_config.dt);
+            executable = true;
+            break;
         }
-        .into()
+
+        if !executable {
+            break;
+        }
     }
 
-    fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let value = match item {
-            TrainEvent::Episode(EpisodeSummary { loss: Some(l), .. }) => *l as f64,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
+    if let Some(loss) = accumulated_loss {
+        let grads = loss.backward();
+        let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
+        self.model = self
+            .optimizer
+            .step(self.config.learning_rate, self.model.clone(), grads);
+    }
+
+    total_loss_value / step_count.max(1) as f32
+}
+```
+
+Fine-tuning is supervised because we already know the direction that was taken in the best trajectory. We simply maximize the log-probability of those directions under the current model. This can clean up the policy after noisy REINFORCE exploration.
+
+## The main loop
+
+`Trainer::train` orchestrates everything:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 16 — Trainer::train
+pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
+    let planner_config = PlannerConfig::default();
+    let mut stats = TrainStats::default();
+
+    // ... optional greedy eval of best_model if resuming ...
+
+    loop {
+        // stop on episode limit, patience, or interrupter
+        let epsilon = self.current_epsilon(ep);
+        let episode = self.run_episode(ep, units, goal, &planner_config, epsilon);
+
+        let loss = if !episode.steps.is_empty() {
+            let loss = self.update(&episode);
+            stats.losses.push(loss);
+            Some(loss)
+        } else {
+            None
         };
-        self.state.update(
-            value,
-            1,
-            FormatOptions::new(self.name()).precision(4),
-        )
+
+        if episode.reached_goal {
+            // track best time, save best_model and best_trajectory
+        }
+
+        // periodic greedy evaluation
+        if interval > 0 && ep > 0 && (ep + 1).is_multiple_of(interval) {
+            if let Some(greedy_time) = self.evaluate_greedy(units, goal, &planner_config) {
+                // update best_time / best_model
+            }
+        }
+
+        // emit Burn metrics
+        // ...
     }
 
-    fn clear(&mut self) {
-        self.state.reset();
-    }
+    stats
 }
 ```
 
-Because a `Metric` is pure, you can test it in isolation by feeding it a few `TrainEvent` values. You do not need a running simulator, a terminal, or a backend.
+The loop is deliberately simple: one episode, one gradient step. This makes it easy to reason about and easy to extend with more sophisticated algorithms later.
 
-### The metric bundle
+## Burn metrics
 
-`FafSimMetrics` owns all metric instances and forwards each event to every metric:
+`faf-sim` uses Burn's metric and renderer infrastructure to report progress. Each episode emits an `EpisodeSummary` with steps, epsilon, goal status, completion time, loss, and best time. Periodic greedy evaluations emit `GreedyEvalSummary`. These are consumed by a `MetricsRenderer`, such as the built-in TUI renderer, to show live training progress.
 
-```rust
-// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 582 — FafSimMetrics (abbreviated)
-pub struct FafSimMetrics {
-    renderer: Box<dyn MetricsRenderer>,
-    loss: EpisodeLossMetric,
-    steps: EpisodeStepsMetric,
-    completion_time: CompletionTimeMetric,
-    goal_reach: GoalReachMetric,
-    epsilon: EpsilonMetric,
-    best_time: BestTimeMetric,
-    greedy_time: GreedyEvalTimeMetric,
-    speed: EpisodeSpeedMetric,
-}
-```
+## What you should remember
 
-At the start of training it registers every metric with the renderer. After each episode it updates every metric and asks the renderer to redraw:
+- **Host-side sampling, tensor-side gradients.** The environment runs with Rust primitives; only the loss and backward pass use Burn tensors.
+- **Mask twice.** Mask during action selection and again inside the loss.
+- **REINFORCE objective.** `-log π * return - entropy_coef * entropy`.
+- **One gradient step per episode.** Accumulate per-step losses, then `backward()` + `optimizer.step()`.
+- **Greedy eval chooses the best model.** Track the fastest greedy completion time and keep that model.
+- **Fine-tuning distills the best trajectory.** Cross-entropy on the recorded directions can polish the final policy.
 
-```rust
-// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 614 — register
-pub fn register(&mut self) {
-    Self::register_metric(&mut *self.renderer, &self.loss);
-    Self::register_metric(&mut *self.renderer, &self.steps);
-    // ... one line per metric
-}
-
-// crates/faf-sim/src/planner/mcts/train/metric/metrics.rs ~line 633 — update
-pub fn update(&mut self, event: &TrainEvent, metadata: &MetricMetadata) {
-    Self::update_metric(&mut *self.renderer, &mut self.loss, event, metadata);
-    // ... one line per metric
-}
-```
-
-### Emitting events from the training loop
-
-The trainer does not know which renderer is attached. It just emits a `TrainEvent` and calls `render`:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 149 — episode event dispatch
-if let Some(ref mut metrics) = self.metrics {
-    let metadata = metric_metadata(ep + 1, self.config.episodes);
-    metrics.update(
-        &TrainEvent::Episode(EpisodeSummary {
-            episode: ep + 1,
-            total_episodes: self.config.episodes,
-            // ...
-        }),
-        &metadata,
-    );
-    metrics.render(training_progress(ep + 1, self.config.episodes, Some(ep + 1)), vec![]);
-}
-```
-
-### Graceful stop with `Interrupter`
-
-The trainer checks both the SIGINT flag and the Burn `Interrupter` once per episode:
-
-```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 91 — should_stop
-pub(crate) fn should_stop(&self) -> bool {
-    self.stop_requested.load(Ordering::Relaxed)
-        || self.interrupter.is_stopped()
-}
-```
-
-If the user closes the TUI or sends SIGINT, the current episode finishes, the best model is fine-tuned, and the checkpoint is saved cleanly.
-
-### Why this matters for RL in Burn
-
-Following these conventions gives four concrete wins:
-
-- **Less code.** The custom `faf-sim-tui` crate and its Ratatui event loop are gone. Burn ships a production-ready TUI renderer.
-- **Easier to extend.** Adding a new metric means implementing one `Metric` struct and adding it to the bundle. Every renderer automatically receives the new value.
-- **Testable.** Metrics are pure, so you can assert on their numeric output without a running training loop.
-- **Better hardware utilization.** The old dashboard did terminal I/O on the training thread. Burn's `TuiMetricsRendererWrapper` runs the UI on its own thread, so the training loop spends almost all of its time on rollouts and gradient steps. The practical sign on this machine was that the GPU/CPU fans stayed at higher, steadier speeds — the backend was no longer waiting for the screen to redraw.
-
-The CLI wiring is covered in the [Integration and CLI](08-integration.md) chapter. Pass `--no-tui` for plain-text output or `--quiet` to suppress live output entirely.
-
-If progress stalls, try:
-
-- Increasing `episodes` or `max_steps`.
-- Raising or lowering `learning_rate`.
-- Changing `gamma`.
-- Adjusting `epsilon` or `entropy_coef`.
-- Tuning the reward weights in `train::reward`.
-
-## CLI training
-
-The CLI wraps the programmatic API:
-
-```text
-faf-sim train -e 5000 -m 10000 uef novaxcenter
-```
-
-This trains a UEF `novaxcenter` bundle with 5000 episodes and up to 10000 steps per episode. Output is written to `data/models/mlp-uef-novax-center`. The same network shape is used for every target because the plan graph is universal; only the synthetic `Goal` node carries target-specific cost and build time.
-
-By default the CLI opens Burn's TUI dashboard when running in an interactive terminal. Use `--no-tui` to keep plain-text output, or `--quiet` to suppress live output entirely:
-
-```text
-faf-sim train -e 5000 -m 10000 --no-tui uef novaxcenter
-faf-sim train -e 5000 -m 10000 --quiet uef novaxcenter
-```
-
-### Early stopping on a plateau
-
-Set `--patience <N>` to stop training if the best completion time has not improved for `N` episodes. Patience is counted only **after the first successful episode**, so the run will keep trying until it finds at least one solution.
-
-```text
-faf-sim train -e 10000 -m 5000 --patience 1000 uef novaxcenter
-```
-
-This is useful for long training runs: instead of committing to a fixed episode budget, you let the trainer run until it stops making progress. You can combine it with `-t` (`target_time`) to stop as soon as a good enough time is reached.
-
-### Disabling epsilon decay
-
-By default epsilon decays from `--epsilon` to `--epsilon-final` over the run. If you want to keep exploring at a constant rate — for example when resuming from a saved model — pass `--no-epsilon-decay`. Epsilon then stays at the value of `--epsilon` for the whole run:
-
-```text
-# constant 10% random actions (default --epsilon)
-faf-sim train -e 10000 -m 5000 --no-epsilon-decay uef novaxcenter
-
-# constant 30% random actions
-faf-sim train -e 10000 -m 5000 --epsilon 0.3 --no-epsilon-decay uef novaxcenter
-```
-
-## Testing
-
-Unit tests for training live in `crates/faf-sim/src/planner/mcts/train/tests.rs`. They cover:
-
-- Episode rollout shape and reward accumulation.
-- `find_upgrade_source` helper.
-- `assigned_squad_counts` helper.
-- Tensor helper functions.
-- Saving and loading a round-tripped bundle.
-
-Run them with:
-
-```text
-cargo test -p faf-sim
-```
-
-There is no end-to-end integration test for a full training run because it is too slow for the normal test suite.
+With the policy trained, the next chapter shows how to use it as a prior inside MCTS.

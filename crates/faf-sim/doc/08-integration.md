@@ -7,7 +7,7 @@ This chapter explains how to wire the MCTS planner into the existing `faf-sim` p
 The `Planner` dispatches to a single strategy, MCTS, but the network that guides it can be selected:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 94 — ValueNetKind
+// crates/faf-sim/src/planner/core.rs ~line 110 — ValueNetKind
 pub enum ValueNetKind {
     /// Hierarchical policy bundle.
     #[default]
@@ -16,7 +16,7 @@ pub enum ValueNetKind {
     Gnn,
 }
 
-// crates/faf-sim/src/planner/core.rs ~line 128 — Strategy enum
+// crates/faf-sim/src/planner/core.rs ~line 148 — Strategy enum
 pub enum Strategy {
     /// Monte Carlo Tree Search guided by a learned value network.
     Mcts {
@@ -30,14 +30,14 @@ pub enum Strategy {
 }
 ```
 
-Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` refers to the full hierarchical policy bundle (upgrade + direction + action + power + squad heads).
+Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if selected. `Mlp` refers to the direction-only policy bundle (backbone + direction head).
 
 ## Entry point
 
 `Planner::plan` matches on the strategy and forwards to the corresponding module. `plan` takes `&mut self` because future strategies may hold mutable search state. `iterations` sets the MCTS budget and `deterministic` is stored in the strategy for the one-step policy entry point. The concrete network is hidden behind a [`ValueNet`] trait object; the MCTS search itself always uses argmax selection:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 339 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 338 — Planner::plan dispatch
 pub fn plan(
     &mut self,
     units: &Units,
@@ -49,30 +49,22 @@ pub fn plan(
             iterations,
             value_net: _,
             deterministic: _,
-        } => {
-            let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
-                PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
-            })?;
-
-            if self.value_net.num_edges() != num_edges {
-                return Err(PlannerError::Other(format!(
-                    "value net was built for {} edges but goal has {}",
-                    self.value_net.num_edges(),
-                    num_edges
-                )));
-            }
-
-            MctsSearch::new(MctsConfig {
-                iterations,
-                ..MctsConfig::default()
-            })
-            .search(initial_state, goal, units, &self.config, self.value_net.as_ref())
-        }
+        } => MctsSearch::new(MctsConfig {
+            iterations,
+            ..MctsConfig::default()
+        })
+        .search(
+            initial_state,
+            goal,
+            units,
+            &self.config,
+            self.value_net.as_ref(),
+        ),
     }
 }
 ```
 
-`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step hierarchical policy lives in `mcts::policy::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
+`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step direction-only policy lives in `mcts::policy::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/policy.rs ~line 18 — mcts::policy::plan
@@ -120,7 +112,7 @@ loop:
 `PlanResult` carries a `first_action` field for this purpose:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 46 — PlanResult (abbreviated)
+// crates/faf-sim/src/planner/core.rs ~line 55 — PlanResult (abbreviated)
 pub struct PlanResult {
     pub events: Vec<BuildEvent>,
     pub completion_time: f64,
@@ -206,7 +198,7 @@ pub async fn run(mut self) {
 For deterministic testing, `run_build_order_simulation` in `sim/runner.rs` pauses Tokio's clock, spawns both actors, and drives time forward in fixed increments:
 
 ```rust
-// crates/faf-sim/src/sim/runner.rs ~line 114 — run_build_order_simulation
+// crates/faf-sim/src/sim/runner.rs ~line 117 — run_build_order_simulation
 pub async fn run_build_order_simulation(
     units: Units,
     goal: Goal,
@@ -245,7 +237,7 @@ All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so call
 The strategy can be parsed from a string:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 170 — Strategy::from_str MCTS parsing
+// crates/faf-sim/src/planner/core.rs ~line 187 — Strategy::from_str MCTS parsing
 if lower == "mcts" {
     return Ok(Strategy::Mcts {
         iterations: 100,
@@ -299,7 +291,7 @@ The same default applies to the `train` subcommand.
 `PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 250 — PlannerConfig default
+// crates/faf-sim/src/planner/core.rs ~line 260 — PlannerConfig default
 fn default() -> Self {
     Self {
         dt: 1.0,
@@ -347,7 +339,11 @@ if let Some(action) = result.first_action {
 Train a policy bundle programmatically:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 64 — train_policy
+// docref: example
+use faf_sim::planner::mcts::train::{train_policy, save_policy, FafSimMetrics, TrainConfig};
+use burn::train::renderer::tui::TuiMetricsRendererWrapper;
+use burn::train::Interrupter;
+
 let goal = Goal {
     tech_level: TechLevel::T4,
     mass_cost: 28_000.0,
@@ -376,11 +372,11 @@ save_policy(
 And load it later:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 29 — load_policy
+// docref: example
 use faf_sim::planner::mcts::value_net::MlpValueNet;
+use faf_sim::planner::mcts::train::load_policy;
 
-let num_edges = plan_edge_index(&units, &goal).unwrap().len();
-let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord"), num_edges).unwrap();
+let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 let value_net = Box::new(MlpValueNet::from_net(bundle));
 let planner = Planner::with_config(strategy, PlannerConfig::default(), value_net);
 // `goal` is the same abstract Goal used during training.
@@ -393,12 +389,15 @@ The CLI wraps these calls with `train` and `simulate` subcommands. The programma
 For interactive training, the `faf-sim-cli` binary uses Burn's built-in terminal UI renderer (`TuiMetricsRendererWrapper`) when stdout is a terminal. The renderer is created inside the training thread and shows the standard Burn metric dashboard.
 
 ```rust
-// apps/faf-sim-cli/src/main.rs ~line 175 — run_train
-let renderer: Box<dyn MetricsRenderer> = if let Some(inter) = interrupter_for_renderer {
-    Box::new(TuiMetricsRendererWrapper::new(inter, None))
-} else {
-    Box::new(TextMetricsRenderer::new())
-};
+// apps/faf-sim-cli/src/main.rs ~line 177 — run_train renderer setup
+let renderer: Box<dyn MetricsRenderer> =
+    if let Some(inter) = interrupter_for_renderer {
+        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+    } else if quiet {
+        Box::new(TextMetricsRenderer::quiet())
+    } else {
+        Box::new(TextMetricsRenderer::new())
+    };
 let metrics = FafSimMetrics::new(renderer);
 ```
 
@@ -406,4 +405,4 @@ Pass `--no-tui` to keep plain-text output, or `--quiet` to suppress live progres
 
 ## Model compatibility
 
-Saved policy bundles from before the abstract-goal change will fail to load and must be retrained. The universal plan graph now has a fixed edge count and a synthetic `Goal` node; `load_policy` creates a model of the correct shape and loads the record into it, and a shape mismatch produces a clear deserialization error.
+Saved policy bundles from before the direction-only refactor will fail to load and must be retrained. The policy network now consumes 11 state features and outputs 6 direction logits; `load_policy` creates a model of that shape and loads the record into it, and a shape mismatch produces a clear deserialization error.

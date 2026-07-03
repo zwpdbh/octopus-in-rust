@@ -139,8 +139,8 @@ The bonuses are given **once per episode**, so the agent cannot farm them by rep
 During training, each step's target is the discounted sum of future rewards plus the terminal bonus:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer.rs ~line 650 — compute_returns
-fn compute_returns(&mut self, episode: &mut Episode) {
+// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 15 — compute_returns
+pub(crate) fn compute_returns(&mut self, episode: &mut Episode) {
     let step_count = episode.steps.len();
     if step_count == 0 {
         return;
