@@ -1,26 +1,18 @@
-//! State featurization for the hierarchical policy networks.
+//! State featurization for the direction-only policy network.
 //!
 //! Converts a variable-size [`SimulationState`] into a fixed-size `Vec<f32>` that
-//! the macro network, build-power network, and engineer-squad network consume.
-//! The base feature vector is shared; the macro network additionally receives
-//! the previous-tick engineer shortfall, the power network receives a one-hot
-//! encoding of the selected edge, and the squad network receives the target
-//! build power.
+//! the direction network consumes.
 
 use crate::planner::core::PlannerConfig;
 use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
-/// Number of base state features.
+/// Number of state features fed into the direction network.
 pub const STATE_FEATURE_COUNT: usize = 11;
-
-/// Number of engineer shortfall feedback features appended to the macro network's
-/// input ([T1, T2, T3]).
-pub const SHORTFALL_FEATURE_COUNT: usize = 3;
 
 /// Convert a simulator state into a fixed-length feature vector.
 ///
-/// The 13 state features are intentionally economy-centric and small. Build
+/// The 11 state features are intentionally economy-centric and small. Build
 /// orders in FAF are driven mainly by income, build power, and tech tier, so
 /// the network gets those directly instead of a huge one-hot unit roster.
 ///
@@ -103,23 +95,6 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     ));
 
     debug_assert_eq!(features.len(), STATE_FEATURE_COUNT);
-    features
-}
-
-/// Append the previous-tick engineer shortfall to the base state features.
-///
-/// The macro network receives both economy/state features and explicit feedback
-/// that the previous action wanted more engineers of a given tech than were
-/// available. This helps it learn to build/upgrade engineers before retrying
-/// an edge that previously starved.
-pub fn state_features_with_shortfall(
-    state: &SimulationState,
-    units: &Units,
-    config: &PlannerConfig,
-    shortfall: [f32; SHORTFALL_FEATURE_COUNT],
-) -> Vec<f32> {
-    let mut features = state_features(state, units, config);
-    features.extend_from_slice(&shortfall);
     features
 }
 

@@ -75,7 +75,7 @@ pub fn plan(
 `Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step hierarchical policy lives in `mcts::policy::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 26 — mcts::policy::plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 18 — mcts::policy::plan
 pub fn plan(
     units: &Units,
     initial_state: SimulationState,
@@ -84,7 +84,6 @@ pub fn plan(
     value_net_kind: ValueNetKind,
     deterministic: bool,
     policy_bundle: Option<&dyn ValueNet>,
-    shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
@@ -94,7 +93,6 @@ pub fn plan(
             goal,
             policy_bundle,
             deterministic,
-            shortfall,
             config,
         ),
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(

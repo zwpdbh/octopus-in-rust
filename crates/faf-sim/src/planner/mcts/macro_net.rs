@@ -17,7 +17,7 @@ use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use rand::rngs::ThreadRng;
 
-use super::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
+use super::features::STATE_FEATURE_COUNT;
 
 /// Number of strategic directions the direction head can choose from.
 ///
@@ -31,11 +31,11 @@ pub(crate) const MASK_VALUE: f32 = -1e9;
 
 /// Direction-only policy network.
 ///
-/// Input: base state features + previous-tick engineer shortfall (16 floats).
+/// Input: state features ([`STATE_FEATURE_COUNT`] floats).
 /// Output: direction logits (6) over [`EdgeCategory::ALL`].
 ///
 /// The architecture is intentionally tiny: a shared two-layer backbone
-/// (16 -> 128 -> 64) followed by a single direction head (64 -> 6).
+/// ([`STATE_FEATURE_COUNT`] -> 128 -> 64) followed by a single direction head (64 -> 6).
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     /// First shared backbone layer: input features -> 128-dim hidden space.
@@ -52,10 +52,10 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     /// Create a new direction-only policy network.
     ///
     /// Architecture:
-    /// - backbone: 16 -> 128 -> 64
+    /// - backbone: 11 -> 128 -> 64
     /// - direction head: 64 -> 6
     pub fn new(device: &B::Device) -> Self {
-        let backbone_input = STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT;
+        let backbone_input = STATE_FEATURE_COUNT;
         let backbone_hidden = 128;
         let latent_dim = 64;
 
@@ -75,7 +75,7 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     /// Shared backbone that turns a batch of state feature vectors into a batch
     /// of 64-dimensional latent vectors.
     ///
-    /// Input shape: `[batch_size, 16]`. Output shape: `[batch_size, 64]`.
+    /// Input shape: `[batch_size, 11]`. Output shape: `[batch_size, 64]`.
     pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
         let x = self.backbone1.forward(features);
         let x = self.activation.forward(x);
@@ -156,7 +156,7 @@ pub fn softmax_probs(logits: &[f32]) -> Vec<f32> {
 /// Return a Graphviz DOT description of the direction-only policy network
 /// architecture.
 pub fn hierarchical_policy_net_dot() -> String {
-    let input_dim = STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT;
+    let input_dim = STATE_FEATURE_COUNT;
     let backbone_hidden = 128;
     let latent_dim = 64;
 
@@ -166,7 +166,7 @@ pub fn hierarchical_policy_net_dot() -> String {
     node [shape=box, style="rounded,filled", fontname="Helvetica"];
     edge [fontname="Helvetica", fontsize=10];
 
-    input [label="Input\n{} features\n({} state + {} shortfall)", fillcolor="#e3f2fd"];
+    input [label="Input\n{} state features", fillcolor="#e3f2fd"];
 
     backbone1 [label="backbone1\nLinear({}, {})", fillcolor="#fff3e0"];
     relu1 [label="ReLU", shape=ellipse, fillcolor="#f3e5f5"];
@@ -186,8 +186,6 @@ pub fn hierarchical_policy_net_dot() -> String {
     direction_head -> direction_out;
 }}"##,
         input_dim,
-        STATE_FEATURE_COUNT,
-        SHORTFALL_FEATURE_COUNT,
         input_dim,
         backbone_hidden,
         backbone_hidden,
@@ -217,7 +215,7 @@ mod tests {
         let device = Default::default();
         let net: HierarchicalPolicyNet<TestBackend> = HierarchicalPolicyNet::new(&device);
 
-        let features = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];
+        let features = vec![0.0f32; STATE_FEATURE_COUNT];
         let latent = net.latent(tensor_from_vec(&features, &device));
 
         let direction = net.direction_logits(latent);

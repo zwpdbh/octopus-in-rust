@@ -196,7 +196,7 @@ pub fn select_squad_for_edge(
 
 The function prefers the highest build-rate engineers within each tech level, so a T2 engineer with a higher build rate is chosen before a slower one.
 
-If the desired squad exceeds the available idle engineers, the difference is recorded as **shortfall** and fed back into the macro network on the next tick. This feedback loop lets the policy learn to build or upgrade engineers before retrying an edge that previously starved.
+If no idle engineers can satisfy the target, the heuristic emits `SimAction::Wait` for one tick.
 
 ## Low-level `SimAction`
 
@@ -240,17 +240,15 @@ pub enum SimAction {
 The one-step planner ties the pieces together in `macro_policy_plan`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 54 — macro_policy_plan (abbreviated)
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 44 — macro_policy_plan (abbreviated)
 fn macro_policy_plan(...) -> Result<PlanResult, PlannerError> {
     // 1. forward through direction head and pick a legal direction
-    // 2. forward through action head for that direction and pick a legal edge
-    // 3. forward through power and squad heads
-    // 4. resolve squad, build SimAction::Build/Upgrade/BuildGoal, execute
-    // 5. update shortfall feedback
+    // 2. heuristic converts direction to a concrete SimAction
+    // 3. execute SimAction::Build/Upgrade/BuildGoal
 }
 ```
 
-If no legal edge exists, or the resolved squad is empty, the planner issues `SimAction::Wait` for one tick and records the shortfall.
+If no legal direction exists, or the heuristic cannot assign builders, the planner issues `SimAction::Wait` for one tick.
 
 ## Storage caps and adjacency
 

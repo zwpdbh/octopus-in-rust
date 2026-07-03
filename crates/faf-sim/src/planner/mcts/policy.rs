@@ -5,7 +5,7 @@
 //! delegates concrete action selection to the heuristic layer.
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
-use crate::planner::mcts::features::state_features_with_shortfall;
+use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{masked_argmax, masked_sample_index};
 use crate::planner::mcts::value_net::{MlpValueNet, ValueNet};
@@ -23,7 +23,6 @@ pub fn plan(
     value_net_kind: ValueNetKind,
     deterministic: bool,
     policy_bundle: Option<&dyn ValueNet>,
-    shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     match value_net_kind {
@@ -33,7 +32,6 @@ pub fn plan(
             goal,
             policy_bundle,
             deterministic,
-            shortfall,
             config,
         ),
         ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
@@ -49,7 +47,6 @@ pub(crate) fn macro_policy_plan(
     goal: &Goal,
     policy_bundle: Option<&dyn ValueNet>,
     deterministic: bool,
-    shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
     let plan = build_plan_graph(units, *goal);
@@ -63,7 +60,7 @@ pub(crate) fn macro_policy_plan(
         }
     };
 
-    let features = state_features_with_shortfall(&state, units, config, *shortfall);
+    let features = state_features(&state, units, config);
     let direction_logits = bundle.evaluate_direction(features);
     let direction_mask = legal_direction_mask(&state, units, config, goal, &plan);
 
@@ -90,7 +87,6 @@ pub(crate) fn macro_policy_plan(
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
-    *shortfall = compute_shortfall(&action, &state, &new_state, units);
     Ok(plan_result_with_action(new_state, action))
 }
 
@@ -146,20 +142,6 @@ pub(crate) fn execute_action(
     Ok(())
 }
 
-/// Compute shortfall feedback for the next tick.
-///
-/// For the new direction-only design this is mostly a placeholder: the heuristic
-/// either succeeds or emits `Wait`. We keep the shortfall vector so the macro
-/// network still receives the same input shape, but values are usually zero.
-fn compute_shortfall(
-    _action: &SimAction,
-    _before: &SimulationState,
-    _after: &SimulationState,
-    _units: &Units,
-) -> [f32; 3] {
-    [0.0f32; 3]
-}
-
 /// Build a [`PlanResult`] that commits to a single immediate action.
 pub(crate) fn plan_result_with_action(state: SimulationState, action: SimAction) -> PlanResult {
     PlanResult {
@@ -185,7 +167,6 @@ mod tests {
         let units = load_units();
         let state = SimulationState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
-        let mut shortfall = [0.0f32; 3];
 
         let goal = Goal {
             tech_level: crate::units::TechLevel::T4,
@@ -193,7 +174,7 @@ mod tests {
             energy_cost: 340_000.0,
             build_time: 46_250.0,
         };
-        let result = macro_policy_plan(&units, state, &goal, None, true, &mut shortfall, &config)
+        let result = macro_policy_plan(&units, state, &goal, None, true, &config)
             .expect("plan should succeed");
 
         assert!(

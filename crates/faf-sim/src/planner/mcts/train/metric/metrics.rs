@@ -550,10 +550,7 @@ impl Metric for EpisodeSpeedMetric {
 
         // Use the iteration count as batch size so the running average is
         // weighted correctly.
-        let batch_size = metadata
-            .iteration
-            .map(|i| i as usize + 1)
-            .unwrap_or(episode);
+        let batch_size = metadata.iteration.map(|i| i + 1).unwrap_or(episode);
         self.state.update(
             value,
             batch_size.max(1),

@@ -18,7 +18,7 @@
 | **EdgeCategory** | Strategic focus tag (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `Goal`) attached to every plan-graph edge. |
 | **Episode** | One full rollout from the starting state until the goal is reached or `max_steps` is exceeded. |
 | **Faction** | One of UEF, Cybran, Aeon, or Seraphim. Determines available units and build trees. |
-| **Feature vector** | Fixed-size numerical representation of a `SimulationState` plus optional shortfall feedback, fed into the learned networks. |
+| **Feature vector** | Fixed-size numerical representation of a `SimulationState` fed into the learned direction network. |
 | **Fine-tuning** | Supervised training on the best trajectory found during REINFORCE, run after the main loop. |
 | **SimulationState** | The authoritative discrete simulator state: units, projects, economy, completed structures. |
 | **GNN** | Graph Neural Network. A planned alternative value head that reasons directly over the plan graph. Not yet implemented. |
@@ -31,7 +31,7 @@
 | **PlanEdge** | A typed, stable action candidate with source, target, kind, and strategic category. |
 | **PlanEdgeIndex** | Stable ordered list of `PlanEdge`s derived from a `PlanGraph`, used to index network outputs. |
 | **PlanGraph** | Static directed acyclic graph derived from `Units` and the `Goal`. It catalogues every legal build/upgrade edge and is used to enumerate legal actions and to mask network outputs. It does not change during an episode or rollout. See also `BuildGraph`. |
-| **Planner** | The public facade that owns the strategy, configuration, policy bundle, and shortfall state. |
+| **Planner** | The public facade that owns the strategy, configuration, and policy bundle. |
 | **Policy bundle** | The learned hierarchical network saved and loaded together; macro alias for `HierarchicalPolicyNet`. |
 | **Power head** | Learned Burn head that outputs a scalar target build power for the selected edge. |
 | **Rollout** | In MCTS, a full simulation from a leaf node using the greedy policy network on a cloned `SimulationState`. The rollout adds nodes to the cloned build graph through normal simulator execution and returns a scalar value estimate. |
@@ -40,7 +40,7 @@
 | **PUCT** | UCT variant that incorporates a learned prior probability into the exploration bonus. |
 | **Return** | Discounted sum of rewards over an episode, used as the target for REINFORCE. |
 | **Selection** | In MCTS, traversing the tree from the root to a leaf using the UCB1/PUCT formula. |
-| **Shortfall** | Unmet engineer demand from the previous tick, fed back into the macro network as a three-dimensional feature. |
+| **Shortfall** | Historical feedback channel for unmet engineer demand. Removed in the current direction-only design. |
 | **SimAction** | Internal representation of a simulator action: `Build`, `Upgrade`, `Assist`, or `Wait`. |
 | **Simulator tick** | One fixed-duration step of the discrete-time economy and build-progress simulation. |
 | **Squad head** | Learned Burn head that outputs desired `[T1, T2, T3]` engineer counts. |

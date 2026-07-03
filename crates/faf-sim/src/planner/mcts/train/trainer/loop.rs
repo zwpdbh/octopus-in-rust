@@ -64,7 +64,7 @@ impl Trainer {
             if episode.reached_goal {
                 stats.goal_reaches += 1;
                 stats.completion_times.push(episode.completion_time);
-                let is_new_best = best_time.map_or(true, |t| episode.completion_time < t);
+                let is_new_best = best_time.is_none_or(|t| episode.completion_time < t);
                 if is_new_best {
                     best_time = Some(episode.completion_time);
                     episodes_since_best = 0;
@@ -75,7 +75,6 @@ impl Trainer {
                             .iter()
                             .map(|s| TrajectoryStep {
                                 direction_index: s.direction_index,
-                                shortfall: s.shortfall,
                             })
                             .collect(),
                     });
@@ -88,9 +87,9 @@ impl Trainer {
             }
 
             let interval = self.config.greedy_eval_interval;
-            if interval > 0 && ep > 0 && (ep + 1) % interval == 0 {
+            if interval > 0 && ep > 0 && (ep + 1).is_multiple_of(interval) {
                 if let Some(greedy_time) = self.evaluate_greedy(units, goal, &planner_config) {
-                    let is_new_best = best_time.map_or(true, |t| greedy_time < t);
+                    let is_new_best = best_time.is_none_or(|t| greedy_time < t);
                     if is_new_best {
                         best_time = Some(greedy_time);
                         episodes_since_best = 0;

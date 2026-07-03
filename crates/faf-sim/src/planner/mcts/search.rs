@@ -6,7 +6,7 @@
 //! values.
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
-use crate::planner::mcts::features::state_features_with_shortfall;
+use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{apply_mask, masked_argmax};
 use crate::planner::mcts::policy::{execute_action, plan_result_with_action};
@@ -280,8 +280,7 @@ fn evaluate_direction_priors(
     model: &dyn ValueNet,
     plan: &PlanGraph,
 ) -> (Vec<f32>, Vec<usize>) {
-    let shortfall = [0.0f32; 3];
-    let features = state_features_with_shortfall(state, units, config, shortfall);
+    let features = state_features(state, units, config);
 
     let mut direction_logits = model.evaluate_direction(features);
     let direction_mask = legal_direction_mask(state, units, config, goal, plan);
@@ -395,8 +394,7 @@ fn greedy_direction_action(
     model: &dyn ValueNet,
     plan: &PlanGraph,
 ) -> SimAction {
-    let shortfall = [0.0f32; 3];
-    let features = state_features_with_shortfall(state, units, config, shortfall);
+    let features = state_features(state, units, config);
     let direction_logits = model.evaluate_direction(features);
     let direction_mask = legal_direction_mask(state, units, config, goal, plan);
 

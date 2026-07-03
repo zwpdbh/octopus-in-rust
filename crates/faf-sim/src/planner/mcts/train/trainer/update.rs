@@ -44,14 +44,8 @@ impl Trainer {
         let mut step_count = 0usize;
 
         for step in &episode.steps {
-            let base_features = step.base_features.clone();
-
-            let macro_features = {
-                let mut v = base_features.clone();
-                v.extend_from_slice(&step.shortfall);
-                v
-            };
-            let macro_input = tensor1d_from_vec(&macro_features);
+            let features = step.base_features.clone();
+            let macro_input = tensor1d_from_vec(&features);
             let latent = self.model.latent(macro_input);
 
             let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
@@ -98,9 +92,9 @@ impl Trainer {
         if let Some(loss) = accumulated_loss {
             let grads = loss.backward();
             let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-            self.model =
-                self.optimizer
-                    .step(self.config.learning_rate.into(), self.model.clone(), grads);
+            self.model = self
+                .optimizer
+                .step(self.config.learning_rate, self.model.clone(), grads);
         }
 
         if step_count == 0 {

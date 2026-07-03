@@ -6,7 +6,7 @@ use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
 
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::features::{state_features, state_features_with_shortfall};
+use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::masked_sample_index;
 use crate::planner::mcts::policy::execute_action;
@@ -34,7 +34,6 @@ impl Trainer {
             final_reward: 0.0,
             steps: Vec::new(),
         };
-        let mut shortfall = [0.0f32; 3];
         let mut milestones = MilestoneTracker::default();
 
         for _step in 0..self.config.max_steps {
@@ -45,8 +44,6 @@ impl Trainer {
             }
 
             let base_features = state_features(&state, units, planner_config);
-            let macro_features =
-                state_features_with_shortfall(&state, units, planner_config, shortfall);
 
             let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
             if direction_mask.iter().all(|&b| !b) {
@@ -56,7 +53,7 @@ impl Trainer {
 
             let direction_logits = self
                 .model
-                .evaluate_direction(macro_features.clone(), &self.device);
+                .evaluate_direction(base_features.clone(), &self.device);
 
             let direction_idx = if self.rng.random::<f32>() < epsilon {
                 let legal_directions: Vec<usize> = direction_mask
@@ -86,16 +83,11 @@ impl Trainer {
 
             episode.steps.push(EpisodeStep {
                 base_features,
-                shortfall,
                 direction_mask,
                 direction_index: direction_idx,
                 step_reward,
                 return_value: 0.0,
             });
-
-            // Shortfall is now always zero because the heuristic either assigns
-            // builders or emits Wait. We keep the feature dimension unchanged.
-            shortfall = [0.0f32; 3];
         }
 
         episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);

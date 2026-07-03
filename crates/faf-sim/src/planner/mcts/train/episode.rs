@@ -3,10 +3,8 @@
 /// One recorded step in a training episode.
 #[derive(Debug, Clone)]
 pub(crate) struct EpisodeStep {
-    /// Base state feature vector (without shortfall).
+    /// State feature vector fed to the direction head at this step.
     pub(crate) base_features: Vec<f32>,
-    /// Shortfall feedback fed into the direction head at this step.
-    pub(crate) shortfall: [f32; 3],
     /// Mask over [`EdgeCategory::ALL`] indicating which directions are legal.
     pub(crate) direction_mask: Vec<bool>,
     /// Selected strategic direction index (into [`EdgeCategory::ALL`]).
@@ -21,7 +19,6 @@ pub(crate) struct EpisodeStep {
 #[derive(Debug, Clone)]
 pub(crate) struct TrajectoryStep {
     pub(crate) direction_index: usize,
-    pub(crate) shortfall: [f32; 3],
 }
 
 /// In-memory trajectory for the best training episode.

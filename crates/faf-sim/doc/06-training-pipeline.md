@@ -167,15 +167,8 @@ Each episode rolls out the current policy in the simulator. The trainer gathers 
 // crates/faf-sim/src/planner/mcts/train/episode.rs ~line 5 — EpisodeStep
 pub(crate) struct EpisodeStep {
     pub(crate) base_features: Vec<f32>,
-    pub(crate) shortfall: [f32; 3],
-    pub(crate) upgrade_mask: Vec<bool>,
-    pub(crate) upgrade_index: usize,
     pub(crate) direction_mask: Vec<bool>,
-    pub(crate) action_mask: Vec<bool>,
     pub(crate) direction_index: usize,
-    pub(crate) edge_index: usize,
-    pub(crate) target_power: f32,
-    pub(crate) desired_squad: [f32; 3],
     pub(crate) step_reward: f32,
     pub(crate) return_value: f32,
 }
@@ -183,7 +176,7 @@ pub(crate) struct EpisodeStep {
 
 At each step the trainer:
 
-1. Featurizes the state with shortfall feedback.
+1. Featurizes the state.
 2. Computes the legal factory-upgrade mask.
 3. Samples an upgrade option from the upgrade head (or a random legal upgrade with probability `epsilon`).
 4. If no upgrade was chosen, computes the legal direction mask and the legal edge mask for that direction, then samples a direction and edge (again with epsilon-greedy noise).
@@ -278,7 +271,7 @@ Greedy evaluation is the source of the best model; REINFORCE alone does not guar
 
 ## Fine-tuning on the best trajectory
 
-After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes cross-entropy/MSE losses with the recorded `(direction, edge_index, target_power, desired_squad, shortfall)` targets.
+After the REINFORCE loop finishes, `fine_tune_best_model` runs supervised fine-tuning on the best trajectory discovered during training. If a best trajectory was recorded from an episode that set a new best time, the trainer creates a fresh optimizer around the best model and minimizes cross-entropy loss on the recorded `direction` targets.
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/policy.rs ~line 91 — fine_tune_best_model

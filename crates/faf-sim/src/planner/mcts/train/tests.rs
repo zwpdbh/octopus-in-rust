@@ -1,5 +1,5 @@
 use crate::planner::core::Goal;
-use crate::planner::mcts::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
+use crate::planner::mcts::features::STATE_FEATURE_COUNT;
 use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
 use crate::units::{TechLevel, Units};
 
@@ -53,7 +53,7 @@ fn save_and_load_policy_round_trip() {
     let loaded = load_policy(&path).expect("load should succeed");
 
     let device: TrainDevice = Default::default();
-    let dummy = vec![0.0f32; STATE_FEATURE_COUNT + SHORTFALL_FEATURE_COUNT];
+    let dummy = vec![0.0f32; STATE_FEATURE_COUNT];
     let before = model.evaluate_direction(dummy.clone(), &device);
     let after = loaded.evaluate_direction(dummy, &device);
     assert_eq!(before.len(), after.len());

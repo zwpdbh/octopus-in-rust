@@ -227,7 +227,6 @@ fn rollout_value(
             goal,
             Some(model),
             true,                       // deterministic / greedy
-            &mut shortfall,
             config,
         );
 
@@ -247,14 +246,12 @@ fn rollout_value(
 
 During rollout, actions are chosen by the **hierarchical policy network**, not by the MCTS tree search. The tree search already selected and expanded the leaf; the rollout simply asks the policy network "what would you do from here?" and lets it play the game out.
 
-The policy network decides each rollout action in four stages:
+The policy network decides each rollout action in two stages:
 
-1. **Upgrade head:** decide whether to upgrade a factory (`NoUpgrade`, `T1→T2`, `T2→T3`).
-2. **Direction head:** pick a strategic focus (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `Goal`).
-3. **Action head:** pick a concrete plan-graph edge inside that direction.
-4. **Power + squad heads:** decide target build power and the `[T1, T2, T3]` engineer squad.
+1. **Direction head:** pick a strategic focus (`IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `IncreaseEnergyStorage`, `Goal`, or `UpgradeTech`).
+2. **Heuristic layer:** convert the selected direction into a concrete `SimAction` and execute it.
 
-In training the policy samples these choices stochastically; during MCTS rollout it uses the greedy mode (`deterministic: true`) so the value estimate is stable.
+In training the policy samples the direction stochastically; during MCTS rollout it uses the greedy mode (`deterministic: true`) so the value estimate is stable.
 
 ### What the rollout modifies
 
@@ -273,7 +270,7 @@ flowchart LR
 
 After the rollout finishes, the cloned state is discarded. Only the **final scalar value** (discounted rewards + terminal bonus) is backed up into the MCTS tree.
 
-The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. That means rollouts use the full hierarchical policy, including the `upgrade_head`, to choose factory upgrades. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
+The rollout reuses the same `macro_policy_plan` function used by the one-step policy, avoiding duplicated inference logic. That means rollouts use the direction network plus the deterministic heuristic to choose build/upgrade actions. When `iterations` is large, the rollout provides the leaf-value estimates; when `iterations` is zero, no rollouts occur and the search relies entirely on the prior probabilities computed at the root.
 
 ## MCTS does not guarantee success
 

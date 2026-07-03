@@ -114,9 +114,8 @@ For the current model:
 Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into an 11-dimensional vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constants
+// crates/faf-sim/src/planner/mcts/features.rs ~line 15 — feature constant
 pub const STATE_FEATURE_COUNT: usize = 11;
-pub const SHORTFALL_FEATURE_COUNT: usize = 3;
 ```
 
 The 11 features are listed in `state_features`:
@@ -138,22 +137,6 @@ The 11 features are listed in `state_features`:
 
 They are intentionally economy-centric. Build orders in FAF are driven mainly by income, build power, and tech tier, so the network gets those directly instead of a huge one-hot unit roster.
 
-The macro network also receives a three-dimensional **shortfall** vector, which records how many idle engineers of each tech level were requested but unavailable in the previous tick. This feedback lets the policy learn to build or upgrade engineers before retrying an action that previously starved.
-
-```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 123 — state_features_with_shortfall
-pub fn state_features_with_shortfall(
-    state: &SimulationState,
-    units: &Units,
-    config: &PlannerConfig,
-    shortfall: [f32; SHORTFALL_FEATURE_COUNT],
-) -> Vec<f32> {
-    let mut features = state_features(state, units, config);
-    features.extend_from_slice(&shortfall);
-    features
-}
-```
-
 ## What the policy sees
 
 From the network's point of view, a state is a snapshot it can evaluate and expand. **The policy does not consume the build graph as a graph.** It consumes a fixed-size feature vector extracted from the state:
@@ -166,12 +149,11 @@ flowchart LR
     B --> E["state_features()<br/>counts active projects,<br/>tech milestones"]
     C --> E
     D --> E
-    E --> F["[f32; 13]"]
-    F --> G["+ shortfall [f32; 3]"]
-    G --> H["HierarchicalPolicyNet"]
+    E --> F["[f32; 11]"]
+    F --> G["HierarchicalPolicyNet"]
 ```
 
-The 13 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)); the tree itself is the MCTS search tree, not the build graph.
+The 11 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)); the tree itself is the MCTS search tree, not the build graph.
 
 ## Objectives
 

@@ -41,25 +41,35 @@ pub fn direction_to_action(
 }
 
 /// A build/upgrade target extracted from a legal plan-graph edge.
+///
+/// This mirrors [`EdgeAction`]: a candidate is either a brand-new build or an
+/// in-place upgrade of an existing unit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Candidate {
-    target: UnitKind,
-    /// For upgrades, the unit kind being upgraded.
-    upgrade_from: Option<UnitKind>,
+enum Candidate {
+    Build { target: UnitKind },
+    Upgrade { from: UnitKind, to: UnitKind },
+}
+
+impl Candidate {
+    fn target(&self) -> &UnitKind {
+        match self {
+            Candidate::Build { target } => target,
+            Candidate::Upgrade { to, .. } => to,
+        }
+    }
 }
 
 /// Return all legal build/upgrade candidates in `plan` whose category matches.
 ///
-/// Results are deduplicated by `(target, source)` so multiple builders for the
-/// same target appear only once.
+/// Results are deduplicated so multiple builders for the same target appear only
+/// once.
 fn legal_candidates(
     plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     category: EdgeCategory,
 ) -> Vec<Candidate> {
-    let mut seen: std::collections::HashSet<(UnitKind, Option<UnitKind>)> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<Candidate> = std::collections::HashSet::new();
     let mut candidates = Vec::new();
 
     for edge in plan.graph().edge_references() {
@@ -74,21 +84,31 @@ fn legal_candidates(
             continue;
         }
 
-        let Some(target_kind) = target.as_unit() else {
-            continue;
-        };
-        let source_kind = if action == EdgeAction::Upgrade {
-            source.as_unit().cloned()
-        } else {
-            None
+        let candidate = match action {
+            EdgeAction::Build => {
+                let Some(target_kind) = target.as_unit() else {
+                    continue;
+                };
+                Candidate::Build {
+                    target: target_kind.clone(),
+                }
+            }
+            EdgeAction::Upgrade => {
+                let Some(from) = source.as_unit() else {
+                    continue;
+                };
+                let Some(to) = target.as_unit() else {
+                    continue;
+                };
+                Candidate::Upgrade {
+                    from: from.clone(),
+                    to: to.clone(),
+                }
+            }
         };
 
-        let key = (target_kind.clone(), source_kind.clone());
-        if seen.insert(key) {
-            candidates.push(Candidate {
-                target: target_kind.clone(),
-                upgrade_from: source_kind,
-            });
+        if seen.insert(candidate.clone()) {
+            candidates.push(candidate);
         }
     }
 
@@ -121,16 +141,19 @@ fn pick_mass_action(
         .into_iter()
         .filter(|c| {
             matches!(
-                c.target,
+                c.target(),
                 UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
             )
         })
-        .map(|c| (c.target, c.upgrade_from))
         .collect();
 
     let Some(best) = candidates
         .into_iter()
-        .filter_map(|(target, source)| {
+        .filter_map(|c| {
+            let (target, source) = match &c {
+                Candidate::Build { target } => (target.clone(), None),
+                Candidate::Upgrade { from, to } => (to.clone(), Some(from.clone())),
+            };
             let cost = project_cost(units, &target, source.as_ref())?;
             let gain = mass_income_gain(units, &target, source.as_ref())?;
             if gain <= 0.0 {
@@ -155,18 +178,21 @@ fn pick_energy_action(
 ) -> SimAction {
     let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergy)
         .into_iter()
-        .filter(|c| matches!(c.target, UnitKind::Pgen(_)))
-        .map(|c| (c.target, c.upgrade_from))
+        .filter(|c| matches!(c.target(), UnitKind::Pgen(_)))
         .collect();
 
     let Some(best) = candidates
         .into_iter()
-        .max_by(|a, b| pgen_tier(&a.0).cmp(&pgen_tier(&b.0)))
+        .max_by(|a, b| pgen_tier(a.target()).cmp(&pgen_tier(b.target())))
     else {
         return SimAction::Wait;
     };
 
-    build_or_upgrade(best.0, best.1, state, units, config)
+    let (target, source) = match best {
+        Candidate::Build { target } => (target, None),
+        Candidate::Upgrade { from, to } => (to, Some(from)),
+    };
+    build_or_upgrade(target, source, state, units, config)
 }
 
 /// Pick the highest-tier engineer build action.
@@ -178,8 +204,13 @@ fn pick_bp_action(
 ) -> SimAction {
     let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseBP)
         .into_iter()
-        .filter(|c| matches!(c.target, UnitKind::Engineer(_)) && c.upgrade_from.is_none())
-        .map(|c| c.target)
+        .filter(
+            |c| matches!(c, Candidate::Build { target } if matches!(target, UnitKind::Engineer(_))),
+        )
+        .map(|c| match c {
+            Candidate::Build { target } => target,
+            Candidate::Upgrade { .. } => unreachable!("filtered to builds only"),
+        })
         .collect();
 
     let Some(target) = candidates
@@ -208,7 +239,7 @@ fn pick_storage_action(
 ) -> SimAction {
     let can_build = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergyStorage)
         .iter()
-        .any(|c| c.target == UnitKind::EnergyStorage && c.upgrade_from.is_none());
+        .any(|c| matches!(c, Candidate::Build { target } if *target == UnitKind::EnergyStorage));
 
     if !can_build {
         return SimAction::Wait;
@@ -255,8 +286,8 @@ fn pick_upgrade_action(
 ) -> SimAction {
     let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::UpgradeTech)
         .into_iter()
-        .filter_map(|c| match (c.upgrade_from, c.target) {
-            (Some(from), to)
+        .filter_map(|c| match c {
+            Candidate::Upgrade { from, to }
                 if matches!(from, UnitKind::Factory(_)) && matches!(to, UnitKind::Factory(_)) =>
             {
                 Some((from, to))

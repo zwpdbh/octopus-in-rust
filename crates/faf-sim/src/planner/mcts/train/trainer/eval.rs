@@ -2,7 +2,7 @@
 
 use super::super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::features::state_features_with_shortfall;
+use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{masked_argmax, PolicyBundle};
 use crate::planner::mcts::policy::execute_action;
@@ -41,16 +41,14 @@ impl Trainer {
     ) -> Option<f64> {
         let plan = build_plan_graph(units, *goal);
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
-        let shortfall = [0.0f32; 3];
 
         for _ in 0..max_steps {
             if state.goal_reached(goal) {
                 return Some(state.time);
             }
 
-            let macro_features =
-                state_features_with_shortfall(&state, units, planner_config, shortfall);
-            let direction_logits = model.evaluate_direction(macro_features, device);
+            let features = state_features(&state, units, planner_config);
+            let direction_logits = model.evaluate_direction(features, device);
             let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
 
             if direction_mask.iter().all(|&b| !b) {
