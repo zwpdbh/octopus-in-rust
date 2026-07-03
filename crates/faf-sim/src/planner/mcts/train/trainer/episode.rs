@@ -18,7 +18,7 @@ use crate::planner::mcts::selections::{
     PlanEdgeIndex,
 };
 use crate::planner::plan_graph::{EdgeAction, EdgeCategory, PlanGraph};
-use crate::planner::search::SimAction;
+use crate::planner::SimAction;
 use crate::sim::{NodeId, SimulationState};
 use crate::units::{UnitKind, Units};
 

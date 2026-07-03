@@ -354,7 +354,7 @@ pub struct PlanResult {
     pub completion_time: f64,
     pub final_economy: EconomyState,
     /// The only field the reactive executor commits to.
-    pub first_action: Option<crate::planner::search::SimAction>,
+    pub first_action: Option<crate::planner::SimAction>,
 }
 ```
 

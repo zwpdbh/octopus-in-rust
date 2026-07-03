@@ -17,7 +17,7 @@ use crate::planner::mcts::selections::{
     SelectionOption,
 };
 use crate::planner::plan_graph::EdgeCategory;
-use crate::planner::search::SimAction;
+use crate::planner::SimAction;
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 

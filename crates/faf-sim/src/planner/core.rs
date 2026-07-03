@@ -69,7 +69,7 @@ pub struct PlanResult {
     /// In the closed-loop actor design this is the only field the executor
     /// commits to. It is converted into a [`crate::actors::message::SimulationMsg`]
     /// and sent to the simulator; the rest of the plan is recomputed next tick.
-    pub first_action: Option<crate::planner::search::SimAction>,
+    pub first_action: Option<crate::planner::SimAction>,
 }
 
 /// Planner error type.

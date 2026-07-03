@@ -7,13 +7,14 @@
 //! - A STRIPS/goal-oriented planning layer ([`strips`], [`plan_graph`]) for
 //!   reasoning about build/upgrade dependencies symbolically.
 
+pub(crate) mod action;
 pub mod core;
 pub(crate) mod heuristic;
 pub mod mcts;
 pub mod plan_graph;
-pub(crate) mod search;
 pub mod strips;
 
+pub use action::SimAction;
 pub use core::{Goal, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, ValueNetKind};
 pub use plan_graph::{build_plan_graph, EdgeAction, PlanGraph, PlanNode};
 pub use strips::{build_operators, Fact, Operator, StripsAction};

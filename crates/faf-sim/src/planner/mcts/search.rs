@@ -16,7 +16,7 @@ use crate::planner::mcts::selections::{
 use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_bonus};
 use crate::planner::mcts::value_net::ValueNet;
 use crate::planner::plan_graph::EdgeCategory;
-use crate::planner::search::SimAction;
+use crate::planner::SimAction;
 use crate::sim::SimulationState;
 use crate::units::Units;
 

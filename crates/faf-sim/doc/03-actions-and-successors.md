@@ -203,7 +203,7 @@ If the desired squad exceeds the available idle engineers, the difference is rec
 The concrete simulator commands are the existing `SimAction` enum, extended to carry multiple builders:
 
 ```rust
-// crates/faf-sim/src/planner/search.rs ~line 21 — SimAction enum
+// crates/faf-sim/src/planner/action.rs ~line 17 — SimAction enum
 pub enum SimAction {
     /// Build a unit with the given builders.
     Build {

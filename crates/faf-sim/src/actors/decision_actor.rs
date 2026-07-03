@@ -7,8 +7,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::actors::message::{Observation, SimulationMsg};
 use crate::planner::core::Goal;
-use crate::planner::search::SimAction;
 use crate::planner::Planner;
+use crate::planner::SimAction;
 use crate::units::Units;
 
 fn sim_action_to_command(action: SimAction) -> Option<SimulationMsg> {

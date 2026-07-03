@@ -127,7 +127,7 @@ pub struct PlanResult {
     pub events: Vec<BuildEvent>,
     pub completion_time: f64,
     pub final_economy: EconomyState,
-    pub first_action: Option<crate::planner::search::SimAction>,
+    pub first_action: Option<crate::planner::SimAction>,
 }
 ```
 
