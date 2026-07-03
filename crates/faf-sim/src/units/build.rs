@@ -6,7 +6,7 @@
 
 use faf_units::Unit;
 
-use crate::units::kind::{Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind};
+use crate::units::kind::{Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole};
 
 /// Build a `UnitDef` from a raw `Unit`, if the unit is relevant to the
 /// optimizer.
@@ -16,8 +16,51 @@ pub(crate) fn unit_def(unit: &Unit) -> Option<UnitDef> {
     let target_stats = economy.target_stats()?;
     let builder = economy.builder_capability();
 
+    let build_rate = builder.map(|b| b.build_rate).unwrap_or(0.0);
+    let mass_income = economy.production_per_second_mass.unwrap_or(0.0);
+    let energy_income = economy.production_per_second_energy.unwrap_or(0.0);
+    let maintenance_energy = economy
+        .maintenance_consumption_per_second_energy
+        .unwrap_or(0.0);
+    let mass_storage = economy.storage_mass.unwrap_or(0.0);
+    let energy_storage = economy.storage_energy.unwrap_or(0.0);
+
+    let role = match kind.clone() {
+        UnitKind::Commander => UnitRole::Commander {
+            build_rate,
+            mass_income,
+            energy_income,
+            maintenance_energy,
+            mass_storage,
+            energy_storage,
+        },
+        UnitKind::Engineer(_) => UnitRole::Engineer {
+            build_rate,
+            maintenance_energy,
+        },
+        UnitKind::Factory(_) => UnitRole::Factory {
+            build_rate,
+            maintenance_energy,
+        },
+        UnitKind::Mex(_) => UnitRole::MassExtractor {
+            mass_income,
+            maintenance_energy,
+        },
+        UnitKind::Pgen(_) => UnitRole::PowerGenerator {
+            energy_income,
+            maintenance_energy,
+        },
+        UnitKind::EnergyStorage => UnitRole::EnergyStorage { energy_storage },
+        UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitRole::CappedMassExtractor {
+            mass_income,
+            mass_storage,
+            maintenance_energy,
+        },
+        UnitKind::Unique(_) => UnitRole::Other { maintenance_energy },
+    };
+
     Some(UnitDef {
-        kind,
+        kind: kind.clone(),
         faction: faction_from_unit(unit),
         display_name: unit.display_name(),
         cost: UnitCost {
@@ -25,14 +68,7 @@ pub(crate) fn unit_def(unit: &Unit) -> Option<UnitDef> {
             energy: target_stats.build_cost_energy,
             build_time: target_stats.build_time,
         },
-        build_rate: builder.map(|b| b.build_rate).unwrap_or(0.0),
-        mass_income: economy.production_per_second_mass.unwrap_or(0.0),
-        energy_income: economy.production_per_second_energy.unwrap_or(0.0),
-        maintenance_energy: economy
-            .maintenance_consumption_per_second_energy
-            .unwrap_or(0.0),
-        mass_storage: economy.storage_mass.unwrap_or(0.0),
-        energy_storage: economy.storage_energy.unwrap_or(0.0),
+        role,
     })
 }
 

@@ -32,7 +32,8 @@ pub use sim::{
 };
 
 pub use units::{
-    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, Units, UpgradeRecipe,
+    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
+    UpgradeRecipe,
 };
 
 #[cfg(test)]

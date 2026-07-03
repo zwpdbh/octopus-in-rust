@@ -49,8 +49,8 @@ pub fn derive_economy(units: &Units, unit_kinds: &[UnitKind]) -> EconomyState {
     let mut energy_storage = 0.0;
 
     for def in &defs {
-        mass_storage += def.mass_storage;
-        energy_storage += def.energy_storage;
+        mass_storage += def.mass_storage();
+        energy_storage += def.energy_storage();
     }
 
     let production: EcoFlow = defs.iter().map(|d| d.production()).sum();
@@ -335,7 +335,9 @@ fn is_builder_node(node_id: NodeId, graph: &BuildGraph, units: &Units) -> bool {
     if !node.is_active() {
         return false;
     }
-    units.def(&node.unit_id).is_some_and(|d| d.build_rate > 0.0)
+    units
+        .def(&node.unit_id)
+        .is_some_and(|d| d.build_rate() > 0.0)
 }
 
 /// Build power contributed by a single active builder node.
@@ -344,7 +346,7 @@ pub(crate) fn builder_power(node_id: NodeId, graph: &BuildGraph, units: &Units) 
     if !node.is_active() {
         return 0.0;
     }
-    units.def(&node.unit_id).map_or(0.0, |d| d.build_rate)
+    units.def(&node.unit_id).map_or(0.0, |d| d.build_rate())
 }
 
 impl SimulationState {
@@ -558,8 +560,8 @@ impl SimulationState {
                 continue;
             };
 
-            let mut mass_income = def.mass_income;
-            let mut energy_income = def.energy_income;
+            let mut mass_income = def.mass_income();
+            let mut energy_income = def.energy_income();
 
             // Apply the unified FAF adjacency bonus: +12.5% per adjacent storage,
             // capped at 4 storages (+50% max).
@@ -573,9 +575,9 @@ impl SimulationState {
             }
 
             net_mass += mass_income;
-            net_energy += energy_income - def.maintenance_energy;
-            mass_storage_cap += def.mass_storage;
-            energy_storage_cap += def.energy_storage;
+            net_energy += energy_income - def.maintenance_energy();
+            mass_storage_cap += def.mass_storage();
+            energy_storage_cap += def.energy_storage();
         }
 
         self.economy.net_mass_income = net_mass;
@@ -1243,7 +1245,7 @@ mod tests {
             .start_project(&UnitKind::Pgen(TechLevel::T1), &[acu_node], &units)
             .expect("ACU can build T1 pgen");
 
-        let acu_rate = acu.build_rate;
+        let acu_rate = acu.build_rate();
         let expected_ticks = (pgen.cost.build_time / acu_rate).ceil();
         let mut completed = Vec::new();
         for _ in 0..(expected_ticks as usize + 5) {
@@ -1291,7 +1293,7 @@ mod tests {
         let t2_mex_def = units.def(&UnitKind::Mex(TechLevel::T2)).unwrap();
         // The T2 mex is retired and replaced by a CapT2Mex, so the delta is the
         // +50% adjacency bonus over the base T2 mex income.
-        let expected_boost = t2_mex_def.mass_income * 0.5;
+        let expected_boost = t2_mex_def.mass_income() * 0.5;
         assert!(
             (state.economy.net_mass_income - base_mass - expected_boost).abs() < 1e-6,
             "expected mass income boost of {}, got {}",
@@ -1327,7 +1329,7 @@ mod tests {
         assert!(state.is_completed(storage_node));
 
         let pgen_def = units.def(&UnitKind::Pgen(TechLevel::T1)).unwrap();
-        let expected_boost = 0.125 * pgen_def.energy_income;
+        let expected_boost = 0.125 * pgen_def.energy_income();
         assert!(
             (state.economy.net_energy_income - base_energy - expected_boost).abs() < 1e-6,
             "expected energy income boost of {}, got {}",
@@ -1437,7 +1439,7 @@ mod tests {
         let cost = units
             .build_cost(&monkeylord)
             .expect("Monkeylord has a cost");
-        let build_power = units.def(&t3_eng).unwrap().build_rate;
+        let build_power = units.def(&t3_eng).unwrap().build_rate();
         let expected_time = cost.build_time / build_power;
 
         let mut completed = Vec::new();

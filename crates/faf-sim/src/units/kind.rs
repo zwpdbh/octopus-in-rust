@@ -70,6 +70,130 @@ pub struct UnitCost {
     pub build_time: f64,
 }
 
+/// Functional role of a unit.
+///
+/// Each variant carries only the stats that are meaningful for that role. This
+/// makes invalid combinations (e.g., a factory with mass income) unrepresentable
+/// at the type level.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnitRole {
+    /// Armored Command Unit: builds, produces a small base income, and provides
+    /// starting storage.
+    Commander {
+        build_rate: f64,
+        mass_income: f64,
+        energy_income: f64,
+        maintenance_energy: f64,
+        mass_storage: f64,
+        energy_storage: f64,
+    },
+    /// Land factory: builds units, consumes energy for maintenance.
+    Factory {
+        build_rate: f64,
+        maintenance_energy: f64,
+    },
+    /// Engineer: builds units, consumes energy for maintenance.
+    Engineer {
+        build_rate: f64,
+        maintenance_energy: f64,
+    },
+    /// Mass extractor: produces mass, consumes energy for maintenance.
+    MassExtractor {
+        mass_income: f64,
+        maintenance_energy: f64,
+    },
+    /// Power generator: produces energy, consumes energy for maintenance.
+    PowerGenerator {
+        energy_income: f64,
+        maintenance_energy: f64,
+    },
+    /// Energy storage building.
+    EnergyStorage { energy_storage: f64 },
+    /// T2/T3 mass extractor surrounded by four mass storages.
+    CappedMassExtractor {
+        mass_income: f64,
+        mass_storage: f64,
+        maintenance_energy: f64,
+    },
+    /// Any other unit (typically military/unique) with only maintenance cost.
+    Other { maintenance_energy: f64 },
+}
+
+impl UnitRole {
+    /// Build power contributed by this role, if any.
+    pub fn build_rate(&self) -> f64 {
+        match self {
+            UnitRole::Commander { build_rate, .. }
+            | UnitRole::Factory { build_rate, .. }
+            | UnitRole::Engineer { build_rate, .. } => *build_rate,
+            _ => 0.0,
+        }
+    }
+
+    /// Mass income produced by this role, if any.
+    pub fn mass_income(&self) -> f64 {
+        match self {
+            UnitRole::Commander { mass_income, .. }
+            | UnitRole::MassExtractor { mass_income, .. }
+            | UnitRole::CappedMassExtractor { mass_income, .. } => *mass_income,
+            _ => 0.0,
+        }
+    }
+
+    /// Energy income produced by this role, if any.
+    pub fn energy_income(&self) -> f64 {
+        match self {
+            UnitRole::Commander { energy_income, .. }
+            | UnitRole::PowerGenerator { energy_income, .. } => *energy_income,
+            _ => 0.0,
+        }
+    }
+
+    /// Energy consumed per second for maintenance, if any.
+    pub fn maintenance_energy(&self) -> f64 {
+        match self {
+            UnitRole::Commander {
+                maintenance_energy, ..
+            }
+            | UnitRole::Factory {
+                maintenance_energy, ..
+            }
+            | UnitRole::Engineer {
+                maintenance_energy, ..
+            }
+            | UnitRole::MassExtractor {
+                maintenance_energy, ..
+            }
+            | UnitRole::PowerGenerator {
+                maintenance_energy, ..
+            }
+            | UnitRole::CappedMassExtractor {
+                maintenance_energy, ..
+            }
+            | UnitRole::Other { maintenance_energy } => *maintenance_energy,
+            _ => 0.0,
+        }
+    }
+
+    /// Mass storage capacity provided by this role, if any.
+    pub fn mass_storage(&self) -> f64 {
+        match self {
+            UnitRole::Commander { mass_storage, .. }
+            | UnitRole::CappedMassExtractor { mass_storage, .. } => *mass_storage,
+            _ => 0.0,
+        }
+    }
+
+    /// Energy storage capacity provided by this role, if any.
+    pub fn energy_storage(&self) -> f64 {
+        match self {
+            UnitRole::Commander { energy_storage, .. }
+            | UnitRole::EnergyStorage { energy_storage } => *energy_storage,
+            _ => 0.0,
+        }
+    }
+}
+
 /// Static definition of a unit.
 ///
 /// This is the optimizer's view of a unit: all stats needed for economy and
@@ -80,12 +204,39 @@ pub struct UnitDef {
     pub faction: Faction,
     pub display_name: String,
     pub cost: UnitCost,
-    pub build_rate: f64,
-    pub mass_income: f64,
-    pub energy_income: f64,
-    pub maintenance_energy: f64,
-    pub mass_storage: f64,
-    pub energy_storage: f64,
+    pub role: UnitRole,
+}
+
+impl UnitDef {
+    /// Build power contributed by this unit, if any.
+    pub fn build_rate(&self) -> f64 {
+        self.role.build_rate()
+    }
+
+    /// Mass income produced by this unit, if any.
+    pub fn mass_income(&self) -> f64 {
+        self.role.mass_income()
+    }
+
+    /// Energy income produced by this unit, if any.
+    pub fn energy_income(&self) -> f64 {
+        self.role.energy_income()
+    }
+
+    /// Energy consumed per second for maintenance, if any.
+    pub fn maintenance_energy(&self) -> f64 {
+        self.role.maintenance_energy()
+    }
+
+    /// Mass storage capacity provided by this unit, if any.
+    pub fn mass_storage(&self) -> f64 {
+        self.role.mass_storage()
+    }
+
+    /// Energy storage capacity provided by this unit, if any.
+    pub fn energy_storage(&self) -> f64 {
+        self.role.energy_storage()
+    }
 }
 
 /// Recipe for constructing a brand-new unit.
@@ -124,8 +275,8 @@ impl UnitCost {
 impl EcoProducer for UnitDef {
     fn production(&self) -> EcoFlow {
         EcoFlow {
-            mass_per_second: self.mass_income,
-            energy_per_second: self.energy_income,
+            mass_per_second: self.mass_income(),
+            energy_per_second: self.energy_income(),
         }
     }
 }
@@ -134,7 +285,7 @@ impl EcoConsumer for UnitDef {
     fn consumption(&self) -> EcoFlow {
         EcoFlow {
             mass_per_second: 0.0,
-            energy_per_second: self.maintenance_energy,
+            energy_per_second: self.maintenance_energy(),
         }
     }
 }

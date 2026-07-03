@@ -7,12 +7,12 @@
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::mcts::features::state_features_with_shortfall;
-use crate::planner::mcts::heuristic::direction_to_action;
+use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{apply_mask, masked_argmax};
 use crate::planner::mcts::policy::{execute_action, plan_result_with_action};
 use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_bonus};
 use crate::planner::mcts::value_net::ValueNet;
-use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::SimAction;
 use crate::sim::SimulationState;
 use crate::units::Units;
@@ -64,12 +64,13 @@ impl MctsNode {
         units: &Units,
         config: &PlannerConfig,
         model: &dyn ValueNet,
+        plan: &PlanGraph,
     ) -> Self {
         let is_terminal = state.goal_reached(goal);
         let (direction_priors, untried_directions) = if is_terminal {
             (vec![0.0f32; EdgeCategory::ALL.len()], Vec::new())
         } else {
-            evaluate_direction_priors(&state, goal, units, config, model)
+            evaluate_direction_priors(&state, goal, units, config, model, plan)
         };
 
         Self {
@@ -105,7 +106,8 @@ impl MctsSearch {
         planner_config: &PlannerConfig,
         model: &dyn ValueNet,
     ) -> Result<PlanResult, PlannerError> {
-        let mut root = MctsNode::new(initial_state, goal, units, planner_config, model);
+        let plan = build_plan_graph(units, *goal);
+        let mut root = MctsNode::new(initial_state, goal, units, planner_config, model, &plan);
 
         if root.untried_directions.is_empty() && !root.is_terminal {
             // No legal actions from the root.
@@ -134,6 +136,7 @@ impl MctsSearch {
                     planner_config,
                     model,
                     self.config.max_rollout_steps,
+                    &plan,
                 )
             } else {
                 // Expand one untried direction, then rollout from the child.
@@ -150,7 +153,14 @@ impl MctsSearch {
 
                 leaf.untried_directions.retain(|&d| d != direction_idx);
 
-                match expand_direction(&leaf.state, direction_idx, goal, units, planner_config) {
+                match expand_direction(
+                    &leaf.state,
+                    direction_idx,
+                    goal,
+                    units,
+                    planner_config,
+                    &plan,
+                ) {
                     Some(child_state) => {
                         let child_value = if child_state.goal_reached(goal) {
                             compute_terminal_bonus(&child_state, true) as f64
@@ -162,6 +172,7 @@ impl MctsSearch {
                                 planner_config,
                                 model,
                                 self.config.max_rollout_steps,
+                                &plan,
                             )
                         };
                         leaf.children.push((
@@ -209,15 +220,12 @@ impl MctsSearch {
         let mut final_state = root.state.clone();
         let action = if let Some(direction_idx) = best_direction {
             let direction = EdgeCategory::ALL[direction_idx];
-            match direction_to_action(direction, &root.state, units, planner_config, goal) {
-                Some(action) => {
-                    if execute_action(&mut final_state, &action, units, planner_config.dt).is_ok() {
-                        action
-                    } else {
-                        SimAction::Wait
-                    }
-                }
-                None => SimAction::Wait,
+            let action =
+                direction_to_action(direction, &root.state, units, planner_config, goal, &plan);
+            if execute_action(&mut final_state, &action, units, planner_config.dt).is_ok() {
+                action
+            } else {
+                SimAction::Wait
             }
         } else {
             SimAction::Wait
@@ -270,12 +278,13 @@ fn evaluate_direction_priors(
     units: &Units,
     config: &PlannerConfig,
     model: &dyn ValueNet,
+    plan: &PlanGraph,
 ) -> (Vec<f32>, Vec<usize>) {
     let shortfall = [0.0f32; 3];
     let features = state_features_with_shortfall(state, units, config, shortfall);
 
     let mut direction_logits = model.evaluate_direction(features);
-    let direction_mask = legal_direction_mask(state, units, config, goal);
+    let direction_mask = legal_direction_mask(state, units, config, goal, plan);
     apply_mask(&mut direction_logits, &direction_mask);
     let direction_probs = softmax_probs(&direction_logits);
 
@@ -296,10 +305,11 @@ fn legal_direction_mask(
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
+    plan: &PlanGraph,
 ) -> Vec<bool> {
     EdgeCategory::ALL
         .iter()
-        .map(|&d| direction_to_action(d, state, units, config, goal).is_some())
+        .map(|&d| is_direction_legal(d, state, units, config, goal, plan))
         .collect()
 }
 
@@ -324,9 +334,13 @@ fn expand_direction(
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
+    plan: &PlanGraph,
 ) -> Option<SimulationState> {
     let direction = EdgeCategory::ALL.get(direction_idx)?;
-    let action = direction_to_action(*direction, state, units, config, goal)?;
+    let action = direction_to_action(*direction, state, units, config, goal, plan);
+    if matches!(action, SimAction::Wait) {
+        return None;
+    }
 
     let mut new_state = state.clone();
     if execute_action(&mut new_state, &action, units, config.dt).is_err() {
@@ -345,6 +359,7 @@ fn rollout_value(
     config: &PlannerConfig,
     model: &dyn ValueNet,
     max_steps: usize,
+    plan: &PlanGraph,
 ) -> f64 {
     let mut s = state.clone();
     let mut total = 0.0f32;
@@ -358,7 +373,7 @@ fn rollout_value(
 
         let prev = s.clone();
 
-        let action = greedy_direction_action(&s, goal, units, config, model);
+        let action = greedy_direction_action(&s, goal, units, config, model, plan);
         if execute_action(&mut s, &action, units, config.dt).is_err() {
             s.tick(units, config.dt);
         }
@@ -378,17 +393,16 @@ fn greedy_direction_action(
     units: &Units,
     config: &PlannerConfig,
     model: &dyn ValueNet,
+    plan: &PlanGraph,
 ) -> SimAction {
     let shortfall = [0.0f32; 3];
     let features = state_features_with_shortfall(state, units, config, shortfall);
     let direction_logits = model.evaluate_direction(features);
-    let direction_mask = legal_direction_mask(state, units, config, goal);
+    let direction_mask = legal_direction_mask(state, units, config, goal, plan);
 
     if let Some(direction_idx) = masked_argmax(&direction_logits, &direction_mask) {
         let direction = EdgeCategory::ALL[direction_idx];
-        if let Some(action) = direction_to_action(direction, state, units, config, goal) {
-            return action;
-        }
+        return direction_to_action(direction, state, units, config, goal, plan);
     }
 
     SimAction::Wait

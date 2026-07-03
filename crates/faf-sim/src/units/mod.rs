@@ -24,7 +24,7 @@ use crate::planner::core::Goal;
 use crate::planner::plan_graph::{build_universal_plan_graph, PlanGraph, UniversalPlanGraph};
 
 pub use kind::{
-    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UpgradeRecipe,
+    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, UpgradeRecipe,
 };
 
 mod build;
@@ -105,12 +105,11 @@ impl Units {
                     energy: 6000.0,
                     build_time: 1000.0,
                 },
-                build_rate: 0.0,
-                mass_income: 6.0,
-                energy_income: 0.0,
-                maintenance_energy: 9.0,
-                mass_storage: 2000.0,
-                energy_storage: 0.0,
+                role: UnitRole::CappedMassExtractor {
+                    mass_income: 6.0,
+                    mass_storage: 2000.0,
+                    maintenance_energy: 9.0,
+                },
             },
         );
         defs.insert(
@@ -124,12 +123,11 @@ impl Units {
                     energy: 6000.0,
                     build_time: 1000.0,
                 },
-                build_rate: 0.0,
-                mass_income: 18.0,
-                energy_income: 0.0,
-                maintenance_energy: 54.0,
-                mass_storage: 2000.0,
-                energy_storage: 0.0,
+                role: UnitRole::CappedMassExtractor {
+                    mass_income: 18.0,
+                    mass_storage: 2000.0,
+                    maintenance_energy: 54.0,
+                },
             },
         );
 
@@ -541,19 +539,19 @@ mod tests {
         // adjacency bonus is applied at runtime by the adjacency tracker.
         let cap_t2_def = units.def(&UnitKind::CapT2Mex).expect("capped t2 mex def");
         assert_eq!(cap_t2_def.kind, UnitKind::CapT2Mex);
-        assert!(cap_t2_def.mass_storage > 0.0);
-        assert!((cap_t2_def.mass_income - t2_mex_def.mass_income).abs() < 1e-9);
+        assert!(cap_t2_def.mass_storage() > 0.0);
+        assert!((cap_t2_def.mass_income() - t2_mex_def.mass_income()).abs() < 1e-9);
 
         let cap_t3_def = units.def(&UnitKind::CapT3Mex).expect("capped t3 mex def");
         assert_eq!(cap_t3_def.kind, UnitKind::CapT3Mex);
-        assert!(cap_t3_def.mass_storage > 0.0);
-        assert!((cap_t3_def.mass_income - t3_mex_def.mass_income).abs() < 1e-9);
+        assert!(cap_t3_def.mass_storage() > 0.0);
+        assert!((cap_t3_def.mass_income() - t3_mex_def.mass_income()).abs() < 1e-9);
 
         let energy_storage_def = units
             .def(&UnitKind::EnergyStorage)
             .expect("energy storage def");
         assert_eq!(energy_storage_def.kind, UnitKind::EnergyStorage);
-        assert!(energy_storage_def.energy_storage > 0.0);
+        assert!(energy_storage_def.energy_storage() > 0.0);
 
         assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::EnergyStorage));
         assert!(units.is_upgradeable(&UnitKind::Mex(TechLevel::T2)));

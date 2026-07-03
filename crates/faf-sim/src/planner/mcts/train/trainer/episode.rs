@@ -7,10 +7,10 @@ use super::super::reward::{compute_step_reward, compute_terminal_bonus, Mileston
 
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::features::{state_features, state_features_with_shortfall};
-use crate::planner::mcts::heuristic::direction_to_action;
+use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::masked_sample_index;
 use crate::planner::mcts::policy::execute_action;
-use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -26,6 +26,7 @@ impl Trainer {
         planner_config: &PlannerConfig,
         epsilon: f32,
     ) -> Episode {
+        let plan = build_plan_graph(units, *goal);
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut episode = Episode {
             reached_goal: false,
@@ -47,7 +48,7 @@ impl Trainer {
             let macro_features =
                 state_features_with_shortfall(&state, units, planner_config, shortfall);
 
-            let direction_mask = legal_direction_mask(&state, units, planner_config, goal);
+            let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
             if direction_mask.iter().all(|&b| !b) {
                 state.tick(units, self.config.dt);
                 continue;
@@ -72,14 +73,7 @@ impl Trainer {
             };
             let direction = EdgeCategory::ALL[direction_idx];
 
-            let action = match direction_to_action(direction, &state, units, planner_config, goal) {
-                Some(a) => a,
-                None => {
-                    // Direction was legal at masking time but not now; wait.
-                    state.tick(units, self.config.dt);
-                    continue;
-                }
-            };
+            let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
 
             let prev_state = state.clone();
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
@@ -117,10 +111,11 @@ fn legal_direction_mask(
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
+    plan: &PlanGraph,
 ) -> Vec<bool> {
     EdgeCategory::ALL
         .iter()
-        .map(|&d| direction_to_action(d, state, units, config, goal).is_some())
+        .map(|&d| is_direction_legal(d, state, units, config, goal, plan))
         .collect()
 }
 
@@ -150,8 +145,9 @@ mod tests {
         let state = SimulationState::new(&units, &[UnitKind::Commander]);
         let config = PlannerConfig::default();
         let goal = t4_goal();
+        let plan = build_plan_graph(&units, goal);
 
-        let mask = legal_direction_mask(&state, &units, &config, &goal);
+        let mask = legal_direction_mask(&state, &units, &config, &goal, &plan);
         assert_eq!(mask.len(), DIRECTION_COUNT);
         assert!(mask[EdgeCategory::IncreaseMass as usize]);
     }

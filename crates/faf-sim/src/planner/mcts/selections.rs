@@ -520,11 +520,11 @@ fn idle_engineers_by_tech(
         bucket.sort_by(|&a, &b| {
             let rate_a = units
                 .def(&state.graph[a].unit_id)
-                .map(|d| d.build_rate)
+                .map(|d| d.build_rate())
                 .unwrap_or(0.0);
             let rate_b = units
                 .def(&state.graph[b].unit_id)
-                .map(|d| d.build_rate)
+                .map(|d| d.build_rate())
                 .unwrap_or(0.0);
             rate_b.total_cmp(&rate_a)
         });
@@ -603,11 +603,11 @@ pub fn select_squad_for_edge(
         fallback.sort_by(|&a, &b| {
             let rate_a = units
                 .def(&state.graph[a].unit_id)
-                .map(|d| d.build_rate)
+                .map(|d| d.build_rate())
                 .unwrap_or(0.0);
             let rate_b = units
                 .def(&state.graph[b].unit_id)
-                .map(|d| d.build_rate)
+                .map(|d| d.build_rate())
                 .unwrap_or(0.0);
             rate_b.total_cmp(&rate_a)
         });

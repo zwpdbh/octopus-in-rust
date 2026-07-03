@@ -6,10 +6,10 @@
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::mcts::features::state_features_with_shortfall;
-use crate::planner::mcts::heuristic::direction_to_action;
+use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{masked_argmax, masked_sample_index};
 use crate::planner::mcts::value_net::{MlpValueNet, ValueNet};
-use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::SimAction;
 use crate::sim::{GraphSimError, SimulationState};
 use crate::units::Units;
@@ -52,6 +52,8 @@ pub(crate) fn macro_policy_plan(
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
+    let plan = build_plan_graph(units, *goal);
+
     let default_net;
     let bundle: &dyn ValueNet = match policy_bundle {
         Some(b) => b,
@@ -63,7 +65,7 @@ pub(crate) fn macro_policy_plan(
 
     let features = state_features_with_shortfall(&state, units, config, *shortfall);
     let direction_logits = bundle.evaluate_direction(features);
-    let direction_mask = legal_direction_mask(&state, units, config, goal);
+    let direction_mask = legal_direction_mask(&state, units, config, goal, &plan);
 
     if direction_mask.iter().all(|&b| !b) {
         state.tick(units, config.dt);
@@ -79,16 +81,7 @@ pub(crate) fn macro_policy_plan(
     .unwrap_or(0);
     let direction = EdgeCategory::ALL[direction_idx];
 
-    let action = match direction_to_action(direction, &state, units, config, goal) {
-        Some(action) => action,
-        None => {
-            // The network chose a direction that is no longer executable. This
-            // should be rare because we mask illegal directions, but races can
-            // happen between masking and execution.
-            state.tick(units, config.dt);
-            return Ok(plan_result_with_action(state, SimAction::Wait));
-        }
-    };
+    let action = direction_to_action(direction, &state, units, config, goal, &plan);
 
     let mut new_state = state.clone();
     if execute_action(&mut new_state, &action, units, config.dt).is_err() {
@@ -108,10 +101,11 @@ fn legal_direction_mask(
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
+    plan: &PlanGraph,
 ) -> Vec<bool> {
     EdgeCategory::ALL
         .iter()
-        .map(|&d| direction_to_action(d, state, units, config, goal).is_some())
+        .map(|&d| is_direction_legal(d, state, units, config, goal, plan))
         .collect()
 }
 

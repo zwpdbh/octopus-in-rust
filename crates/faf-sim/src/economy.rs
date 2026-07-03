@@ -126,8 +126,8 @@ pub fn total_build_power(units: &Units, builders: &[UnitKind]) -> RequestedBuild
         builders
             .iter()
             .filter_map(|kind| units.def(kind))
-            .filter(|def| def.build_rate > 0.0)
-            .map(|def| def.build_rate)
+            .filter(|def| def.build_rate() > 0.0)
+            .map(|def| def.build_rate())
             .sum(),
     )
 }
@@ -749,7 +749,7 @@ mod tests {
         let units = load_units();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let t3_eng = UnitKind::Engineer(TechLevel::T3);
-        let build_power = RequestedBuildPower(units.def(&t3_eng).unwrap().build_rate);
+        let build_power = RequestedBuildPower(units.def(&t3_eng).unwrap().build_rate());
 
         let drain = compute_drain(
             &units.build_cost(&monkeylord).unwrap().to_target_stats(),
@@ -773,9 +773,9 @@ mod tests {
 
         let total = total_build_power(&units, &[acu.clone(), t1_eng.clone(), t3_eng.clone()]);
 
-        let expected = units.def(&acu).unwrap().build_rate
-            + units.def(&t1_eng).unwrap().build_rate
-            + units.def(&t3_eng).unwrap().build_rate;
+        let expected = units.def(&acu).unwrap().build_rate()
+            + units.def(&t1_eng).unwrap().build_rate()
+            + units.def(&t3_eng).unwrap().build_rate();
 
         assert!((total.0 - expected).abs() < 1e-9);
     }
@@ -863,7 +863,7 @@ mod tests {
     fn build_project_completes_with_constant_power() {
         let units = load_units();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate);
+        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
 
         // Build a T1 engineer with another T1 engineer.
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
@@ -890,7 +890,7 @@ mod tests {
     fn build_project_progress_tracks_remaining_work() {
         let units = load_units();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate);
+        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let build_time = project.target.build_time;
@@ -922,7 +922,7 @@ mod tests {
     fn build_project_stalls_and_takes_longer() {
         let units = load_units();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate);
+        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let build_time = project.target.build_time;
@@ -989,7 +989,7 @@ mod tests {
     fn storage_buffers_during_zero_income() {
         let units = load_units();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate);
+        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let total_mass = project.target.mass;
@@ -1038,7 +1038,7 @@ mod tests {
             BuildProject::new(UnitKind::Unique(UnitId("URL0402".to_string())), &units)
                 .expect("valid target");
         project.assigned_build_power =
-            RequestedBuildPower(units.def(&UnitKind::Commander).unwrap().build_rate);
+            RequestedBuildPower(units.def(&UnitKind::Commander).unwrap().build_rate());
         let net = summarize_economy(&units, &[UnitKind::Commander], &[&project]);
         assert!(
             net.energy_per_second < 0.0,

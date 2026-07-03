@@ -9,10 +9,10 @@ use super::super::math::tensor1d_from_vec;
 use super::super::TrainBackend;
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::mcts::features::state_features;
-use crate::planner::mcts::heuristic::direction_to_action;
+use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{DIRECTION_COUNT, MASK_VALUE};
 use crate::planner::mcts::policy::execute_action;
-use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -31,6 +31,7 @@ impl Trainer {
             return 0.0;
         }
 
+        let plan = build_plan_graph(units, *goal);
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
         let mut total_loss_value = 0.0f32;
@@ -39,7 +40,8 @@ impl Trainer {
         for step in &trajectory.steps {
             let mut executable = false;
             for _ in 0..self.config.max_steps {
-                let direction_mask = legal_direction_mask(&state, units, planner_config, goal);
+                let direction_mask =
+                    legal_direction_mask(&state, units, planner_config, goal, &plan);
                 if !direction_mask[step.direction_index] {
                     state.tick(units, planner_config.dt);
                     continue;
@@ -82,11 +84,9 @@ impl Trainer {
                 step_count += 1;
 
                 let direction = EdgeCategory::ALL[step.direction_index];
-                if let Some(action) =
-                    direction_to_action(direction, &state, units, planner_config, goal)
-                {
-                    let _ = execute_action(&mut state, &action, units, planner_config.dt);
-                }
+                let action =
+                    direction_to_action(direction, &state, units, planner_config, goal, &plan);
+                let _ = execute_action(&mut state, &action, units, planner_config.dt);
                 executable = true;
                 break;
             }
@@ -119,9 +119,10 @@ fn legal_direction_mask(
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
+    plan: &PlanGraph,
 ) -> Vec<bool> {
     EdgeCategory::ALL
         .iter()
-        .map(|&d| direction_to_action(d, state, units, config, goal).is_some())
+        .map(|&d| is_direction_legal(d, state, units, config, goal, plan))
         .collect()
 }

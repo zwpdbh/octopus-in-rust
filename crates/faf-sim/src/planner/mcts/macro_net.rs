@@ -16,12 +16,8 @@ use burn::tensor::{Tensor, TensorData};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use rand::rngs::ThreadRng;
-use rand::RngExt;
 
 use super::features::{SHORTFALL_FEATURE_COUNT, STATE_FEATURE_COUNT};
-use super::selections::PlanEdgeIndex;
-use crate::planner::core::Goal;
-use crate::units::Units;
 
 /// Number of strategic directions the direction head can choose from.
 ///
@@ -114,15 +110,6 @@ fn tensor_from_vec<B: Backend>(features: &[f32], device: &B::Device) -> Tensor<B
     Tensor::<B, 2>::from_data(data, device)
 }
 
-/// Build a one-hot vector with `1.0` at `idx`.
-pub fn one_hot(idx: usize, len: usize) -> Vec<f32> {
-    let mut v = vec![0.0f32; len];
-    if idx < len {
-        v[idx] = 1.0;
-    }
-    v
-}
-
 /// Apply a boolean mask to logits: illegal positions become `MASK_VALUE`.
 pub fn apply_mask(logits: &mut [f32], mask: &[bool]) {
     for (l, legal) in logits.iter_mut().zip(mask.iter()) {
@@ -164,53 +151,6 @@ pub fn softmax_probs(logits: &[f32]) -> Vec<f32> {
         return vec![1.0f32 / logits.len() as f32; logits.len()];
     }
     exps.iter().map(|&e| e / sum).collect()
-}
-
-/// Sample a scalar from a Gaussian using the Box-Muller transform.
-pub fn sample_gaussian(mean: f32, std: f32, rng: &mut ThreadRng) -> f32 {
-    let u1: f32 = rng.random::<f32>().max(1e-7);
-    let u2: f32 = rng.random();
-    let r = (-2.0 * u1.ln()).sqrt();
-    let theta = 2.0 * std::f32::consts::PI * u2;
-    mean + std * r * theta.cos()
-}
-
-/// Round and clamp a continuous engineer-count vector to non-negative integers,
-/// capping each tech level by the number of idle engineers available.
-pub fn clamp_squad(raw: [f32; 3], available: [usize; 3]) -> [usize; 3] {
-    let mut clamped = [0usize; 3];
-    for i in 0..3 {
-        let v = raw[i].round().max(0.0) as usize;
-        clamped[i] = v.min(available[i]);
-    }
-    clamped
-}
-
-/// Ensure at least one engineer is requested when an edge is legal but the
-/// network asked for zero of every tech.
-pub fn ensure_minimum_squad(desired: [usize; 3], available: [usize; 3]) -> [usize; 3] {
-    let total: usize = desired.iter().sum();
-    if total > 0 {
-        return desired;
-    }
-    let mut adjusted = desired;
-    for i in (0..3).rev() {
-        if available[i] > 0 {
-            adjusted[i] = 1;
-            break;
-        }
-    }
-    adjusted
-}
-
-/// Compute shortfall feedback from desired and available counts.
-pub fn shortfall_from_counts(desired: [usize; 3], available: [usize; 3]) -> [f32; 3] {
-    let mut out = [0.0f32; 3];
-    for i in 0..3 {
-        let diff = desired[i].saturating_sub(available[i]) as f32;
-        out[i] = diff;
-    }
-    out
 }
 
 /// Return a Graphviz DOT description of the direction-only policy network
@@ -259,23 +199,9 @@ pub fn hierarchical_policy_net_dot() -> String {
     )
 }
 
-/// Infer the number of plan-graph edges for a goal.
-pub fn num_plan_edges(units: &Units, goal: &Goal) -> Option<usize> {
-    Some(units.plan_graph(*goal).graph().edge_count())
-}
-
-/// Build the stable edge index for a goal.
-pub fn plan_edge_index(units: &Units, goal: &Goal) -> Option<PlanEdgeIndex> {
-    let plan = units.plan_graph(*goal);
-    Some(PlanEdgeIndex::new(&plan))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::mcts::selections::{SelectionOption, SelectionPools};
-    use crate::sim::SimulationState;
-    use crate::units::{TechLevel, UnitKind, Units};
 
     /// Inference-only backend for tests. Prefer CPU when available so unit tests
     /// do not require a GPU, but fall back to CUDA/WGPU if CPU is disabled.
@@ -285,11 +211,6 @@ mod tests {
     type TestBackend = burn::backend::Cuda;
     #[cfg(all(feature = "wgpu", not(any(feature = "cpu", feature = "cuda"))))]
     type TestBackend = burn::backend::Wgpu;
-
-    fn load_units() -> Units {
-        let json = include_str!("../../../../../plugins/faf-units/data/faf_units.json");
-        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
-    }
 
     #[test]
     fn direction_net_runs_forward_pass() {
@@ -311,49 +232,5 @@ mod tests {
         let logits = vec![1.0f32, 5.0, 2.0, 3.0];
         let mask = vec![true, false, true, false];
         assert_eq!(masked_argmax(&logits, &mask), Some(2));
-    }
-
-    #[test]
-    fn clamp_squad_caps_by_available() {
-        let raw = [1.4f32, 2.6, -0.1];
-        let available = [1, 2, 0];
-        assert_eq!(clamp_squad(raw, available), [1, 2, 0]);
-    }
-
-    #[test]
-    fn edge_index_maps_to_selection_option() {
-        let units = load_units();
-        let goal = Goal {
-            tech_level: crate::units::TechLevel::T4,
-            mass_cost: 28_000.0,
-            energy_cost: 340_000.0,
-            build_time: 46_250.0,
-        };
-        let plan = units.plan_graph(goal);
-        let edge_index = PlanEdgeIndex::new(&plan);
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
-        let mut found_build = false;
-        for i in 0..edge_index.len() {
-            if let Some(option) = edge_index.to_selection_option(i, &state, &units) {
-                if matches!(
-                    option,
-                    SelectionOption::Build(UnitKind::Factory(TechLevel::T1))
-                ) {
-                    found_build = true;
-                }
-            }
-        }
-        assert!(found_build, "ACU should be able to build a T1 factory");
-
-        let pools = SelectionPools::new(&plan, &state, &units);
-        for option in pools.options() {
-            let idx = edge_index
-                .find_edge_for_option(option, &state, &units)
-                .expect("every pool option should map to an edge");
-            let back = edge_index
-                .to_selection_option(idx, &state, &units)
-                .expect("mapped edge should be legal");
-            assert_eq!(*option, back);
-        }
     }
 }
