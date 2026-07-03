@@ -34,10 +34,10 @@ Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if sel
 
 ## Entry point
 
-`Planner::plan` matches on the strategy and forwards to the corresponding module. Because the planner maintains engineer shortfall feedback between ticks, `plan` takes `&mut self`. `iterations` sets the MCTS budget, `value_net` selects the trained bundle (or a lazily-created random model if none is loaded), and `deterministic` is stored in the strategy for the one-step policy entry point. The MCTS search itself always uses argmax selection:
+`Planner::plan` matches on the strategy and forwards to the corresponding module. `plan` takes `&mut self` so the planner can lazily create and cache a fallback value net when none has been loaded. `iterations` sets the MCTS budget, `value_net` selects the network kind used to create the fallback, and `deterministic` is stored in the strategy for the one-step policy entry point. The concrete network is hidden behind a [`ValueNet`] trait object; the MCTS search itself always uses argmax selection:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 321 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 352 — Planner::plan dispatch
 pub fn plan(
     &mut self,
     units: &Units,
@@ -47,23 +47,34 @@ pub fn plan(
     match self.strategy {
         Strategy::Mcts {
             iterations,
-            value_net: _,
+            value_net: kind,
             deterministic: _,
         } => {
             let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
                 PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
             })?;
-            let model = match self.value_net.as_ref() {
-                Some(m) => m,
-                None => self.default_model.get_or_insert_with(|| {
-                    PolicyBundle::new(&TrainDevice::default(), num_edges)
-                }),
-            };
-            MctsSearch::new(MctsConfig {
+
+            let config = &self.config;
+            let search = MctsSearch::new(MctsConfig {
                 iterations,
                 ..MctsConfig::default()
-            })
-            .search(initial_state, goal, units, &self.config, model)
+            });
+
+            match self.loaded_net.as_ref() {
+                Some(net) => search.search(initial_state, goal, units, config, net.as_ref()),
+                None => {
+                    let net = self.fallback_net.get_or_insert_with(|| {
+                        kind.create(num_edges)
+                            .expect("default value net must be creatable")
+                    });
+                    if net.num_edges() != num_edges {
+                        *net = kind
+                            .create(num_edges)
+                            .expect("default value net must be creatable");
+                    }
+                    search.search(initial_state, goal, units, config, net.as_ref())
+                }
+            }
         }
     }
 }
@@ -80,7 +91,7 @@ pub fn plan(
     _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
-    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    policy_bundle: Option<&dyn ValueNet>,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
@@ -316,12 +327,15 @@ A minimal integration test looks like this:
 
 ```rust
 // docref: example
+use faf_sim::planner::mcts::value_net::MlpValueNet;
+
 let goal = Goal {
     tech_level: TechLevel::T4,
     mass_cost: 28_000.0,
     energy_cost: 340_000.0,
     build_time: 46_250.0,
 };
+let value_net = Box::new(MlpValueNet::from_net(bundle));
 let planner = Planner::with_value_net(
     Strategy::Mcts {
         iterations: 100,
@@ -329,7 +343,7 @@ let planner = Planner::with_value_net(
         deterministic: true,
     },
     PlannerConfig::default(),
-    bundle,
+    value_net,
 );
 let result = planner.plan(&units, initial_state, &goal)?;
 
@@ -373,9 +387,12 @@ And load it later:
 
 ```rust
 // crates/faf-sim/src/planner/mcts/train/policy.rs ~line 29 — load_policy
+use faf_sim::planner::mcts::value_net::MlpValueNet;
+
 let num_edges = plan_edge_index(&units, &goal).unwrap().len();
 let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord"), num_edges).unwrap();
-let planner = Planner::with_value_net(strategy, PlannerConfig::default(), bundle);
+let value_net = Box::new(MlpValueNet::from_net(bundle));
+let planner = Planner::with_value_net(strategy, PlannerConfig::default(), value_net);
 // `goal` is the same abstract Goal used during training.
 ```
 

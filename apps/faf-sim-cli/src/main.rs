@@ -25,6 +25,7 @@ use faf_sim::planner::mcts::train::{
     load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
     MetricsRenderer, TrainConfig,
 };
+use faf_sim::planner::mcts::value_net::MlpValueNet;
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::{
     run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, SimulationConfig,
@@ -377,7 +378,8 @@ async fn run_simulate(
         let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
         let model = load_policy(&path, num_edges).expect("load trained model");
         println!("Model loaded successfully.");
-        Planner::with_value_net(strategy, PlannerConfig::default(), model)
+        let value_net = Box::new(MlpValueNet::from_net(model));
+        Planner::with_value_net(strategy, PlannerConfig::default(), value_net)
     } else {
         println!("No trained model found; using random initialization");
         Planner::reactive(strategy)

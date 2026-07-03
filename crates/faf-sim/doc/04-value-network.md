@@ -196,12 +196,12 @@ At inference time the planner performs up to five deterministic steps:
 The core inference function is `macro_policy_plan` in `mcts::policy`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 107 — macro_policy_plan
+// crates/faf-sim/src/planner/mcts/policy.rs ~line 102 — macro_policy_plan
 fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,
     goal: &Goal,
-    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    policy_bundle: Option<&dyn ValueNet>,
     deterministic: bool,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
@@ -210,7 +210,7 @@ fn macro_policy_plan(
 }
 ```
 
-If no bundle is provided, the function falls back to a deterministic greedy edge selector based on plan-graph structure. This is useful for testing without a trained model.
+If no bundle is provided, the function falls back to a freshly-initialized MLP value net. This is useful for testing without a trained model, although the resulting actions are essentially random.
 
 ## Relationship to MCTS and training
 

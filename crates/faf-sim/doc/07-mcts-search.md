@@ -43,10 +43,9 @@ pub fn search(
     goal: &Goal,
     units: &Units,
     planner_config: &PlannerConfig,
-    model: &PolicyBundle<TrainBackend>,
+    model: &dyn ValueNet,
 ) -> Result<PlanResult, PlannerError> {
     let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
-    let device: TrainDevice = Default::default();
     let mut root = MctsNode::new(
         initial_state,
         goal,
@@ -54,7 +53,6 @@ pub fn search(
         planner_config,
         &edge_index,
         model,
-        &device,
     );
 
     for _ in 0..self.config.iterations {
@@ -128,14 +126,13 @@ A larger `c_puct` makes the search explore more aggressively. A smaller `c_puct`
 The policy network supplies a prior probability for every legal edge. The prior is computed by evaluating the direction head, converting it to a softmax over legal directions, then for each direction evaluating the action head and converting it to a softmax over legal edges in that direction. The direction and action probabilities are multiplied and summed to get a single prior per edge.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 311 — evaluate_edge_priors
+// crates/faf-sim/src/planner/mcts/search.rs ~line 309 — evaluate_edge_priors
 fn evaluate_edge_priors(
     state: &SimulationState,
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
-    model: &PolicyBundle<TrainBackend>,
-    device: &TrainDevice,
+    model: &dyn ValueNet,
 ) -> (Vec<f32>, Vec<usize>) {
     // ... direction softmax over legal directions ...
     // ... action softmax for each direction over legal edges ...
@@ -174,7 +171,6 @@ match expand_edge(
     planner_config,
     &edge_index,
     model,
-    &device,
 ) {
     Some(child_state) => { /* create child node */ }
     None => { /* expansion failed, treat as neutral value */ }
@@ -184,7 +180,7 @@ match expand_edge(
 `expand_edge` resolves the selected edge into a concrete action using the power and squad heads, just like the one-step policy:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 376 — expand_edge
+// crates/faf-sim/src/planner/mcts/search.rs ~line 365 — expand_edge
 fn expand_edge(
     state: &SimulationState,
     edge_idx: usize,
@@ -192,8 +188,7 @@ fn expand_edge(
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
-    model: &PolicyBundle<TrainBackend>,
-    device: &TrainDevice,
+    model: &dyn ValueNet,
 ) -> Option<SimulationState> {
     let edge = edge_index.get(edge_idx)?;
     // ... evaluate power and squad heads, resolve builders, execute action ...
@@ -208,15 +203,14 @@ If expansion fails (for example, because no idle builder is available), the sear
 If a node is already fully expanded, or immediately after expanding a new child, the search estimates the leaf's value with a rollout. A rollout is **not** a shortcut that manipulates the build graph to estimate time. It is a full simulation on a **cloned** `SimulationState`, running the same `execute_action` + `tick` code used everywhere else.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/search.rs ~line 439 — rollout_value
+// crates/faf-sim/src/planner/mcts/search.rs ~line 427 — rollout_value
 fn rollout_value(
     state: &SimulationState,
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    model: &PolicyBundle<TrainBackend>,
+    model: &dyn ValueNet,
     _edge_index: &PlanEdgeIndex,
-    _device: &TrainDevice,
     max_steps: usize,
 ) -> f64 {
     let mut s = state.clone();          // copy of the leaf state
@@ -231,7 +225,7 @@ fn rollout_value(
             units,
             s.clone(),
             goal,
-            Some(model.clone()),
+            Some(model),
             true,                       // deterministic / greedy
             &mut shortfall,
             config,

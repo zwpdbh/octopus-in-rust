@@ -8,15 +8,13 @@ use std::collections::HashSet;
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::mcts::features::state_features_with_shortfall;
-use crate::planner::mcts::macro_net::{
-    apply_mask, clamp_squad, ensure_minimum_squad, PolicyBundle,
-};
+use crate::planner::mcts::macro_net::{apply_mask, clamp_squad, ensure_minimum_squad};
 use crate::planner::mcts::policy::{execute_action, macro_policy_plan};
 use crate::planner::mcts::selections::{
     find_upgrade_source, idle_engineer_counts, select_squad_for_edge, PlanEdgeIndex,
 };
 use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_bonus};
-use crate::planner::mcts::train::{TrainBackend, TrainDevice};
+use crate::planner::mcts::value_net::ValueNet;
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::search::SimAction;
 use crate::sim::SimulationState;
@@ -69,14 +67,13 @@ impl MctsNode {
         units: &Units,
         config: &PlannerConfig,
         edge_index: &PlanEdgeIndex,
-        model: &PolicyBundle<TrainBackend>,
-        device: &TrainDevice,
+        model: &dyn ValueNet,
     ) -> Self {
         let is_terminal = state.goal_reached(goal);
         let (edge_priors, untried_edges) = if is_terminal {
             (vec![0.0f32; edge_index.len()], Vec::new())
         } else {
-            evaluate_edge_priors(&state, units, config, edge_index, model, device)
+            evaluate_edge_priors(&state, units, config, edge_index, model)
         };
 
         Self {
@@ -118,11 +115,10 @@ impl MctsSearch {
         goal: &Goal,
         units: &Units,
         planner_config: &PlannerConfig,
-        model: &PolicyBundle<TrainBackend>,
+        model: &dyn ValueNet,
     ) -> Result<PlanResult, PlannerError> {
         let edge_index = PlanEdgeIndex::new(&units.plan_graph(*goal));
 
-        let device: TrainDevice = Default::default();
         let mut root = MctsNode::new(
             initial_state,
             goal,
@@ -130,7 +126,6 @@ impl MctsSearch {
             planner_config,
             &edge_index,
             model,
-            &device,
         );
 
         if root.untried_edges.is_empty() && !root.is_terminal {
@@ -160,7 +155,6 @@ impl MctsSearch {
                     planner_config,
                     model,
                     &edge_index,
-                    &device,
                     self.config.max_rollout_steps,
                 )
             } else {
@@ -186,7 +180,6 @@ impl MctsSearch {
                     planner_config,
                     &edge_index,
                     model,
-                    &device,
                 ) {
                     Some(child_state) => {
                         let child_value = if child_state.goal_reached(goal) {
@@ -199,7 +192,6 @@ impl MctsSearch {
                                 planner_config,
                                 model,
                                 &edge_index,
-                                &device,
                                 self.config.max_rollout_steps,
                             )
                         };
@@ -255,7 +247,6 @@ impl MctsSearch {
                 planner_config,
                 &edge_index,
                 model,
-                &device,
             ) {
                 Some(s) => {
                     final_state = s;
@@ -313,13 +304,12 @@ fn evaluate_edge_priors(
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
-    model: &PolicyBundle<TrainBackend>,
-    device: &TrainDevice,
+    model: &dyn ValueNet,
 ) -> (Vec<f32>, Vec<usize>) {
     let shortfall = [0.0f32; 3];
     let features = state_features_with_shortfall(state, units, config, shortfall);
 
-    let mut direction_logits = model.evaluate_direction(features.clone(), device);
+    let mut direction_logits = model.evaluate_direction(features.clone());
     let direction_mask = edge_index.legal_category_mask(state, units);
     apply_mask(&mut direction_logits, &direction_mask);
     let direction_probs = softmax_probs(&direction_logits);
@@ -330,7 +320,7 @@ fn evaluate_edge_priors(
             continue;
         }
         let category = EdgeCategory::ALL[d];
-        let mut action_logits = model.evaluate_action(features.clone(), category, device);
+        let mut action_logits = model.evaluate_action(features.clone(), category);
         let action_mask = edge_index.legal_mask_for_category(state, units, category);
         apply_mask(&mut action_logits, &action_mask);
         let action_probs = softmax_probs(&action_logits);
@@ -380,17 +370,16 @@ fn expand_edge(
     units: &Units,
     config: &PlannerConfig,
     edge_index: &PlanEdgeIndex,
-    model: &PolicyBundle<TrainBackend>,
-    device: &TrainDevice,
+    model: &dyn ValueNet,
 ) -> Option<SimulationState> {
     let edge = edge_index.get(edge_idx)?;
 
     let shortfall = [0.0f32; 3];
     let features = state_features_with_shortfall(state, units, config, shortfall);
-    let power_mean = model.evaluate_power(features.clone(), edge_idx, edge_index.len(), device);
+    let power_mean = model.evaluate_power(features.clone(), edge_idx, edge_index.len());
     let target_power = power_mean.max(0.0).round();
 
-    let squad_raw = model.evaluate_squad(features, target_power, device);
+    let squad_raw = model.evaluate_squad(features, target_power);
     let squad_raw_arr = [
         squad_raw.get(0).copied().unwrap_or(0.0),
         squad_raw.get(1).copied().unwrap_or(0.0),
@@ -441,9 +430,8 @@ fn rollout_value(
     goal: &Goal,
     units: &Units,
     config: &PlannerConfig,
-    model: &PolicyBundle<TrainBackend>,
+    model: &dyn ValueNet,
     _edge_index: &PlanEdgeIndex,
-    _device: &TrainDevice,
     max_steps: usize,
 ) -> f64 {
     let mut s = state.clone();
@@ -462,7 +450,7 @@ fn rollout_value(
             units,
             s.clone(),
             goal,
-            Some(model.clone()),
+            Some(model),
             true,
             &mut shortfall,
             config,

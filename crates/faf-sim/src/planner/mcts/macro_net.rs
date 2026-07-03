@@ -518,7 +518,6 @@ pub fn plan_edge_index(units: &Units, goal: &Goal) -> Option<PlanEdgeIndex> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::core::PlannerConfig;
     use crate::planner::mcts::selections::{SelectionOption, SelectionPools};
     use crate::sim::SimulationState;
     use crate::units::{TechLevel, UnitKind, Units};

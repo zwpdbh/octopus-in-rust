@@ -4,8 +4,6 @@
 //! three learned networks to pick a concrete plan-graph edge, a target build
 //! power, and a [T1, T2, T3] engineer squad.
 
-use burn::tensor::Device;
-
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::search::SimAction;
 use crate::sim::{GraphSimError, NodeId, SimulationState};
@@ -14,13 +12,13 @@ use crate::units::Units;
 use super::features::state_features_with_shortfall;
 use super::macro_net::{
     clamp_squad, ensure_minimum_squad, masked_argmax, masked_sample_index, plan_edge_index,
-    shortfall_from_counts, PolicyBundle, UPGRADE_OPTION_COUNT,
+    shortfall_from_counts, UPGRADE_OPTION_COUNT,
 };
 use super::selections::{
     assigned_squad_counts, can_upgrade, find_upgrade_source, idle_engineer_counts,
     select_squad_for_edge, PlanEdgeIndex,
 };
-use super::train::TrainBackend;
+use super::value_net::{MlpValueNet, ValueNet};
 use crate::planner::plan_graph::{EdgeAction, EdgeCategory};
 use crate::units::{TechLevel, UnitKind};
 
@@ -32,7 +30,7 @@ pub fn plan(
     _iterations: usize,
     value_net_kind: ValueNetKind,
     deterministic: bool,
-    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    policy_bundle: Option<&dyn ValueNet>,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
@@ -105,7 +103,7 @@ pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,
     goal: &Goal,
-    policy_bundle: Option<PolicyBundle<TrainBackend>>,
+    policy_bundle: Option<&dyn ValueNet>,
     deterministic: bool,
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
@@ -113,16 +111,21 @@ pub(crate) fn macro_policy_plan(
     let edge_index = plan_edge_index(units, goal)
         .ok_or_else(|| PlannerError::UnsupportedStrategy("goal has no plan graph".to_string()))?;
 
-    let device: Device<TrainBackend> = Default::default();
-    let bundle: PolicyBundle<TrainBackend> =
-        policy_bundle.unwrap_or_else(|| PolicyBundle::new(&device, edge_index.len()));
+    let default_net;
+    let bundle: &dyn ValueNet = match policy_bundle {
+        Some(b) => b,
+        None => {
+            default_net = MlpValueNet::new(edge_index.len());
+            &default_net
+        }
+    };
 
     let macro_features = state_features_with_shortfall(&state, units, config, *shortfall);
 
     // First decide whether to upgrade a factory. The upgrade head is separate
     // from the direction head because teching up is a distinct strategic
     // decision from choosing an economic focus.
-    let upgrade_logits = bundle.evaluate_upgrade(macro_features.clone(), &device);
+    let upgrade_logits = bundle.evaluate_upgrade(macro_features.clone());
     let upgrade_legal_mask = upgrade_mask(&edge_index, &state, units);
 
     if !upgrade_legal_mask.iter().all(|&b| !b) {
@@ -139,7 +142,7 @@ pub(crate) fn macro_policy_plan(
             let edge_idx = find_upgrade_edge_idx(&edge_index, source_kind, target_kind)
                 .expect("upgrade option must map to a plan-graph edge");
             return execute_selected_edge(
-                &bundle,
+                bundle,
                 &edge_index,
                 edge_idx,
                 state,
@@ -152,7 +155,7 @@ pub(crate) fn macro_policy_plan(
     }
 
     // No upgrade chosen: fall through to the normal direction -> action pipeline.
-    let direction_logits = bundle.evaluate_direction(macro_features.clone(), &device);
+    let direction_logits = bundle.evaluate_direction(macro_features.clone());
     let direction_mask = edge_index.legal_category_mask(&state, units);
 
     if direction_mask.iter().all(|&b| !b) {
@@ -169,7 +172,7 @@ pub(crate) fn macro_policy_plan(
     .unwrap_or(0);
     let category = EdgeCategory::ALL[direction_idx];
 
-    let action_logits = bundle.evaluate_action(macro_features.clone(), category, &device);
+    let action_logits = bundle.evaluate_action(macro_features.clone(), category);
     let action_mask = edge_index.legal_mask_for_category(&state, units, category);
 
     if action_mask.iter().all(|&b| !b) {
@@ -186,7 +189,7 @@ pub(crate) fn macro_policy_plan(
     .unwrap_or(0);
 
     execute_selected_edge(
-        &bundle,
+        bundle,
         &edge_index,
         edge_idx,
         state,
@@ -200,7 +203,7 @@ pub(crate) fn macro_policy_plan(
 /// Execute the plan-graph edge selected by either the upgrade head or the
 /// direction + action heads. Handles power, squad, and simulator execution.
 fn execute_selected_edge(
-    bundle: &PolicyBundle<TrainBackend>,
+    bundle: &dyn ValueNet,
     edge_index: &PlanEdgeIndex,
     edge_idx: usize,
     mut state: SimulationState,
@@ -209,8 +212,6 @@ fn execute_selected_edge(
     shortfall: &mut [f32; 3],
     config: &PlannerConfig,
 ) -> Result<PlanResult, PlannerError> {
-    let device: Device<TrainBackend> = Default::default();
-
     let edge = match edge_index.get(edge_idx) {
         Some(e) => e.clone(),
         None => {
@@ -219,11 +220,10 @@ fn execute_selected_edge(
         }
     };
 
-    let power_mean =
-        bundle.evaluate_power(macro_features.clone(), edge_idx, edge_index.len(), &device);
+    let power_mean = bundle.evaluate_power(macro_features.clone(), edge_idx, edge_index.len());
     let target_power = power_mean.max(0.0).round();
 
-    let squad_raw = bundle.evaluate_squad(macro_features, target_power, &device);
+    let squad_raw = bundle.evaluate_squad(macro_features, target_power);
     let squad_raw_arr = [
         squad_raw.get(0).copied().unwrap_or(0.0),
         squad_raw.get(1).copied().unwrap_or(0.0),

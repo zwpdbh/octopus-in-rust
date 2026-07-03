@@ -8,9 +8,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
-use crate::planner::mcts::macro_net::{num_plan_edges, PolicyBundle};
+use crate::planner::mcts::macro_net::num_plan_edges;
 use crate::planner::mcts::search::{MctsConfig, MctsSearch};
-use crate::planner::mcts::train::{TrainBackend, TrainDevice};
+use crate::planner::mcts::value_net::{ValueNet, ValueNetFactory};
 use crate::sim::{BuildEvent, SimulationState};
 use crate::units::{TechLevel, UnitCost, Units};
 
@@ -270,19 +270,32 @@ impl Default for PlannerConfig {
 }
 
 /// A planner that dispatches to the MCTS strategy.
-#[derive(Debug, Clone)]
+///
+/// The concrete value network is hidden behind a [`ValueNet`] trait object;
+/// the planner only knows the strategy and search configuration. Training
+/// details such as the Burn backend or the hierarchical network architecture
+/// are not part of the public surface.
+#[derive(Debug)]
 pub struct Planner {
     /// Selected planning strategy.
     pub strategy: Strategy,
     /// Shared search configuration.
     pub config: PlannerConfig,
-    /// Optional trained hierarchical policy bundle. If present, MCTS uses it
-    /// instead of a fresh random initialization.
-    pub value_net: Option<PolicyBundle<TrainBackend>>,
-    /// Lazily-created random model used when no trained value net is available.
-    default_model: Option<PolicyBundle<TrainBackend>>,
-    /// Previous-tick engineer shortfall feedback passed to the macro network.
-    pub last_shortfall: [f32; 3],
+    /// Optional trained value net passed in by the caller.
+    loaded_net: Option<Box<dyn ValueNet>>,
+    /// Lazily-created value net used when no trained net is loaded.
+    fallback_net: Option<Box<dyn ValueNet>>,
+}
+
+impl Clone for Planner {
+    fn clone(&self) -> Self {
+        Self {
+            strategy: self.strategy,
+            config: self.config,
+            loaded_net: self.loaded_net.as_ref().map(|n| n.clone_box()),
+            fallback_net: self.fallback_net.as_ref().map(|n| n.clone_box()),
+        }
+    }
 }
 
 impl Planner {
@@ -291,10 +304,8 @@ impl Planner {
         Self::with_config(strategy, PlannerConfig::default())
     }
 
-    /// Reset transient planner state such as engineer shortfall feedback.
-    pub fn reset_state(&mut self) {
-        self.last_shortfall = [0.0f32; 3];
-    }
+    /// Reset transient planner state.
+    pub fn reset_state(&mut self) {}
 
     /// Create a planner tuned for the reactive actor loop.
     pub fn reactive(strategy: Strategy) -> Self {
@@ -306,24 +317,22 @@ impl Planner {
         Self {
             strategy,
             config,
-            value_net: None,
-            default_model: None,
-            last_shortfall: [0.0f32; 3],
+            loaded_net: None,
+            fallback_net: None,
         }
     }
 
-    /// Create a planner that uses a trained policy bundle.
+    /// Create a planner that uses a trained value net.
     pub fn with_value_net(
         strategy: Strategy,
         config: PlannerConfig,
-        value_net: PolicyBundle<TrainBackend>,
+        value_net: Box<dyn ValueNet>,
     ) -> Self {
         Self {
             strategy,
             config,
-            value_net: Some(value_net),
-            default_model: None,
-            last_shortfall: [0.0f32; 3],
+            loaded_net: Some(value_net),
+            fallback_net: None,
         }
     }
 
@@ -349,23 +358,35 @@ impl Planner {
         match self.strategy {
             Strategy::Mcts {
                 iterations,
-                value_net: _,
+                value_net: kind,
                 deterministic: _,
             } => {
                 let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
                     PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
                 })?;
-                let model = match self.value_net.as_ref() {
-                    Some(m) => m,
-                    None => self.default_model.get_or_insert_with(|| {
-                        PolicyBundle::new(&TrainDevice::default(), num_edges)
-                    }),
-                };
-                MctsSearch::new(MctsConfig {
+
+                let config = &self.config;
+                let search = MctsSearch::new(MctsConfig {
                     iterations,
                     ..MctsConfig::default()
-                })
-                .search(initial_state, goal, units, &self.config, model)
+                });
+
+                match self.loaded_net.as_ref() {
+                    Some(net) => search.search(initial_state, goal, units, config, net.as_ref()),
+                    None => {
+                        let net = self.fallback_net.get_or_insert_with(|| {
+                            kind.create(num_edges)
+                                .expect("default value net must be creatable")
+                        });
+                        // If the goal shape changed, recreate the fallback net.
+                        if net.num_edges() != num_edges {
+                            *net = kind
+                                .create(num_edges)
+                                .expect("default value net must be creatable");
+                        }
+                        search.search(initial_state, goal, units, config, net.as_ref())
+                    }
+                }
             }
         }
     }
