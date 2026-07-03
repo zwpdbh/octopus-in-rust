@@ -373,17 +373,21 @@ async fn run_simulate(
     let path = model_path(&target);
     let model_file = path.with_extension("mpk");
 
-    let planner = if model_file.exists() {
-        println!("Loading trained model from {}", model_file.display());
-        let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
-        let model = load_policy(&path, num_edges).expect("load trained model");
-        println!("Model loaded successfully.");
-        let value_net = Box::new(MlpValueNet::from_net(model));
-        Planner::with_value_net(strategy, PlannerConfig::default(), value_net)
-    } else {
-        println!("No trained model found; using random initialization");
-        Planner::reactive(strategy)
-    };
+    if !model_file.exists() {
+        eprintln!(
+            "No trained model found at {}. Train one first with `faf-sim train <faction> {}`.",
+            model_file.display(),
+            target.display_name()
+        );
+        std::process::exit(1);
+    }
+
+    println!("Loading trained model from {}", model_file.display());
+    let num_edges = num_plan_edges(units, &goal).expect("goal must have a plan graph");
+    let model = load_policy(&path, num_edges).expect("load trained model");
+    println!("Model loaded successfully.");
+    let value_net = Box::new(MlpValueNet::from_net(model));
+    let planner = Planner::with_config(strategy, PlannerConfig::default(), value_net);
 
     let config = SimulationConfig {
         planner,

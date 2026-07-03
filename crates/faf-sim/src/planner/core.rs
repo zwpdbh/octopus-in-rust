@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::economy::EconomyState;
 use crate::planner::mcts::macro_net::num_plan_edges;
 use crate::planner::mcts::search::{MctsConfig, MctsSearch};
-use crate::planner::mcts::value_net::{ValueNet, ValueNetFactory};
+use crate::planner::mcts::value_net::ValueNet;
 use crate::sim::{BuildEvent, SimulationState};
 use crate::units::{TechLevel, UnitCost, Units};
 
@@ -275,16 +275,18 @@ impl Default for PlannerConfig {
 /// the planner only knows the strategy and search configuration. Training
 /// details such as the Burn backend or the hierarchical network architecture
 /// are not part of the public surface.
+///
+/// A planner must be created with a value net. If you do not have a trained
+/// model, pass a freshly-initialized net (e.g. [`MlpValueNet::new`]); the
+/// planner itself will not silently fall back to a random policy.
 #[derive(Debug)]
 pub struct Planner {
     /// Selected planning strategy.
     pub strategy: Strategy,
     /// Shared search configuration.
     pub config: PlannerConfig,
-    /// Optional trained value net passed in by the caller.
-    loaded_net: Option<Box<dyn ValueNet>>,
-    /// Lazily-created value net used when no trained net is loaded.
-    fallback_net: Option<Box<dyn ValueNet>>,
+    /// Value net used for inference.
+    value_net: Box<dyn ValueNet>,
 }
 
 impl Clone for Planner {
@@ -292,38 +294,24 @@ impl Clone for Planner {
         Self {
             strategy: self.strategy,
             config: self.config,
-            loaded_net: self.loaded_net.as_ref().map(|n| n.clone_box()),
-            fallback_net: self.fallback_net.as_ref().map(|n| n.clone_box()),
+            value_net: self.value_net.clone_box(),
         }
     }
 }
 
 impl Planner {
     /// Create a planner with the default configuration.
-    pub fn new(strategy: Strategy) -> Self {
-        Self::with_config(strategy, PlannerConfig::default())
+    pub fn new(strategy: Strategy, value_net: Box<dyn ValueNet>) -> Self {
+        Self::with_config(strategy, PlannerConfig::default(), value_net)
     }
 
-    /// Reset transient planner state.
-    pub fn reset_state(&mut self) {}
-
     /// Create a planner tuned for the reactive actor loop.
-    pub fn reactive(strategy: Strategy) -> Self {
-        Self::with_config(strategy, PlannerConfig::default())
+    pub fn reactive(strategy: Strategy, value_net: Box<dyn ValueNet>) -> Self {
+        Self::with_config(strategy, PlannerConfig::default(), value_net)
     }
 
     /// Create a planner with an explicit configuration.
-    pub fn with_config(strategy: Strategy, config: PlannerConfig) -> Self {
-        Self {
-            strategy,
-            config,
-            loaded_net: None,
-            fallback_net: None,
-        }
-    }
-
-    /// Create a planner that uses a trained value net.
-    pub fn with_value_net(
+    pub fn with_config(
         strategy: Strategy,
         config: PlannerConfig,
         value_net: Box<dyn ValueNet>,
@@ -331,8 +319,7 @@ impl Planner {
         Self {
             strategy,
             config,
-            loaded_net: Some(value_net),
-            fallback_net: None,
+            value_net,
         }
     }
 
@@ -358,35 +345,32 @@ impl Planner {
         match self.strategy {
             Strategy::Mcts {
                 iterations,
-                value_net: kind,
+                value_net: _,
                 deterministic: _,
             } => {
                 let num_edges = num_plan_edges(units, goal).ok_or_else(|| {
                     PlannerError::UnsupportedStrategy("goal has no plan graph".to_string())
                 })?;
 
-                let config = &self.config;
-                let search = MctsSearch::new(MctsConfig {
+                if self.value_net.num_edges() != num_edges {
+                    return Err(PlannerError::Other(format!(
+                        "value net was built for {} edges but goal has {}",
+                        self.value_net.num_edges(),
+                        num_edges
+                    )));
+                }
+
+                MctsSearch::new(MctsConfig {
                     iterations,
                     ..MctsConfig::default()
-                });
-
-                match self.loaded_net.as_ref() {
-                    Some(net) => search.search(initial_state, goal, units, config, net.as_ref()),
-                    None => {
-                        let net = self.fallback_net.get_or_insert_with(|| {
-                            kind.create(num_edges)
-                                .expect("default value net must be creatable")
-                        });
-                        // If the goal shape changed, recreate the fallback net.
-                        if net.num_edges() != num_edges {
-                            *net = kind
-                                .create(num_edges)
-                                .expect("default value net must be creatable");
-                        }
-                        search.search(initial_state, goal, units, config, net.as_ref())
-                    }
-                }
+                })
+                .search(
+                    initial_state,
+                    goal,
+                    units,
+                    &self.config,
+                    self.value_net.as_ref(),
+                )
             }
         }
     }

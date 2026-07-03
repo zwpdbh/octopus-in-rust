@@ -34,12 +34,15 @@ pub struct SimulationConfig {
 }
 
 impl SimulationConfig {
-    /// Create a default configuration for a given strategy.
+    /// Create a default configuration for a given strategy and value net.
     ///
     /// Uses `Planner::reactive` and a 1-second simulation timestep.
-    pub fn for_strategy(strategy: crate::planner::Strategy) -> Self {
+    pub fn for_strategy(
+        strategy: crate::planner::Strategy,
+        value_net: Box<dyn crate::planner::mcts::value_net::ValueNet>,
+    ) -> Self {
         Self {
-            planner: Planner::reactive(strategy),
+            planner: Planner::reactive(strategy, value_net),
             sim_dt: DEFAULT_SIM_DT,
             max_sim_time: DEFAULT_MAX_SIM_TIME,
         }
