@@ -8,6 +8,19 @@ use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Number of state features fed into the direction network.
+///
+/// This is a manual count of the values pushed by [`state_features`] below.
+/// The vector is deliberately small and economy-centric: FAF build orders are
+/// driven mainly by income, storage, build power, time, mex saturation, active
+/// projects, and the few tech milestones that unlock the goal path.
+///
+/// Historical note: earlier experiments used a larger feature set (including a
+/// 3-D "shortfall" vector). Those extra channels were removed because they did
+/// not improve decisions and made the network wider for no benefit. The current
+/// 11 features capture the same strategic information more compactly.
+///
+/// If you add or remove a feature, update this constant and the ordered list in
+/// the doc comment of [`state_features`].
 pub const STATE_FEATURE_COUNT: usize = 11;
 
 /// Convert a simulator state into a fixed-length feature vector.
@@ -15,6 +28,10 @@ pub const STATE_FEATURE_COUNT: usize = 11;
 /// The 11 state features are intentionally economy-centric and small. Build
 /// orders in FAF are driven mainly by income, build power, and tech tier, so
 /// the network gets those directly instead of a huge one-hot unit roster.
+///
+/// The count of `features.push(...)` calls below must always equal
+/// [`STATE_FEATURE_COUNT`]. The `debug_assert_eq!` at the end of this function
+/// catches accidental drift.
 ///
 /// Feature order:
 /// 0. net mass income   (scaled by 100)
@@ -84,6 +101,11 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     // Tech milestones: these gates unlock most of the rest of the goal path,
     // so the network receives them as explicit booleans instead of having to
     // infer them from the unit roster.
+    //
+    // - T2/T3 factories unlock the ability to build higher-tier engineers.
+    // - T3 engineer is the concrete builder that can start the abstract goal
+    //   (e.g. a T4 experimental). Without this flag the policy would have to
+    //   deduce goal availability from the much larger unit roster.
     features.push(bool_f32(
         state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
     ));

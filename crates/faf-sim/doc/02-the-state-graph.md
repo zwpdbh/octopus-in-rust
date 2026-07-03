@@ -114,14 +114,20 @@ For the current model:
 Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into an 11-dimensional vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 11 — feature constant
+// crates/faf-sim/src/planner/mcts/features.rs ~line 10 — feature constant (excerpt)
+/// Number of state features fed into the direction network.
+///
+/// This is a manual count of the values pushed by `state_features` below.
+/// The vector is deliberately small and economy-centric: FAF build orders are
+/// driven mainly by income, storage, build power, time, mex saturation, active
+/// projects, and the few tech milestones that unlock the goal path.
 pub const STATE_FEATURE_COUNT: usize = 11;
 ```
 
 The 11 features are listed in `state_features`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 27 — state feature order
+// crates/faf-sim/src/planner/mcts/features.rs ~line 36 — state feature order
 // 0. net mass income   (scaled by 100)
 // 1. net energy income (scaled by 1000)
 // 2. mass storage ratio
@@ -136,6 +142,8 @@ The 11 features are listed in `state_features`:
 ```
 
 They are intentionally economy-centric. Build orders in FAF are driven mainly by income, build power, and tech tier, so the network gets those directly instead of a huge one-hot unit roster.
+
+The T3 engineer flag is worth calling out: in this model a T3 engineer is the only unit that can start the abstract goal (e.g. a T4 experimental). Without an explicit flag the network would have to infer goal availability from the full unit roster, so the milestone is surfaced as a single boolean.
 
 ## What the policy sees
 
