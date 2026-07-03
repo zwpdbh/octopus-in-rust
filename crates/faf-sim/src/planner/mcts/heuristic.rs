@@ -6,11 +6,13 @@
 
 use crate::economy::{compute_drain, RequestedBuildPower};
 use crate::planner::core::Goal;
-use crate::planner::mcts::selections::{find_upgrade_source, SelectionPools};
-use crate::planner::plan_graph::EdgeCategory;
+use crate::planner::plan_graph::{
+    find_upgrade_source, is_plan_edge_legal, EdgeAction, EdgeCategory, PlanGraph,
+};
 use crate::planner::SimAction;
 use crate::sim::{NodeId, SimulationState};
 use crate::units::{TechLevel, UnitKind, Units};
+use petgraph::visit::EdgeRef;
 
 /// Turn a network direction into a concrete simulator action.
 ///
@@ -26,18 +28,71 @@ pub fn direction_to_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
     goal: &Goal,
-    plan: &crate::planner::plan_graph::PlanGraph,
+    plan: &PlanGraph,
 ) -> SimAction {
-    let pools = SelectionPools::new(plan, state, units);
-
     match direction {
-        EdgeCategory::IncreaseMass => pick_mass_action(&pools, state, units, config),
-        EdgeCategory::IncreaseEnergy => pick_energy_action(&pools, state, units, config),
-        EdgeCategory::IncreaseBP => pick_bp_action(&pools, state, units, config),
-        EdgeCategory::IncreaseEnergyStorage => pick_storage_action(&pools, state, units, config),
+        EdgeCategory::IncreaseMass => pick_mass_action(plan, state, units, config),
+        EdgeCategory::IncreaseEnergy => pick_energy_action(plan, state, units, config),
+        EdgeCategory::IncreaseBP => pick_bp_action(plan, state, units, config),
+        EdgeCategory::IncreaseEnergyStorage => pick_storage_action(plan, state, units, config),
         EdgeCategory::Goal => pick_goal_action(state, units, config, goal),
-        EdgeCategory::UpgradeTech => pick_upgrade_action(&pools, state, units, config),
+        EdgeCategory::UpgradeTech => pick_upgrade_action(plan, state, units, config),
     }
+}
+
+/// A build/upgrade target extracted from a legal plan-graph edge.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Candidate {
+    target: UnitKind,
+    /// For upgrades, the unit kind being upgraded.
+    upgrade_from: Option<UnitKind>,
+}
+
+/// Return all legal build/upgrade candidates in `plan` whose category matches.
+///
+/// Results are deduplicated by `(target, source)` so multiple builders for the
+/// same target appear only once.
+fn legal_candidates(
+    plan: &PlanGraph,
+    state: &SimulationState,
+    units: &Units,
+    category: EdgeCategory,
+) -> Vec<Candidate> {
+    let mut seen: std::collections::HashSet<(UnitKind, Option<UnitKind>)> =
+        std::collections::HashSet::new();
+    let mut candidates = Vec::new();
+
+    for edge in plan.graph().edge_references() {
+        let action = *edge.weight();
+        let source = &plan.graph()[edge.source()];
+        let target = &plan.graph()[edge.target()];
+
+        if EdgeCategory::categorize(action, target) != category {
+            continue;
+        }
+        if !is_plan_edge_legal(action, source, target, state, units) {
+            continue;
+        }
+
+        let Some(target_kind) = target.as_unit() else {
+            continue;
+        };
+        let source_kind = if action == EdgeAction::Upgrade {
+            source.as_unit().cloned()
+        } else {
+            None
+        };
+
+        let key = (target_kind.clone(), source_kind.clone());
+        if seen.insert(key) {
+            candidates.push(Candidate {
+                target: target_kind.clone(),
+                upgrade_from: source_kind,
+            });
+        }
+    }
+
+    candidates
 }
 
 /// True if `direction` has at least one legal concrete action in `state`.
@@ -57,33 +112,20 @@ pub fn is_direction_legal(
 
 /// Pick the mass action with the shortest payback time.
 fn pick_mass_action(
-    pools: &SelectionPools,
+    plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = pools
-        .options()
-        .iter()
-        .filter_map(|opt| match opt {
-            crate::planner::mcts::selections::SelectionOption::Build(u)
-                if matches!(
-                    u,
-                    UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
-                ) =>
-            {
-                Some((u.clone(), None))
-            }
-            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
-                if matches!(
-                    to,
-                    UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
-                ) =>
-            {
-                Some((to.clone(), Some(from.clone())))
-            }
-            _ => None,
+    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseMass)
+        .into_iter()
+        .filter(|c| {
+            matches!(
+                c.target,
+                UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
+            )
         })
+        .map(|c| (c.target, c.upgrade_from))
         .collect();
 
     let Some(best) = candidates
@@ -106,27 +148,15 @@ fn pick_mass_action(
 
 /// Pick the highest-tech legal energy action.
 fn pick_energy_action(
-    pools: &SelectionPools,
+    plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = pools
-        .options()
-        .iter()
-        .filter_map(|opt| match opt {
-            crate::planner::mcts::selections::SelectionOption::Build(u)
-                if matches!(u, UnitKind::Pgen(_)) =>
-            {
-                Some((u.clone(), None))
-            }
-            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
-                if matches!(to, UnitKind::Pgen(_)) =>
-            {
-                Some((to.clone(), Some(from.clone())))
-            }
-            _ => None,
-        })
+    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergy)
+        .into_iter()
+        .filter(|c| matches!(c.target, UnitKind::Pgen(_)))
+        .map(|c| (c.target, c.upgrade_from))
         .collect();
 
     let Some(best) = candidates
@@ -141,22 +171,15 @@ fn pick_energy_action(
 
 /// Pick the highest-tier engineer build action.
 fn pick_bp_action(
-    pools: &SelectionPools,
+    plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = pools
-        .options()
-        .iter()
-        .filter_map(|opt| match opt {
-            crate::planner::mcts::selections::SelectionOption::Build(u)
-                if matches!(u, UnitKind::Engineer(_)) =>
-            {
-                Some(u.clone())
-            }
-            _ => None,
-        })
+    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseBP)
+        .into_iter()
+        .filter(|c| matches!(c.target, UnitKind::Engineer(_)) && c.upgrade_from.is_none())
+        .map(|c| c.target)
         .collect();
 
     let Some(target) = candidates
@@ -178,28 +201,27 @@ fn pick_bp_action(
 
 /// Build energy storage if legal.
 fn pick_storage_action(
-    pools: &SelectionPools,
+    plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    pools
-        .options()
+    let can_build = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergyStorage)
         .iter()
-        .find_map(|opt| match opt {
-            crate::planner::mcts::selections::SelectionOption::Build(UnitKind::EnergyStorage) => {
-                let builders = assign_builders(UnitKind::EnergyStorage, state, units, config.dt);
-                if builders.is_empty() {
-                    return None;
-                }
-                Some(SimAction::Build {
-                    unit_id: UnitKind::EnergyStorage,
-                    builders,
-                })
-            }
-            _ => None,
-        })
-        .unwrap_or(SimAction::Wait)
+        .any(|c| c.target == UnitKind::EnergyStorage && c.upgrade_from.is_none());
+
+    if !can_build {
+        return SimAction::Wait;
+    }
+
+    let builders = assign_builders(UnitKind::EnergyStorage, state, units, config.dt);
+    if builders.is_empty() {
+        return SimAction::Wait;
+    }
+    SimAction::Build {
+        unit_id: UnitKind::EnergyStorage,
+        builders,
+    }
 }
 
 /// Start the abstract goal with T3 engineers.
@@ -226,19 +248,18 @@ fn pick_goal_action(
 
 /// Pick the lowest-tier legal factory upgrade.
 fn pick_upgrade_action(
-    pools: &SelectionPools,
+    plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = pools
-        .options()
-        .iter()
-        .filter_map(|opt| match opt {
-            crate::planner::mcts::selections::SelectionOption::Upgrade { from, to }
+    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::UpgradeTech)
+        .into_iter()
+        .filter_map(|c| match (c.upgrade_from, c.target) {
+            (Some(from), to)
                 if matches!(from, UnitKind::Factory(_)) && matches!(to, UnitKind::Factory(_)) =>
             {
-                Some((from.clone(), to.clone()))
+                Some((from, to))
             }
             _ => None,
         })

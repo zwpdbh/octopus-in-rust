@@ -18,6 +18,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 
 use crate::planner::core::Goal;
+use crate::sim::{NodeId, SimulationState};
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Concrete action an edge represents in the plan graph.
@@ -330,6 +331,116 @@ fn add_upgrade_edges(
             graph.add_edge(from_idx, to_idx, EdgeAction::Upgrade);
         }
     }
+}
+
+/// True if `edge` can be executed in `state`.
+///
+/// The source node must be a unit that is owned and active. For build edges the
+/// target must not already be owned or under construction, and a capable idle
+/// builder must exist. For upgrade edges [`can_upgrade`] must hold.
+pub fn is_plan_edge_legal(
+    action: EdgeAction,
+    source: &PlanNode,
+    target: &PlanNode,
+    state: &SimulationState,
+    units: &Units,
+) -> bool {
+    let Some(source_kind) = source.as_unit() else {
+        return false;
+    };
+
+    if !state.has_completed_unit(source_kind) {
+        return false;
+    }
+
+    match action {
+        EdgeAction::Build => {
+            let can_build = match target.as_goal() {
+                Some(goal) => {
+                    !state.goal_reached(goal)
+                        && !state.goal_project_active()
+                        && can_build_goal(source_kind, goal)
+                }
+                None => {
+                    let target_kind = target.as_unit().expect("build target must be unit or goal");
+                    !state.has_completed_unit(target_kind)
+                        && !state.active_target_unit_ids().contains(target_kind)
+                }
+            };
+            can_build && is_idle_builder(state, units, source_kind)
+        }
+        EdgeAction::Upgrade => {
+            let source_kind = source.as_unit().expect("upgrade source must be a unit");
+            let target_kind = target.as_unit().expect("upgrade target must be a unit");
+            can_upgrade(state, units, source_kind, target_kind)
+        }
+    }
+}
+
+/// True if `builder` is allowed to start the abstract `goal` project.
+///
+/// For now all goals are built by a T3 engineer.
+fn can_build_goal(builder: &UnitKind, _goal: &Goal) -> bool {
+    matches!(builder, UnitKind::Engineer(TechLevel::T3))
+}
+
+/// True if the state has an active, idle builder of the given kind.
+pub fn is_idle_builder(state: &SimulationState, units: &Units, kind: &UnitKind) -> bool {
+    state
+        .idle_builders(units)
+        .iter()
+        .any(|&id| state.graph[id].unit_id == *kind)
+}
+
+/// True if `source` can be upgraded into `target` now.
+///
+/// The source unit must be active and not already busy, and there must be an
+/// idle builder capable of performing the upgrade.
+pub fn can_upgrade(
+    state: &SimulationState,
+    units: &Units,
+    source: &UnitKind,
+    target: &UnitKind,
+) -> bool {
+    // Find an active source unit that is not already upgrading or building.
+    let source_nodes: Vec<_> = state
+        .graph
+        .graph
+        .node_weights()
+        .filter(|n| n.is_active() && n.unit_id == *source)
+        .map(|n| n.id)
+        .collect();
+
+    if source_nodes.is_empty() {
+        return false;
+    }
+
+    // Find an idle builder that can perform this upgrade.
+    let recipe = units
+        .upgrade_recipes(source)
+        .iter()
+        .find(|r| r.to == *target);
+
+    let Some(recipe) = recipe else {
+        return false;
+    };
+
+    recipe.builder_options.iter().any(|builder_kind| {
+        state
+            .idle_builders(units)
+            .iter()
+            .any(|&id| state.graph[id].unit_id == *builder_kind)
+    })
+}
+
+/// Find an active source node of the given kind for an upgrade edge.
+pub fn find_upgrade_source(state: &SimulationState, source_kind: &UnitKind) -> Option<NodeId> {
+    state
+        .graph
+        .graph
+        .node_weights()
+        .find(|n| n.is_active() && n.unit_id == *source_kind)
+        .map(|n| n.id)
 }
 
 #[cfg(test)]

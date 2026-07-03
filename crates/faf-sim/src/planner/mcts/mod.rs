@@ -10,7 +10,6 @@ pub mod heuristic;
 pub mod macro_net;
 pub mod policy;
 pub mod search;
-pub mod selections;
 pub mod train;
 pub mod value_net;
 
