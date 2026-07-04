@@ -143,9 +143,26 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
     /// This is the public inference entry point. It adds the batch dimension,
     /// runs the backbone and direction head, and returns the raw logits as a
     /// host-side `Vec<f32>`.
+    ///
+    /// Operation-by-operation:
+    ///
+    /// 1. `tensor_from_vec` wraps the input in a `[1, STATE_FEATURE_COUNT]` tensor.
+    /// 2. `latent` runs the backbone: Linear → ReLU → Linear → ReLU,
+    ///    producing a `[1, 64]` latent vector.
+    /// 3. `direction_logits` runs the direction head Linear layer,
+    ///    producing a `[1, DIRECTION_COUNT]` logit tensor.
+    /// 4. The final chain converts the tensor back to a `Vec<f32>`.
     pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-        let tensor = tensor_from_vec(&features, device);
-        let logits = self.direction_logits(self.latent(tensor));
+        // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
+        let features = tensor_from_vec(&features, device);
+
+        // 2. Backbone: matrix multiply → ReLU → matrix multiply → ReLU.
+        let latent = self.latent(features);
+
+        // 3. Direction head: final matrix multiply → [1, DIRECTION_COUNT].
+        let logits = self.direction_logits(latent);
+
+        // 4. Convert back to a host-side Vec<f32>.
         logits.into_data().as_slice::<f32>().unwrap().to_vec()
     }
 }

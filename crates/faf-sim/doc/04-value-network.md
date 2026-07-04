@@ -150,10 +150,18 @@ Output shape: `[batch, DIRECTION_COUNT]` where `DIRECTION_COUNT = 6`.
 During MCTS and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 146 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-    let tensor = tensor_from_vec(&features, device);
-    let logits = self.direction_logits(self.latent(tensor));
+    // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
+    let features = tensor_from_vec(&features, device);
+
+    // 2. Backbone: matrix multiply → ReLU → matrix multiply → ReLU.
+    let latent = self.latent(features);
+
+    // 3. Direction head: final matrix multiply → [1, DIRECTION_COUNT].
+    let logits = self.direction_logits(latent);
+
+    // 4. Convert back to a host-side Vec<f32>.
     logits.into_data().as_slice::<f32>().unwrap().to_vec()
 }
 ```

@@ -165,11 +165,81 @@ pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
 For inference we provide a helper that takes a host `Vec<f32>` and returns host `Vec<f32>`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 146 — evaluate_direction
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-    let tensor = tensor_from_vec(&features, device);
-    let logits = self.direction_logits(self.latent(tensor));
+    // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
+    let features = tensor_from_vec(&features, device);
+
+    // 2. Backbone: matrix multiply → ReLU → matrix multiply → ReLU.
+    let latent = self.latent(features);
+
+    // 3. Direction head: final matrix multiply → [1, DIRECTION_COUNT].
+    let logits = self.direction_logits(latent);
+
+    // 4. Convert back to a host-side Vec<f32>.
     logits.into_data().as_slice::<f32>().unwrap().to_vec()
+}
+```
+
+### What `evaluate_direction` is actually doing
+
+If you are new to ML frameworks, it helps to think of a trained network as a fixed pipeline of math operations, not a black box. The network has already learned its weight matrices and biases during training; `evaluate_direction` just multiplies the input through them.
+
+The high-level flow is:
+
+```text
+input vector → matrix multiply → ReLU → matrix multiply → ReLU → matrix multiply → output vector
+```
+
+Here is exactly how that maps to the code, with the tensor shape after each step:
+
+| English | Code | Shape |
+|---|---|---|
+| input vector | `tensor_from_vec(&features, device)` | `[1, 11]` |
+| matrix multiply | `self.backbone1.forward(features)` | `[1, 11]` → `[1, 128]` |
+| ReLU | `self.activation.forward(x)` | `[1, 128]` |
+| matrix multiply | `self.backbone2.forward(x)` | `[1, 128]` → `[1, 64]` |
+| ReLU | `self.activation.forward(x)` | `[1, 64]` |
+| matrix multiply | `self.direction_head.forward(latent)` | `[1, 64]` → `[1, 6]` |
+| output vector | `logits.into_data().as_slice::<f32>().unwrap().to_vec()` | 6 floats |
+
+A few things worth pointing out:
+
+- **Why `[1, 11]`?** The first dimension is the batch size. During MCTS planning we evaluate one game state at a time, so the batch is `1`. The second dimension is `STATE_FEATURE_COUNT` (11 state features).
+- **`Linear::forward` is matrix multiplication plus a bias.** When you see `self.backbone1.forward(x)`, Burn is computing `x @ W + b` using the weight matrix `W` and bias vector `b` that were created when the layer was initialized.
+- **`self.activation.forward` is ReLU.** The `activation` field holds a `Relu`, so each call zeros out negative values but does not change the tensor's shape.
+- **The final `.to_vec()` converts back to normal Rust data.** ML frameworks operate on tensors, but the rest of our planner works with ordinary `Vec<f32>`, so we pull the six logit values out of the tensor before returning.
+
+So the full chain expands to:
+
+```rust
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction (expanded view)
+pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
+    // 1. input vector [1, 11]
+    let tensor = tensor_from_vec(&features, device);
+
+    // 2. latent() = matrix multiply → ReLU → matrix multiply → ReLU
+    //    produces [1, 64]
+    let latent = self.latent(tensor);
+
+    // 3. direction_logits() = final matrix multiply
+    //    produces [1, 6]
+    let logits = self.direction_logits(latent);
+
+    // 4. output vector: 6 floats
+    logits.into_data().as_slice::<f32>().unwrap().to_vec()
+}
+```
+
+And `latent()` itself expands to the first four operations:
+
+```rust
+// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent (operation-by-operation view)
+pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
+    let x = self.backbone1.forward(features);   // matrix multiply: [1, 11] → [1, 128]
+    let x = self.activation.forward(x);          // ReLU: shape stays [1, 128]
+    let x = self.backbone2.forward(x);           // matrix multiply: [1, 128] → [1, 64]
+    self.activation.forward(x)                   // ReLU: shape stays [1, 64]
 }
 ```
 
