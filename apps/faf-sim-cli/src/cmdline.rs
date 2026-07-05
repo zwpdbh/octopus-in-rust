@@ -138,10 +138,6 @@ pub struct TrainArgs {
     /// Disable the terminal dashboard and print plain text progress instead.
     #[arg(long, default_value = "false")]
     pub no_tui: bool,
-    /// Stop early if no new best completion time is found for this many
-    /// episodes. Counted only after the first successful episode.
-    #[arg(long)]
-    pub patience: Option<usize>,
     /// Clip gradients by global L2 norm to this value. `1.0` is a good default
     /// for preventing REINFORCE divergence; omit to disable clipping.
     #[arg(long)]

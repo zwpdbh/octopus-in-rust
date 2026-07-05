@@ -32,7 +32,6 @@ pub struct TrainConfig {
     pub entropy_coef: f32,
     pub target_time: Option<f64>,
     pub greedy_eval_interval: usize,
-    pub patience: Option<usize>,
     pub fine_tune_epochs: usize,
     pub grad_clip: Option<f32>,
 }
@@ -447,7 +446,7 @@ pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
     // ... optional greedy eval of best_model if resuming ...
 
     loop {
-        // stop on episode limit, patience, or interrupter
+        // stop on episode limit or user interrupt
         let epsilon = self.current_epsilon(ep);
         let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
 

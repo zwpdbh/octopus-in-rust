@@ -44,7 +44,7 @@ You should be comfortable with Rust and with the basics of neural networks and p
   ```text
   cargo run --release -p faf-sim-cli -- train -e 5000 -m 10000 uef novaxcenter
   ```
-  Add `--quiet` to suppress output, `--patience 1000` to stop early, or `--no-epsilon-decay` to keep exploration constant.
+  Add `--quiet` to suppress output or `--no-epsilon-decay` to keep exploration constant.
 - **Visualise the plan graph:**
   ```text
   cargo run --release -p faf-sim-cli -- plan

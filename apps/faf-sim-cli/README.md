@@ -17,7 +17,6 @@ cargo run --release --bin faf-sim -- plan
 # --dt : fixed simulator timestep in seconds (default 1.0)
 # -r  : resume from an existing model file (optional)
 # --fresh        : delete any existing model checkpoint for this target before training
-# --patience <N> : stop early if no new best time for N episodes after the first success
 # --quiet        : suppress per-episode and progress output
 # --no-tui       : disable the live dashboard and print plain text progress instead
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
@@ -43,12 +42,6 @@ cargo run --release --bin faf-sim -- \
 # or when the tiny network is CPU-bound).
 cargo run --no-default-features --features cpu --release --bin faf-sim -- \
   train -e 5000 -m 1000 --grad-clip 1.0 uef novaxcenter
-
-# Same run with patience-based early stopping (stops if no improvement for 1000 episodes).
-cargo run --release --bin faf-sim -- \
-  train -e 10000 -m 5000 --patience 1000 uef novaxcenter
-
-
 
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
 cargo run --bin faf-sim -- simulate uef novaxcenter
@@ -77,16 +70,6 @@ For UEF Novax Center, `-m 5000` (≈83 minutes of game time) is enough for a goo
 ## Simulate without a trained model
 
 If you run `simulate` before training, the planner falls back to a randomly initialized network and runs MCTS with random priors over an 8-hour horizon. This is expected to be very slow and is useful only as a smoke test. Train first for real results.
-
-## Plateau-based early stopping
-
-Long runs can waste time once the policy stops improving. Use `--patience` to stop automatically:
-
-```sh
-cargo run --release --bin faf-sim -- train -e 10000 -m 5000 --patience 1000 uef novaxcenter
-```
-
-This counts episodes **after the first successful episode**. If no new best completion time is found for 1000 episodes, training stops and the best-seen model is saved.
 
 ## Controlling exploration
 

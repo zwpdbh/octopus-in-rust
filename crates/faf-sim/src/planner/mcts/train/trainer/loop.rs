@@ -23,10 +23,9 @@ impl Trainer {
 
         let mut best_time = self.initial_best_time(units, goal, &planner_config);
         let mut ep = 0usize;
-        let mut episodes_since_best = 0usize;
 
         loop {
-            if self.should_stop_loop(ep, episodes_since_best, best_time) {
+            if self.should_stop_training(ep) {
                 break;
             }
 
@@ -40,22 +39,10 @@ impl Trainer {
                 .then(|| self.handle_goal_reached(&episode, &mut stats, &mut best_time))
                 .unwrap_or(false);
 
-            self.maybe_evaluate_greedy(
-                units,
-                goal,
-                &planner_config,
-                ep + 1,
-                &mut best_time,
-                &mut episodes_since_best,
-            );
+            self.maybe_evaluate_greedy(units, goal, &planner_config, ep + 1, &mut best_time);
             self.emit_episode_metrics(ep + 1, &episode, epsilon, loss, best_time);
 
-            if self.should_stop() {
-                break;
-            }
-
             ep += 1;
-            episodes_since_best += 1;
 
             if target_hit {
                 break;
@@ -96,24 +83,15 @@ impl Trainer {
         })
     }
 
-    /// Check hard stopping conditions that do not depend on the episode result.
-    fn should_stop_loop(
-        &self,
-        ep: usize,
-        episodes_since_best: usize,
-        best_time: Option<f64>,
-    ) -> bool {
+    /// Check whether training should stop before starting episode `ep`.
+    ///
+    /// Training stops when either the episode limit is reached or the user
+    /// requests a stop through the interrupter / stop flag.
+    fn should_stop_training(&self, ep: usize) -> bool {
         if self.config.episodes != 0 && ep >= self.config.episodes {
             return true;
         }
-
-        if let Some(patience) = self.config.patience {
-            if best_time.is_some() && episodes_since_best >= patience {
-                return true;
-            }
-        }
-
-        false
+        self.should_stop()
     }
 
     /// Run one policy-gradient update if the episode produced any steps.
@@ -167,7 +145,6 @@ impl Trainer {
         planner_config: &PlannerConfig,
         episode: usize,
         best_time: &mut Option<f64>,
-        episodes_since_best: &mut usize,
     ) {
         let interval = self.config.greedy_eval_interval;
         if interval == 0 || episode == 0 || !episode.is_multiple_of(interval) {
@@ -180,7 +157,6 @@ impl Trainer {
             let is_new_best = best_time.is_none_or(|t| greedy_time < t);
             if is_new_best {
                 *best_time = Some(greedy_time);
-                *episodes_since_best = 0;
                 self.best_model = Some(self.model.clone());
                 self.best_trajectory = None;
             }

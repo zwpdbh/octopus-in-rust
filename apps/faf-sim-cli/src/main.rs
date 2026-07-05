@@ -135,7 +135,6 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         } else {
             args.epsilon_decay_episodes.unwrap_or(args.episodes)
         },
-        patience: args.patience,
         grad_clip: args.grad_clip,
         ..Default::default()
     };
