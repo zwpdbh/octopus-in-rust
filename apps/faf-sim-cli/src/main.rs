@@ -113,7 +113,7 @@ fn model_path(target: &ResearchTarget) -> std::path::PathBuf {
 async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     let goal = target.to_goal(units);
 
-    let use_tui = !args.quiet && !args.no_tui && std::io::stdout().is_terminal();
+    let use_tui = !args.quiet && !args.text && std::io::stdout().is_terminal();
 
     if !use_tui {
         println!(

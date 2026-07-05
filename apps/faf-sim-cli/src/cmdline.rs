@@ -135,9 +135,9 @@ pub struct TrainArgs {
     /// Suppress per-episode and progress output.
     #[arg(long, default_value = "false")]
     pub quiet: bool,
-    /// Disable the terminal dashboard and print plain text progress instead.
+    /// Print plain-text progress to stderr instead of opening the terminal dashboard.
     #[arg(long, default_value = "false")]
-    pub no_tui: bool,
+    pub text: bool,
     /// Clip gradients by global L2 norm to this value. `1.0` is a good default
     /// for preventing REINFORCE divergence; omit to disable clipping.
     #[arg(long)]

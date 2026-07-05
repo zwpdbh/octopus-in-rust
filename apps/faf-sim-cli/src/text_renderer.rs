@@ -1,7 +1,7 @@
 //! Plain-text `MetricsRenderer` for non-TUI training runs.
 //!
 //! This prints the same per-episode line that the old verbose trainer emitted,
-//! so `--no-tui` output remains familiar.
+//! so `--text` output remains familiar.
 
 use std::collections::HashMap;
 

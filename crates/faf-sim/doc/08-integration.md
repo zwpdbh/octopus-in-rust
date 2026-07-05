@@ -401,7 +401,7 @@ let renderer: Box<dyn MetricsRenderer> =
 let metrics = FafSimMetrics::new(renderer);
 ```
 
-Pass `--no-tui` to keep plain-text output, or `--quiet` to suppress live progress entirely. Inside the Burn TUI, use the renderer's normal quit key to stop training gracefully at the next episode boundary.
+Pass `--text` to keep plain-text output, or `--quiet` to suppress live progress entirely. Inside the Burn TUI, use the renderer's normal quit key to stop training gracefully at the next episode boundary.
 
 ## Model compatibility
 

@@ -558,9 +558,14 @@ All metrics are numeric and use Burn's `NumericMetricState`, so the renderer rec
 
 The renderer is chosen by the CLI, not by the library. `faf-sim` library code only knows about `Box<dyn MetricsRenderer>`; the binary picks the concrete implementation.
 
-#### TUI renderer (`--tui`)
+#### TUI renderer (default)
 
-`faf-sim-cli` wraps Burn's built-in TUI renderer:
+By default `faf-sim-cli` opens Burn's built-in terminal dashboard when stdout is an interactive terminal:
+
+```rust
+// apps/faf-sim-cli/src/main.rs ~line 116
+let use_tui = !args.quiet && !args.text && std::io::stdout().is_terminal();
+```
 
 ```rust
 // apps/faf-sim-cli/src/main.rs ~line 177
@@ -575,11 +580,11 @@ let renderer: Box<dyn MetricsRenderer> =
 let metrics = FafSimMetrics::new(renderer);
 ```
 
-The TUI renderer opens a terminal dashboard with live plots for every registered metric. It also accepts an `Interrupter`, so pressing the stop key in the dashboard gracefully ends training at the next episode boundary.
+The TUI renderer shows live plots for every registered metric. It also accepts an `Interrupter`, so pressing the stop key in the dashboard gracefully ends training at the next episode boundary.
 
-#### Text renderer (`--no-tui` or default)
+#### Text renderer (`--text`)
 
-When TUI is disabled, `TextMetricsRenderer` (`apps/faf-sim-cli/src/text_renderer.rs`) prints one line per episode to stderr:
+Pass `--text` to disable the dashboard and use `TextMetricsRenderer` (`apps/faf-sim-cli/src/text_renderer.rs`) instead. It prints one line per episode to stderr:
 
 ```text
 ep=   1 steps=  42 eps=0.1000 reached=false time=             - best=             - loss=    1.2345

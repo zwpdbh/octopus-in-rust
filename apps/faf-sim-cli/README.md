@@ -18,7 +18,7 @@ cargo run --release --bin faf-sim -- plan
 # -r  : resume from an existing model file (optional)
 # --fresh        : delete any existing model checkpoint for this target before training
 # --quiet        : suppress per-episode and progress output
-# --no-tui       : disable the live dashboard and print plain text progress instead
+# --text         : print plain text progress instead of opening the live dashboard
 # -t <duration>  : stop early once the best time is at most this (e.g. -t 30m)
 # --no-epsilon-decay : keep exploration probability constant (useful for resuming a search)
 
