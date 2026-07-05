@@ -2,10 +2,10 @@
 
 use super::super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::mcts::direction_planner::execute_action;
 use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{masked_argmax, PolicyBundle};
-use crate::planner::mcts::policy::execute_action;
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};

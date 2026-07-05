@@ -318,7 +318,7 @@ At each update, the learning rate is passed as a `f64` (Burn converts it interna
 Burn's `CompactRecorder` writes a model's weights to a `.mpk` file (MessagePack). Loading reconstructs the model from the same file:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 21 — save_policy
+// crates/faf-sim/src/planner/mcts/train/policy_training.rs ~line 21 — save_policy
 pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
@@ -334,7 +334,7 @@ pub fn save_policy(
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy.rs ~line 35 — load_policy
+// crates/faf-sim/src/planner/mcts/train/policy_training.rs ~line 35 — load_policy
 pub fn load_policy(path: &std::path::Path) -> Result<PolicyBundle<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();

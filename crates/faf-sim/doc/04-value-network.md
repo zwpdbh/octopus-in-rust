@@ -176,10 +176,10 @@ At inference time the planner performs three deterministic steps:
 2. Run the direction head, mask out illegal directions, and take `argmax`.
 3. Run the heuristic layer to convert the selected direction into a concrete `SimAction` and execute it.
 
-The core inference function is `macro_policy_plan` in `mcts::policy`:
+The core inference function is `macro_policy_plan` in `mcts::direction_planner`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 44 — macro_policy_plan
+// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 44 — macro_policy_plan
 pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,

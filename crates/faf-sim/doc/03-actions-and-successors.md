@@ -195,7 +195,7 @@ pub enum SimAction {
 The one-step planner ties the pieces together in `macro_policy_plan`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 44 — macro_policy_plan (abbreviated)
+// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 44 — macro_policy_plan (abbreviated)
 pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,

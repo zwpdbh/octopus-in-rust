@@ -64,10 +64,10 @@ pub fn plan(
 }
 ```
 
-`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step direction-only policy lives in `mcts::policy::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
+`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step direction-only policy lives in `mcts::direction_planner::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/policy.rs ~line 18 — mcts::policy::plan
+// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 18 — mcts::direction_planner::plan
 pub fn plan(
     units: &Units,
     initial_state: SimulationState,

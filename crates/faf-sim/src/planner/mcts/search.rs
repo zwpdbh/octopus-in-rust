@@ -6,10 +6,10 @@
 //! values.
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
+use crate::planner::mcts::direction_planner::{execute_action, plan_result_with_action};
 use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::{apply_mask, masked_argmax};
-use crate::planner::mcts::policy::{execute_action, plan_result_with_action};
 use crate::planner::mcts::train::reward::{compute_step_reward, compute_terminal_bonus};
 use crate::planner::mcts::value_net::ValueNet;
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};

@@ -31,7 +31,7 @@ pub mod config;
 pub mod episode;
 pub mod math;
 pub mod metric;
-pub mod policy;
+pub mod policy_training;
 pub mod reward;
 pub mod trainer;
 
@@ -40,7 +40,7 @@ mod tests;
 
 pub use config::{TrainConfig, TrainStats};
 pub use metric::{EpisodeSummary, FafSimMetrics, FineTuneSummary, GreedyEvalSummary, TrainEvent};
-pub use policy::{load_policy, save_policy, train_policy, train_policy_from};
+pub use policy_training::{load_policy, save_policy, train_policy, train_policy_from};
 pub use trainer::Trainer;
 
 // Re-export Burn training/renderer types so the CLI can build a renderer without

@@ -6,10 +6,10 @@ use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
 
 use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::mcts::direction_planner::execute_action;
 use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::masked_sample_index;
-use crate::planner::mcts::policy::execute_action;
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
