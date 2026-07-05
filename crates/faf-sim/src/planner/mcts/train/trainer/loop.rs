@@ -1,7 +1,7 @@
 //! Trainer main loop for the direction-only policy network.
 
 use super::super::config::TrainStats;
-use super::super::episode::{BuildTrajectory, TrajectoryStep};
+use super::super::episode::{BuildTrajectory, Episode, TrajectoryStep};
 use super::super::metric::metrics::training_progress;
 use super::super::metric::{EpisodeSummary, GreedyEvalSummary, TrainEvent};
 use crate::planner::core::{Goal, PlannerConfig};
@@ -19,141 +19,39 @@ impl Trainer {
         let plan = build_plan_graph(units, *goal);
         let mut stats = TrainStats::default();
 
-        if let Some(ref mut metrics) = self.metrics {
-            metrics.register();
-        }
+        self.register_metrics();
 
-        let mut best_time: Option<f64> = if let Some(ref model) = self.best_model {
-            Trainer::evaluate_greedy_with_model(
-                model,
-                units,
-                goal,
-                &planner_config,
-                self.config.max_steps,
-                self.config.dt,
-                &self.device,
-            )
-        } else {
-            None
-        };
-
+        let mut best_time = self.initial_best_time(units, goal, &planner_config);
         let mut ep = 0usize;
         let mut episodes_since_best = 0usize;
-        loop {
-            if self.config.episodes != 0 && ep >= self.config.episodes {
-                break;
-            }
 
-            if let Some(patience) = self.config.patience {
-                if best_time.is_some() && episodes_since_best >= patience {
-                    break;
-                }
+        loop {
+            if self.should_stop_loop(ep, episodes_since_best, best_time) {
+                break;
             }
 
             let epsilon = self.current_epsilon(ep);
             let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
-
-            let loss = if !episode.steps.is_empty() {
-                let loss = self.update(&episode);
-                stats.losses.push(loss);
-                Some(loss)
-            } else {
-                None
-            };
-
+            let loss = self.update_policy(&episode, &mut stats);
             stats.episode_lengths.push(episode.steps.len());
-            let mut target_hit = false;
-            if episode.reached_goal {
-                stats.goal_reaches += 1;
-                stats.completion_times.push(episode.completion_time);
-                let is_new_best = best_time.is_none_or(|t| episode.completion_time < t);
-                if is_new_best {
-                    best_time = Some(episode.completion_time);
-                    episodes_since_best = 0;
-                    self.best_model = Some(self.model.clone());
-                    self.best_trajectory = Some(BuildTrajectory {
-                        steps: episode
-                            .steps
-                            .iter()
-                            .map(|s| TrajectoryStep {
-                                direction_index: s.direction_index,
-                            })
-                            .collect(),
-                    });
-                }
-                if let Some(target) = self.config.target_time {
-                    if episode.completion_time <= target {
-                        target_hit = true;
-                    }
-                }
-            }
 
-            let interval = self.config.greedy_eval_interval;
-            if interval > 0 && ep > 0 && (ep + 1).is_multiple_of(interval) {
-                if let Some(greedy_time) = self.evaluate_greedy(units, goal, &planner_config) {
-                    let is_new_best = best_time.is_none_or(|t| greedy_time < t);
-                    if is_new_best {
-                        best_time = Some(greedy_time);
-                        episodes_since_best = 0;
-                        self.best_model = Some(self.model.clone());
-                        self.best_trajectory = None;
-                    }
-                    if let Some(ref mut metrics) = self.metrics {
-                        let metadata = metric_metadata(ep + 1, self.config.episodes);
-                        metrics.update(
-                            &TrainEvent::GreedyEval(GreedyEvalSummary {
-                                episode: ep + 1,
-                                reached_goal: true,
-                                completion_time: Some(greedy_time),
-                                best_time,
-                            }),
-                            &metadata,
-                        );
-                        metrics.render(
-                            training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
-                            vec![],
-                        );
-                    }
-                } else if let Some(ref mut metrics) = self.metrics {
-                    let metadata = metric_metadata(ep + 1, self.config.episodes);
-                    metrics.update(
-                        &TrainEvent::GreedyEval(GreedyEvalSummary {
-                            episode: ep + 1,
-                            reached_goal: false,
-                            completion_time: None,
-                            best_time,
-                        }),
-                        &metadata,
-                    );
-                    metrics.render(
-                        training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
-                        vec![],
-                    );
-                }
-            }
+            let target_hit = episode
+                .reached_goal
+                .then(|| self.handle_goal_reached(&episode, &mut stats, &mut best_time))
+                .unwrap_or(false);
 
-            if let Some(ref mut metrics) = self.metrics {
-                let metadata = metric_metadata(ep + 1, self.config.episodes);
-                metrics.update(
-                    &TrainEvent::Episode(EpisodeSummary {
-                        episode: ep + 1,
-                        total_episodes: self.config.episodes,
-                        steps: episode.steps.len(),
-                        epsilon,
-                        reached_goal: episode.reached_goal,
-                        completion_time: episode.completion_time,
-                        loss,
-                        best_time,
-                    }),
-                    &metadata,
-                );
-                metrics.render(
-                    training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
-                    vec![],
-                );
-                if self.should_stop() {
-                    break;
-                }
+            self.maybe_evaluate_greedy(
+                units,
+                goal,
+                &planner_config,
+                ep + 1,
+                &mut best_time,
+                &mut episodes_since_best,
+            );
+            self.emit_episode_metrics(ep + 1, &episode, epsilon, loss, best_time);
+
+            if self.should_stop() {
+                break;
             }
 
             ep += 1;
@@ -165,6 +63,191 @@ impl Trainer {
         }
 
         stats
+    }
+
+    /// Register all metrics with the renderer if metrics are configured.
+    fn register_metrics(&mut self) {
+        if let Some(ref mut metrics) = self.metrics {
+            metrics.register();
+        }
+    }
+
+    /// Compute the initial best time from a pre-existing best model.
+    ///
+    /// When training from scratch this is `None`; when resuming from a
+    /// checkpoint it evaluates the loaded model greedily to establish a
+    /// baseline.
+    fn initial_best_time(
+        &self,
+        units: &Units,
+        goal: &Goal,
+        planner_config: &PlannerConfig,
+    ) -> Option<f64> {
+        self.best_model.as_ref().and_then(|model| {
+            Trainer::evaluate_greedy_with_model(
+                model,
+                units,
+                goal,
+                planner_config,
+                self.config.max_steps,
+                self.config.dt,
+                &self.device,
+            )
+        })
+    }
+
+    /// Check hard stopping conditions that do not depend on the episode result.
+    fn should_stop_loop(
+        &self,
+        ep: usize,
+        episodes_since_best: usize,
+        best_time: Option<f64>,
+    ) -> bool {
+        if self.config.episodes != 0 && ep >= self.config.episodes {
+            return true;
+        }
+
+        if let Some(patience) = self.config.patience {
+            if best_time.is_some() && episodes_since_best >= patience {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Run one policy-gradient update if the episode produced any steps.
+    fn update_policy(&mut self, episode: &Episode, stats: &mut TrainStats) -> Option<f32> {
+        if episode.steps.is_empty() {
+            return None;
+        }
+
+        let loss = self.update(episode);
+        stats.losses.push(loss);
+        Some(loss)
+    }
+
+    /// Update training statistics and the best model when an episode reaches the goal.
+    ///
+    /// Returns `true` if the target completion time was hit.
+    fn handle_goal_reached(
+        &mut self,
+        episode: &Episode,
+        stats: &mut TrainStats,
+        best_time: &mut Option<f64>,
+    ) -> bool {
+        stats.goal_reaches += 1;
+        stats.completion_times.push(episode.completion_time);
+
+        let is_new_best = best_time.is_none_or(|t| episode.completion_time < t);
+        if is_new_best {
+            *best_time = Some(episode.completion_time);
+            self.best_model = Some(self.model.clone());
+            self.best_trajectory = Some(BuildTrajectory {
+                steps: episode
+                    .steps
+                    .iter()
+                    .map(|s| TrajectoryStep {
+                        direction_index: s.direction_index,
+                    })
+                    .collect(),
+            });
+        }
+
+        self.config
+            .target_time
+            .is_some_and(|target| episode.completion_time <= target)
+    }
+
+    /// Run a periodic greedy evaluation and update the best model if it improves.
+    fn maybe_evaluate_greedy(
+        &mut self,
+        units: &Units,
+        goal: &Goal,
+        planner_config: &PlannerConfig,
+        episode: usize,
+        best_time: &mut Option<f64>,
+        episodes_since_best: &mut usize,
+    ) {
+        let interval = self.config.greedy_eval_interval;
+        if interval == 0 || episode == 0 || !episode.is_multiple_of(interval) {
+            return;
+        }
+
+        let greedy_time = self.evaluate_greedy(units, goal, planner_config);
+
+        if let Some(greedy_time) = greedy_time {
+            let is_new_best = best_time.is_none_or(|t| greedy_time < t);
+            if is_new_best {
+                *best_time = Some(greedy_time);
+                *episodes_since_best = 0;
+                self.best_model = Some(self.model.clone());
+                self.best_trajectory = None;
+            }
+        }
+
+        self.emit_greedy_eval_metrics(episode, greedy_time.is_some(), greedy_time, *best_time);
+    }
+
+    /// Emit an `Episode` event to the metrics renderer.
+    fn emit_episode_metrics(
+        &mut self,
+        episode: usize,
+        summary: &Episode,
+        epsilon: f32,
+        loss: Option<f32>,
+        best_time: Option<f64>,
+    ) {
+        let Some(ref mut metrics) = self.metrics else {
+            return;
+        };
+
+        let metadata = metric_metadata(episode, self.config.episodes);
+        metrics.update(
+            &TrainEvent::Episode(EpisodeSummary {
+                episode,
+                total_episodes: self.config.episodes,
+                steps: summary.steps.len(),
+                epsilon,
+                reached_goal: summary.reached_goal,
+                completion_time: summary.completion_time,
+                loss,
+                best_time,
+            }),
+            &metadata,
+        );
+        metrics.render(
+            training_progress(episode, self.config.episodes, Some(episode)),
+            vec![],
+        );
+    }
+
+    /// Emit a `GreedyEval` event to the metrics renderer.
+    fn emit_greedy_eval_metrics(
+        &mut self,
+        episode: usize,
+        reached_goal: bool,
+        completion_time: Option<f64>,
+        best_time: Option<f64>,
+    ) {
+        let Some(ref mut metrics) = self.metrics else {
+            return;
+        };
+
+        let metadata = metric_metadata(episode, self.config.episodes);
+        metrics.update(
+            &TrainEvent::GreedyEval(GreedyEvalSummary {
+                episode,
+                reached_goal,
+                completion_time,
+                best_time,
+            }),
+            &metadata,
+        );
+        metrics.render(
+            training_progress(episode, self.config.episodes, Some(episode)),
+            vec![],
+        );
     }
 
     pub(crate) fn current_epsilon(&self, ep: usize) -> f32 {
