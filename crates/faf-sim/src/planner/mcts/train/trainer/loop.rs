@@ -5,6 +5,7 @@ use super::super::episode::{BuildTrajectory, TrajectoryStep};
 use super::super::metric::metrics::training_progress;
 use super::super::metric::{EpisodeSummary, GreedyEvalSummary, TrainEvent};
 use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::plan_graph::build_plan_graph;
 use crate::units::Units;
 use burn::data::dataloader::Progress;
 use burn::train::metric::MetricMetadata;
@@ -15,6 +16,7 @@ impl Trainer {
     /// Train the policy on the given goal.
     pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
         let planner_config = PlannerConfig::default();
+        let plan = build_plan_graph(units, *goal);
         let mut stats = TrainStats::default();
 
         if let Some(ref mut metrics) = self.metrics {
@@ -49,7 +51,7 @@ impl Trainer {
             }
 
             let epsilon = self.current_epsilon(ep);
-            let episode = self.run_episode(ep, units, goal, &planner_config, epsilon);
+            let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
 
             let loss = if !episode.steps.is_empty() {
                 let loss = self.update(&episode);

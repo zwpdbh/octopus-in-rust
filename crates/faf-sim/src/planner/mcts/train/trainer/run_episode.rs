@@ -10,7 +10,7 @@ use crate::planner::mcts::direction_planner::execute_action;
 use crate::planner::mcts::features::state_features;
 use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
 use crate::planner::mcts::macro_net::masked_sample_index;
-use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
+use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -20,13 +20,12 @@ impl Trainer {
     /// Run one episode and record the trajectory.
     pub(crate) fn run_episode(
         &mut self,
-        _ep: usize,
         units: &Units,
         goal: &Goal,
         planner_config: &PlannerConfig,
         epsilon: f32,
+        plan: &PlanGraph,
     ) -> Episode {
-        let plan = build_plan_graph(units, *goal);
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut episode = Episode {
             reached_goal: false,
@@ -115,6 +114,7 @@ fn legal_direction_mask(
 mod tests {
     use super::*;
     use crate::planner::mcts::macro_net::DIRECTION_COUNT;
+    use crate::planner::plan_graph::build_plan_graph;
     use crate::units::{TechLevel, Units};
 
     fn load_units() -> Units {
