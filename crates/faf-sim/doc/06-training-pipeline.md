@@ -449,7 +449,7 @@ pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
     loop {
         // stop on episode limit, patience, or interrupter
         let epsilon = self.current_epsilon(ep);
-        let episode = self.run_episode(ep, units, goal, &planner_config, epsilon);
+        let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
 
         let loss = if !episode.steps.is_empty() {
             let loss = self.update(&episode);
@@ -482,7 +482,144 @@ The loop is deliberately simple: one episode, one gradient step. This makes it e
 
 ## Burn metrics
 
-`faf-sim` uses Burn's metric and renderer infrastructure to report progress. Each episode emits an `EpisodeSummary` with steps, epsilon, goal status, completion time, loss, and best time. Periodic greedy evaluations emit `GreedyEvalSummary`. These are consumed by a `MetricsRenderer`, such as the built-in TUI renderer, to show live training progress.
+Training progress is reported through Burn's metric and renderer infrastructure. The trainer does not print directly; it emits typed events, a metric bundle turns those events into numeric state, and a pluggable renderer draws that state for the user.
+
+### Data flow
+
+The pipeline looks like this:
+
+```text
+Trainer::train
+    ├─ TrainEvent::Episode(EpisodeSummary { ... })
+    └─ TrainEvent::GreedyEval(GreedyEvalSummary { ... })
+           ↓
+       FafSimMetrics::update(event, metadata)
+           ↓
+       per-metric NumericMetricState
+           ↓
+       MetricsRenderer::update_train(state)
+           ↓
+       TUI dashboard or plain-text lines
+```
+
+In `Trainer::train`:
+
+```rust
+// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 137
+if let Some(ref mut metrics) = self.metrics {
+    metrics.update(
+        &TrainEvent::Episode(EpisodeSummary {
+            episode: ep + 1,
+            total_episodes: self.config.episodes,
+            steps: episode.steps.len(),
+            epsilon,
+            reached_goal: episode.reached_goal,
+            completion_time: episode.completion_time,
+            loss,
+            best_time,
+        }),
+        &metadata,
+    );
+    metrics.render(
+        training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
+        vec![],
+    );
+}
+```
+
+`FafSimMetrics` (in `crates/faf-sim/src/planner/mcts/train/metric/metrics.rs`) owns one `Metric` implementation for each quantity we care about and forwards every event to all of them. Each metric decides whether the event is relevant; irrelevant events produce `"-"` so the renderer can skip them.
+
+### Train events
+
+There are three event variants:
+
+- `TrainEvent::Episode` — emitted after every REINFORCE episode.
+- `TrainEvent::GreedyEval` — emitted after each periodic greedy evaluation.
+- `TrainEvent::FineTuneEpoch` — emitted during supervised fine-tuning on the best trajectory.
+
+### Metrics
+
+`FafSimMetrics` registers the following metrics with the renderer:
+
+| Metric | Source event | What it shows |
+|---|---|---|
+| `Episode Loss` | `Episode` | Average REINFORCE loss for the episode. |
+| `Episode Steps` | `Episode` | Number of simulator steps in the episode. |
+| `Completion Time` | `Episode` (goal reached) | Time in seconds when the goal was reached. |
+| `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
+| `Epsilon` | `Episode` | Current epsilon-greedy exploration probability. |
+| `Best Time` | `Episode` or `GreedyEval` | Fastest completion time observed so far. |
+| `Greedy Eval Time` | `GreedyEval` (goal reached) | Completion time of the latest greedy rollout. |
+| `Episodes/sec` | `Episode` | Training throughput. |
+| `Fine-Tune Loss` | `FineTuneEpoch` | Supervised cross-entropy loss on the best trajectory. |
+
+All metrics are numeric and use Burn's `NumericMetricState`, so the renderer receives both a formatted string and a raw value for plotting.
+
+### Renderers
+
+The renderer is chosen by the CLI, not by the library. `faf-sim` library code only knows about `Box<dyn MetricsRenderer>`; the binary picks the concrete implementation.
+
+#### TUI renderer (`--tui`)
+
+`faf-sim-cli` wraps Burn's built-in TUI renderer:
+
+```rust
+// apps/faf-sim-cli/src/main.rs ~line 177
+let renderer: Box<dyn MetricsRenderer> =
+    if let Some(inter) = interrupter_for_renderer {
+        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+    } else if quiet {
+        Box::new(TextMetricsRenderer::quiet())
+    } else {
+        Box::new(TextMetricsRenderer::new())
+    };
+let metrics = FafSimMetrics::new(renderer);
+```
+
+The TUI renderer opens a terminal dashboard with live plots for every registered metric. It also accepts an `Interrupter`, so pressing the stop key in the dashboard gracefully ends training at the next episode boundary.
+
+#### Text renderer (`--no-tui` or default)
+
+When TUI is disabled, `TextMetricsRenderer` (`apps/faf-sim-cli/src/text_renderer.rs`) prints one line per episode to stderr:
+
+```text
+ep=   1 steps=  42 eps=0.1000 reached=false time=             - best=             - loss=    1.2345
+ep=  10 steps=  38 eps=0.0955 reached= true time=      2m 15.3s best=      2m 15.3s loss=    0.9876
+ep=  50 steps=  31 eps=0.0782 reached= true time=      1m 52.1s best=      1m 48.7s loss=    0.5432
+```
+
+Columns:
+
+- `ep` — episode number.
+- `steps` — simulator steps taken.
+- `eps` — current epsilon (exploration probability).
+- `reached` — whether the goal was reached.
+- `time` — completion time if the goal was reached.
+- `best` — best completion time seen so far.
+- `loss` — average episode loss.
+
+#### Quiet renderer (`--quiet`)
+
+`TextMetricsRenderer::quiet()` consumes metric updates but prints nothing. This is useful for CI or when piping output elsewhere.
+
+### How to read the output
+
+During normal training you should see:
+
+- `loss` trending downward as the policy learns.
+- `reached` moving from mostly `false` to mostly `true`.
+- `time` and `best` decreasing as the policy finds faster build orders.
+- `eps` decaying from `epsilon` toward `epsilon_final`.
+
+`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest greedy rollout, not necessarily the final parameters. The TUI plots `Best Time` and `Greedy Eval Time` so you can watch this directly.
+
+### Integration summary
+
+- The trainer emits typed events.
+- `FafSimMetrics` converts events into numeric metric state.
+- A `MetricsRenderer` draws the state.
+- `faf-sim-cli` chooses between Burn's TUI renderer and a plain-text renderer based on CLI flags.
+- The same metric code works for interactive TUI runs, log-friendly text runs, and silent `--quiet` runs.
 
 ## What you should remember
 
