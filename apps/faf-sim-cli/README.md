@@ -28,9 +28,9 @@ cargo run --release --bin faf-sim -- plan
 # - Training stops early if the policy reaches a 30-minute completion time.
 # - --grad-clip 1.0 prevents REINFORCE gradients from exploding.
 cargo run --release --bin faf-sim -- \
-  train -e 5000 -m 1000 -t 30m \
+  train -e 5000 -m 10000 -t 25m \
   --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
-  --dt 2.0 \
+  --dt 1.0 \
   --grad-clip 1.0 \
   uef novaxcenter
 

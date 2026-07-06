@@ -1,4 +1,20 @@
 //! Burn-style metrics for faf-sim training.
+//!
+//! The training dashboard displays one plot per metric. Each metric is updated
+//! from [`TrainEvent`]s produced by the MCTS planner. The following metrics are
+//! collected:
+//!
+//! | Metric | Source | Interpretation |
+//! |---|---|---|
+//! | Episode Loss | `TrainEvent::Episode` | REINFORCE policy loss for the finished episode. Lower is better; a downward trend means the policy is improving. |
+//! | Fine-Tune Loss | `TrainEvent::FineTuneEpoch` | Supervised fine-tuning loss on the best trajectories. Lower is better. |
+//! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
+//! | Completion Time | `TrainEvent::Episode` | Simulator time when the episode ended (goal reached or step limit). Lower is better. |
+//! | Goal Reach | `TrainEvent::Episode` | Percentage of episodes that reached the goal. Higher is better; 100% means the agent consistently succeeds. |
+//! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
+//! | Best Time | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time observed so far across training and greedy evaluations. Lower is better. |
+//! | Greedy Eval Time | `TrainEvent::GreedyEval` | Completion time of a periodic greedy (no exploration) evaluation. Lower is better. |
+//! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,6 +31,10 @@ use burn::train::LearnerSummary;
 use super::events::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary, TrainEvent};
 
 /// Episode REINFORCE loss.
+///
+/// Tracks the policy loss computed over the completed episode. This is the
+/// primary optimization objective: a decreasing value indicates the MCTS
+/// policy network is learning from the collected trajectories.
 #[derive(Clone, Default)]
 pub struct EpisodeLossMetric {
     name: MetricName,
@@ -70,6 +90,10 @@ impl Numeric for EpisodeLossMetric {
 }
 
 /// Supervised fine-tuning loss.
+///
+/// Tracks the cross-entropy (or regression) loss when fine-tuning the policy
+/// on the best trajectories collected so far. A decreasing value indicates the
+/// policy is fitting the high-quality demonstrations.
 #[derive(Clone, Default)]
 pub struct FineTuneLossMetric {
     name: MetricName,
@@ -125,6 +149,10 @@ impl Numeric for FineTuneLossMetric {
 }
 
 /// Steps taken in an episode.
+///
+/// Tracks how many simulator steps were executed before the episode ended.
+/// Shorter episodes usually mean the agent reached the goal quickly; long
+/// flat lines may indicate the agent is stuck or wandering.
 #[derive(Clone, Default)]
 pub struct EpisodeStepsMetric {
     name: MetricName,
@@ -183,6 +211,10 @@ impl Numeric for EpisodeStepsMetric {
 }
 
 /// Completion time when the goal is reached.
+///
+/// Tracks the simulator time at which the episode reached the goal. Episodes
+/// that do not reach the goal are reported as "-" rather than the final time.
+/// Lower values mean the agent is solving the task faster.
 #[derive(Clone, Default)]
 pub struct CompletionTimeMetric {
     name: MetricName,
@@ -245,6 +277,10 @@ impl Numeric for CompletionTimeMetric {
 }
 
 /// Fraction of episodes that reached the goal.
+///
+/// Tracks the success rate of episodes. Reported as a percentage, where 100%
+/// means every episode reached the goal and 0% means none did. This is the
+/// simplest indicator of whether the agent is learning to solve the task.
 #[derive(Clone, Default)]
 pub struct GoalReachMetric {
     name: MetricName,
@@ -309,6 +345,10 @@ impl Numeric for GoalReachMetric {
 }
 
 /// Current epsilon-greedy exploration probability.
+///
+/// Tracks the probability of taking a random action instead of the policy's
+/// best action. Epsilon typically decays over training, shifting the agent
+/// from exploration to exploitation.
 #[derive(Clone, Default)]
 pub struct EpsilonMetric {
     name: MetricName,
@@ -364,6 +404,11 @@ impl Numeric for EpsilonMetric {
 }
 
 /// Best completion time observed so far.
+///
+/// Tracks the lowest completion time seen across both normal training
+/// episodes and periodic greedy evaluations. Unlike [`CompletionTimeMetric`],
+/// this value is monotonically non-increasing and shows the best performance
+/// achieved so far.
 #[derive(Clone, Default)]
 pub struct BestTimeMetric {
     name: MetricName,
@@ -426,6 +471,11 @@ impl Numeric for BestTimeMetric {
 }
 
 /// Greedy evaluation completion time.
+///
+/// Tracks the completion time of periodic greedy evaluations, where the agent
+/// acts without exploration (`epsilon = 0`). This measures the true policy
+/// quality independent of random exploration. Only successful greedy runs are
+/// reported.
 #[derive(Clone, Default)]
 pub struct GreedyEvalTimeMetric {
     name: MetricName,
@@ -488,6 +538,10 @@ impl Numeric for GreedyEvalTimeMetric {
 }
 
 /// Training throughput in episodes per second.
+///
+/// Tracks how many episodes are completed per wall-clock second. This is a
+/// pure speed metric: higher values mean training is progressing faster, but
+/// it does not indicate learning quality.
 #[derive(Clone)]
 pub struct EpisodeSpeedMetric {
     name: MetricName,
