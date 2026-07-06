@@ -45,6 +45,7 @@ fn legal_candidates(
     plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
+    config: &crate::planner::core::PlannerConfig,
     category: EdgeCategory,
 ) -> Vec<Candidate> {
     let mut seen: std::collections::HashSet<Candidate> = std::collections::HashSet::new();
@@ -58,7 +59,7 @@ fn legal_candidates(
         if EdgeCategory::categorize(action, target) != category {
             continue;
         }
-        if !is_plan_edge_legal(action, source, target, state, units) {
+        if !is_plan_edge_legal(action, source, target, state, units, config) {
             continue;
         }
 

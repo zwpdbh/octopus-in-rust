@@ -9,11 +9,11 @@
 //! | Episode Loss | `TrainEvent::Episode` | REINFORCE policy loss for the finished episode. Lower is better; a downward trend means the policy is improving. |
 //! | Fine-Tune Loss | `TrainEvent::FineTuneEpoch` | Supervised fine-tuning loss on the best trajectories. Lower is better. |
 //! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
-//! | Completion Time | `TrainEvent::Episode` | Simulator time when the episode ended (goal reached or step limit). Lower is better. |
+//! | Completion Time | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal. Lower is better. |
 //! | Goal Reach | `TrainEvent::Episode` | Percentage of episodes that reached the goal. Higher is better; 100% means the agent consistently succeeds. |
 //! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
-//! | Best Time | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time observed so far across training and greedy evaluations. Lower is better. |
-//! | Greedy Eval Time | `TrainEvent::GreedyEval` | Completion time of a periodic greedy (no exploration) evaluation. Lower is better. |
+//! | Best Time | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time in minutes observed so far across training and greedy evaluations. Lower is better. |
+//! | Greedy Eval Time | `TrainEvent::GreedyEval` | Completion time in minutes of a periodic greedy (no exploration) evaluation. Lower is better. |
 //! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
 use std::sync::Arc;
@@ -210,11 +210,12 @@ impl Numeric for EpisodeStepsMetric {
     }
 }
 
-/// Completion time when the goal is reached.
+/// Completion time when the goal is reached, in minutes.
 ///
-/// Tracks the simulator time at which the episode reached the goal. Episodes
-/// that do not reach the goal are reported as "-" rather than the final time.
-/// Lower values mean the agent is solving the task faster.
+/// Tracks the simulator time at which the episode reached the goal, converted
+/// to minutes for readability. Episodes that do not reach the goal are reported
+/// as "-" rather than the final time. Lower values mean the agent is solving
+/// the task faster.
 #[derive(Clone, Default)]
 pub struct CompletionTimeMetric {
     name: MetricName,
@@ -239,7 +240,7 @@ impl Metric for CompletionTimeMetric {
 
     fn attributes(&self) -> MetricAttributes {
         NumericAttributes {
-            unit: Some("s".to_string()),
+            unit: Some("min".to_string()),
             higher_is_better: false,
         }
         .into()
@@ -255,9 +256,9 @@ impl Metric for CompletionTimeMetric {
             _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
         self.state.update(
-            value,
+            seconds_to_minutes(value),
             1,
-            FormatOptions::new(self.name()).precision(1).unit("s"),
+            FormatOptions::new(self.name()).precision(2).unit("min"),
         )
     }
 
@@ -403,12 +404,12 @@ impl Numeric for EpsilonMetric {
     }
 }
 
-/// Best completion time observed so far.
+/// Best completion time observed so far, in minutes.
 ///
 /// Tracks the lowest completion time seen across both normal training
-/// episodes and periodic greedy evaluations. Unlike [`CompletionTimeMetric`],
-/// this value is monotonically non-increasing and shows the best performance
-/// achieved so far.
+/// episodes and periodic greedy evaluations, converted to minutes for
+/// readability. Unlike [`CompletionTimeMetric`], this value is monotonically
+/// non-increasing and shows the best performance achieved so far.
 #[derive(Clone, Default)]
 pub struct BestTimeMetric {
     name: MetricName,
@@ -433,7 +434,7 @@ impl Metric for BestTimeMetric {
 
     fn attributes(&self) -> MetricAttributes {
         NumericAttributes {
-            unit: Some("s".to_string()),
+            unit: Some("min".to_string()),
             higher_is_better: false,
         }
         .into()
@@ -449,9 +450,9 @@ impl Metric for BestTimeMetric {
             return SerializedEntry::new("-".to_string(), "".to_string());
         };
         self.state.update(
-            value,
+            seconds_to_minutes(value),
             1,
-            FormatOptions::new(self.name()).precision(1).unit("s"),
+            FormatOptions::new(self.name()).precision(2).unit("min"),
         )
     }
 
@@ -470,12 +471,12 @@ impl Numeric for BestTimeMetric {
     }
 }
 
-/// Greedy evaluation completion time.
+/// Greedy evaluation completion time, in minutes.
 ///
 /// Tracks the completion time of periodic greedy evaluations, where the agent
-/// acts without exploration (`epsilon = 0`). This measures the true policy
-/// quality independent of random exploration. Only successful greedy runs are
-/// reported.
+/// acts without exploration (`epsilon = 0`), converted to minutes for
+/// readability. This measures the true policy quality independent of random
+/// exploration. Only successful greedy runs are reported.
 #[derive(Clone, Default)]
 pub struct GreedyEvalTimeMetric {
     name: MetricName,
@@ -500,7 +501,7 @@ impl Metric for GreedyEvalTimeMetric {
 
     fn attributes(&self) -> MetricAttributes {
         NumericAttributes {
-            unit: Some("s".to_string()),
+            unit: Some("min".to_string()),
             higher_is_better: false,
         }
         .into()
@@ -516,9 +517,9 @@ impl Metric for GreedyEvalTimeMetric {
             _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
         self.state.update(
-            value,
+            seconds_to_minutes(value),
             1,
-            FormatOptions::new(self.name()).precision(1).unit("s"),
+            FormatOptions::new(self.name()).precision(2).unit("min"),
         )
     }
 
@@ -725,6 +726,14 @@ impl FafSimMetrics {
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.renderer.on_train_end(summary)
     }
+}
+
+/// Convert simulator seconds into minutes for time-based metrics.
+///
+/// Displaying build-order completion times in minutes keeps the dashboard axis
+/// labels readable for T4 targets that take tens of minutes to finish.
+fn seconds_to_minutes(seconds: f64) -> f64 {
+    seconds / 60.0
 }
 
 /// Helper to build a `TrainingProgress` from episode-level progress.

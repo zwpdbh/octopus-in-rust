@@ -36,6 +36,10 @@ pub struct TrainConfig {
     /// Global gradient norm clipping threshold. `None` disables clipping.
     /// A value of `1.0` is a safe default for preventing REINFORCE divergence.
     pub grad_clip: Option<f32>,
+    /// Maximum number of mass extractors (including capped upgrades) that may
+    /// be active at the same time. New mex builds are blocked once this cap is
+    /// reached; upgrades do not count toward the cap.
+    pub max_mex_count: usize,
 }
 
 impl Default for TrainConfig {
@@ -54,6 +58,7 @@ impl Default for TrainConfig {
             greedy_eval_interval: 100,
             fine_tune_epochs: 100,
             grad_clip: None,
+            max_mex_count: 12,
         }
     }
 }

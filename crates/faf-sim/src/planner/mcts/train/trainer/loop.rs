@@ -15,7 +15,10 @@ use super::Trainer;
 impl Trainer {
     /// Train the policy on the given goal.
     pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
-        let planner_config = PlannerConfig::default();
+        let planner_config = PlannerConfig {
+            max_mex_count: self.config.max_mex_count,
+            ..PlannerConfig::default()
+        };
         let plan = build_plan_graph(units, *goal);
         let mut stats = TrainStats::default();
 

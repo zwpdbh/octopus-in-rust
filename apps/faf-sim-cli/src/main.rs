@@ -63,7 +63,7 @@ async fn main() {
         CliCommand::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
-            run_simulate(&units, target, args.strategy, args.output).await;
+            run_simulate(&units, target, args.strategy, args.max_mex_count, args.output).await;
         }
         CliCommand::DrawNet(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
@@ -136,6 +136,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
             args.epsilon_decay_episodes.unwrap_or(args.episodes)
         },
         grad_clip: args.grad_clip,
+        max_mex_count: args.max_mex_count,
         ..Default::default()
     };
 
@@ -358,6 +359,7 @@ async fn run_simulate(
     units: &SimUnits,
     target: ResearchTarget,
     strategy: Strategy,
+    max_mex_count: usize,
     output: Option<std::path::PathBuf>,
 ) {
     use faf_sim::PlannerConfig;
@@ -383,7 +385,14 @@ async fn run_simulate(
     let model = load_policy(&path).expect("load trained model");
     println!("Model loaded successfully.");
     let value_net = Box::new(MlpValueNet::from_net(model));
-    let planner = Planner::with_config(strategy, PlannerConfig::default(), value_net);
+    let planner = Planner::with_config(
+        strategy,
+        PlannerConfig {
+            max_mex_count,
+            ..PlannerConfig::default()
+        },
+        value_net,
+    );
 
     let config = SimulationConfig {
         planner,

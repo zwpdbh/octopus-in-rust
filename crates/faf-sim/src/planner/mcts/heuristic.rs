@@ -67,6 +67,7 @@ fn legal_candidates(
     plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
+    config: &crate::planner::core::PlannerConfig,
     category: EdgeCategory,
 ) -> Vec<Candidate> {
     let mut seen: std::collections::HashSet<Candidate> = std::collections::HashSet::new();
@@ -80,7 +81,7 @@ fn legal_candidates(
         if EdgeCategory::categorize(action, target) != category {
             continue;
         }
-        if !is_plan_edge_legal(action, source, target, state, units) {
+        if !is_plan_edge_legal(action, source, target, state, units, config) {
             continue;
         }
 
@@ -137,7 +138,7 @@ fn pick_mass_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseMass)
+    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseMass)
         .into_iter()
         .filter(|c| {
             matches!(
@@ -176,7 +177,7 @@ fn pick_energy_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergy)
+    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseEnergy)
         .into_iter()
         .filter(|c| matches!(c.target(), UnitKind::Pgen(_)))
         .collect();
@@ -195,26 +196,46 @@ fn pick_energy_action(
     build_or_upgrade(target, source, state, units, config)
 }
 
-/// Pick the highest-tier engineer build action.
+/// Pick the action that increases build power.
+///
+/// If the state has no factory yet, build the lowest-tier legal factory so
+/// engineers can be produced. Otherwise build the highest-tier legal engineer.
 fn pick_bp_action(
     plan: &PlanGraph,
     state: &SimulationState,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::IncreaseBP)
-        .into_iter()
-        .filter(
-            |c| matches!(c, Candidate::Build { target } if matches!(target, UnitKind::Engineer(_))),
-        )
-        .map(|c| match c {
-            Candidate::Build { target } => target,
-            Candidate::Upgrade { .. } => unreachable!("filtered to builds only"),
-        })
-        .collect();
+    let candidates = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseBP);
+
+    if !has_factory(state) {
+        let Some(target) = candidates
+            .into_iter()
+            .filter_map(|c| match c {
+                Candidate::Build { target }
+                    if matches!(target, UnitKind::Factory(_)) =>
+                {
+                    Some(target)
+                }
+                _ => None,
+            })
+            .min_by(|a, b| factory_tier(a).cmp(&factory_tier(b)))
+        else {
+            return SimAction::Wait;
+        };
+        return build_or_upgrade(target, None, state, units, config);
+    }
 
     let Some(target) = candidates
         .into_iter()
+        .filter_map(|c| match c {
+            Candidate::Build { target }
+                if matches!(target, UnitKind::Engineer(_)) =>
+            {
+                Some(target)
+            }
+            _ => None,
+        })
         .max_by(|a, b| engineer_tier(a).cmp(&engineer_tier(b)))
     else {
         return SimAction::Wait;
@@ -237,7 +258,7 @@ fn pick_storage_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let can_build = legal_candidates(plan, state, units, EdgeCategory::IncreaseEnergyStorage)
+    let can_build = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseEnergyStorage)
         .iter()
         .any(|c| matches!(c, Candidate::Build { target } if *target == UnitKind::EnergyStorage));
 
@@ -255,7 +276,7 @@ fn pick_storage_action(
     }
 }
 
-/// Start the abstract goal with T3 engineers.
+/// Start the abstract goal with idle T3 engineers.
 fn pick_goal_action(
     state: &SimulationState,
     units: &Units,
@@ -266,8 +287,26 @@ fn pick_goal_action(
         return SimAction::Wait;
     }
 
-    let target = UnitKind::Engineer(TechLevel::T3);
-    let builders = assign_builders(target, state, units, config.dt);
+    let mut candidates: Vec<NodeId> = state
+        .idle_builders(units)
+        .into_iter()
+        .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(TechLevel::T3)))
+        .collect();
+
+    candidates.sort_by(|&a, &b| {
+        let rate_a = units
+            .def(&state.graph[a].unit_id)
+            .map(|d| d.build_rate())
+            .unwrap_or(0.0);
+        let rate_b = units
+            .def(&state.graph[b].unit_id)
+            .map(|d| d.build_rate())
+            .unwrap_or(0.0);
+        rate_b.total_cmp(&rate_a)
+    });
+
+    let builders =
+        greedy_with_stall_gate(candidates, &goal.cost().to_target_stats(), state, units, config.dt);
     if builders.is_empty() {
         return SimAction::Wait;
     }
@@ -284,7 +323,7 @@ fn pick_upgrade_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, EdgeCategory::UpgradeTech)
+    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::UpgradeTech)
         .into_iter()
         .filter_map(|c| match c {
             Candidate::Upgrade { from, to }
@@ -464,6 +503,15 @@ fn greedy_with_stall_gate(
     squad
 }
 
+/// True if the state already has at least one factory.
+fn has_factory(state: &SimulationState) -> bool {
+    state
+        .graph
+        .graph
+        .node_weights()
+        .any(|n| matches!(n.unit_id, UnitKind::Factory(_)))
+}
+
 fn total_build_power_of_nodes(nodes: &[NodeId], state: &SimulationState, units: &Units) -> f64 {
     nodes
         .iter()
@@ -631,6 +679,66 @@ mod tests {
             UnitKind::Factory(TechLevel::T2),
             "UpgradeTech should prefer T1->T2 over T2->T3, got {:?}",
             action
+        );
+    }
+
+    #[test]
+    fn bp_direction_builds_t1_factory_from_acu_when_no_factory_exists() {
+        let units = load_units();
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let config = crate::planner::core::PlannerConfig::default();
+        let goal = t4_goal();
+        let plan = build_plan(&units, goal);
+
+        let action = direction_to_action(
+            EdgeCategory::IncreaseBP,
+            &state,
+            &units,
+            &config,
+            &goal,
+            &plan,
+        );
+        assert!(
+            matches!(action, SimAction::Build { ref unit_id, .. } if *unit_id == UnitKind::Factory(TechLevel::T1)),
+            "IncreaseBP should build a T1 factory from the ACU when no factory exists, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn goal_direction_uses_idle_t3_engineers_not_factories() {
+        let units = load_units();
+        let state = SimulationState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T3),
+                UnitKind::Engineer(TechLevel::T3),
+            ],
+        );
+        let config = crate::planner::core::PlannerConfig::default();
+        let goal = t4_goal();
+        let plan = build_plan(&units, goal);
+
+        let action = direction_to_action(
+            EdgeCategory::Goal,
+            &state,
+            &units,
+            &config,
+            &goal,
+            &plan,
+        );
+        let SimAction::BuildGoal { builders, .. } = action else {
+            panic!("Goal direction should start a goal project, got {:?}", action);
+        };
+        assert!(
+            builders.iter().all(|&b| {
+                matches!(
+                    state.graph[b].unit_id,
+                    UnitKind::Engineer(TechLevel::T3)
+                )
+            }),
+            "Goal project must be started by T3 engineers, not factories"
         );
     }
 }

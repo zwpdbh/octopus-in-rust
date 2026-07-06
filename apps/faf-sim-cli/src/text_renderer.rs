@@ -166,8 +166,8 @@ impl MetricsRenderer for TextMetricsRenderer {
     }
 }
 
-fn format_time(seconds: f64) -> String {
-    let minutes = (seconds / 60.0).floor();
-    let secs = seconds - minutes * 60.0;
-    format!("{:.0}m {:.1}s", minutes, secs)
+fn format_time(minutes: f64) -> String {
+    let whole_minutes = minutes.floor();
+    let secs = (minutes - whole_minutes) * 60.0;
+    format!("{:.0}m {:.1}s", whole_minutes, secs)
 }

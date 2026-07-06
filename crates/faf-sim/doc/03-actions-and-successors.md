@@ -69,13 +69,14 @@ The plan graph is a directed acyclic graph where an edge `A -> B` means "unit `A
 Not every plan-graph edge is legal in every state. `is_plan_edge_legal` checks the current `SimulationState` before an edge can be used:
 
 ```rust
-// crates/faf-sim/src/planner/plan_graph.rs ~line 341 — is_plan_edge_legal
+// crates/faf-sim/src/planner/plan_graph.rs ~line 342 — is_plan_edge_legal
 pub fn is_plan_edge_legal(
     action: EdgeAction,
     source: &PlanNode,
     target: &PlanNode,
     state: &SimulationState,
     units: &Units,
+    config: &crate::planner::core::PlannerConfig,
 ) -> bool {
     let Some(source_kind) = source.as_unit() else { return false; };
     if !state.has_completed_unit(source_kind) { return false; }
@@ -92,6 +93,7 @@ pub fn is_plan_edge_legal(
                     let target_kind = target.as_unit().expect("build target must be unit or goal");
                     !state.has_completed_unit(target_kind)
                         && !state.active_target_unit_ids().contains(target_kind)
+                        && !would_exceed_mex_cap(state, config, target_kind)
                 }
             };
             can_build && is_idle_builder(state, units, source_kind)

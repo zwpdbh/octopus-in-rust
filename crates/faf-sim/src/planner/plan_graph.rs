@@ -336,14 +336,16 @@ fn add_upgrade_edges(
 /// True if `edge` can be executed in `state`.
 ///
 /// The source node must be a unit that is owned and active. For build edges the
-/// target must not already be owned or under construction, and a capable idle
-/// builder must exist. For upgrade edges [`can_upgrade`] must hold.
+/// target must not already be owned or under construction, a capable idle
+/// builder must exist, and the mex cap must not be exceeded. For upgrade edges
+/// [`can_upgrade`] must hold.
 pub fn is_plan_edge_legal(
     action: EdgeAction,
     source: &PlanNode,
     target: &PlanNode,
     state: &SimulationState,
     units: &Units,
+    config: &crate::planner::core::PlannerConfig,
 ) -> bool {
     let Some(source_kind) = source.as_unit() else {
         return false;
@@ -365,6 +367,7 @@ pub fn is_plan_edge_legal(
                     let target_kind = target.as_unit().expect("build target must be unit or goal");
                     !state.has_completed_unit(target_kind)
                         && !state.active_target_unit_ids().contains(target_kind)
+                        && !would_exceed_mex_cap(state, config, target_kind)
                 }
             };
             can_build && is_idle_builder(state, units, source_kind)
@@ -375,6 +378,26 @@ pub fn is_plan_edge_legal(
             can_upgrade(state, units, source_kind, target_kind)
         }
     }
+}
+
+/// True if building `target_kind` would exceed the configured mex cap.
+fn would_exceed_mex_cap(
+    state: &SimulationState,
+    config: &crate::planner::core::PlannerConfig,
+    target_kind: &UnitKind,
+) -> bool {
+    if !is_mex_kind(target_kind) {
+        return false;
+    }
+    state.count_active_mex() >= config.max_mex_count
+}
+
+/// True if `kind` is a mass extractor (any tech level or capped variant).
+fn is_mex_kind(kind: &UnitKind) -> bool {
+    matches!(
+        kind,
+        UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
+    )
 }
 
 /// True if `builder` is allowed to start the abstract `goal` project.
@@ -446,6 +469,7 @@ pub fn find_upgrade_source(state: &SimulationState, source_kind: &UnitKind) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planner::core::PlannerConfig;
 
     fn load_units() -> Units {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
@@ -542,6 +566,114 @@ mod tests {
             goal_edges.len(),
             1,
             "T3 engineer should have exactly one goal edge"
+        );
+    }
+
+    #[test]
+    fn mex_build_blocked_when_cap_reached() {
+        let units = load_units();
+        let goal = fatboy_goal();
+        let plan_graph = build_plan_graph(&units, goal);
+        let graph = plan_graph.graph();
+
+        // Find the ACU -> T1 mex build edge.
+        let mex_edge = graph
+            .edge_indices()
+            .find(|&e| {
+                let (s, t) = graph.edge_endpoints(e).unwrap();
+                graph[s].as_unit() == Some(&UnitKind::Commander)
+                    && graph[t].as_unit() == Some(&UnitKind::Mex(TechLevel::T1))
+                    && graph[e] == EdgeAction::Build
+            })
+            .expect("plan graph should have ACU -> T1 mex build edge");
+
+        let (source_idx, target_idx) = graph.edge_endpoints(mex_edge).unwrap();
+        let source = &graph[source_idx];
+        let target = &graph[target_idx];
+
+        // With zero active mexes and a cap of zero, building is illegal.
+        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let zero_cap_config = PlannerConfig {
+            max_mex_count: 0,
+            ..PlannerConfig::default()
+        };
+        assert!(
+            !is_plan_edge_legal(
+                EdgeAction::Build,
+                source,
+                target,
+                &state,
+                &units,
+                &zero_cap_config
+            ),
+            "new mex build should be illegal when cap is already reached"
+        );
+
+        // With a cap of one, building the first mex is legal.
+        let one_cap_config = PlannerConfig {
+            max_mex_count: 1,
+            ..PlannerConfig::default()
+        };
+        assert!(
+            is_plan_edge_legal(
+                EdgeAction::Build,
+                source,
+                target,
+                &state,
+                &units,
+                &one_cap_config
+            ),
+            "first mex build should be legal when below the cap"
+        );
+    }
+
+    #[test]
+    fn mex_upgrade_remains_legal_at_cap() {
+        let units = load_units();
+        let goal = fatboy_goal();
+        let plan_graph = build_plan_graph(&units, goal);
+        let graph = plan_graph.graph();
+
+        // Find the T2 mex -> CapT2Mex upgrade edge.
+        let cap_edge = graph
+            .edge_indices()
+            .find(|&e| {
+                let (s, t) = graph.edge_endpoints(e).unwrap();
+                graph[s].as_unit() == Some(&UnitKind::Mex(TechLevel::T2))
+                    && graph[t].as_unit() == Some(&UnitKind::CapT2Mex)
+                    && graph[e] == EdgeAction::Upgrade
+            })
+            .expect("plan graph should have T2 mex -> CapT2Mex upgrade edge");
+
+        let (source_idx, target_idx) = graph.edge_endpoints(cap_edge).unwrap();
+        let source = &graph[source_idx];
+        let target = &graph[target_idx];
+
+        // One active T2 mex and a cap of one: upgrading should still be legal
+        // because upgrades do not increase the total mex count.
+        let state = SimulationState::new(
+            &units,
+            &[
+                UnitKind::Commander,
+                UnitKind::Factory(TechLevel::T1),
+                UnitKind::Engineer(TechLevel::T2),
+                UnitKind::Mex(TechLevel::T2),
+            ],
+        );
+        let cap_config = PlannerConfig {
+            max_mex_count: 1,
+            ..PlannerConfig::default()
+        };
+        assert!(
+            is_plan_edge_legal(
+                EdgeAction::Upgrade,
+                source,
+                target,
+                &state,
+                &units,
+                &cap_config
+            ),
+            "mex upgrade should remain legal even when the cap is reached"
         );
     }
 

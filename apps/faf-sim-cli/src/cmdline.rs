@@ -142,6 +142,11 @@ pub struct TrainArgs {
     /// for preventing REINFORCE divergence; omit to disable clipping.
     #[arg(long)]
     pub grad_clip: Option<f32>,
+    /// Maximum number of mass extractors (including capped upgrades) that may
+    /// be active at the same time. New mex builds are blocked once this cap is
+    /// reached; upgrades do not count toward the cap.
+    #[arg(long, default_value = "12")]
+    pub max_mex_count: usize,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,
@@ -165,6 +170,11 @@ pub struct SimulateArgs {
     /// or append `:greedy` for deterministic argmax selection).
     #[arg(short = 's', long, default_value = "mcts:100:mlp:greedy")]
     pub strategy: faf_sim::Strategy,
+    /// Maximum number of mass extractors (including capped upgrades) that may
+    /// be active at the same time. New mex builds are blocked once this cap is
+    /// reached; upgrades do not count toward the cap.
+    #[arg(long, default_value = "12")]
+    pub max_mex_count: usize,
     /// Write the SVG build-order diagram to this file instead of a temporary file.
     #[arg(short = 'o', long)]
     pub output: Option<std::path::PathBuf>,
