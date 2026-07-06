@@ -9,11 +9,11 @@
 //! | Episode Loss | `TrainEvent::Episode` | REINFORCE policy loss for the finished episode. Lower is better; a downward trend means the policy is improving. |
 //! | Fine-Tune Loss | `TrainEvent::FineTuneEpoch` | Supervised fine-tuning loss on the best trajectories. Lower is better. |
 //! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
-//! | Completion Time | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal. Lower is better. |
+//! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal. Lower is better. |
 //! | Goal Reach | `TrainEvent::Episode` | Percentage of episodes that reached the goal. Higher is better; 100% means the agent consistently succeeds. |
 //! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
-//! | Best Time | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time in minutes observed so far across training and greedy evaluations. Lower is better. |
-//! | Greedy Eval Time | `TrainEvent::GreedyEval` | Completion time in minutes of a periodic greedy (no exploration) evaluation. Lower is better. |
+//! | Best Time (min) | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time in minutes observed so far across training and greedy evaluations. Lower is better. |
+//! | Greedy Eval Time (min) | `TrainEvent::GreedyEval` | Completion time in minutes of a periodic greedy (no exploration) evaluation. Lower is better. |
 //! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
 use std::sync::Arc;
@@ -225,7 +225,7 @@ pub struct CompletionTimeMetric {
 impl CompletionTimeMetric {
     pub fn new() -> Self {
         Self {
-            name: Arc::new("Completion Time".to_string()),
+            name: Arc::new("Completion Time (min)".to_string()),
             state: NumericMetricState::default(),
         }
     }
@@ -419,7 +419,7 @@ pub struct BestTimeMetric {
 impl BestTimeMetric {
     pub fn new() -> Self {
         Self {
-            name: Arc::new("Best Time".to_string()),
+            name: Arc::new("Best Time (min)".to_string()),
             state: NumericMetricState::default(),
         }
     }
@@ -486,7 +486,7 @@ pub struct GreedyEvalTimeMetric {
 impl GreedyEvalTimeMetric {
     pub fn new() -> Self {
         Self {
-            name: Arc::new("Greedy Eval Time".to_string()),
+            name: Arc::new("Greedy Eval Time (min)".to_string()),
             state: NumericMetricState::default(),
         }
     }

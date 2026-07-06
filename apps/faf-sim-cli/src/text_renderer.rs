@@ -15,8 +15,8 @@ const LOSS: &str = "Episode Loss";
 const STEPS: &str = "Episode Steps";
 const EPSILON: &str = "Epsilon";
 const GOAL_REACH: &str = "Goal Reach";
-const COMPLETION_TIME: &str = "Completion Time";
-const BEST_TIME: &str = "Best Time";
+const COMPLETION_TIME: &str = "Completion Time (min)";
+const BEST_TIME: &str = "Best Time (min)";
 
 /// Plain-text renderer that prints per-episode progress to stderr.
 pub struct TextMetricsRenderer {

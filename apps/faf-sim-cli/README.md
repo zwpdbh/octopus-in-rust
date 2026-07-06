@@ -16,6 +16,7 @@ cargo run --release --bin faf-sim -- train -e 5000 -m 10000 \
   --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
   --dt 1.0 --grad-clip 1.0 \
   -t 25m --max-mex-count 10 \
+  --resume \
   uef novaxcenter
 
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
@@ -114,14 +115,14 @@ The live dashboard shows one plot per metric. You can switch metrics with `←`/
 | **Episode Loss**     | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                         |
 | **Fine-Tune Loss**   | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                             |
 | **Episode Steps**    | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.      |
-| **Completion Time**  | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
+| **Completion Time (min)** | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
 | **Goal Reach**       | Percentage of episodes that reached the goal. You want this to climb toward 100%.                                     |
 | **Epsilon**          | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                         |
-| **Best Time**        | Best completion time in minutes observed so far across training and greedy evaluations. Monotonically non-increasing. |
-| **Greedy Eval Time** | Completion time in minutes of periodic greedy (no exploration) rollouts. Measures true policy quality.                |
+| **Best Time (min)**      | Best completion time in minutes observed so far across training and greedy evaluations. Monotonically non-increasing. |
+| **Greedy Eval Time (min)** | Completion time in minutes of periodic greedy (no exploration) rollouts. Measures true policy quality.                |
 | **Episodes/sec**     | Training throughput. Higher is faster, but does not indicate learning quality.                                        |
 
-When training is healthy you should see `Goal Reach` rise, `Episode Loss` fall, and `Best Time` drop within the first few hundred episodes.
+When training is healthy you should see `Goal Reach` rise, `Episode Loss` fall, and `Best Time (min)` drop within the first few hundred episodes.
 
 ## Important: give the episode enough horizon
 
