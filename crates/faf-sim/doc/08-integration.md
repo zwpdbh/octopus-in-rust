@@ -308,7 +308,7 @@ Train a policy bundle programmatically:
 ```rust
 // docref: example
 use faf_sim::planner::policy::train::{train_policy, save_policy, FafSimMetrics, TrainConfig};
-use burn::train::renderer::tui::TuiMetricsRendererWrapper;
+use train_tui::TrainTuiRenderer;
 use burn::train::Interrupter;
 
 let goal = Goal {
@@ -317,9 +317,8 @@ let goal = Goal {
     energy_cost: 340_000.0,
     build_time: 46_250.0,
 };
-let metrics = FafSimMetrics::new(Box::new(TuiMetricsRendererWrapper::new(
+let metrics = FafSimMetrics::new(Box::new(TrainTuiRenderer::new(
     Interrupter::new(),
-    None,
 )));
 let (bundle, best_bundle, stats) = train_policy(
     &units,
@@ -353,13 +352,13 @@ The CLI wraps these calls with `train` and `simulate` subcommands. The programma
 
 ## Terminal dashboard
 
-For interactive training, the `faf-sim-cli` binary uses Burn's built-in terminal UI renderer (`TuiMetricsRendererWrapper`) when stdout is a terminal. The renderer is created inside the training thread and shows the standard Burn metric dashboard.
+For interactive training, the `faf-sim-cli` binary uses the custom `train-tui` renderer (`TrainTuiRenderer`) when stdout is a terminal. The renderer is created inside the training thread and shows a dashboard tuned for the project: the status panel is removed and the metrics text panel is expanded so more live values fit on small terminals.
 
 ```rust
 // apps/faf-sim-cli/src/main.rs ~line 177 — run_train renderer setup
 let renderer: Box<dyn MetricsRenderer> =
     if let Some(inter) = interrupter_for_renderer {
-        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+        Box::new(TrainTuiRenderer::new(inter))
     } else if quiet {
         Box::new(TextMetricsRenderer::quiet())
     } else {

@@ -350,10 +350,7 @@ impl Metric for GoalReachMetric {
             self.history.pop_front();
         }
         let ratio = self.current_ratio();
-        SerializedEntry::new(
-            format!("{:.2} %", ratio * 100.0),
-            format!("{:.4}", ratio),
-        )
+        SerializedEntry::new(format!("{:.2} %", ratio * 100.0), format!("{:.4}", ratio))
     }
 
     fn clear(&mut self) {

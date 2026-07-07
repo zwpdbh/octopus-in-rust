@@ -46,7 +46,6 @@ pub use trainer::Trainer;
 // Re-export Burn training/renderer types so the CLI can build a renderer without
 // depending directly on the `burn` crate and duplicating backend features.
 pub use burn::train::metric::{MetricDefinition, MetricEntry, MetricId, NumericEntry};
-pub use burn::train::renderer::tui::TuiMetricsRendererWrapper;
 pub use burn::train::renderer::{
     EvaluationName, EvaluationProgress, MetricState, MetricsRenderer, MetricsRendererEvaluation,
     MetricsRendererTraining, ProgressType, TrainingProgress,

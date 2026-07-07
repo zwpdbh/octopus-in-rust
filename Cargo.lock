@@ -3181,6 +3181,7 @@ dependencies = [
  "petgraph-svg",
  "serde_json",
  "tokio",
+ "train-tui",
 ]
 
 [[package]]
@@ -8530,6 +8531,15 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "train-tui"
+version = "0.1.0"
+dependencies = [
+ "burn-train",
+ "crossterm 0.28.1",
+ "ratatui 0.29.0",
 ]
 
 [[package]]

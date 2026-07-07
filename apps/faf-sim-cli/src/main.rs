@@ -21,7 +21,6 @@ use std::sync::Arc;
 use clap::Parser;
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::planner::policy::macro_net::hierarchical_policy_net_dot;
-use faf_sim::planner::policy::train::TuiMetricsRendererWrapper;
 use faf_sim::planner::policy::train::{
     load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
     MetricsRenderer, TrainConfig,
@@ -34,6 +33,7 @@ use faf_sim::{
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
+use train_tui::TrainTuiRenderer;
 
 use petgraph_svg::{graph_to_svg, EdgeLabel, LegendItem, NodeLabel, RenderOptions};
 
@@ -188,7 +188,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
             move || {
                 let renderer: Box<dyn MetricsRenderer> =
                     if let Some(inter) = interrupter_for_renderer {
-                        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+                        Box::new(TrainTuiRenderer::new(inter))
                     } else if quiet {
                         Box::new(TextMetricsRenderer::quiet())
                     } else {

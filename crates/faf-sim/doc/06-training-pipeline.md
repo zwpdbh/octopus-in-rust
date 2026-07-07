@@ -560,7 +560,7 @@ The renderer is chosen by the CLI, not by the library. `faf-sim` library code on
 
 #### TUI renderer (default)
 
-By default `faf-sim-cli` opens Burn's built-in terminal dashboard when stdout is an interactive terminal:
+By default `faf-sim-cli` opens the custom `train-tui` terminal dashboard when stdout is an interactive terminal. It follows Burn's layout conventions but removes the status panel and expands the metrics text panel:
 
 ```rust
 // apps/faf-sim-cli/src/main.rs ~line 116
@@ -571,7 +571,7 @@ let use_tui = !args.quiet && !args.text && std::io::stdout().is_terminal();
 // apps/faf-sim-cli/src/main.rs ~line 177
 let renderer: Box<dyn MetricsRenderer> =
     if let Some(inter) = interrupter_for_renderer {
-        Box::new(TuiMetricsRendererWrapper::new(inter, None))
+        Box::new(TrainTuiRenderer::new(inter))
     } else if quiet {
         Box::new(TextMetricsRenderer::quiet())
     } else {
