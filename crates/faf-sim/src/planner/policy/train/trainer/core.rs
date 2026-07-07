@@ -1,5 +1,6 @@
 //! Trainer for the direction-only policy network.
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -12,7 +13,8 @@ use super::super::config::TrainConfig;
 use super::super::episode::BuildTrajectory;
 use super::super::metric::metrics::FafSimMetrics;
 use super::super::{TrainBackend, TrainDevice};
-use crate::planner::mcts::macro_net::PolicyBundle;
+use crate::planner::plan_graph::PlanGraph;
+use crate::planner::policy::macro_net::PolicyBundle;
 use burn::train::Interrupter;
 
 /// Concrete optimizer type returned by `AdamConfig::init` for a full policy bundle.
@@ -22,6 +24,10 @@ pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
     pub(crate) best_trajectory: Option<BuildTrajectory>,
+    pub(crate) best_train_time: Option<f64>,
+    /// Plan graph for the current goal. Built on first use and reused for the
+    /// rest of training so that evaluation and fine-tuning do not rebuild it.
+    pub(crate) plan: Option<Rc<PlanGraph>>,
     pub(crate) optimizer: AdamOptimizer,
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
@@ -61,6 +67,8 @@ impl Trainer {
             model,
             best_model: None,
             best_trajectory: None,
+            best_train_time: None,
+            plan: None,
             optimizer,
             config,
             device,

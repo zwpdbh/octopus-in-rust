@@ -20,7 +20,7 @@ A separate deterministic heuristic layer converts the chosen direction into a co
 ## The `HierarchicalPolicyNet` struct
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 49 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 49 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -37,7 +37,7 @@ pub struct HierarchicalPolicyNet<B: Backend> {
 The constructor sizes the backbone and direction head from the feature count, hidden sizes, and number of directions.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 74 — HierarchicalPolicyNet::new
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 74 — HierarchicalPolicyNet::new
 pub fn new(device: &B::Device) -> Self {
     let backbone_input = STATE_FEATURE_COUNT;
     let backbone_hidden = 128;
@@ -95,7 +95,7 @@ direction_head.forward() → [batch, 6] ← these are the direction logits
 The backbone turns the 11-D input vector into a 64-D latent vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent backbone
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 120 — latent backbone
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -137,7 +137,7 @@ In short: **however many backbone `Linear` layers the struct owns, `latent()` ca
 ## Direction head
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 137 — direction head
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 137 — direction head
 pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
     self.direction_head.forward(latent)
 }
@@ -147,10 +147,10 @@ Output shape: `[batch, DIRECTION_COUNT]` where `DIRECTION_COUNT = 6`.
 
 ## Convenience evaluators
 
-During MCTS and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
+During simulation and training we often evaluate a single state at a time. Burn's batched operations work fine with batch size `1`, so the crate provides small helpers that take a `Vec<f32>` and return Rust primitives:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 155 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
     let features = tensor_from_vec(&features, device);
@@ -176,10 +176,10 @@ At inference time the planner performs three deterministic steps:
 2. Run the direction head, mask out illegal directions, and take `argmax`.
 3. Run the heuristic layer to convert the selected direction into a concrete `SimAction` and execute it.
 
-The core inference function is `macro_policy_plan` in `mcts::direction_planner`:
+The core inference function is `macro_policy_plan` in `policy::direction_planner`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 44 — macro_policy_plan
+// crates/faf-sim/src/planner/policy/direction_planner.rs ~line 44 — macro_policy_plan
 pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,
@@ -194,13 +194,13 @@ pub(crate) fn macro_policy_plan(
 
 If no bundle is provided, the function falls back to a freshly-initialized MLP value net. This is useful for testing without a trained model, although the resulting actions are essentially random.
 
-## Relationship to MCTS and training
+## Relationship to training and simulation
 
 The same `HierarchicalPolicyNet` is used in two places:
 
-1. **Training rollouts** — sample a direction from the masked softmax. No tree is built; the policy is sampled directly.
-2. **MCTS priors and rollouts** — convert direction softmax probabilities into prior probabilities for legal directions, and play out the greedy policy from a leaf to estimate its value.
+1. **Training rollouts** — sample a direction from the masked softmax. The policy is sampled directly.
+2. **Simulation** — run the policy once per tick, mask illegal directions, and pick the highest-probability legal direction (or sample if stochastic).
 
-Because the network is a single `Module`, training, MCTS priors, and MCTS rollouts all share one set of weights and one serialization format.
+Because the network is a single `Module`, training and simulation share one set of weights and one serialization format.
 
 Next we look at the reward signal that tells the policy whether its decisions are good.

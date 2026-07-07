@@ -70,20 +70,28 @@ impl DecisionActor {
     /// they do not trigger a new decision on their own.
     pub async fn run(mut self) {
         while let Some(observation) = self.obs_rx.recv().await {
-            let command = match observation {
+            match observation {
                 Observation::State(state) => {
-                    let plan = self.planner.plan(&self.units, state, &self.goal).ok();
-                    plan.and_then(|p| p.first_action)
-                        .and_then(sim_action_to_command)
+                    // The reactive loop commits to a single action per simulator
+                    // tick. This matches the training-time greedy evaluator where
+                    // the policy evaluates once, executes the chosen direction,
+                    // and then advances the simulation by `dt` before deciding
+                    // again.
+                    let plan = match self.planner.plan(&self.units, state, &self.goal) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+
+                    let Some(command) = plan.first_action.and_then(sim_action_to_command) else {
+                        continue;
+                    };
+
+                    if self.cmd_tx.send(command).await.is_err() {
+                        return;
+                    }
                 }
                 // Events alone do not trigger a new decision; wait for the next state snapshot.
-                Observation::Event(_) => None,
-            };
-
-            if let Some(command) = command {
-                if self.cmd_tx.send(command).await.is_err() {
-                    break;
-                }
+                Observation::Event(_) => {}
             }
         }
     }
@@ -143,5 +151,5 @@ mod tests {
     }
 
     // Tests that exercise the decision actor with a concrete planner will be
-    // re-added once the MCTS planner is implemented.
+    // re-added once the policy planner is fully validated.
 }

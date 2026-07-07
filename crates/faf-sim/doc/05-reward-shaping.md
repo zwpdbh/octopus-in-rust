@@ -17,7 +17,7 @@ The training loop combines them into a discounted return for each step.
 The per-step reward is computed from the state before and after the action:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/reward.rs ~line 22 — compute_step_reward
+// crates/faf-sim/src/planner/policy/train/reward.rs ~line 22 — compute_step_reward
 pub(crate) fn compute_step_reward(
     prev_state: &SimulationState,
     next_state: &SimulationState,
@@ -82,7 +82,7 @@ The per-step reward is economy-centric and designed to keep the expansion chain 
 At the end of an episode, the agent receives a terminal bonus that depends on whether the goal was reached:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/reward.rs ~line 10 — compute_terminal_bonus
+// crates/faf-sim/src/planner/policy/train/reward.rs ~line 10 — compute_terminal_bonus
 pub(crate) fn compute_terminal_bonus(state: &SimulationState, goal_reached: bool) -> f32 {
     if goal_reached {
         1000.0 - state.time as f32 * 0.2
@@ -102,7 +102,7 @@ The terminal bonus is the dominant term in the return for successful episodes, w
 For expensive T4 targets the terminal bonus is too sparse on its own: the agent must learn a long prerequisite chain before it ever sees a positive completion signal. `MilestoneTracker` adds one-time bonuses for unlocking key technologies:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/reward.rs ~line 77 — MilestoneTracker
+// crates/faf-sim/src/planner/policy/train/reward.rs ~line 77 — MilestoneTracker
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct MilestoneTracker {
     t2_factory: bool,
@@ -139,7 +139,7 @@ The bonuses are given **once per episode**, so the agent cannot farm them by rep
 During training, each step's target is the discounted sum of future rewards plus the terminal bonus:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 15 — compute_returns
+// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 15 — compute_returns
 pub(crate) fn compute_returns(&mut self, episode: &mut Episode) {
     let step_count = episode.steps.len();
     if step_count == 0 {

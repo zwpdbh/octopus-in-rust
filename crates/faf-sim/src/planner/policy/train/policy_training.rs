@@ -12,7 +12,7 @@ use super::metric::{FineTuneSummary, TrainEvent};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::macro_net::PolicyBundle;
+use crate::planner::policy::macro_net::PolicyBundle;
 use crate::units::Units;
 use burn::train::metric::MetricMetadata;
 use burn::train::Interrupter;
@@ -126,7 +126,10 @@ fn fine_tune_best_model(
     let mut tuner = Trainer::from_model(*config, model_to_tune);
     tuner.metrics = trainer.metrics.take();
     tuner.interrupter = trainer.interrupter.clone();
-    let planner_config = PlannerConfig::default();
+    let planner_config = PlannerConfig {
+        max_mex_count: config.max_mex_count,
+        ..PlannerConfig::default()
+    };
 
     for epoch in 0..config.fine_tune_epochs {
         let loss = tuner.fine_tune_on_trajectory(&trajectory, units, goal, &planner_config);

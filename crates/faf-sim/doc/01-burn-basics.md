@@ -28,7 +28,7 @@ burn = { version = "0.21", default-features = false, features = ["std", "autodif
 The crate aliases the training backend for convenience:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/mod.rs ~line 23 — training backend aliases
+// crates/faf-sim/src/planner/policy/train/mod.rs ~line 23 — training backend aliases
 #[cfg(feature = "cpu")]
 pub type TrainBackend = Autodiff<NdArray>;
 #[cfg(all(feature = "cuda", not(feature = "cpu")))]
@@ -39,7 +39,7 @@ pub type TrainBackend = Autodiff<Wgpu>;
 pub type TrainDevice = burn::tensor::Device<TrainBackend>;
 ```
 
-Every tensor and model we train uses `TrainBackend`. The same recorded weights can be loaded back onto the same backend for inference inside MCTS.
+Every tensor and model we train uses `TrainBackend`. The same recorded weights can be loaded back onto the same backend for inference during simulation.
 
 The `faf-sim-cli` package defaults to the CUDA backend, so training on a GPU does not require extra feature flags:
 
@@ -79,7 +79,7 @@ A `Tensor<B, D>` has a backend `B` and a dimensionality `D`. A 1-D vector of log
 Tensors are created from data and a device using `TensorData`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/math.rs ~line 8 — tensor1d_from_vec
+// crates/faf-sim/src/planner/policy/train/math.rs ~line 8 — tensor1d_from_vec
 pub(crate) fn tensor1d_from_vec(features: &[f32]) -> Tensor<TrainBackend, 2> {
     let device: TrainDevice = Default::default();
     let data = TensorData::new(features.to_vec(), [1, features.len()]);
@@ -101,7 +101,7 @@ Common operations we use:
 A model in Burn is just a Rust struct whose fields are Burn layers, plus a `#[derive(Module)]` attribute:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 49 — HierarchicalPolicyNet
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 49 — HierarchicalPolicyNet
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     backbone1: Linear<B>,
@@ -121,7 +121,7 @@ pub struct HierarchicalPolicyNet<B: Backend> {
 Because `HierarchicalPolicyNet<B>` is generic over `B: Backend`, the same struct definition serves for training (`Autodiff<NdArray>`) and inference (`NdArray`). During planning we hide the concrete type behind a trait object so the rest of the crate does not need to know which backend is in use:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/value_net.rs ~line 17 — ValueNet trait
+// crates/faf-sim/src/planner/policy/value_net.rs ~line 17 — ValueNet trait
 pub trait ValueNet: std::fmt::Debug + Send + Sync {
     fn evaluate_direction(&self, features: Vec<f32>) -> Vec<f32>;
     fn clone_box(&self) -> Box<dyn ValueNet>;
@@ -133,7 +133,7 @@ pub trait ValueNet: std::fmt::Debug + Send + Sync {
 Burn layers are constructed with a config object. For example, a `Linear` layer is initialized from a `LinearConfig`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 80 — constructing linear layers
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 80 — constructing linear layers
 backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 ```
 
@@ -144,7 +144,7 @@ backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
 A forward method is ordinary Rust. The only Burn-specific part is the tensor operations:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent backbone forward
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 120 — latent backbone forward
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);
     let x = self.activation.forward(x);
@@ -156,7 +156,7 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 The direction head consumes the latent vector and produces logits over the six strategic directions:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 137 — direction head
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 137 — direction head
 pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
     self.direction_head.forward(latent)
 }
@@ -165,7 +165,7 @@ pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
 For inference we provide a helper that takes a host `Vec<f32>` and returns host `Vec<f32>`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 155 — evaluate_direction
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
     let features = tensor_from_vec(&features, device);
@@ -205,7 +205,7 @@ Here is exactly how that maps to the code, with the tensor shape after each step
 
 A few things worth pointing out:
 
-- **Why `[1, 11]`?** The first dimension is the batch size. During MCTS planning we evaluate one game state at a time, so the batch is `1`. The second dimension is `STATE_FEATURE_COUNT` (11 state features).
+- **Why `[1, 11]`?** The first dimension is the batch size. During policy inference we evaluate one game state at a time, so the batch is `1`. The second dimension is `STATE_FEATURE_COUNT` (11 state features).
 - **`Linear::forward` is matrix multiplication plus a bias.** When you see `self.backbone1.forward(x)`, Burn is computing `x @ W + b` using the weight matrix `W` and bias vector `b` that were created when the layer was initialized.
 - **`self.activation.forward` is ReLU.** The `activation` field holds a `Relu`, so each call zeros out negative values but does not change the tensor's shape.
 - **The final `.to_vec()` converts back to normal Rust data.** ML frameworks operate on tensors, but the rest of our planner works with ordinary `Vec<f32>`, so we pull the six logit values out of the tensor before returning.
@@ -213,7 +213,7 @@ A few things worth pointing out:
 So the full chain expands to:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 155 — evaluate_direction (expanded view)
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 155 — evaluate_direction (expanded view)
 pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
     // 1. input vector [1, 11]
     let tensor = tensor_from_vec(&features, device);
@@ -234,7 +234,7 @@ pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<
 And `latent()` itself expands to the first four operations:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 120 — latent (operation-by-operation view)
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 120 — latent (operation-by-operation view)
 pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
     let x = self.backbone1.forward(features);   // matrix multiply: [1, 11] → [1, 128]
     let x = self.activation.forward(x);          // ReLU: shape stays [1, 128]
@@ -248,12 +248,12 @@ pub(crate) fn latent(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
 In RL the set of legal actions changes every step. We implement action masking by adding a large negative value to the logits of illegal directions before the softmax:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 30 — mask value
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 30 — mask value
 pub(crate) const MASK_VALUE: f32 = -1e9;
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/macro_net.rs ~line 163 — apply_mask
+// crates/faf-sim/src/planner/policy/macro_net.rs ~line 163 — apply_mask
 pub fn apply_mask(logits: &mut [f32], mask: &[bool]) {
     for (l, legal) in logits.iter_mut().zip(mask.iter()) {
         if !legal {
@@ -270,7 +270,7 @@ After masking, `softmax` assigns near-zero probability to illegal directions. Du
 To train, we need gradients. Burn provides them through the `Autodiff<B>` backend wrapper. A tensor on `Autodiff<NdArray>` remembers how it was computed, so calling `.backward()` produces a gradient tape.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 93 — backward pass
+// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 93 — backward pass
 let grads = loss.backward();
 let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
 self.model = self
@@ -292,7 +292,7 @@ Burn's `Optimizer::step` takes the model by value and returns a new model. There
 Burn's `Adam` optimizer is configured with `AdamConfig` and initialized with gradient clipping if desired:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 51 — Adam optimizer setup
+// crates/faf-sim/src/planner/policy/train/trainer/core.rs ~line 51 — Adam optimizer setup
 let optimizer = {
     let adam = AdamConfig::new();
     let adam = if let Some(clip) = config.grad_clip {
@@ -307,7 +307,7 @@ let optimizer = {
 The concrete optimizer type is an alias:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 19 — optimizer type alias
+// crates/faf-sim/src/planner/policy/train/trainer/core.rs ~line 19 — optimizer type alias
 pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
 ```
 
@@ -318,7 +318,7 @@ At each update, the learning rate is passed as a `f64` (Burn converts it interna
 Burn's `CompactRecorder` writes a model's weights to a `.mpk` file (MessagePack). Loading reconstructs the model from the same file:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy_training.rs ~line 21 — save_policy
+// crates/faf-sim/src/planner/policy/train/policy_training.rs ~line 21 — save_policy
 pub fn save_policy(
     model: &PolicyBundle<TrainBackend>,
     path: &std::path::Path,
@@ -334,7 +334,7 @@ pub fn save_policy(
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/policy_training.rs ~line 35 — load_policy
+// crates/faf-sim/src/planner/policy/train/policy_training.rs ~line 35 — load_policy
 pub fn load_policy(path: &std::path::Path) -> Result<PolicyBundle<TrainBackend>, String> {
     let device: TrainDevice = Default::default();
     let recorder = CompactRecorder::new();

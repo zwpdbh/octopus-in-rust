@@ -123,7 +123,7 @@ For an upgrade edge to be legal:
 The heuristic layer is the bridge between the network's high-level direction and the simulator's concrete commands. Its entry point is `direction_to_action`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 25 — direction_to_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 25 — direction_to_action
 pub fn direction_to_action(
     direction: EdgeCategory,
     state: &SimulationState,
@@ -197,7 +197,7 @@ pub enum SimAction {
 The one-step planner ties the pieces together in `macro_policy_plan`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 44 — macro_policy_plan (abbreviated)
+// crates/faf-sim/src/planner/policy/direction_planner.rs ~line 44 — macro_policy_plan (abbreviated)
 pub(crate) fn macro_policy_plan(
     units: &Units,
     mut state: SimulationState,
@@ -240,7 +240,7 @@ state → state_features → direction head → 6 logits → masked softmax → 
                                         concrete SimAction
 ```
 
-This is `O(1)` forward work per decision at the network level. The heuristic scan of the plan graph is cheap because the plan graph is small and static. MCTS multiplies that work by its iteration budget, but the per-expansion cost remains bounded.
+This is `O(1)` forward work per decision at the network level. The heuristic scan of the plan graph is cheap because the plan graph is small and static. The reactive loop repeats this work every tick, but each decision is fast enough to keep up with the simulator.
 
 ## Legal move validation
 

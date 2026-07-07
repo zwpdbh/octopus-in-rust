@@ -13,7 +13,7 @@
 //! For `plan` and `simulate`, the target faction/unit is a subcommand so clap
 //! can constrain `<UNIT>` to faction-legal values. The planner strategy is a
 //! single typed argument that carries any strategy-specific configuration
-//! (e.g. `mcts:200`) inside its value.
+//! (e.g. `policy:mlp:greedy`) inside its value.
 
 use clap::{Parser, Subcommand};
 
@@ -166,9 +166,9 @@ pub struct DrawNetArgs {
 /// Arguments for the `simulate` subcommand.
 #[derive(Parser)]
 pub struct SimulateArgs {
-    /// Planner strategy (`mcts`, `mcts:<iterations>`, `mcts:<iterations>:<mlp|gnn>`,
-    /// or append `:greedy` for deterministic argmax selection).
-    #[arg(short = 's', long, default_value = "mcts:100:mlp:greedy")]
+    /// Planner strategy (`policy`, `policy:<mlp|gnn>`, or append `:greedy` for
+    /// deterministic argmax selection).
+    #[arg(short = 's', long, default_value = "policy:mlp:greedy")]
     pub strategy: faf_sim::Strategy,
     /// Maximum number of mass extractors (including capped upgrades) that may
     /// be active at the same time. New mex builds are blocked once this cap is

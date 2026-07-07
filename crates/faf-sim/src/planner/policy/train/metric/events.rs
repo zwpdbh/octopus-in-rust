@@ -17,8 +17,6 @@ pub struct EpisodeSummary {
     pub completion_time: f64,
     /// Average policy loss for this episode, if an update was performed.
     pub loss: Option<f32>,
-    /// Best completion time observed so far (training or greedy).
-    pub best_time: Option<f64>,
 }
 
 /// Summary of a periodic greedy evaluation.
@@ -26,11 +24,7 @@ pub struct EpisodeSummary {
 pub struct GreedyEvalSummary {
     /// One-based episode index at which the evaluation was run.
     pub episode: usize,
-    /// Whether the greedy rollout reached the goal.
-    pub reached_goal: bool,
-    /// Completion time of the greedy rollout, if it reached the goal.
-    pub completion_time: Option<f64>,
-    /// Best completion time observed so far.
+    /// Best completion time observed so far across greedy evaluations.
     pub best_time: Option<f64>,
 }
 

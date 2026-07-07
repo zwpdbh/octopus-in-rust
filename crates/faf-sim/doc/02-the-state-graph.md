@@ -114,7 +114,7 @@ For the current model:
 Neural networks need fixed-size inputs. The state featurizer compresses the variable-size `SimulationState` into an 11-dimensional vector:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 10 — feature constant (excerpt)
+// crates/faf-sim/src/planner/policy/features.rs ~line 10 — feature constant (excerpt)
 /// Number of state features fed into the direction network.
 ///
 /// This is a manual count of the values pushed by `state_features` below.
@@ -127,7 +127,7 @@ pub const STATE_FEATURE_COUNT: usize = 11;
 The 11 features are listed in `state_features`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/features.rs ~line 36 — state feature order
+// crates/faf-sim/src/planner/policy/features.rs ~line 36 — state feature order
 // 0. net mass income   (scaled by 100)
 // 1. net energy income (scaled by 1000)
 // 2. mass storage ratio
@@ -161,7 +161,7 @@ flowchart LR
     F --> G["HierarchicalPolicyNet"]
 ```
 
-The 11 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The search loop uses the legal successors of this snapshot to grow the tree (see [chapter 4](03-actions-and-successors.md)); the tree itself is the MCTS search tree, not the build graph.
+The 11 features are economy-centric numbers and tech booleans, not adjacency lists or node embeddings. This is why the current network is an MLP, not a GNN. The policy uses this snapshot to choose a high-level direction (see [chapter 4](03-actions-and-successors.md)); the concrete action is then resolved from the plan graph.
 
 ## Why not a GNN?
 

@@ -502,8 +502,8 @@ Callers stay unchanged because `mod.rs` re-exports.
 #### Bad
 
 ```text
-planner/mcts/train/episode.rs         # EpisodeStep / Episode data
-planner/mcts/train/trainer/episode.rs # Trainer::run_episode logic
+planner/policy/train/episode.rs         # EpisodeStep / Episode data
+planner/policy/train/trainer/episode.rs # Trainer::run_episode logic
 ```
 
 Both files appear as `episode` in import paths (`train::episode` vs `train::trainer::episode`). The name does not reveal which holds data and which holds behavior.
@@ -511,8 +511,8 @@ Both files appear as `episode` in import paths (`train::episode` vs `train::trai
 #### Good
 
 ```text
-planner/mcts/train/episode.rs         # EpisodeStep / Episode data
-planner/mcts/train/trainer/run_episode.rs # episode generation logic
+planner/policy/train/episode.rs         # EpisodeStep / Episode data
+planner/policy/train/trainer/run_episode.rs # episode generation logic
 ```
 
 The behavior file is named after what it does, so the two modules are immediately distinguishable.

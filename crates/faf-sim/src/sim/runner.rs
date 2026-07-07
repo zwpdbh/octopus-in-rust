@@ -39,7 +39,7 @@ impl SimulationConfig {
     /// Uses `Planner::reactive` and a 1-second simulation timestep.
     pub fn for_strategy(
         strategy: crate::planner::Strategy,
-        value_net: Box<dyn crate::planner::mcts::value_net::ValueNet>,
+        value_net: Box<dyn crate::planner::policy::value_net::ValueNet>,
     ) -> Self {
         Self {
             planner: Planner::reactive(strategy, value_net),
@@ -178,5 +178,5 @@ pub async fn run_build_order_simulation(
 
 #[cfg(test)]
 mod tests {
-    // MCTS simulation tests will be added once the MCTS planner is implemented.
+    // Simulation tests will be added once the policy planner is fully validated.
 }

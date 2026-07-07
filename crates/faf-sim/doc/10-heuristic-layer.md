@@ -13,7 +13,7 @@ Keeping these rules explicit has three advantages:
 `direction_to_action` dispatches to a per-direction helper:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 25 — direction_to_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 25 — direction_to_action
 pub fn direction_to_action(
     direction: EdgeCategory,
     state: &SimulationState,
@@ -40,7 +40,7 @@ If the chosen direction has no legal concrete action, the helper returns `SimAct
 Each helper starts by scanning the plan graph for legal edges in its category:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 66 — legal_candidates
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 66 — legal_candidates
 fn legal_candidates(
     plan: &PlanGraph,
     state: &SimulationState,
@@ -91,7 +91,7 @@ Results are deduplicated so the same target reachable from multiple builders app
 When the network chooses `IncreaseMass`, the heuristic picks the mass action with the shortest payback time:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 134 — pick_mass_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 134 — pick_mass_action
 fn pick_mass_action(
     plan: &PlanGraph,
     state: &SimulationState,
@@ -131,7 +131,7 @@ Payback time is `mass cost / mass income gain`. T1 mexes have the shortest payba
 Energy actions are simpler: build the highest-tech legal power generator or upgrade:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 173 — pick_energy_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 173 — pick_energy_action
 fn pick_energy_action(
     plan: &PlanGraph,
     state: &SimulationState,
@@ -165,7 +165,7 @@ Higher-tech pgens provide more energy income per unit of build power, so once th
 `IncreaseBP` builds the highest-tier engineer that is currently buildable:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 199 — pick_bp_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 199 — pick_bp_action
 fn pick_bp_action(
     plan: &PlanGraph,
     state: &SimulationState,
@@ -207,7 +207,7 @@ Factory upgrades are handled by `UpgradeTech`, so `IncreaseBP` focuses purely on
 Factory upgrades prefer the lowest-tier idle factory, so tech progression is staged:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 281 — pick_upgrade_action
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 281 — pick_upgrade_action
 fn pick_upgrade_action(
     plan: &PlanGraph,
     state: &SimulationState,
@@ -249,7 +249,7 @@ fn pick_upgrade_action(
 Both builds and upgrades use the same builder-assignment pattern: collect capable idle builders, sort by build rate (highest first), and add them greedily until adding one more would cause a mass or energy stall within one tick.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 355 — assign_builders
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 355 — assign_builders
 fn assign_builders(
     target: UnitKind,
     state: &SimulationState,
@@ -280,7 +280,7 @@ fn assign_builders(
 The stall gate is the key safety mechanism:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/heuristic.rs ~line 424 — greedy_with_stall_gate
+// crates/faf-sim/src/planner/policy/heuristic.rs ~line 424 — greedy_with_stall_gate
 fn greedy_with_stall_gate(
     candidates: Vec<NodeId>,
     target_stats: &faf_units::BuildTargetStats,

@@ -1,6 +1,6 @@
 use crate::planner::core::Goal;
-use crate::planner::mcts::features::STATE_FEATURE_COUNT;
-use crate::planner::mcts::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
+use crate::planner::policy::features::STATE_FEATURE_COUNT;
+use crate::planner::policy::train::{load_policy, save_policy, TrainConfig, TrainDevice, Trainer};
 use crate::units::{TechLevel, Units};
 
 fn load_units() -> Units {

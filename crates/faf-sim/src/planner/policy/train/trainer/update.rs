@@ -7,7 +7,7 @@ use burn::tensor::{Tensor, TensorData};
 use super::super::episode::Episode;
 use super::super::math::tensor1d_from_vec;
 use super::super::TrainBackend;
-use crate::planner::mcts::macro_net::{DIRECTION_COUNT, MASK_VALUE};
+use crate::planner::policy::macro_net::{DIRECTION_COUNT, MASK_VALUE};
 
 use super::Trainer;
 

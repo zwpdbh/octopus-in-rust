@@ -1,10 +1,10 @@
 # 8. Integration and CLI
 
-This chapter explains how to wire the MCTS planner into the existing `faf-sim` planner enum and run it from the CLI.
+This chapter explains how the learned policy planner is wired into the `faf-sim` planner enum and run from the CLI.
 
 ## Strategy enum
 
-The `Planner` dispatches to a single strategy, MCTS, but the network that guides it can be selected:
+The `Planner` dispatches to a single strategy, `Policy`, but the network architecture can be selected:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 110 — ValueNetKind
@@ -18,13 +18,11 @@ pub enum ValueNetKind {
 
 // crates/faf-sim/src/planner/core.rs ~line 148 — Strategy enum
 pub enum Strategy {
-    /// Monte Carlo Tree Search guided by a learned value network.
-    Mcts {
-        /// Number of MCTS iterations to run per decision.
-        iterations: usize,
-        /// Kind of learned value network to use inside MCTS.
+    /// Direct one-step policy lookup guided by a learned network.
+    Policy {
+        /// Kind of learned policy network to use.
         value_net: ValueNetKind,
-        /// If true, always pick the highest-scoring plan-graph edge.
+        /// If true, always pick the highest-scoring legal direction.
         deterministic: bool,
     },
 }
@@ -34,71 +32,35 @@ Currently only `ValueNetKind::Mlp` is implemented; `Gnn` returns an error if sel
 
 ## Entry point
 
-`Planner::plan` matches on the strategy and forwards to the corresponding module. `plan` takes `&mut self` because future strategies may hold mutable search state. `iterations` sets the MCTS budget and `deterministic` is stored in the strategy for the one-step policy entry point. The concrete network is hidden behind a [`ValueNet`] trait object; the MCTS search itself always uses argmax selection:
+`Planner::plan` evaluates the policy once, masks illegal directions, and returns the best immediate action:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 338 — Planner::plan dispatch
+// crates/faf-sim/src/planner/core.rs ~line 318 — Planner::plan
 pub fn plan(
     &mut self,
     units: &Units,
     initial_state: SimulationState,
     goal: &Goal,
 ) -> Result<PlanResult, PlannerError> {
-    match self.strategy {
-        Strategy::Mcts {
-            iterations,
-            value_net: _,
-            deterministic: _,
-        } => MctsSearch::new(MctsConfig {
-            iterations,
-            ..MctsConfig::default()
-        })
-        .search(
-            initial_state,
-            goal,
-            units,
-            &self.config,
-            self.value_net.as_ref(),
-        ),
-    }
+    let Strategy::Policy { value_net, deterministic } = self.strategy;
+    direction_planner::plan(
+        units,
+        initial_state,
+        goal,
+        1,
+        value_net,
+        deterministic,
+        Some(self.value_net.as_ref()),
+        &self.config,
+    )
 }
 ```
 
-`Planner::plan` always runs full UCT search via `MctsSearch::search`. The one-step direction-only policy lives in `mcts::direction_planner::plan`, which is a separate entry point used directly by training rollouts and MCTS leaf rollouts:
-
-```rust
-// crates/faf-sim/src/planner/mcts/direction_planner.rs ~line 18 — mcts::direction_planner::plan
-pub fn plan(
-    units: &Units,
-    initial_state: SimulationState,
-    goal: &Goal,
-    _iterations: usize,
-    value_net_kind: ValueNetKind,
-    deterministic: bool,
-    policy_bundle: Option<&dyn ValueNet>,
-    config: &PlannerConfig,
-) -> Result<PlanResult, PlannerError> {
-    match value_net_kind {
-        ValueNetKind::Mlp => macro_policy_plan(
-            units,
-            initial_state,
-            goal,
-            policy_bundle,
-            deterministic,
-            config,
-        ),
-        ValueNetKind::Gnn => Err(PlannerError::UnsupportedStrategy(
-            "GNN value net is not yet implemented".to_string(),
-        )),
-    }
-}
-```
-
-The CLI `simulate` command goes through `Planner::plan`, which runs full MCTS. The `deterministic` flag controls whether the one-step rollout policy inside MCTS samples or takes argmax; it also makes the trained bundle's action selection deterministic during leaf rollouts.
+The one-step direction-only policy lives in `policy::direction_planner::plan`, which is the same entry point used by training rollouts and the reactive simulator. The concrete network is hidden behind a [`ValueNet`] trait object.
 
 ## Reactive planning
 
-The MCTS planner is meant to run every tick. It does not commit to a full plan; it only returns the best immediate action. The surrounding actor executes that action, advances the simulator, and calls the planner again on the new state.
+The policy planner is meant to run every tick. It does not commit to a full plan; it only returns the best immediate action. The surrounding actor executes that action, advances the simulator, and calls the planner again on the new state.
 
 This closed-loop style protects against drift:
 
@@ -118,6 +80,7 @@ pub struct PlanResult {
     pub completion_time: f64,
     pub final_economy: EconomyState,
     pub first_action: Option<crate::planner::SimAction>,
+    pub final_state: SimulationState,
 }
 ```
 
@@ -180,16 +143,22 @@ pub async fn run(mut self) -> Result<SimulationState, GraphSimError> {
 // crates/faf-sim/src/actors/decision_actor.rs ~line 69 — DecisionActor::run
 pub async fn run(mut self) {
     while let Some(observation) = self.obs_rx.recv().await {
-        let command = match observation {
+        match observation {
             Observation::State(state) => {
-                let plan = self.planner.plan(&self.units, state, &self.goal).ok();
-                plan.and_then(|p| p.first_action)
-                    .and_then(sim_action_to_command)
+                let plan = match self.planner.plan(&self.units, state, &self.goal) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let Some(command) = plan.first_action.and_then(sim_action_to_command) else {
+                    continue;
+                };
+
+                if self.cmd_tx.send(command).await.is_err() {
+                    return;
+                }
             }
-            Observation::Event(_) => None,
-        };
-        if let Some(command) = command {
-            if self.cmd_tx.send(command).await.is_err() { break; }
+            Observation::Event(_) => {}
         }
     }
 }
@@ -237,37 +206,38 @@ All three actor modules are re-exported from `crates/faf-sim/src/lib.rs` so call
 The strategy can be parsed from a string:
 
 ```rust
-// crates/faf-sim/src/planner/core.rs ~line 187 — Strategy::from_str MCTS parsing
-if lower == "mcts" {
-    return Ok(Strategy::Mcts {
-        iterations: 100,
+// crates/faf-sim/src/planner/core.rs ~line 211 — Strategy::from_str policy parsing
+if lower == "policy" {
+    return Ok(Strategy::Policy {
         value_net: ValueNetKind::Mlp,
         deterministic: false,
     });
 }
 
-let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
-
-for part in parts {
-    if part == "greedy" || part == "deterministic" {
-        deterministic = true;
-    } else if let Ok(iters) = part.parse::<usize>() {
-        iterations = iters;
-    } else {
-        value_net = ValueNetKind::from_str(part)?;
+if let Some(rest) = lower.strip_prefix("policy") {
+    let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
+    let mut value_net = ValueNetKind::Mlp;
+    let mut deterministic = false;
+    for part in parts {
+        if part == "greedy" || part == "deterministic" {
+            deterministic = true;
+        } else {
+            value_net = ValueNetKind::from_str(part)?;
+        }
     }
+    return Ok(Strategy::Policy { value_net, deterministic });
 }
 ```
 
 So the CLI can accept arguments such as:
 
 ```text
-faf-sim simulate --strategy mcts cybran monkeylord
-faf-sim simulate --strategy mcts:500 cybran monkeylord
-faf-sim simulate --strategy mcts:500:mlp:greedy cybran monkeylord
+faf-sim simulate --strategy policy cybran monkeylord
+faf-sim simulate --strategy policy:mlp:greedy cybran monkeylord
+faf-sim simulate --strategy policy:gnn:greedy cybran monkeylord
 ```
 
-The default strategy for `simulate` is `mcts:100:mlp:greedy`.
+The default strategy for `simulate` is `policy:mlp:greedy`.
 
 ### GPU builds
 
@@ -275,20 +245,20 @@ The `faf-sim-cli` package defaults to CUDA, so no extra feature flags are needed
 
 ```text
 # NVIDIA GPU (your 3090) — default
-cargo run --release -p faf-sim-cli -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+cargo run --release -p faf-sim-cli -- simulate --strategy policy:mlp:greedy uef novaxcenter
 
 # Cross-platform WebGPU/Vulkan
-cargo run --release -p faf-sim-cli --no-default-features --features wgpu -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+cargo run --release -p faf-sim-cli --no-default-features --features wgpu -- simulate --strategy policy:mlp:greedy uef novaxcenter
 
 # CPU-only fallback
-cargo run --release -p faf-sim-cli --no-default-features --features cpu -- simulate --strategy mcts:100:mlp:greedy uef novaxcenter
+cargo run --release -p faf-sim-cli --no-default-features --features cpu -- simulate --strategy policy:mlp:greedy uef novaxcenter
 ```
 
 The same default applies to the `train` subcommand.
 
 ## Configuration
 
-`PlannerConfig` is shared by all strategies. The current defaults are tuned for MCTS:
+`PlannerConfig` is shared by planning and training. The current defaults are tuned for the reactive policy loop:
 
 ```rust
 // crates/faf-sim/src/planner/core.rs ~line 260 — PlannerConfig default
@@ -301,15 +271,13 @@ fn default() -> Self {
 }
 ```
 
-MCTS may benefit from a smaller `dt` because it explores fewer states than beam search and can afford finer-grained timing. Add MCTS-specific defaults in `Planner::new` if experiments show a better setting.
-
 ## Putting it together
 
 A minimal integration test looks like this:
 
 ```rust
 // docref: example
-use faf_sim::planner::mcts::value_net::MlpValueNet;
+use faf_sim::planner::policy::value_net::MlpValueNet;
 
 let goal = Goal {
     tech_level: TechLevel::T4,
@@ -319,8 +287,7 @@ let goal = Goal {
 };
 let value_net = Box::new(MlpValueNet::from_net(bundle));
 let planner = Planner::with_config(
-    Strategy::Mcts {
-        iterations: 100,
+    Strategy::Policy {
         value_net: ValueNetKind::Mlp,
         deterministic: true,
     },
@@ -340,7 +307,7 @@ Train a policy bundle programmatically:
 
 ```rust
 // docref: example
-use faf_sim::planner::mcts::train::{train_policy, save_policy, FafSimMetrics, TrainConfig};
+use faf_sim::planner::policy::train::{train_policy, save_policy, FafSimMetrics, TrainConfig};
 use burn::train::renderer::tui::TuiMetricsRendererWrapper;
 use burn::train::Interrupter;
 
@@ -373,8 +340,8 @@ And load it later:
 
 ```rust
 // docref: example
-use faf_sim::planner::mcts::value_net::MlpValueNet;
-use faf_sim::planner::mcts::train::load_policy;
+use faf_sim::planner::policy::value_net::MlpValueNet;
+use faf_sim::planner::policy::train::load_policy;
 
 let bundle = load_policy(&PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 let value_net = Box::new(MlpValueNet::from_net(bundle));

@@ -1,15 +1,15 @@
 //! Planner abstraction for build-order generation.
 //!
 //! A [`Planner`] turns an initial [`SimulationState`] into a [`PlanResult`]
-//! (timeline + completion time). It dispatches to the MCTS strategy.
+//! (timeline + completion time). It dispatches to the learned policy strategy.
 
 use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
-use crate::planner::mcts::search::{MctsConfig, MctsSearch};
-use crate::planner::mcts::value_net::ValueNet;
+use crate::planner::policy::direction_planner;
+use crate::planner::policy::value_net::ValueNet;
 use crate::sim::{BuildEvent, SimulationState};
 use crate::units::{TechLevel, UnitCost, Units};
 
@@ -48,16 +48,16 @@ impl Goal {
 /// consumers should treat this as a **one-step lookahead**: execute
 /// [`PlanResult::first_action`], advance the simulator, and call the planner
 /// again. The remaining fields (`events`, `completion_time`, `final_economy`)
-/// are the projected full trajectory used internally by MCTS for value
-/// estimation; they are not a fixed schedule and are typically ignored by the
-/// reactive execution loop.
-#[derive(Debug, Clone, PartialEq)]
+/// are the projected full trajectory used internally for value estimation;
+/// they are not a fixed schedule and are typically ignored by the reactive
+/// execution loop.
+#[derive(Debug, Clone)]
 pub struct PlanResult {
     /// Projected completion events in chronological order.
     ///
-    /// This is what MCTS expects to happen if the current best action sequence
-    /// is followed to the goal. In a reactive loop the simulator produces its
-    /// own authoritative events; use those instead.
+    /// This is what the policy expects to happen if the current best action
+    /// sequence is followed to the goal. In a reactive loop the simulator
+    /// produces its own authoritative events; use those instead.
     pub events: Vec<BuildEvent>,
     /// Projected in-game seconds when the goal unit would finish.
     pub completion_time: f64,
@@ -69,6 +69,11 @@ pub struct PlanResult {
     /// commits to. It is converted into a [`crate::actors::message::SimulationMsg`]
     /// and sent to the simulator; the rest of the plan is recomputed next tick.
     pub first_action: Option<crate::planner::SimAction>,
+    /// State after executing [`first_action`].
+    ///
+    /// This lets callers plan several steps ahead without waiting for the
+    /// simulator to report back after every command.
+    pub final_state: SimulationState,
 }
 
 /// Planner error type.
@@ -105,7 +110,7 @@ impl fmt::Display for PlannerError {
 
 impl Error for PlannerError {}
 
-/// Architecture of the learned value network used inside MCTS.
+/// Architecture of the learned policy network.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ValueNetKind {
     /// Hierarchical policy bundle (macro + build-power + engineer-squad).
@@ -141,20 +146,18 @@ impl FromStr for ValueNetKind {
 
 /// Selectable planning algorithm.
 ///
-/// Currently only MCTS is supported, but the value network that guides it can be
-/// chosen between MLP and GNN. The enum is kept so future strategies can be
-/// added without changing the public API.
+/// The default `Policy` strategy runs the trained network once per decision,
+/// masks illegal directions, and picks the highest-probability legal direction
+/// (or samples when stochastic). This is the same path used by the training
+/// greedy evaluator and is fast enough for the reactive simulation loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
-    /// Monte Carlo Tree Search guided by a learned value network.
-    Mcts {
-        /// Number of MCTS iterations to run per decision.
-        iterations: usize,
-        /// Kind of learned value network to use inside MCTS.
+    /// Direct one-step policy lookup guided by a learned network.
+    Policy {
+        /// Kind of learned policy network to use.
         value_net: ValueNetKind,
-        /// If true, the policy always picks the highest-scoring legal plan-graph
-        /// edge instead of sampling from the softmax. This makes simulation
-        /// deterministic and reproducible.
+        /// If true, always pick the highest-scoring legal direction; otherwise
+        /// sample from the masked softmax.
         deterministic: bool,
     },
 }
@@ -162,21 +165,15 @@ pub enum Strategy {
 impl Strategy {
     /// Human-readable strategy name.
     pub fn display_name(&self) -> &'static str {
-        "mcts"
+        "policy"
     }
 
     /// Return a copy of this strategy with deterministic selection enabled.
     pub fn with_deterministic(self) -> Self {
-        match self {
-            Strategy::Mcts {
-                iterations,
-                value_net,
-                ..
-            } => Strategy::Mcts {
-                iterations,
-                value_net,
-                deterministic: true,
-            },
+        let Strategy::Policy { value_net, .. } = self;
+        Strategy::Policy {
+            value_net,
+            deterministic: true,
         }
     }
 }
@@ -186,62 +183,45 @@ impl FromStr for Strategy {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lower = s.to_ascii_lowercase();
-        if lower == "mcts" {
-            return Ok(Strategy::Mcts {
-                iterations: 100,
+
+        if lower == "policy" {
+            return Ok(Strategy::Policy {
                 value_net: ValueNetKind::Mlp,
                 deterministic: false,
             });
         }
 
-        let Some(rest) = lower.strip_prefix("mcts") else {
-            return Err(PlannerError::UnsupportedStrategy(s.to_string()));
-        };
-
-        // Supported forms:
-        //   mcts:<iter>
-        //   mcts:<iter>:<net>
-        //   mcts::<net>              (default iterations)
-        //   mcts:<iter>:<net>:greedy (deterministic argmax)
-        //   mcts:greedy              (deterministic, defaults)
-        let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
-
-        let mut iterations = 100usize;
-        let mut value_net = ValueNetKind::Mlp;
-        let mut deterministic = false;
-
-        for part in parts {
-            if part == "greedy" || part == "deterministic" {
-                deterministic = true;
-            } else if let Ok(iters) = part.parse::<usize>() {
-                iterations = iters;
-            } else {
-                value_net = ValueNetKind::from_str(part)?;
+        if let Some(rest) = lower.strip_prefix("policy") {
+            let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
+            let mut value_net = ValueNetKind::Mlp;
+            let mut deterministic = false;
+            for part in parts {
+                if part == "greedy" || part == "deterministic" {
+                    deterministic = true;
+                } else {
+                    value_net = ValueNetKind::from_str(part)?;
+                }
             }
+            return Ok(Strategy::Policy {
+                value_net,
+                deterministic,
+            });
         }
 
-        Ok(Strategy::Mcts {
-            iterations,
-            value_net,
-            deterministic,
-        })
+        Err(PlannerError::UnsupportedStrategy(s.to_string()))
     }
 }
 
 impl fmt::Display for Strategy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Strategy::Mcts {
-                iterations,
-                value_net,
-                deterministic,
-            } => {
-                if *deterministic {
-                    write!(f, "mcts:{}:{}:greedy", iterations, value_net)
-                } else {
-                    write!(f, "mcts:{}:{}", iterations, value_net)
-                }
-            }
+        let Strategy::Policy {
+            value_net,
+            deterministic,
+        } = self;
+        if *deterministic {
+            write!(f, "policy:{}:greedy", value_net)
+        } else {
+            write!(f, "policy:{}", value_net)
         }
     }
 }
@@ -258,7 +238,7 @@ pub struct PlannerConfig {
 }
 
 impl Default for PlannerConfig {
-    /// Defaults tuned for MCTS with a 1-second decision timestep.
+    /// Defaults tuned for the reactive policy loop with a 1-second decision timestep.
     fn default() -> Self {
         Self {
             dt: 1.0,
@@ -268,10 +248,10 @@ impl Default for PlannerConfig {
     }
 }
 
-/// A planner that dispatches to the MCTS strategy.
+/// A planner that dispatches to the learned policy strategy.
 ///
-/// The concrete value network is hidden behind a [`ValueNet`] trait object;
-/// the planner only knows the strategy and search configuration. Training
+/// The concrete policy network is hidden behind a [`ValueNet`] trait object;
+/// the planner only knows the strategy and planner configuration. Training
 /// details such as the Burn backend or the hierarchical network architecture
 /// are not part of the public surface.
 ///
@@ -324,40 +304,37 @@ impl Planner {
 
     /// Run the planner from `initial_state` toward `goal`.
     ///
-    /// This is the public entry point for planning. It dispatches to the selected
-    /// strategy (currently only MCTS) and returns a [`PlanResult`] that contains
-    /// both a projected full trajectory and the immediate next action.
+    /// This is the public entry point for planning. It evaluates the learned
+    /// policy once, masks illegal directions, and returns a [`PlanResult`] that
+    /// contains both a projected full trajectory and the immediate next action.
     ///
     /// The result is designed for **closed-loop, reactive** use: the caller should
     /// execute only [`PlanResult::first_action`], advance the simulator, and call
     /// `plan` again on the new state. The projected `events`, `completion_time`,
-    /// and `final_economy` are MCTS's best estimate of what would happen if the
-    /// current policy were followed to the goal, but they are not a fixed schedule.
-    /// Replanning every tick prevents discrete timing drift (stalls, builder
-    /// rounding, completed projects) from compounding.
+    /// and `final_economy` are the policy's best estimate of what would happen if
+    /// the current policy were followed to the goal, but they are not a fixed
+    /// schedule. Replanning every tick prevents discrete timing drift (stalls,
+    /// builder rounding, completed projects) from compounding.
     pub fn plan(
         &mut self,
         units: &Units,
         initial_state: SimulationState,
         goal: &Goal,
     ) -> Result<PlanResult, PlannerError> {
-        match self.strategy {
-            Strategy::Mcts {
-                iterations,
-                value_net: _,
-                deterministic: _,
-            } => MctsSearch::new(MctsConfig {
-                iterations,
-                ..MctsConfig::default()
-            })
-            .search(
-                initial_state,
-                goal,
-                units,
-                &self.config,
-                self.value_net.as_ref(),
-            ),
-        }
+        let Strategy::Policy {
+            value_net,
+            deterministic,
+        } = self.strategy;
+        direction_planner::plan(
+            units,
+            initial_state,
+            goal,
+            1,
+            value_net,
+            deterministic,
+            Some(self.value_net.as_ref()),
+            &self.config,
+        )
     }
 }
 
@@ -366,52 +343,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strategy_parses_mcts() {
+    fn strategy_parses_policy() {
         assert_eq!(
-            Strategy::from_str("mcts").unwrap(),
-            Strategy::Mcts {
-                iterations: 100,
+            Strategy::from_str("policy").unwrap(),
+            Strategy::Policy {
                 value_net: ValueNetKind::Mlp,
                 deterministic: false,
             }
         );
         assert_eq!(
-            Strategy::from_str("Mcts:500").unwrap(),
-            Strategy::Mcts {
-                iterations: 500,
+            Strategy::from_str("policy:greedy").unwrap(),
+            Strategy::Policy {
                 value_net: ValueNetKind::Mlp,
-                deterministic: false,
-            }
-        );
-        assert_eq!(
-            Strategy::from_str("mcts:500:gnn").unwrap(),
-            Strategy::Mcts {
-                iterations: 500,
-                value_net: ValueNetKind::Gnn,
-                deterministic: false,
-            }
-        );
-        assert_eq!(
-            Strategy::from_str("mcts::gnn").unwrap(),
-            Strategy::Mcts {
-                iterations: 100,
-                value_net: ValueNetKind::Gnn,
-                deterministic: false,
-            }
-        );
-        assert_eq!(
-            Strategy::from_str("mcts:500:gnn:greedy").unwrap(),
-            Strategy::Mcts {
-                iterations: 500,
-                value_net: ValueNetKind::Gnn,
                 deterministic: true,
             }
         );
         assert_eq!(
-            Strategy::from_str("mcts:greedy").unwrap(),
-            Strategy::Mcts {
-                iterations: 100,
-                value_net: ValueNetKind::Mlp,
+            Strategy::from_str("Policy:gnn").unwrap(),
+            Strategy::Policy {
+                value_net: ValueNetKind::Gnn,
+                deterministic: false,
+            }
+        );
+        assert_eq!(
+            Strategy::from_str("policy:gnn:greedy").unwrap(),
+            Strategy::Policy {
+                value_net: ValueNetKind::Gnn,
                 deterministic: true,
             }
         );
@@ -420,31 +377,20 @@ mod tests {
     #[test]
     fn strategy_display_includes_value_net() {
         assert_eq!(
-            Strategy::Mcts {
-                iterations: 200,
+            Strategy::Policy {
                 value_net: ValueNetKind::Mlp,
                 deterministic: false,
             }
             .to_string(),
-            "mcts:200:mlp"
+            "policy:mlp"
         );
         assert_eq!(
-            Strategy::Mcts {
-                iterations: 200,
-                value_net: ValueNetKind::Gnn,
-                deterministic: false,
-            }
-            .to_string(),
-            "mcts:200:gnn"
-        );
-        assert_eq!(
-            Strategy::Mcts {
-                iterations: 200,
+            Strategy::Policy {
                 value_net: ValueNetKind::Mlp,
                 deterministic: true,
             }
             .to_string(),
-            "mcts:200:mlp:greedy"
+            "policy:mlp:greedy"
         );
     }
 
@@ -459,7 +405,12 @@ mod tests {
             Err(PlannerError::UnsupportedStrategy(_))
         ));
         assert!(matches!(
+            // The old MCTS strategy is no longer supported.
             Strategy::from_str("mcts:abc"),
+            Err(PlannerError::UnsupportedStrategy(_))
+        ));
+        assert!(matches!(
+            Strategy::from_str("policy:100"),
             Err(PlannerError::UnsupportedStrategy(_))
         ));
     }

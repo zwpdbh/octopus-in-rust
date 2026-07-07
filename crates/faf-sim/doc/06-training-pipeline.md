@@ -12,14 +12,14 @@ The full training pipeline has five stages:
 4. **Policy update** — `update` computes the REINFORCE loss and applies one gradient step.
 5. **Fine-tuning** — `fine_tune_on_trajectory` distills the best discovered trajectory into the final model.
 
-The whole loop is driven by `Trainer::train`.
+The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for episode generation, greedy evaluation, and fine-tuning.
 
 ## Configuration
 
 `TrainConfig` groups the hyperparameters you will tune most often:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/config.rs ~line 5 — TrainConfig
+// crates/faf-sim/src/planner/policy/train/config.rs ~line 5 — TrainConfig
 pub struct TrainConfig {
     pub episodes: usize,
     pub max_steps: usize,
@@ -50,7 +50,7 @@ Key knobs:
 The `Trainer` owns the model, optimizer, device, and RNG. It is constructed with a fresh random model or from an existing one:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 42 — Trainer::new
+// crates/faf-sim/src/planner/policy/train/trainer/core.rs ~line 42 — Trainer::new
 pub fn new(config: TrainConfig) -> Self {
     let device: TrainDevice = Default::default();
     let model = PolicyBundle::new(&device);
@@ -59,7 +59,7 @@ pub fn new(config: TrainConfig) -> Self {
 ```
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 49 — Trainer::from_model
+// crates/faf-sim/src/planner/policy/train/trainer/core.rs ~line 49 — Trainer::from_model
 pub fn from_model(config: TrainConfig, model: PolicyBundle<TrainBackend>) -> Self {
     let device: TrainDevice = Default::default();
     let optimizer = {
@@ -78,7 +78,7 @@ pub fn from_model(config: TrainConfig, model: PolicyBundle<TrainBackend>) -> Sel
 Notice that Burn's optimizer is initialized with a model reference (`adam.init()`), but in our case we use the default `AdamConfig` and Burn infers parameter shapes later when we call `step`. The `OptimizerAdaptor` type alias ties the optimizer to the model type:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/core.rs ~line 19 — AdamOptimizer
+// crates/faf-sim/src/planner/policy/train/trainer/core.rs ~line 19 — AdamOptimizer
 pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, TrainBackend>;
 ```
 
@@ -93,16 +93,15 @@ pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, Trai
 5. Executes the action and records the reward.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/run_episode.rs ~line 21 — run_episode
+// crates/faf-sim/src/planner/policy/train/trainer/run_episode.rs ~line 21 — run_episode
 pub(crate) fn run_episode(
     &mut self,
-    _ep: usize,
     units: &Units,
     goal: &Goal,
     planner_config: &PlannerConfig,
     epsilon: f32,
+    plan: &PlanGraph,
 ) -> Episode {
-    let plan = build_plan_graph(units, *goal);
     let mut state = SimulationState::new(units, &[UnitKind::Commander]);
     let mut episode = Episode { reached_goal: false, completion_time: 0.0, final_reward: 0.0, steps: Vec::new() };
     let mut milestones = MilestoneTracker::default();
@@ -176,7 +175,7 @@ There are two important Burn patterns here:
 REINFORCE uses the discounted return from each step as the weight on its log-probability. `compute_returns` walks backward through the episode, applies the discount factor `gamma`, and then standardizes the returns:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 15 — compute_returns
+// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 15 — compute_returns
 pub(crate) fn compute_returns(&mut self, episode: &mut Episode) {
     let step_count = episode.steps.len();
     if step_count == 0 {
@@ -218,7 +217,7 @@ The update step is where Burn really shines. For each recorded step we:
 7. Accumulate losses across the episode and apply one gradient step.
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/update.rs ~line 41 — update
+// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 41 — update
 pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
     let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
     let mut total_loss = 0.0f32;
@@ -297,20 +296,19 @@ Notice that the mask is applied inside the loss, not just during sampling. This 
 
 ## Greedy evaluation
 
-During training we periodically evaluate the current model greedily (argmax over masked logits). If the greedy rollout reaches the goal faster than any previous greedy rollout, we save that model as `best_model`:
+During training we periodically evaluate the current model greedily (argmax over masked logits). If the greedy rollout reaches the goal faster than any previous greedy rollout, we save that model as `best_model`. The plan graph is built once by `Trainer::train` and reused for every evaluation:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/eval.rs ~line 33 — evaluate_greedy_with_model
+// crates/faf-sim/src/planner/policy/train/trainer/eval.rs ~line 33 — evaluate_greedy_with_model
 pub(crate) fn evaluate_greedy_with_model(
     model: &PolicyBundle<TrainBackend>,
     units: &Units,
     goal: &Goal,
     planner_config: &PlannerConfig,
-    max_steps: usize,
-    dt: f64,
+    plan: &PlanGraph,
+    config: &TrainConfig,
     device: &TrainDevice,
 ) -> Option<f64> {
-    let plan = build_plan_graph(units, *goal);
     let mut state = SimulationState::new(units, &[UnitKind::Commander]);
 
     for _ in 0..max_steps {
@@ -323,16 +321,16 @@ pub(crate) fn evaluate_greedy_with_model(
         let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
 
         if direction_mask.iter().all(|&b| !b) {
-            state.tick(units, dt);
+            state.tick(units, config.dt);
             continue;
         }
 
         let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
         let direction = EdgeCategory::ALL[direction_idx];
-        let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
+        let action = direction_to_action(direction, &state, units, planner_config, goal, plan);
 
-        if execute_action(&mut state, &action, units, dt).is_err() {
-            state.tick(units, dt);
+        if execute_action(&mut state, &action, units, config.dt).is_err() {
+            state.tick(units, config.dt);
         }
     }
 
@@ -344,10 +342,10 @@ Greedy evaluation is the source of the best model. REINFORCE alone does not guar
 
 ## Fine-tuning on the best trajectory
 
-After REINFORCE finishes, the trainer runs supervised fine-tuning on the best trajectory discovered during training. This is a Burn cross-entropy (negative log-likelihood) loss that distills the best episode into the model:
+After REINFORCE finishes, the trainer runs supervised fine-tuning on the best trajectory discovered during training. This is a Burn cross-entropy (negative log-likelihood) loss that distills the best episode into the model. It reuses the same cached plan graph:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/fine_tune.rs ~line 23 — fine_tune_on_trajectory
+// crates/faf-sim/src/planner/policy/train/trainer/fine_tune.rs ~line 23 — fine_tune_on_trajectory
 pub(crate) fn fine_tune_on_trajectory(
     &mut self,
     trajectory: &BuildTrajectory,
@@ -359,7 +357,10 @@ pub(crate) fn fine_tune_on_trajectory(
         return 0.0;
     }
 
-    let plan = build_plan_graph(units, *goal);
+    let plan = self
+        .plan
+        .as_ref()
+        .expect("plan graph should be built before fine-tuning");
     let mut state = SimulationState::new(units, &[UnitKind::Commander]);
     let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
     let mut total_loss_value = 0.0f32;
@@ -438,7 +439,7 @@ Fine-tuning is supervised because we already know the direction that was taken i
 `Trainer::train` orchestrates everything:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 16 — Trainer::train
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 16 — Trainer::train
 pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
     let planner_config = PlannerConfig::default();
     let mut stats = TrainStats::default();
@@ -504,7 +505,7 @@ Trainer::train
 In `Trainer::train`:
 
 ```rust
-// crates/faf-sim/src/planner/mcts/train/trainer/loop.rs ~line 137
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 137
 if let Some(ref mut metrics) = self.metrics {
     metrics.update(
         &TrainEvent::Episode(EpisodeSummary {
@@ -526,7 +527,7 @@ if let Some(ref mut metrics) = self.metrics {
 }
 ```
 
-`FafSimMetrics` (in `crates/faf-sim/src/planner/mcts/train/metric/metrics.rs`) owns one `Metric` implementation for each quantity we care about and forwards every event to all of them. Each metric decides whether the event is relevant; irrelevant events produce `"-"` so the renderer can skip them.
+`FafSimMetrics` (in `crates/faf-sim/src/planner/policy/train/metric/metrics.rs`) owns one `Metric` implementation for each quantity we care about and forwards every event to all of them. Each metric decides whether the event is relevant; irrelevant events produce `"-"` so the renderer can skip them.
 
 ### Train events
 
@@ -547,8 +548,7 @@ There are three event variants:
 | `Completion Time` | `Episode` (goal reached) | Time in seconds when the goal was reached. |
 | `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
 | `Epsilon` | `Episode` | Current epsilon-greedy exploration probability. |
-| `Best Time` | `Episode` or `GreedyEval` | Fastest completion time observed so far. |
-| `Greedy Eval Time` | `GreedyEval` (goal reached) | Completion time of the latest greedy rollout. |
+| `Best Time` | `GreedyEval` | Fastest completion time observed so far across periodic greedy evaluations. |
 | `Episodes/sec` | `Episode` | Training throughput. |
 | `Fine-Tune Loss` | `FineTuneEpoch` | Supervised cross-entropy loss on the best trajectory. |
 
@@ -615,7 +615,7 @@ During normal training you should see:
 - `time` and `best` decreasing as the policy finds faster build orders.
 - `eps` decaying from `epsilon` toward `epsilon_final`.
 
-`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest greedy rollout, not necessarily the final parameters. The TUI plots `Best Time` and `Greedy Eval Time` so you can watch this directly.
+`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest greedy rollout, not necessarily the final parameters. The TUI plots `Best Time` so you can watch this directly.
 
 ### Integration summary
 
@@ -634,4 +634,4 @@ During normal training you should see:
 - **Greedy eval chooses the best model.** Track the fastest greedy completion time and keep that model.
 - **Fine-tuning distills the best trajectory.** Cross-entropy on the recorded directions can polish the final policy.
 
-With the policy trained, the next chapter shows how to use it as a prior inside MCTS.
+With the policy trained, the next chapter shows how to wire it into the reactive simulator.

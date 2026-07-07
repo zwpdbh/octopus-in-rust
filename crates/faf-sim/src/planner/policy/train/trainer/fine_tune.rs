@@ -8,11 +8,11 @@ use super::super::episode::BuildTrajectory;
 use super::super::math::tensor1d_from_vec;
 use super::super::TrainBackend;
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::planner::mcts::direction_planner::execute_action;
-use crate::planner::mcts::features::state_features;
-use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
-use crate::planner::mcts::macro_net::{DIRECTION_COUNT, MASK_VALUE};
-use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
+use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
+use crate::planner::policy::direction_planner::execute_action;
+use crate::planner::policy::features::state_features;
+use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal};
+use crate::planner::policy::macro_net::{DIRECTION_COUNT, MASK_VALUE};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -31,7 +31,10 @@ impl Trainer {
             return 0.0;
         }
 
-        let plan = build_plan_graph(units, *goal);
+        let plan = self
+            .plan
+            .as_ref()
+            .expect("plan graph should be built before fine_tune_on_trajectory");
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
         let mut total_loss_value = 0.0f32;
@@ -41,7 +44,7 @@ impl Trainer {
             let mut executable = false;
             for _ in 0..self.config.max_steps {
                 let direction_mask =
-                    legal_direction_mask(&state, units, planner_config, goal, &plan);
+                    legal_direction_mask(&state, units, planner_config, goal, plan);
                 if !direction_mask[step.direction_index] {
                     state.tick(units, planner_config.dt);
                     continue;
@@ -80,7 +83,7 @@ impl Trainer {
 
                 let direction = EdgeCategory::ALL[step.direction_index];
                 let action =
-                    direction_to_action(direction, &state, units, planner_config, goal, &plan);
+                    direction_to_action(direction, &state, units, planner_config, goal, plan);
                 let _ = execute_action(&mut state, &action, units, planner_config.dt);
                 executable = true;
                 break;

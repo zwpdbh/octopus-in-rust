@@ -4,7 +4,7 @@
 //! subcommands are organized as:
 //!
 //! ```text
-//! faf-sim simulate -s mcts cybran monkeylord
+//! faf-sim simulate -s policy:mlp:greedy cybran monkeylord
 //! faf-sim train -e 1000 cybran monkeylord
 //! ```
 //!

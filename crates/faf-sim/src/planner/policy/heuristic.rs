@@ -138,15 +138,16 @@ fn pick_mass_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseMass)
-        .into_iter()
-        .filter(|c| {
-            matches!(
-                c.target(),
-                UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
-            )
-        })
-        .collect();
+    let candidates: Vec<_> =
+        legal_candidates(plan, state, units, config, EdgeCategory::IncreaseMass)
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    c.target(),
+                    UnitKind::Mex(_) | UnitKind::CapT2Mex | UnitKind::CapT3Mex
+                )
+            })
+            .collect();
 
     let Some(best) = candidates
         .into_iter()
@@ -177,10 +178,11 @@ fn pick_energy_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseEnergy)
-        .into_iter()
-        .filter(|c| matches!(c.target(), UnitKind::Pgen(_)))
-        .collect();
+    let candidates: Vec<_> =
+        legal_candidates(plan, state, units, config, EdgeCategory::IncreaseEnergy)
+            .into_iter()
+            .filter(|c| matches!(c.target(), UnitKind::Pgen(_)))
+            .collect();
 
     let Some(best) = candidates
         .into_iter()
@@ -212,9 +214,7 @@ fn pick_bp_action(
         let Some(target) = candidates
             .into_iter()
             .filter_map(|c| match c {
-                Candidate::Build { target }
-                    if matches!(target, UnitKind::Factory(_)) =>
-                {
+                Candidate::Build { target } if matches!(target, UnitKind::Factory(_)) => {
                     Some(target)
                 }
                 _ => None,
@@ -229,11 +229,7 @@ fn pick_bp_action(
     let Some(target) = candidates
         .into_iter()
         .filter_map(|c| match c {
-            Candidate::Build { target }
-                if matches!(target, UnitKind::Engineer(_)) =>
-            {
-                Some(target)
-            }
+            Candidate::Build { target } if matches!(target, UnitKind::Engineer(_)) => Some(target),
             _ => None,
         })
         .max_by(|a, b| engineer_tier(a).cmp(&engineer_tier(b)))
@@ -258,9 +254,15 @@ fn pick_storage_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let can_build = legal_candidates(plan, state, units, config, EdgeCategory::IncreaseEnergyStorage)
-        .iter()
-        .any(|c| matches!(c, Candidate::Build { target } if *target == UnitKind::EnergyStorage));
+    let can_build = legal_candidates(
+        plan,
+        state,
+        units,
+        config,
+        EdgeCategory::IncreaseEnergyStorage,
+    )
+    .iter()
+    .any(|c| matches!(c, Candidate::Build { target } if *target == UnitKind::EnergyStorage));
 
     if !can_build {
         return SimAction::Wait;
@@ -305,8 +307,13 @@ fn pick_goal_action(
         rate_b.total_cmp(&rate_a)
     });
 
-    let builders =
-        greedy_with_stall_gate(candidates, &goal.cost().to_target_stats(), state, units, config.dt);
+    let builders = greedy_with_stall_gate(
+        candidates,
+        &goal.cost().to_target_stats(),
+        state,
+        units,
+        config.dt,
+    );
     if builders.is_empty() {
         return SimAction::Wait;
     }
@@ -323,17 +330,19 @@ fn pick_upgrade_action(
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
-    let candidates: Vec<_> = legal_candidates(plan, state, units, config, EdgeCategory::UpgradeTech)
-        .into_iter()
-        .filter_map(|c| match c {
-            Candidate::Upgrade { from, to }
-                if matches!(from, UnitKind::Factory(_)) && matches!(to, UnitKind::Factory(_)) =>
-            {
-                Some((from, to))
-            }
-            _ => None,
-        })
-        .collect();
+    let candidates: Vec<_> =
+        legal_candidates(plan, state, units, config, EdgeCategory::UpgradeTech)
+            .into_iter()
+            .filter_map(|c| match c {
+                Candidate::Upgrade { from, to }
+                    if matches!(from, UnitKind::Factory(_))
+                        && matches!(to, UnitKind::Factory(_)) =>
+                {
+                    Some((from, to))
+                }
+                _ => None,
+            })
+            .collect();
 
     let Some((from, to)) = candidates
         .into_iter()
@@ -720,24 +729,17 @@ mod tests {
         let goal = t4_goal();
         let plan = build_plan(&units, goal);
 
-        let action = direction_to_action(
-            EdgeCategory::Goal,
-            &state,
-            &units,
-            &config,
-            &goal,
-            &plan,
-        );
+        let action = direction_to_action(EdgeCategory::Goal, &state, &units, &config, &goal, &plan);
         let SimAction::BuildGoal { builders, .. } = action else {
-            panic!("Goal direction should start a goal project, got {:?}", action);
+            panic!(
+                "Goal direction should start a goal project, got {:?}",
+                action
+            );
         };
         assert!(
-            builders.iter().all(|&b| {
-                matches!(
-                    state.graph[b].unit_id,
-                    UnitKind::Engineer(TechLevel::T3)
-                )
-            }),
+            builders
+                .iter()
+                .all(|&b| { matches!(state.graph[b].unit_id, UnitKind::Engineer(TechLevel::T3)) }),
             "Goal project must be started by T3 engineers, not factories"
         );
     }

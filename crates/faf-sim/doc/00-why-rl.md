@@ -2,7 +2,7 @@
 
 A FAF build order is a sequence of build/upgrade/assist/wait decisions that grows your economy and technology until a goal is reached. The objective is simple: finish the goal as fast as possible. Finding the optimal sequence is not simple.
 
-This tutorial explains why **reinforcement learning (RL)** is a good fit for FAF build-order optimization, why we train the policy with REINFORCE, and why we use **Monte Carlo Tree Search (MCTS)** only during simulation/inference. The implementation is in Rust with the [Burn](https://github.com/tracel-ai/burn) deep-learning framework.
+This tutorial explains why **reinforcement learning (RL)** is a good fit for FAF build-order optimization and why we train a single direction policy with REINFORCE. The implementation is in Rust with the [Burn](https://github.com/tracel-ai/burn) deep-learning framework.
 
 ## The search space is enormous and sequential
 
@@ -69,64 +69,36 @@ The overall flow is:
             next SimulationState
 ```
 
-## What MCTS adds (during simulation)
+## Why a learned policy, not hand-written heuristics?
 
-MCTS is used only when you run `faf-sim simulate`, not during training. It is **closed-loop**. It keeps a search tree rooted in the current observed state, expands the most promising branches, and recomputes the best action from the real state each tick. Small deviations do not compound because the planner always reasons from the latest state.
+Hand-written build orders work for one target on one map, but they are brittle:
 
-MCTS also naturally balances two things that are hard to encode by hand:
+- A small balance patch can change the optimal order.
+- Different factions and targets need different orders.
+- It is hard to weigh trade-offs like "one more mex now vs. one more engineer now" in closed form.
 
-1. **Exploration** — trying actions whose short-term value is unclear.
-2. **Exploitation** — doubling down on actions that look good in simulation.
+A learned policy discovers these trade-offs from experience. It is trained to maximize a single scalar — negative completion time — and generalizes across the states it has seen during training.
 
-The UCT formula (covered in [chapter 8](07-mcts-search.md)) does this balance mathematically. During training, the policy explores by sampling from its own output with epsilon-greedy noise instead of building a tree.
+During training the policy explores by sampling from its own output with epsilon-greedy noise. During simulation we typically use the greedy argmax direction, which is deterministic and fast.
 
-## Why a learned policy, not random rollouts?
+## Why one-step policy instead of search?
 
-In classic MCTS, a leaf is evaluated by playing random moves to the end and averaging the result. For FAF this is too expensive:
+A natural question is: why not wrap the policy in a lookahead search? The answer is practical:
 
-- The horizon is long (minutes of game time, many build steps).
-- The reward is sparse (you only know the result when the goal is reached).
-- Random rollouts produce mostly terrible build orders, so the signal is noisy.
-
-A **learned direction policy** replaces the random rollout. It is a single `burn::module::Module` that, in one forward pass, decides which strategic direction to pursue. The heuristic layer then resolves that direction into a fully specified command. During simulation MCTS still explores the tree, but it expands directions using the network's prior probabilities and evaluates leaves with greedy policy rollouts. During training the policy is sampled directly, without any tree.
-
-## Why MCTS if the policy can act alone?
-
-A natural question is: if `macro_policy_plan` already turns the network output into a concrete `SimAction`, why do we need MCTS at all?
-
-The answer is that MCTS is **not required** to use the policy. The policy can act by itself in a single forward pass:
-
-```text
-state → state_features → HierarchicalPolicyNet → direction → heuristic → SimAction
-```
-
-That one-step mode is exactly what the trainer uses, because running MCTS inside every training episode would be too slow.
-
-MCTS becomes useful **after** training, during simulation. It wraps the same one-step policy and uses it to look ahead:
-
-```text
-Planner::plan(state, goal)
-    │
-    ▼
-MCTS tree search over 6 directions
-    │  • each node expands one legal direction
-    │  • selection uses network priors (PUCT)
-    │  • leaf values come from greedy policy rollouts
-    │  • many futures are simulated and averaged
-    ▼
-action with highest visit count
-```
+- The policy was trained with **REINFORCE on one-step rollouts**, so it was never trained to provide accurate value estimates for hypothetical future states.
+- The simulator is deterministic, so replanning every tick from the real state already corrects drift.
+- One forward pass per tick is fast enough for the reactive simulation loop.
 
 So the relationship is:
 
-- **Training:** REINFORCE on one-step policy rollouts. No MCTS.
-- **Simulation:** MCTS searches through many one-step policy rollouts to pick a more robust action.
+- **Training:** REINFORCE on one-step policy rollouts.
+- **Simulation:** one-step greedy (or sampled) policy evaluation per tick.
 
-MCTS adds lookahead and averaging. It can find actions that look slightly worse now but lead to much better states later, and it can recover when the network's single-step greedy choice is wrong.
+The policy itself is the planner. If a direction looks slightly worse now but leads to much better states later, the policy must learn that from the return signal during training.
 
 ## Why FAF is a good testbed for this
 
-- **Deterministic simulator.** The same state and action always produce the same next state, so MCTS rollouts are exact and reproducible.
+- **Deterministic simulator.** The same state and action always produce the same next state, so rollouts are reproducible.
 - **Known rules.** Unit stats, build powers, tech requirements, and upgrade costs come from the `Units` repository; there is no hidden physics.
 - **Clear objective.** Minimize completion time, with a secondary efficiency metric.
 - **Compact state.** `SimulationState` is structured data, not raw pixels, so featurization is straightforward.
@@ -139,4 +111,4 @@ MCTS adds lookahead and averaging. It can find actions that look slightly worse 
 
 ## The roadmap in one paragraph
 
-We model the simulator state as a graph, extract an 11-dimensional feature vector, build a small Burn `Module` that maps features to a distribution over six strategic directions, resolve each direction into a concrete command with a deterministic heuristic, train the network with REINFORCE, and run UCT search on top of the trained network during simulation. The rest of this tutorial walks through each piece.
+We model the simulator state as a graph, extract an 11-dimensional feature vector, build a small Burn `Module` that maps features to a distribution over six strategic directions, resolve each direction into a concrete command with a deterministic heuristic, and train the network with REINFORCE. The rest of this tutorial walks through each piece.

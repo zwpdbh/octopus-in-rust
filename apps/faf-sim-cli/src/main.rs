@@ -3,7 +3,7 @@
 //! ```text
 //! faf-sim plan
 //! faf-sim simulate cybran monkeylord
-//! faf-sim simulate -s mcts:200 cybran monkeylord
+//! faf-sim simulate -s policy:mlp:greedy cybran monkeylord
 //! ```
 //!
 //! `plan` emits an SVG image of the universal ACU-rooted plan graph showing the
@@ -19,14 +19,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::Parser;
-use faf_sim::planner::mcts::macro_net::hierarchical_policy_net_dot;
-use faf_sim::planner::mcts::train::TuiMetricsRendererWrapper;
-use faf_sim::planner::mcts::train::{
+use faf_sim::planner::plan_graph::PlanNode;
+use faf_sim::planner::policy::macro_net::hierarchical_policy_net_dot;
+use faf_sim::planner::policy::train::TuiMetricsRendererWrapper;
+use faf_sim::planner::policy::train::{
     load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
     MetricsRenderer, TrainConfig,
 };
-use faf_sim::planner::mcts::value_net::MlpValueNet;
-use faf_sim::planner::plan_graph::PlanNode;
+use faf_sim::planner::policy::value_net::MlpValueNet;
 use faf_sim::{
     run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, SimulationConfig,
     SimulationState, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
@@ -63,7 +63,14 @@ async fn main() {
         CliCommand::Simulate(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
-            run_simulate(&units, target, args.strategy, args.max_mex_count, args.output).await;
+            run_simulate(
+                &units,
+                target,
+                args.strategy,
+                args.max_mex_count,
+                args.output,
+            )
+            .await;
         }
         CliCommand::DrawNet(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
@@ -292,14 +299,12 @@ where
     let task = tokio::task::spawn_blocking(training);
     tokio::pin!(task);
 
-    loop {
-        tokio::select! {
-            res = &mut task => return res.expect("training task panicked"),
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("Ctrl+C received; stopping training gracefully.");
-                stop_flag.store(true, Ordering::Relaxed);
-                return task.await.expect("training task panicked");
-            }
+    tokio::select! {
+        res = &mut task => res.expect("training task panicked"),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("Ctrl+C received; stopping training gracefully.");
+            stop_flag.store(true, Ordering::Relaxed);
+            task.await.expect("training task panicked")
         }
     }
 }

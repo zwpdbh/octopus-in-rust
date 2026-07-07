@@ -1,7 +1,7 @@
 ## Strategy
 
-- Use MCTS + value network (RL).
-- The RL uses the eco state to generate a probability over candidates discovered from the plan graph.
+- Use a learned direction policy network (REINFORCE).
+- The policy uses the economy state to generate a probability distribution over high-level directions discovered from the plan graph.
 
 ## Commands
 
@@ -22,9 +22,9 @@ cargo run --release --bin faf-sim -- train -e 5000 -m 10000 \
 # Simulate a trained policy. The default strategy is greedy argmax over the learned policy.
 cargo run --bin faf-sim -- simulate uef novaxcenter
 cargo run --release --bin faf-sim -- simulate uef novaxcenter
-
+cargo run --release --bin faf-sim -- simulate uef novaxcenter  --strategy policy:mlp:greedy
 # Use an explicit strategy. `:greedy` (or `:deterministic`) makes the simulation reproducible.
-cargo run --release --bin faf-sim -- simulate -s mcts:100:mlp:greedy uef novaxcenter
+cargo run --release --bin faf-sim -- simulate -s policy:mlp:greedy uef novaxcenter
 ```
 
 ## What is being trained
@@ -36,7 +36,7 @@ The `train` command learns a single **hierarchical policy network** with a share
 3. **Power head** — decides how much build power to allocate to that edge.
 4. **Squad head** — decides the `[T1, T2, T3]` engineer composition.
 
-Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluation, and supervised fine-tuning on the best discovered trajectory. `simulate` uses the trained network as both the MCTS prior and the leaf rollout policy.
+Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluation, and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
 
 ## Training parameters reference
 
@@ -110,17 +110,16 @@ cargo run --no-default-features --features cpu --release --bin faf-sim -- \
 
 The live dashboard shows one plot per metric. You can switch metrics with `←`/`→` and plot types (recent history / full history) with `↑`/`↓`.
 
-| Metric               | What it tells you                                                                                                     |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Episode Loss**     | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                         |
-| **Fine-Tune Loss**   | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                             |
-| **Episode Steps**    | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.      |
-| **Completion Time (min)** | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
-| **Goal Reach**       | Percentage of episodes that reached the goal. You want this to climb toward 100%.                                     |
-| **Epsilon**          | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                         |
-| **Best Time (min)**      | Best completion time in minutes observed so far across training and greedy evaluations. Monotonically non-increasing. |
-| **Greedy Eval Time (min)** | Completion time in minutes of periodic greedy (no exploration) rollouts. Measures true policy quality.                |
-| **Episodes/sec**     | Training throughput. Higher is faster, but does not indicate learning quality.                                        |
+| Metric                     | What it tells you                                                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Episode Loss**           | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                         |
+| **Fine-Tune Loss**         | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                             |
+| **Episode Steps**          | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.      |
+| **Completion Time (min)**  | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
+| **Goal Reach**             | Percentage of episodes that reached the goal. You want this to climb toward 100%.                                     |
+| **Epsilon**                | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                         |
+| **Best Time (min)**        | Best completion time in minutes observed so far across periodic greedy evaluations. Monotonically non-increasing. |
+| **Episodes/sec**           | Training throughput. Higher is faster, but does not indicate learning quality.                                        |
 
 When training is healthy you should see `Goal Reach` rise, `Episode Loss` fall, and `Best Time (min)` drop within the first few hundred episodes.
 
@@ -132,7 +131,7 @@ For UEF Novax Center, `-m 10000` (≈160 minutes of game time at `--dt 1.0`) is 
 
 ## Simulate without a trained model
 
-If you run `simulate` before training, the planner falls back to a randomly initialized network and runs MCTS with random priors over an 8-hour horizon. This is expected to be very slow and is useful only as a smoke test. Train first for real results.
+If you run `simulate` before training, the planner uses a randomly initialized network and picks random legal directions over an 8-hour horizon. This is expected to be very slow and is useful only as a smoke test. Train first for real results.
 
 ## Controlling exploration
 
@@ -168,7 +167,7 @@ Saved best-seen model to data/models/mlp-uef-novax-center
 `simulate` loads the trained model automatically and prints the completion time, the final economy, and the build timeline:
 
 ```text
-Strategy: mcts:100:mlp:greedy
+Strategy: policy:mlp:greedy
 Simulate target: UEF Novax Center (XEB2402)
 Loading trained model from data/models/mlp-uef-novax-center.mpk
 

@@ -1,7 +1,7 @@
 //! Burn-style metrics for faf-sim training.
 //!
 //! The training dashboard displays one plot per metric. Each metric is updated
-//! from [`TrainEvent`]s produced by the MCTS planner. The following metrics are
+//! from [`TrainEvent`]s produced by the policy trainer. The following metrics are
 //! collected:
 //!
 //! | Metric | Source | Interpretation |
@@ -33,8 +33,8 @@ use super::events::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary, TrainEve
 /// Episode REINFORCE loss.
 ///
 /// Tracks the policy loss computed over the completed episode. This is the
-/// primary optimization objective: a decreasing value indicates the MCTS
-/// policy network is learning from the collected trajectories.
+/// primary optimization objective: a decreasing value indicates the policy
+/// network is learning from the collected trajectories.
 #[derive(Clone, Default)]
 pub struct EpisodeLossMetric {
     name: MetricName,
@@ -406,10 +406,10 @@ impl Numeric for EpsilonMetric {
 
 /// Best completion time observed so far, in minutes.
 ///
-/// Tracks the lowest completion time seen across both normal training
-/// episodes and periodic greedy evaluations, converted to minutes for
-/// readability. Unlike [`CompletionTimeMetric`], this value is monotonically
-/// non-increasing and shows the best performance achieved so far.
+/// Tracks the lowest completion time seen across periodic greedy
+/// evaluations, converted to minutes for readability. Unlike
+/// [`CompletionTimeMetric`], this value is monotonically non-increasing and
+/// shows the best greedy performance achieved so far.
 #[derive(Clone, Default)]
 pub struct BestTimeMetric {
     name: MetricName,
@@ -442,9 +442,8 @@ impl Metric for BestTimeMetric {
 
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
         let best = match item {
-            TrainEvent::Episode(EpisodeSummary { best_time, .. }) => *best_time,
             TrainEvent::GreedyEval(GreedyEvalSummary { best_time, .. }) => *best_time,
-            _ => None,
+            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
         let Some(value) = best else {
             return SerializedEntry::new("-".to_string(), "".to_string());
@@ -462,73 +461,6 @@ impl Metric for BestTimeMetric {
 }
 
 impl Numeric for BestTimeMetric {
-    fn value(&self) -> NumericEntry {
-        self.state.current_value()
-    }
-
-    fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
-    }
-}
-
-/// Greedy evaluation completion time, in minutes.
-///
-/// Tracks the completion time of periodic greedy evaluations, where the agent
-/// acts without exploration (`epsilon = 0`), converted to minutes for
-/// readability. This measures the true policy quality independent of random
-/// exploration. Only successful greedy runs are reported.
-#[derive(Clone, Default)]
-pub struct GreedyEvalTimeMetric {
-    name: MetricName,
-    state: NumericMetricState,
-}
-
-impl GreedyEvalTimeMetric {
-    pub fn new() -> Self {
-        Self {
-            name: Arc::new("Greedy Eval Time (min)".to_string()),
-            state: NumericMetricState::default(),
-        }
-    }
-}
-
-impl Metric for GreedyEvalTimeMetric {
-    type Input = TrainEvent;
-
-    fn name(&self) -> MetricName {
-        self.name.clone()
-    }
-
-    fn attributes(&self) -> MetricAttributes {
-        NumericAttributes {
-            unit: Some("min".to_string()),
-            higher_is_better: false,
-        }
-        .into()
-    }
-
-    fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let value = match item {
-            TrainEvent::GreedyEval(GreedyEvalSummary {
-                reached_goal: true,
-                completion_time: Some(t),
-                ..
-            }) => *t,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
-        };
-        self.state.update(
-            seconds_to_minutes(value),
-            1,
-            FormatOptions::new(self.name()).precision(2).unit("min"),
-        )
-    }
-
-    fn clear(&mut self) {
-        self.state.reset();
-    }
-}
-
-impl Numeric for GreedyEvalTimeMetric {
     fn value(&self) -> NumericEntry {
         self.state.current_value()
     }
@@ -639,7 +571,6 @@ pub struct FafSimMetrics {
     goal_reach: GoalReachMetric,
     epsilon: EpsilonMetric,
     best_time: BestTimeMetric,
-    greedy_time: GreedyEvalTimeMetric,
     speed: EpisodeSpeedMetric,
 }
 
@@ -655,7 +586,6 @@ impl FafSimMetrics {
             goal_reach: GoalReachMetric::new(),
             epsilon: EpsilonMetric::new(),
             best_time: BestTimeMetric::new(),
-            greedy_time: GreedyEvalTimeMetric::new(),
             speed: EpisodeSpeedMetric::new(),
         }
     }
@@ -669,7 +599,6 @@ impl FafSimMetrics {
         Self::register_metric(&mut *self.renderer, &self.goal_reach);
         Self::register_metric(&mut *self.renderer, &self.epsilon);
         Self::register_metric(&mut *self.renderer, &self.best_time);
-        Self::register_metric(&mut *self.renderer, &self.greedy_time);
         Self::register_metric(&mut *self.renderer, &self.speed);
     }
 
@@ -698,7 +627,6 @@ impl FafSimMetrics {
         Self::update_metric(&mut *self.renderer, &mut self.goal_reach, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.epsilon, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.best_time, event, metadata);
-        Self::update_metric(&mut *self.renderer, &mut self.greedy_time, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.speed, event, metadata);
     }
 

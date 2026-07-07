@@ -6,8 +6,8 @@
 //! single inference operation it needs: direction logits.
 
 use crate::planner::core::{PlannerError, ValueNetKind};
-use crate::planner::mcts::macro_net::HierarchicalPolicyNet;
-use crate::planner::mcts::train::{TrainBackend, TrainDevice};
+use crate::planner::policy::macro_net::HierarchicalPolicyNet;
+use crate::planner::policy::train::{TrainBackend, TrainDevice};
 
 /// Trait-object safe interface to the learned direction policy.
 ///

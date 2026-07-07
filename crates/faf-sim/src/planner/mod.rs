@@ -9,8 +9,8 @@
 
 pub(crate) mod action;
 pub mod core;
-pub mod mcts;
 pub mod plan_graph;
+pub mod policy;
 
 pub use action::SimAction;
 pub use core::{Goal, PlanResult, Planner, PlannerConfig, PlannerError, Strategy, ValueNetKind};

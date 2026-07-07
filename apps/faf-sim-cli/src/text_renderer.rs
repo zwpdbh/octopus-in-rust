@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use faf_sim::planner::mcts::train::{
+use faf_sim::planner::policy::train::{
     EvaluationName, EvaluationProgress, LearnerSummary, MetricDefinition, MetricId, MetricState,
     MetricsRenderer, MetricsRendererEvaluation, MetricsRendererTraining, NumericEntry,
     ProgressType, TrainingProgress,

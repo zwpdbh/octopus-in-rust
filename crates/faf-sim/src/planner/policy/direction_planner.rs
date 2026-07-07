@@ -5,11 +5,11 @@
 //! delegates concrete action selection to the heuristic layer.
 
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
-use crate::planner::mcts::features::state_features;
-use crate::planner::mcts::heuristic::{direction_to_action, is_direction_legal};
-use crate::planner::mcts::macro_net::{masked_argmax, masked_sample_index};
-use crate::planner::mcts::value_net::{MlpValueNet, ValueNet};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
+use crate::planner::policy::features::state_features;
+use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal};
+use crate::planner::policy::macro_net::{masked_argmax, masked_sample_index};
+use crate::planner::policy::value_net::{MlpValueNet, ValueNet};
 use crate::planner::SimAction;
 use crate::sim::{GraphSimError, SimulationState};
 use crate::units::Units;
@@ -150,6 +150,7 @@ pub(crate) fn plan_result_with_action(state: SimulationState, action: SimAction)
         completion_time: state.time,
         final_economy: state.economy,
         first_action: Some(action),
+        final_state: state,
     }
 }
 

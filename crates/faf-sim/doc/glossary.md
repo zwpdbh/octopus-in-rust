@@ -20,24 +20,20 @@
 | **Fine-tuning** | Supervised training on the best trajectory found during REINFORCE, run after the main loop. |
 | **Heuristic layer** | Deterministic rules in `heuristic.rs` that convert a selected `EdgeCategory` direction into a concrete `SimAction`. |
 | **HierarchicalPolicyNet** | The Burn `Module` that implements the direction-only policy: shared backbone plus a single direction head. |
-| **MCTS** | Monte Carlo Tree Search. Uses UCT selection, expansion, rollout, and backup to choose actions. |
 | **Module** | Burn derive macro that makes a struct recordable, loadable, optimizable, and device-movable. |
 | **NodeId** | Opaque identifier for a node in `SimulationState` (a unit instance or project). |
 | **Observation** | Actor message carrying either a `BuildEvent` or the full `SimulationState` from the simulator to the decision actor. |
 | **PlanGraph** | Static directed acyclic graph derived from `Units` and the `Goal`. It catalogues every legal build/upgrade edge and is used to enumerate legal directions and to validate heuristic choices. It does not change during an episode or rollout. See also `BuildGraph`. |
 | **Planner** | The public facade that owns the strategy, configuration, and policy bundle. |
 | **Policy bundle** | The learned direction-only network saved and loaded together; macro alias for `HierarchicalPolicyNet`. |
-| **Rollout** | In MCTS, a full simulation from a leaf node using the greedy policy network on a cloned `SimulationState`. The rollout adds nodes to the cloned build graph through normal simulator execution and returns a scalar value estimate. |
+| **Rollout** | A full episode sampled from the current policy, used to collect trajectories for REINFORCE. |
 | **REINFORCE** | Policy-gradient algorithm used to train the direction head from Monte Carlo returns. |
 | **Patience** | Number of episodes without a new best completion time after which training stops early. |
-| **PUCT** | UCT variant that incorporates a learned prior probability into the exploration bonus. |
 | **Return** | Discounted sum of rewards over an episode, used as the target for REINFORCE. |
-| **Selection** | In MCTS, traversing the tree from the root to a leaf using the UCB1/PUCT formula. |
 | **Shortfall** | Historical feedback channel for unmet engineer demand. Removed in the current direction-only design. |
 | **SimAction** | Internal representation of a simulator action: `Build`, `Upgrade`, `Assist`, `BuildGoal`, or `Wait`. |
 | **Simulator tick** | One fixed-duration step of the discrete-time economy and build-progress simulation. |
-| **Strategy** | The planner enum. Currently only `Strategy::Mcts` exists, with `ValueNetKind::Mlp` or `Gnn`. |
-| **UCT** | Upper Confidence Bound applied to Trees. The selection formula used by MCTS. |
+| **Strategy** | The planner enum. Currently only `Strategy::Policy` exists, with `ValueNetKind::Mlp` or `Gnn`. |
 | **UnitKind** | Type-level identifier for a unit class, e.g. `UnitKind::Engineer(T3)` or `UnitKind::Unique(UnitId("UEL0301".to_string()))`. |
 | **Units** | The static unit database: stats, build lists, prerequisites, adjacency bonuses. |
 | **Upgrade** | Replacing an existing structure with a higher-tier version, such as T1 mex → T2 mex. |
