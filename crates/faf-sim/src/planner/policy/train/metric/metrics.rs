@@ -9,11 +9,10 @@
 //! | Episode Loss | `TrainEvent::Episode` | REINFORCE policy loss for the finished episode. Lower is better; a downward trend means the policy is improving. |
 //! | Fine-Tune Loss | `TrainEvent::FineTuneEpoch` | Supervised fine-tuning loss on the best trajectories. Lower is better. |
 //! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
-//! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal. Lower is better. |
-//! | Goal Reach | `TrainEvent::Episode` | Percentage of episodes that reached the goal. Higher is better; 100% means the agent consistently succeeds. |
+//! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal; "N/A" otherwise. Lower is better. |
+//! | Goal Reach | `TrainEvent::Episode` | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better. |
 //! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
-//! | Best Time (min) | `TrainEvent::Episode`, `TrainEvent::GreedyEval` | Best completion time in minutes observed so far across training and greedy evaluations. Lower is better. |
-//! | Greedy Eval Time (min) | `TrainEvent::GreedyEval` | Completion time in minutes of a periodic greedy (no exploration) evaluation. Lower is better. |
+//! | Best Time (min) | `TrainEvent::GreedyEval` | Best completion time in minutes observed so far from periodic greedy evaluations; "N/A" before any greedy run reaches the goal. Lower is better. |
 //! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
 use std::sync::Arc;
@@ -214,19 +213,19 @@ impl Numeric for EpisodeStepsMetric {
 ///
 /// Tracks the simulator time at which the episode reached the goal, converted
 /// to minutes for readability. Episodes that do not reach the goal are reported
-/// as "-" rather than the final time. Lower values mean the agent is solving
+/// as "N/A" rather than the final time. Lower values mean the agent is solving
 /// the task faster.
 #[derive(Clone, Default)]
 pub struct CompletionTimeMetric {
     name: MetricName,
-    state: NumericMetricState,
+    current_time: Option<f64>,
 }
 
 impl CompletionTimeMetric {
     pub fn new() -> Self {
         Self {
             name: Arc::new("Completion Time (min)".to_string()),
-            state: NumericMetricState::default(),
+            current_time: None,
         }
     }
 }
@@ -252,48 +251,77 @@ impl Metric for CompletionTimeMetric {
                 reached_goal: true,
                 completion_time,
                 ..
-            }) => *completion_time,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
+            }) => {
+                self.current_time = Some(*completion_time);
+                *completion_time
+            }
+            _ => {
+                self.current_time = None;
+                return SerializedEntry::new("N/A".to_string(), "N/A".to_string());
+            }
         };
-        self.state.update(
-            seconds_to_minutes(value),
-            1,
-            FormatOptions::new(self.name()).precision(2).unit("min"),
-        )
+        let minutes = seconds_to_minutes(value);
+        SerializedEntry::new(format!("{minutes:.2} min"), format!("{minutes:.2}"))
     }
 
     fn clear(&mut self) {
-        self.state.reset();
+        self.current_time = None;
     }
 }
 
 impl Numeric for CompletionTimeMetric {
     fn value(&self) -> NumericEntry {
-        self.state.current_value()
+        NumericEntry::Value(
+            self.current_time
+                .map(seconds_to_minutes)
+                .unwrap_or(f64::NAN),
+        )
     }
 
     fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
+        self.value()
     }
 }
 
-/// Fraction of episodes that reached the goal.
+/// Fraction of recent episodes that reached the goal.
 ///
-/// Tracks the success rate of episodes. Reported as a percentage, where 100%
-/// means every episode reached the goal and 0% means none did. This is the
-/// simplest indicator of whether the agent is learning to solve the task.
-#[derive(Clone, Default)]
+/// Tracks a sliding-window success rate over the last N episodes and plots it
+/// as a percentage. This gives a smoother view of learning progress than the
+/// raw per-episode boolean.
+#[derive(Clone)]
 pub struct GoalReachMetric {
     name: MetricName,
-    state: NumericMetricState,
+    window: usize,
+    history: std::collections::VecDeque<f64>,
 }
 
 impl GoalReachMetric {
+    /// Create a metric with the default 100-episode window.
     pub fn new() -> Self {
+        Self::with_window(100)
+    }
+
+    /// Create a metric with a custom sliding-window size.
+    pub fn with_window(window: usize) -> Self {
         Self {
             name: Arc::new("Goal Reach".to_string()),
-            state: NumericMetricState::default(),
+            window: window.max(1),
+            history: std::collections::VecDeque::new(),
         }
+    }
+
+    fn current_ratio(&self) -> f64 {
+        if self.history.is_empty() {
+            0.0
+        } else {
+            self.history.iter().sum::<f64>() / self.history.len() as f64
+        }
+    }
+}
+
+impl Default for GoalReachMetric {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -313,35 +341,33 @@ impl Metric for GoalReachMetric {
     }
 
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let value = match item {
-            TrainEvent::Episode(EpisodeSummary { reached_goal, .. }) => {
-                if *reached_goal {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+        let reached = match item {
+            TrainEvent::Episode(EpisodeSummary { reached_goal, .. }) => *reached_goal,
             _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
-        self.state.update(
-            value,
-            1,
-            FormatOptions::new(self.name()).precision(2).unit("%"),
+        self.history.push_back(if reached { 1.0 } else { 0.0 });
+        while self.history.len() > self.window {
+            self.history.pop_front();
+        }
+        let ratio = self.current_ratio();
+        SerializedEntry::new(
+            format!("{:.2} %", ratio * 100.0),
+            format!("{:.4}", ratio),
         )
     }
 
     fn clear(&mut self) {
-        self.state.reset();
+        self.history.clear();
     }
 }
 
 impl Numeric for GoalReachMetric {
     fn value(&self) -> NumericEntry {
-        self.state.current_value()
+        NumericEntry::Value(self.current_ratio())
     }
 
     fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
+        self.value()
     }
 }
 
@@ -409,18 +435,20 @@ impl Numeric for EpsilonMetric {
 /// Tracks the lowest completion time seen across periodic greedy
 /// evaluations, converted to minutes for readability. Unlike
 /// [`CompletionTimeMetric`], this value is monotonically non-increasing and
-/// shows the best greedy performance achieved so far.
+/// shows the best greedy performance achieved so far. Before any greedy
+/// evaluation reaches the goal, the metric reports "N/A" instead of an
+/// extreme floating-point placeholder.
 #[derive(Clone, Default)]
 pub struct BestTimeMetric {
     name: MetricName,
-    state: NumericMetricState,
+    best_time: Option<f64>,
 }
 
 impl BestTimeMetric {
     pub fn new() -> Self {
         Self {
             name: Arc::new("Best Time (min)".to_string()),
-            state: NumericMetricState::default(),
+            best_time: None,
         }
     }
 }
@@ -443,30 +471,28 @@ impl Metric for BestTimeMetric {
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
         let best = match item {
             TrainEvent::GreedyEval(GreedyEvalSummary { best_time, .. }) => *best_time,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
+            _ => return SerializedEntry::new("N/A".to_string(), "N/A".to_string()),
         };
         let Some(value) = best else {
-            return SerializedEntry::new("-".to_string(), "".to_string());
+            return SerializedEntry::new("N/A".to_string(), "N/A".to_string());
         };
-        self.state.update(
-            seconds_to_minutes(value),
-            1,
-            FormatOptions::new(self.name()).precision(2).unit("min"),
-        )
+        self.best_time = Some(value);
+        let minutes = seconds_to_minutes(value);
+        SerializedEntry::new(format!("{minutes:.2} min"), format!("{minutes:.2}"))
     }
 
     fn clear(&mut self) {
-        self.state.reset();
+        self.best_time = None;
     }
 }
 
 impl Numeric for BestTimeMetric {
     fn value(&self) -> NumericEntry {
-        self.state.current_value()
+        NumericEntry::Value(self.best_time.map(seconds_to_minutes).unwrap_or(f64::NAN))
     }
 
     fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
+        self.value()
     }
 }
 
@@ -591,15 +617,20 @@ impl FafSimMetrics {
     }
 
     /// Register every metric with the renderer.
+    ///
+    /// Metrics are registered in priority order. The left-hand metrics panel
+    /// is very small, so the two most important live values are kept first:
+    /// `Best Time` and `Goal Reach`. All other metrics are still available as
+    /// plot tabs on the right.
     pub fn register(&mut self) {
-        Self::register_metric(&mut *self.renderer, &self.loss);
-        Self::register_metric(&mut *self.renderer, &self.fine_tune_loss);
-        Self::register_metric(&mut *self.renderer, &self.steps);
-        Self::register_metric(&mut *self.renderer, &self.completion_time);
-        Self::register_metric(&mut *self.renderer, &self.goal_reach);
-        Self::register_metric(&mut *self.renderer, &self.epsilon);
         Self::register_metric(&mut *self.renderer, &self.best_time);
+        Self::register_metric(&mut *self.renderer, &self.goal_reach);
+        Self::register_metric(&mut *self.renderer, &self.loss);
+        Self::register_metric(&mut *self.renderer, &self.completion_time);
+        Self::register_metric(&mut *self.renderer, &self.epsilon);
         Self::register_metric(&mut *self.renderer, &self.speed);
+        Self::register_metric(&mut *self.renderer, &self.steps);
+        Self::register_metric(&mut *self.renderer, &self.fine_tune_loss);
     }
 
     fn register_metric<M: Metric>(renderer: &mut dyn MetricsRenderer, metric: &M) {
@@ -609,25 +640,28 @@ impl FafSimMetrics {
     }
 
     /// Update all metrics with a training event and forward states to the renderer.
+    ///
+    /// The update order matches [`Self::register`] so the left-hand metrics
+    /// panel shows the highest-priority values first.
     pub fn update(&mut self, event: &TrainEvent, metadata: &MetricMetadata) {
+        Self::update_metric(&mut *self.renderer, &mut self.best_time, event, metadata);
+        Self::update_metric(&mut *self.renderer, &mut self.goal_reach, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.loss, event, metadata);
-        Self::update_metric(
-            &mut *self.renderer,
-            &mut self.fine_tune_loss,
-            event,
-            metadata,
-        );
-        Self::update_metric(&mut *self.renderer, &mut self.steps, event, metadata);
         Self::update_metric(
             &mut *self.renderer,
             &mut self.completion_time,
             event,
             metadata,
         );
-        Self::update_metric(&mut *self.renderer, &mut self.goal_reach, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.epsilon, event, metadata);
-        Self::update_metric(&mut *self.renderer, &mut self.best_time, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.speed, event, metadata);
+        Self::update_metric(&mut *self.renderer, &mut self.steps, event, metadata);
+        Self::update_metric(
+            &mut *self.renderer,
+            &mut self.fine_tune_loss,
+            event,
+            metadata,
+        );
     }
 
     fn update_metric<M: Metric<Input = TrainEvent> + Numeric>(
@@ -638,7 +672,12 @@ impl FafSimMetrics {
     ) {
         let id = MetricId::new(metric.name());
         let entry = metric.update(event, metadata);
-        let state = MetricState::Numeric(MetricEntry::new(id, entry), metric.value());
+        let value = metric.value();
+        let state = if numeric_is_missing(&value) {
+            MetricState::Generic(MetricEntry::new(id, entry))
+        } else {
+            MetricState::Numeric(MetricEntry::new(id, entry), value)
+        };
         renderer.update_train(state);
     }
 
@@ -654,6 +693,20 @@ impl FafSimMetrics {
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.renderer.on_train_end(summary)
     }
+}
+
+/// Returns true when a numeric metric has no meaningful value to plot.
+///
+/// Missing values are emitted as generic text entries so the renderer shows
+/// "N/A" instead of plotting a placeholder point at 0.0.
+fn numeric_is_missing(value: &NumericEntry) -> bool {
+    let v = match value {
+        NumericEntry::Value(v) => *v,
+        NumericEntry::Aggregated {
+            aggregated_value, ..
+        } => *aggregated_value,
+    };
+    v.is_nan() || v.is_infinite()
 }
 
 /// Convert simulator seconds into minutes for time-based metrics.

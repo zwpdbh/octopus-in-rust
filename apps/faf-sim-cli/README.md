@@ -52,6 +52,11 @@ Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluat
 | `--no-epsilon-decay`       | off          | Keep epsilon constant at `--epsilon` for the whole run. Useful when resuming and you want to keep exploring.                                                      |
 | `--grad-clip`              | none         | Global L2 gradient-clipping threshold. `1.0` is a good default for preventing REINFORCE divergence. Omit to disable clipping.                                     |
 | `--max-mex-count`          | `12`         | Maximum number of mass extractors (including capped upgrades) that may be active at the same time. New mex builds are blocked at this cap; upgrades do not count. |
+| `--reward-bp-coef`         | `0.05`       | Coefficient for the build-power delta reward. Set to `0.0` to disable.                                                                                            |
+| `--reward-mass-income-coef`| `0.1`        | Coefficient for the mass-income delta reward. Set to `0.0` to disable.                                                                                            |
+| `--reward-energy-income-coef`| `0.0`      | Coefficient for the energy-income delta reward. Default is `0.0` so the agent learns power management from the energy stall penalty instead of a direct income bonus. |
+| `--energy-stall-penalty`   | `20.0`       | Penalty applied each step when energy storage is empty (energy stall).                                                                                            |
+| `--mass-stall-penalty`     | `1.0`        | Penalty applied each step when mass storage is empty (mass stall).                                                                                                |
 | `-r, --resume`             | off          | Resume training from the existing model for this target, if one exists.                                                                                           |
 | `--fresh`                  | off          | Delete any existing checkpoint for this target before training.                                                                                                   |
 | `--quiet`                  | off          | Suppress per-episode and progress output.                                                                                                                         |
@@ -116,9 +121,9 @@ The live dashboard shows one plot per metric. You can switch metrics with `←`/
 | **Fine-Tune Loss**         | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                             |
 | **Episode Steps**          | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.      |
 | **Completion Time (min)**  | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
-| **Goal Reach**             | Percentage of episodes that reached the goal. You want this to climb toward 100%.                                     |
+| **Goal Reach**             | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better.                    |
 | **Epsilon**                | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                         |
-| **Best Time (min)**        | Best completion time in minutes observed so far across periodic greedy evaluations. Monotonically non-increasing. |
+| **Best Time (min)**        | Best completion time in minutes observed so far from periodic greedy evaluations. Reported as "N/A" before any greedy run reaches the goal. Monotonically non-increasing. |
 | **Episodes/sec**           | Training throughput. Higher is faster, but does not indicate learning quality.                                        |
 
 When training is healthy you should see `Goal Reach` rise, `Episode Loss` fall, and `Best Time (min)` drop within the first few hundred episodes.

@@ -48,19 +48,6 @@ impl TextMetricsRenderer {
     fn current_value(&self, name: &str) -> Option<&str> {
         self.values.get(name).map(|s| s.as_str())
     }
-
-    fn numeric_value(state: &MetricState) -> Option<f64> {
-        match state {
-            MetricState::Numeric(_, NumericEntry::Value(v)) => Some(*v),
-            MetricState::Numeric(
-                _,
-                NumericEntry::Aggregated {
-                    aggregated_value, ..
-                },
-            ) => Some(*aggregated_value),
-            MetricState::Generic(_) => None,
-        }
-    }
 }
 
 impl MetricsRendererTraining for TextMetricsRenderer {
@@ -71,29 +58,36 @@ impl MetricsRendererTraining for TextMetricsRenderer {
         };
 
         if let Some(name) = self.names.get(id).cloned() {
-            let formatted = if let Some(value) = Self::numeric_value(&state) {
-                match name.as_str() {
-                    LOSS => format!("{:.4}", value),
-                    EPSILON => format!("{:.4}", value),
-                    STEPS => format!("{:.0}", value),
-                    GOAL_REACH => {
-                        if value > 0.5 {
-                            "true".to_string()
-                        } else {
-                            "false".to_string()
+            let formatted = match state {
+                MetricState::Generic(entry) => entry.serialized_entry.formatted,
+                MetricState::Numeric(_, value) => {
+                    let value = match value {
+                        NumericEntry::Value(v) => v,
+                        NumericEntry::Aggregated {
+                            aggregated_value, ..
+                        } => aggregated_value,
+                    };
+                    match name.as_str() {
+                        LOSS => format!("{:.4}", value),
+                        EPSILON => format!("{:.4}", value),
+                        STEPS => format!("{:.0}", value),
+                        GOAL_REACH => {
+                            if value > 0.5 {
+                                "true".to_string()
+                            } else {
+                                "false".to_string()
+                            }
                         }
-                    }
-                    COMPLETION_TIME | BEST_TIME => {
-                        if value.is_finite() && value > 0.0 {
-                            format_time(value)
-                        } else {
-                            "-".to_string()
+                        COMPLETION_TIME | BEST_TIME => {
+                            if value.is_finite() && value > 0.0 {
+                                format_time(value)
+                            } else {
+                                "N/A".to_string()
+                            }
                         }
+                        _ => format!("{:.4}", value),
                     }
-                    _ => format!("{:.4}", value),
                 }
-            } else {
-                "-".to_string()
             };
             self.values.insert(name, formatted);
         }
@@ -117,8 +111,8 @@ impl MetricsRendererTraining for TextMetricsRenderer {
         let steps = self.current_value(STEPS).unwrap_or("-");
         let eps = self.current_value(EPSILON).unwrap_or("-");
         let reached = self.current_value(GOAL_REACH).unwrap_or("false");
-        let time = self.current_value(COMPLETION_TIME).unwrap_or("-");
-        let best = self.current_value(BEST_TIME).unwrap_or("-");
+        let time = self.current_value(COMPLETION_TIME).unwrap_or("N/A");
+        let best = self.current_value(BEST_TIME).unwrap_or("N/A");
         let loss = self.current_value(LOSS).unwrap_or("-");
 
         eprintln!(

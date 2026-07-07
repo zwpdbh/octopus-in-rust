@@ -40,6 +40,27 @@ pub struct TrainConfig {
     /// be active at the same time. New mex builds are blocked once this cap is
     /// reached; upgrades do not count toward the cap.
     pub max_mex_count: usize,
+    /// Coefficient for the build-power delta reward.
+    ///
+    /// Each step is rewarded for increasing total active build power by
+    /// `(next_bp - prev_bp) * reward_bp_coef`. Set to `0.0` to disable.
+    pub reward_bp_coef: f32,
+    /// Coefficient for the mass-income delta reward.
+    ///
+    /// Each step is rewarded for increasing net mass income by
+    /// `(next_mass - prev_mass) * reward_mass_income_coef`. Set to `0.0` to
+    /// disable.
+    pub reward_mass_income_coef: f32,
+    /// Coefficient for the energy-income delta reward.
+    ///
+    /// Set to `0.0` (the default) to let the agent learn power management from
+    /// the energy stall penalty instead of a direct income bonus, which can
+    /// encourage overbuilding power generators.
+    pub reward_energy_income_coef: f32,
+    /// Penalty applied each step when energy storage is empty (energy stall).
+    pub energy_stall_penalty: f32,
+    /// Penalty applied each step when mass storage is empty (mass stall).
+    pub mass_stall_penalty: f32,
 }
 
 impl Default for TrainConfig {
@@ -59,6 +80,11 @@ impl Default for TrainConfig {
             fine_tune_epochs: 100,
             grad_clip: None,
             max_mex_count: 12,
+            reward_bp_coef: 1.0 / 20.0,
+            reward_mass_income_coef: 1.0 / 10.0,
+            reward_energy_income_coef: 0.0,
+            energy_stall_penalty: 20.0,
+            mass_stall_penalty: 1.0,
         }
     }
 }

@@ -144,6 +144,11 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         },
         grad_clip: args.grad_clip,
         max_mex_count: args.max_mex_count,
+        reward_bp_coef: args.reward_bp_coef,
+        reward_mass_income_coef: args.reward_mass_income_coef,
+        reward_energy_income_coef: args.reward_energy_income_coef,
+        energy_stall_penalty: args.energy_stall_penalty,
+        mass_stall_penalty: args.mass_stall_penalty,
         ..Default::default()
     };
 

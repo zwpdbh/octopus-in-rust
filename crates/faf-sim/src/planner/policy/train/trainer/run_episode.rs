@@ -77,7 +77,7 @@ impl Trainer {
                 continue;
             }
 
-            let mut step_reward = compute_step_reward(&prev_state, &state, units);
+            let mut step_reward = compute_step_reward(&prev_state, &state, units, &self.config);
             step_reward += milestones.update(&state, units);
 
             episode.steps.push(EpisodeStep {

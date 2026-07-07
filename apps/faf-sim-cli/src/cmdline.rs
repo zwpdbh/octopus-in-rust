@@ -147,6 +147,23 @@ pub struct TrainArgs {
     /// reached; upgrades do not count toward the cap.
     #[arg(long, default_value = "12")]
     pub max_mex_count: usize,
+    /// Coefficient for the build-power delta reward. Set to 0.0 to disable.
+    #[arg(long, default_value = "0.05")]
+    pub reward_bp_coef: f32,
+    /// Coefficient for the mass-income delta reward. Set to 0.0 to disable.
+    #[arg(long, default_value = "0.1")]
+    pub reward_mass_income_coef: f32,
+    /// Coefficient for the energy-income delta reward. Default is 0.0 so the
+    /// agent learns power management from the energy stall penalty instead of
+    /// a direct income bonus that can encourage overbuilding power generators.
+    #[arg(long, default_value = "0.0")]
+    pub reward_energy_income_coef: f32,
+    /// Penalty applied each step when energy storage is empty (energy stall).
+    #[arg(long, default_value = "20.0")]
+    pub energy_stall_penalty: f32,
+    /// Penalty applied each step when mass storage is empty (mass stall).
+    #[arg(long, default_value = "1.0")]
+    pub mass_stall_penalty: f32,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,
