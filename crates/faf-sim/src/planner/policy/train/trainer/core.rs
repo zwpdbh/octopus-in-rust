@@ -21,7 +21,6 @@ pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, Trai
 
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
-    pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
     pub(crate) best_train_time: Option<f64>,
     /// Plan graph for the current goal. Built on first use and reused for the
     /// rest of training so that episode generation does not rebuild it.
@@ -64,7 +63,6 @@ impl Trainer {
         };
         Self {
             model,
-            best_model: None,
             best_train_time: None,
             plan: None,
             optimizer,

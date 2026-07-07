@@ -118,11 +118,6 @@ pub struct TrainArgs {
     /// duration. Accepts plain seconds or a suffix (`30m`, `1h`, `1200s`).
     #[arg(short = 't', long, value_parser = parse_duration)]
     pub target_time: Option<f64>,
-    /// Penalty applied when an episode hits the step limit without reaching the
-    /// goal. A strong negative value makes failures clearly worse than any
-    /// successful completion.
-    #[arg(long, default_value = "-1000.0")]
-    pub timeout_penalty: f32,
     /// Suppress per-episode and progress output.
     #[arg(long, default_value = "false")]
     pub quiet: bool,

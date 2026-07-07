@@ -320,7 +320,7 @@ let goal = Goal {
 let metrics = FafSimMetrics::new(Box::new(TrainTuiRenderer::new(
     Interrupter::new(),
 )));
-let (bundle, best_bundle, stats) = train_policy(
+let (bundle, stats) = train_policy(
     &units,
     &goal,
     TrainConfig::default(),
@@ -328,11 +328,7 @@ let (bundle, best_bundle, stats) = train_policy(
     None,
     Interrupter::new(),
 );
-save_policy(
-    best_bundle.as_ref().unwrap_or(&bundle),
-    &PathBuf::from("data/models/mlp-cybran-monkeylord"),
-)
-.unwrap();
+save_policy(&bundle, &PathBuf::from("data/models/mlp-cybran-monkeylord")).unwrap();
 ```
 
 And load it later:

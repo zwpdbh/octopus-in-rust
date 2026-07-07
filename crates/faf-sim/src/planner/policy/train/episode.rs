@@ -9,10 +9,6 @@ pub(crate) struct EpisodeStep {
     pub(crate) direction_mask: Vec<bool>,
     /// Selected strategic direction index (into [`EdgeCategory::ALL`]).
     pub(crate) direction_index: usize,
-    /// Raw reward received after this step.
-    pub(crate) step_reward: f32,
-    /// Normalized return for this step, filled in after the episode ends.
-    pub(crate) return_value: f32,
 }
 
 /// One complete training episode.
@@ -21,5 +17,4 @@ pub(crate) struct Episode {
     pub(crate) steps: Vec<EpisodeStep>,
     pub(crate) reached_goal: bool,
     pub(crate) completion_time: f64,
-    pub(crate) final_reward: f32,
 }

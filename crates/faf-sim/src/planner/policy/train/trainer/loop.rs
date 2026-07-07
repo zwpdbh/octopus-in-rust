@@ -36,9 +36,11 @@ impl Trainer {
                 break;
             }
 
-            let episode = self.run_episode(units, goal, &planner_config, &plan);
-            let loss = self.update_policy(&episode, &mut stats);
+            let (episode, loss) = self.run_episode(units, goal, &planner_config, &plan);
             stats.episode_lengths.push(episode.steps.len());
+            if !episode.steps.is_empty() {
+                stats.losses.push(loss);
+            }
 
             let target_hit = if episode.reached_goal {
                 self.handle_goal_reached(&episode, &mut stats)
@@ -46,7 +48,7 @@ impl Trainer {
                 false
             };
 
-            self.emit_episode_metrics(ep + 1, &episode, loss);
+            self.emit_episode_metrics(ep + 1, &episode, Some(loss));
 
             ep += 1;
 
@@ -76,22 +78,10 @@ impl Trainer {
         self.should_stop()
     }
 
-    /// Run one policy-gradient update if the episode produced any steps.
-    fn update_policy(&mut self, episode: &Episode, stats: &mut TrainStats) -> Option<f32> {
-        if episode.steps.is_empty() {
-            return None;
-        }
-
-        let loss = self.update(episode);
-        stats.losses.push(loss);
-        Some(loss)
-    }
-
-    /// Update training statistics and best model when an episode reaches the goal.
+    /// Update training statistics when an episode reaches the goal.
     ///
-    /// The saved model is updated whenever a training episode achieves a new
-    /// best completion time, so that `simulate` receives a model that has
-    /// demonstrably reached the goal.
+    /// The best training time is tracked for metrics only; the saved model is
+    /// always the final model after training finishes.
     /// Returns `true` if the target completion time was hit.
     fn handle_goal_reached(&mut self, episode: &Episode, stats: &mut TrainStats) -> bool {
         stats.goal_reaches += 1;
@@ -102,7 +92,6 @@ impl Trainer {
             .is_none_or(|t| episode.completion_time < t);
         if is_new_best {
             self.best_train_time = Some(episode.completion_time);
-            self.best_model = Some(self.model.clone());
         }
 
         self.config

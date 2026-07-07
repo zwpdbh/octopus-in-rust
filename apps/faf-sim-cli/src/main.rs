@@ -135,7 +135,6 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         max_steps: args.max_steps,
         dt: args.dt,
         target_time: args.target_time,
-        timeout_penalty: args.timeout_penalty,
         grad_clip: args.grad_clip,
         max_mex_count: args.max_mex_count,
         reward_bp_coef: args.reward_bp_coef,
@@ -217,7 +216,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         .await
     };
 
-    let (model, best_model, stats) = train_result;
+    let (model, stats) = train_result;
 
     let elapsed = start_time.elapsed();
     let total_episodes = stats.episode_lengths.len();
@@ -274,14 +273,8 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         format_duration(elapsed.as_secs_f64())
     );
 
-    // Save the best-seen model if there is one, otherwise the final model.
-    let model_to_save = best_model.as_ref().unwrap_or(&model);
-    save_policy(model_to_save, &path).expect("save trained model");
-    if best_model.is_some() {
-        println!("Saved best-seen model to {}", path.display());
-    } else {
-        println!("Model saved to {}", path.display());
-    }
+    save_policy(&model, &path).expect("save trained model");
+    println!("Saved model to {}", path.display());
 }
 
 /// Run a blocking training closure to completion.

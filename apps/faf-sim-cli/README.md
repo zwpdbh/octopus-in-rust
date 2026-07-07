@@ -45,7 +45,6 @@ Training uses REINFORCE with greedy action selection. `simulate` runs the traine
 | `-m, --max-steps`             | `500`        | Maximum simulator steps per episode. This is a cap: the episode stops earlier if the goal is reached. See the horizon advice below.                                   |
 | `--dt`                        | `1.0`        | Fixed simulator timestep in seconds. Smaller values make the simulation finer but need more steps to cover the same game time. `1.0` is a good default.               |
 | `-t, --target-time`           | none         | Stop early once the best completion time is at most this duration (e.g. `-t 30m`, `-t 1h`, `-t 1800s`).                                                               |
-| `--timeout-penalty`           | `-1000.0`    | Reward applied when an episode hits `max-steps` without reaching the goal. More negative values make failures clearly worse than any successful completion.             |
 | `--grad-clip`                 | none         | Global L2 gradient-clipping threshold. `1.0` is a good default for preventing REINFORCE divergence. Omit to disable clipping.                                         |
 | `--max-mex-count`             | `12`         | Maximum number of mass extractors (including capped upgrades) that may be active at the same time. New mex builds are blocked at this cap; upgrades do not count.     |
 | `--reward-bp-coef`            | `0.05`       | Coefficient for the build-power delta reward. Set to `0.0` to disable.                                                                                                |
@@ -86,7 +85,7 @@ cargo run --release --bin faf-sim -- \
   uef novaxcenter
 ```
 
-With the current heuristic you should see goal reaches within the first few episodes. If the first 20–30 episodes report `reached=false` every time, check the horizon (`-m`) and the timeout penalty (`--timeout-penalty`).
+With the current heuristic you should see goal reaches within the first few episodes. If the first 20–30 episodes report `reached=false` every time, check the horizon (`-m`) and the mass-income reward coefficient (`--reward-mass-income-coef`).
 
 ### Starting completely fresh
 
@@ -144,7 +143,7 @@ If you run `simulate` before training, the planner uses a randomly initialized n
 
 ## Controlling exploration
 
-Training currently uses greedy action selection. Exploration will be reintroduced later as a separate mechanism (e.g. temperature-based sampling or parameter-space noise). For now the main lever is the timeout penalty: a more negative value makes failures much worse than any successful completion, which can help the policy escape local optima that time out.
+Training currently uses greedy action selection. Exploration will be reintroduced later as a separate mechanism (e.g. temperature-based sampling or parameter-space noise). For now the only lever is the reward coefficient: a larger `--reward-mass-income-coef` makes mass-income changes more influential, which can help the policy escape local optima where mass growth stalls.
 
 ## Example training output
 
@@ -155,7 +154,7 @@ ep=   1 steps=  42 reached=true time=      52m 15.0s best=      52m 15.0s loss= 
 ep= 9500 steps=  38 reached=true time=      35m 23.0s best=      35m 23.0s loss=    1.0438
 Training complete: 9259/10000 episodes reached the goal
 Best completion time: 35m 23.0s
-Saved best-seen model to data/models/mlp-uef-novax-center
+Saved model to data/models/mlp-uef-novax-center
 ```
 
 ## Example simulate output
@@ -192,7 +191,7 @@ Build-order diagram written to:
 ### `0/N reached` after many episodes
 
 1. **Increase `-m`**. The most common cause is a step cap that is too short for the target to finish. For T4 units start with `-m 10000`.
-2. **Make `--timeout-penalty` more negative**. A stronger failure penalty can help the policy escape local optima that time out.
+2. **Adjust `--reward-mass-income-coef`**. A larger coefficient can help the policy escape local optima where mass growth stalls.
 3. **Check the horizon in game time**. Game time is `steps * dt`. With `--dt 1.0` and `-m 10000` the horizon is ~160 minutes; with `--dt 0.5` the same `-m` covers ~80 minutes.
 4. **Use `--fresh`** if you resumed from a bad checkpoint.
 

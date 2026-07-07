@@ -15,10 +15,6 @@ pub struct TrainConfig {
     pub gamma: f32,
     /// Stop early when the best completion time is at most this many seconds.
     pub target_time: Option<f64>,
-    /// Penalty applied when an episode hits the step limit without reaching the
-    /// goal. A strong negative value makes timeouts clearly worse than any
-    /// successful completion.
-    pub timeout_penalty: f32,
 
     /// Global gradient norm clipping threshold. `None` disables clipping.
     /// A value of `1.0` is a safe default for preventing REINFORCE divergence.
@@ -59,7 +55,6 @@ impl Default for TrainConfig {
             learning_rate: 1e-3,
             gamma: 0.99,
             target_time: None,
-            timeout_penalty: -1000.0,
             grad_clip: None,
             max_mex_count: 12,
             reward_bp_coef: 1.0 / 20.0,

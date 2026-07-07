@@ -40,8 +40,7 @@ pub fn load_policy(path: &std::path::Path) -> Result<PolicyBundle<TrainBackend>,
     Ok(model)
 }
 
-/// Train a policy for `goal` and return the final model, best-seen model, and
-/// training statistics.
+/// Train a policy for `goal` and return the final model and training statistics.
 ///
 /// `metrics` is a Burn-style metric bundle that receives per-episode events and
 /// renders progress through any `MetricsRenderer`. Pass a no-op renderer if live
@@ -58,11 +57,7 @@ pub fn train_policy(
     metrics: FafSimMetrics,
     stop_flag: Option<Arc<AtomicBool>>,
     interrupter: Interrupter,
-) -> (
-    PolicyBundle<TrainBackend>,
-    Option<PolicyBundle<TrainBackend>>,
-    TrainStats,
-) {
+) -> (PolicyBundle<TrainBackend>, TrainStats) {
     let mut trainer = Trainer::new(config)
         .with_metrics(metrics)
         .with_interrupter(interrupter);
@@ -75,9 +70,8 @@ pub fn train_policy(
         let _ = metrics.on_end(None);
     }
 
-    let best_model = trainer.best_model.take();
     let model = trainer.into_model();
-    (model, best_model, stats)
+    (model, stats)
 }
 
 /// Continue training an existing policy for `goal`.
@@ -91,25 +85,19 @@ pub fn train_policy_from(
     metrics: FafSimMetrics,
     stop_flag: Option<Arc<AtomicBool>>,
     interrupter: Interrupter,
-) -> (
-    PolicyBundle<TrainBackend>,
-    Option<PolicyBundle<TrainBackend>>,
-    TrainStats,
-) {
+) -> (PolicyBundle<TrainBackend>, TrainStats) {
     let mut trainer = Trainer::from_model(config, model)
         .with_metrics(metrics)
         .with_interrupter(interrupter);
     if let Some(flag) = stop_flag {
         trainer.stop_requested = flag;
     }
-    trainer.best_model = Some(trainer.model.clone());
     let stats = trainer.train(units, goal);
 
     if let Some(ref mut metrics) = trainer.metrics {
         let _ = metrics.on_end(None);
     }
 
-    let best_model = trainer.best_model.take();
     let model = trainer.into_model();
-    (model, best_model, stats)
+    (model, stats)
 }

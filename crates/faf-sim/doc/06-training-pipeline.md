@@ -1,15 +1,14 @@
-# 6. Training with REINFORCE
+# 6. Training with Online REINFORCE
 
-This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover return normalization and timeout penalties.
+This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with an **online REINFORCE policy-gradient update after every step**. There is no episode-level return computation, no return normalization, and no terminal/timeout penalty for the baseline.
 
 ## The training loop at a glance
 
-The full training pipeline has four stages:
+The full training pipeline has three stages:
 
 1. **Configuration** — `TrainConfig` holds hyperparameters.
-2. **Episode generation** — `run_episode` rolls out one trajectory with the current policy.
-3. **Return computation** — `compute_returns` discounts and standardizes rewards.
-4. **Policy update** — `update` computes the REINFORCE loss and applies one gradient step.
+2. **Episode generation** — `run_episode` rolls out one trajectory with the current policy, calling `update_step` after each action.
+3. **Policy update** — `update_step` computes the masked log-probability of the selected direction, weights it by the step reward, and applies one gradient step immediately.
 
 The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for every episode.
 
@@ -25,7 +24,6 @@ pub struct TrainConfig {
     pub dt: f64,
     pub learning_rate: f64,
     pub gamma: f32,
-    pub timeout_penalty: f32,
     pub target_time: Option<f64>,
     pub grad_clip: Option<f32>,
 }
@@ -34,8 +32,7 @@ pub struct TrainConfig {
 Key knobs:
 
 - `learning_rate` — Adam step size. Start around `1e-3`.
-- `gamma` — discount factor for future rewards. We use `0.99`.
-- `timeout_penalty` — reward given when an episode hits `max_steps` without reaching the goal. A strong negative value (e.g. `-1000.0`) makes failures clearly worse than any successful completion.
+- `gamma` — kept in the config for compatibility, but the online baseline does **not** use discounting; each step is weighted by its own immediate reward.
 - `grad_clip` — global gradient norm clipping. A value of `1.0` can stabilize REINFORCE early in training.
 
 ## Trainer setup
@@ -83,20 +80,25 @@ pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, Trai
 2. Builds the legal-direction mask.
 3. Selects the highest-probability legal direction (greedy argmax).
 4. Resolves the direction to a concrete action via the heuristic layer.
-5. Executes the action and records the reward.
+5. Executes the action, computes the mass-income reward, and runs `update_step` immediately.
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/run_episode.rs ~line 21 — run_episode
+// crates/faf-sim/src/planner/policy/train/trainer/run_episode.rs ~line 20 — run_episode
 pub(crate) fn run_episode(
     &mut self,
     units: &Units,
     goal: &Goal,
     planner_config: &PlannerConfig,
     plan: &PlanGraph,
-) -> Episode {
+) -> (Episode, f32) {
     let mut state = SimulationState::new(units, &[UnitKind::Commander]);
-    let mut episode = Episode { reached_goal: false, completion_time: 0.0, final_reward: 0.0, steps: Vec::new() };
-    let mut milestones = MilestoneTracker::default();
+    let mut episode = Episode {
+        reached_goal: false,
+        completion_time: 0.0,
+        steps: Vec::new(),
+    };
+    let mut accumulated_loss = 0.0f32;
+    let mut step_count = 0usize;
 
     for _step in 0..self.config.max_steps {
         if state.goal_reached(goal) {
@@ -106,7 +108,7 @@ pub(crate) fn run_episode(
         }
 
         let base_features = state_features(&state, units, planner_config);
-        let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
+        let direction_mask = legal_direction_mask(&state, units, planner_config, goal, plan);
         if direction_mask.iter().all(|&b| !b) {
             state.tick(units, self.config.dt);
             continue;
@@ -119,7 +121,7 @@ pub(crate) fn run_episode(
         let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
         let direction = EdgeCategory::ALL[direction_idx];
 
-        let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
+        let action = direction_to_action(direction, &state, units, planner_config, goal, plan);
 
         let prev_state = state.clone();
         if execute_action(&mut state, &action, units, self.config.dt).is_err() {
@@ -127,21 +129,24 @@ pub(crate) fn run_episode(
             continue;
         }
 
-        let mut step_reward = compute_step_reward(&prev_state, &state, units);
-        step_reward += milestones.update(&state, units);
-
-        episode.steps.push(EpisodeStep {
+        let step_reward = compute_step_reward(&prev_state, &state, units, &self.config);
+        let step = EpisodeStep {
             base_features,
             direction_mask,
             direction_index: direction_idx,
-            step_reward,
-            return_value: 0.0,
-        });
+        };
+
+        accumulated_loss += self.update_step(&step, step_reward);
+        step_count += 1;
+        episode.steps.push(step);
     }
 
-    episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal, &self.config);
-    self.compute_returns(&mut episode);
-    episode
+    let avg_loss = if step_count == 0 {
+        0.0
+    } else {
+        accumulated_loss / step_count as f32
+    };
+    (episode, avg_loss)
 }
 ```
 
@@ -150,41 +155,7 @@ There are two important Burn patterns here:
 - **Host-side selection.** `evaluate_direction` returns a plain `Vec<f32>` of logits. We build the mask and pick the highest-scoring legal direction on the CPU, then feed the selected index back into Burn as a tensor for the loss. This keeps the environment interaction on the host; only the gradient computation needs tensors.
 - **Action masking.** `legal_direction_mask` tells us which of the six directions are currently feasible. Masking is applied twice: once during direction selection (so the policy only picks legal directions) and once during the loss (so gradients do not push toward illegal directions).
 
-## Return computation
-
-REINFORCE uses the discounted return from each step as the weight on its log-probability. `compute_returns` walks backward through the episode, applies the discount factor `gamma`, and then standardizes the returns:
-
-```rust
-// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 15 — compute_returns
-pub(crate) fn compute_returns(&mut self, episode: &mut Episode) {
-    let step_count = episode.steps.len();
-    if step_count == 0 {
-        return;
-    }
-
-    let gamma = self.config.gamma;
-    let mut returns = Vec::with_capacity(step_count);
-    let mut g = episode.final_reward;
-    for step in episode.steps.iter().rev() {
-        g = step.step_reward + gamma * g;
-        returns.push(g);
-    }
-    returns.reverse();
-
-    let mean = returns.iter().sum::<f32>() / step_count as f32;
-    let std = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f32>() / step_count as f32)
-        .sqrt()
-        .max(1e-6);
-
-    for (step, ret) in episode.steps.iter_mut().zip(returns) {
-        step.return_value = (ret - mean) / std;
-    }
-}
-```
-
-Standardization (subtract mean, divide by standard deviation) is a classic REINFORCE variance-reduction trick. It makes the optimizer less sensitive to the absolute reward scale and helps early training when returns can be noisy.
-
-## The REINFORCE update
+## The online REINFORCE update
 
 The update step is where Burn really shines. For each recorded step we:
 
@@ -192,94 +163,63 @@ The update step is where Burn really shines. For each recorded step we:
 2. Run the backbone and direction head to get 6 logits.
 3. Apply the legal-direction mask.
 4. Compute `log_softmax` and extract the log-probability of the selected direction.
-5. Weight the log-probability by the standardized return.
-6. Accumulate losses across the episode and apply one gradient step.
+5. Weight the log-probability by the immediate step reward.
+6. Backpropagate and apply one optimizer step right away.
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 41 — update
-pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
-    let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
-    let mut total_loss = 0.0f32;
-    let mut step_count = 0usize;
+// crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 20 — update_step
+pub(crate) fn update_step(&mut self, step: &EpisodeStep, reward: f32) -> f32 {
+    let features = step.base_features.clone();
+    let macro_input = tensor1d_from_vec(&features);
+    let latent = self.model.latent(macro_input);
 
-    for step in &episode.steps {
-        let features = step.base_features.clone();
-        let macro_input = tensor1d_from_vec(&features);
-        let latent = self.model.latent(macro_input);
+    let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
+    let direction_mask: Vec<f32> = step
+        .direction_mask
+        .iter()
+        .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
+        .collect();
+    let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+        TensorData::new(direction_mask, [DIRECTION_COUNT]),
+        &self.device,
+    );
+    let masked_direction_logits = direction_logits + direction_mask_tensor;
+    let direction_log_probs = log_softmax(masked_direction_logits, 0);
+    let direction_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
+        TensorData::new(vec![step.direction_index as i64], [1]),
+        &self.device,
+    );
+    let direction_log_prob = direction_log_probs.select(0, direction_index_tensor);
 
-        let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
-        let direction_mask: Vec<f32> = step
-            .direction_mask
-            .iter()
-            .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
-            .collect();
-        let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::new(direction_mask, [DIRECTION_COUNT]),
-            &self.device,
-        );
-        let masked_direction_logits = direction_logits + direction_mask_tensor;
-        let direction_log_probs = log_softmax(masked_direction_logits, 0);
-        let direction_index_tensor = Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-            TensorData::new(vec![step.direction_index as i64], [1]),
-            &self.device,
-        );
-        let direction_log_prob = direction_log_probs
-            .clone()
-            .select(0, direction_index_tensor);
+    let reward_tensor = Tensor::<TrainBackend, 1>::from_data(
+        TensorData::new(vec![reward], [1]),
+        &self.device,
+    );
+    let loss = direction_log_prob.neg().mul(reward_tensor);
+    let loss_value = loss.clone().into_data().as_slice::<f32>().unwrap()[0];
 
-        let return_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::new(vec![step.return_value], [1]),
-            &self.device,
-        );
-        let loss = direction_log_prob.neg().mul(return_tensor);
+    let grads = loss.backward();
+    let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
+    self.model = self
+        .optimizer
+        .step(self.config.learning_rate, self.model.clone(), grads);
 
-        total_loss += loss.clone().into_data().as_slice::<f32>().unwrap()[0];
-        accumulated_loss = Some(match accumulated_loss {
-            Some(acc) => acc + loss,
-            None => loss,
-        });
-        step_count += 1;
-    }
-
-    if let Some(loss) = accumulated_loss {
-        let grads = loss.backward();
-        let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-        self.model = self
-            .optimizer
-            .step(self.config.learning_rate, self.model.clone(), grads);
-    }
-
-    total_loss / step_count.max(1) as f32
+    loss_value
 }
 ```
 
 The policy-gradient objective for a single step is:
 
 ```text
-loss = -log π(direction | state) * return
+loss = -log π(direction | state) * reward
 ```
 
-- `direction_log_prob.neg().mul(return_tensor)` implements `-log π * return`. If the return is positive, this term pushes the network to increase the probability of the selected direction; if negative, it pushes the network to decrease it.
-
-Accumulating the loss over the whole episode and then calling `backward()` once is equivalent to averaging gradients over the episode. It is also efficient: Burn only builds one computation graph (albeit large) per update.
+- `direction_log_prob.neg().mul(reward_tensor)` implements `-log π * reward`. If the reward is positive, this term pushes the network to increase the probability of the selected direction; if negative, it pushes the network to decrease it.
+- Because the update happens after every step, the gradient is local: it only tells the policy whether the chosen direction increased mass income right now, not whether the whole episode succeeded. This is the simplest possible credit assignment and the main limitation of the baseline.
 
 ## Masking inside the loss
 
 Notice that the mask is applied inside the loss, not just during sampling. This is crucial: if we only masked during sampling, the loss would compare the network's unmasked distribution against a legal direction that the unmasked distribution might assign very low probability to. Masking inside the loss ensures the softmax is computed only over legal directions, so the gradient is well-behaved even when most directions are illegal.
-
-## Best model
-
-Whenever a training episode reaches the goal with a new fastest completion time, `Trainer` saves a copy of the current model as `best_model`:
-
-```rust
-// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 95 — handle_goal_reached
-if is_new_best {
-    self.best_train_time = Some(episode.completion_time);
-    self.best_model = Some(self.model.clone());
-}
-```
-
-REINFORCE alone does not guarantee that the final parameters are the best ones seen, so keeping the model that produced the fastest goal-reaching episode is important for model selection.
 
 ## The main loop
 
@@ -307,25 +247,32 @@ pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
             break;
         }
 
-        let episode = self.run_episode(units, goal, &planner_config, &plan);
-        let loss = self.update_policy(&episode, &mut stats);
+        let (episode, loss) = self.run_episode(units, goal, &planner_config, &plan);
         stats.episode_lengths.push(episode.steps.len());
+        if !episode.steps.is_empty() {
+            stats.losses.push(loss);
+        }
 
-        let target_hit = episode
-            .reached_goal
-            .then(|| self.handle_goal_reached(&episode, &mut stats))
-            .unwrap_or(false);
+        let target_hit = if episode.reached_goal {
+            self.handle_goal_reached(&episode, &mut stats)
+        } else {
+            false
+        };
 
-        self.emit_episode_metrics(ep + 1, &episode, loss);
+        self.emit_episode_metrics(ep + 1, &episode, Some(loss));
 
-        // maybe stop early if target_time was hit
+        ep += 1;
+
+        if target_hit {
+            break;
+        }
     }
 
     stats
 }
 ```
 
-The loop is deliberately simple: one episode, one gradient step. This makes it easy to reason about and easy to extend with more sophisticated algorithms later.
+The loop is deliberately simple: one episode, many gradient steps (one per successful action). `handle_goal_reached` tracks the fastest completion time for metrics, but it does **not** snapshot the model; the saved model is always the final parameters after training.
 
 ## Burn metrics
 
@@ -351,24 +298,8 @@ Trainer::train
 In `Trainer::train`:
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 138
-if let Some(ref mut metrics) = self.metrics {
-    metrics.update(
-        &TrainEvent::Episode(EpisodeSummary {
-            episode: ep + 1,
-            total_episodes: self.config.episodes,
-            steps: episode.steps.len(),
-            reached_goal: episode.reached_goal,
-            completion_time: episode.completion_time,
-            loss,
-        }),
-        &metadata,
-    );
-    metrics.render(
-        training_progress(ep + 1, self.config.episodes, Some(ep + 1)),
-        vec![],
-    );
-}
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 91
+self.emit_episode_metrics(ep + 1, &episode, Some(loss));
 ```
 
 `FafSimMetrics` (in `crates/faf-sim/src/planner/policy/train/metric/metrics.rs`) owns one `Metric` implementation for each quantity we care about and forwards every event to all of them. Each metric decides whether the event is relevant; irrelevant events produce `"-"` so the renderer can skip them.
@@ -377,7 +308,7 @@ if let Some(ref mut metrics) = self.metrics {
 
 There is one event variant:
 
-- `TrainEvent::Episode` — emitted after every REINFORCE episode.
+- `TrainEvent::Episode` — emitted after every episode. It carries the average per-step loss for that episode.
 
 ### Metrics
 
@@ -385,7 +316,7 @@ There is one event variant:
 
 | Metric | Source event | What it shows |
 |---|---|---|
-| `Episode Loss` | `Episode` | Average REINFORCE loss for the episode. |
+| `Episode Loss` | `Episode` | Average REINFORCE loss per successful step in the episode. |
 | `Episode Steps` | `Episode` | Number of simulator steps in the episode. |
 | `Completion Time` | `Episode` (goal reached) | Time in seconds when the goal was reached. |
 | `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
@@ -439,7 +370,7 @@ Columns:
 - `reached` — whether the goal was reached.
 - `time` — completion time if the goal was reached.
 - `best` — best completion time seen so far.
-- `loss` — average episode loss.
+- `loss` — average per-step episode loss.
 
 #### Quiet renderer (`--quiet`)
 
@@ -449,11 +380,11 @@ Columns:
 
 During normal training you should see:
 
-- `loss` trending downward as the policy learns.
-- `reached` moving from mostly `false` to mostly `true`.
-- `time` and `best` decreasing as the policy finds faster build orders.
+- `loss` trending in magnitude as the policy learns which directions raise mass income.
+- `reached` moving from mostly `false` to mostly `true` if the mass-income signal happens to pull the policy toward the goal path.
+- `time` and `best` decreasing when goal-reaching episodes occur.
 
-`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest goal-reaching episode, not necessarily the final parameters. The TUI plots `Best Time` so you can watch this directly.
+`best` is tracked only for diagnostics; the saved model is always the final parameters after training, not the model that produced the fastest training episode.
 
 ### Integration summary
 
@@ -467,8 +398,8 @@ During normal training you should see:
 
 - **Host-side selection, tensor-side gradients.** The environment runs with Rust primitives; only the loss and backward pass use Burn tensors.
 - **Mask twice.** Mask during action selection and again inside the loss.
-- **REINFORCE objective.** `-log π * return`.
-- **One gradient step per episode.** Accumulate per-step losses, then `backward()` + `optimizer.step()`.
-- **Best episode chooses the best model.** Track the fastest training completion time among episodes that reached the goal and keep that model.
+- **Online REINFORCE objective.** `-log π * reward`, applied after every step.
+- **One gradient step per action.** There is no episode-level accumulation or return standardization in the baseline.
+- **Saved model is the final model.** We no longer keep a separate "best" model; whatever parameters exist after the last episode are saved.
 
 With the policy trained, the next chapter shows how to wire it into the reactive simulator.

@@ -1,7 +1,7 @@
 //! Trainer episode generation for the direction-only policy network.
 
 use super::super::episode::{Episode, EpisodeStep};
-use super::super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
+use super::super::reward::compute_step_reward;
 
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
@@ -15,22 +15,23 @@ use crate::units::{UnitKind, Units};
 use super::Trainer;
 
 impl Trainer {
-    /// Run one episode and record the trajectory.
+    /// Run one episode, applying an online policy-gradient update after each
+    /// step. Returns the episode and the average step loss.
     pub(crate) fn run_episode(
         &mut self,
         units: &Units,
         goal: &Goal,
         planner_config: &PlannerConfig,
         plan: &PlanGraph,
-    ) -> Episode {
+    ) -> (Episode, f32) {
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
         let mut episode = Episode {
             reached_goal: false,
             completion_time: 0.0,
-            final_reward: 0.0,
             steps: Vec::new(),
         };
-        let mut milestones = MilestoneTracker::default();
+        let mut accumulated_loss = 0.0f32;
+        let mut step_count = 0usize;
 
         for _step in 0..self.config.max_steps {
             if state.goal_reached(goal) {
@@ -62,21 +63,24 @@ impl Trainer {
                 continue;
             }
 
-            let mut step_reward = compute_step_reward(&prev_state, &state, units, &self.config);
-            step_reward += milestones.update(&state, units);
-
-            episode.steps.push(EpisodeStep {
+            let step_reward = compute_step_reward(&prev_state, &state, units, &self.config);
+            let step = EpisodeStep {
                 base_features,
                 direction_mask,
                 direction_index: direction_idx,
-                step_reward,
-                return_value: 0.0,
-            });
+            };
+
+            accumulated_loss += self.update_step(&step, step_reward);
+            step_count += 1;
+            episode.steps.push(step);
         }
 
-        episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal, &self.config);
-        self.compute_returns(&mut episode);
-        episode
+        let avg_loss = if step_count == 0 {
+            0.0
+        } else {
+            accumulated_loss / step_count as f32
+        };
+        (episode, avg_loss)
     }
 }
 

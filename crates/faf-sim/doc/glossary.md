@@ -5,7 +5,7 @@
 | **Action space** | The six high-level `EdgeCategory` directions the policy can choose from. |
 | **Adjacency bonus** | Reduced energy/mass cost or build time when structures are placed near each other. Encoded in `Units` and applied to build projects. |
 | **Backend** | The Burn compute backend. The `faf-sim` library defaults to CPU (`NdArray`); the `faf-sim-cli` package defaults to CUDA for training. Cross-platform GPU training can also use `Wgpu`. Aliased as `TrainBackend` in the training modules. |
-| **Baseline** | Moving average of recent episode returns used to center REINFORCE advantages and reduce variance. |
+| **Baseline** | Not used in the current online setup. Each REINFORCE step is weighted by its own immediate reward. |
 | **Build order** | A sequence of construction actions that takes the economy from the starting commander to a target unit. |
 | **BuildGraph** | Dynamic graph inside `SimulationState` that records the actual units and projects in the current game. It starts with the ACU and grows as the simulator executes actions. Not to be confused with the static `PlanGraph`. |
 | **BuildPower** | Total construction rate contributed by idle engineers, measured in build points per second. |
@@ -27,8 +27,8 @@
 | **Policy bundle** | The learned direction-only network saved and loaded together; macro alias for `HierarchicalPolicyNet`. |
 | **Rollout** | A full episode sampled from the current policy, used to collect trajectories for REINFORCE. |
 | **REINFORCE** | Policy-gradient algorithm used to train the direction head from Monte Carlo returns. |
-| **Patience** | Number of episodes without a new best completion time after which training stops early. |
-| **Return** | Discounted sum of rewards over an episode, used as the target for REINFORCE. |
+| **Patience** | Not used. Training runs for the configured episode count or until the target time / user stop is hit. |
+| **Return** | Discounted sum of rewards over an episode. The current trainer does not compute returns; it uses the immediate per-step reward directly. |
 | **Shortfall** | Historical feedback channel for unmet engineer demand. Removed in the current direction-only design. |
 | **SimAction** | Internal representation of a simulator action: `Build`, `Upgrade`, `Assist`, `BuildGoal`, or `Wait`. |
 | **Simulator tick** | One fixed-duration step of the discrete-time economy and build-progress simulation. |

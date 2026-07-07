@@ -21,7 +21,7 @@ Run each goal multiple times and report the mean and standard deviation. Because
 1. **Completion time.** The in-game seconds when the goal finishes. Lower is better.
 2. **Goal reach rate.** The fraction of episodes that reach the goal within the step budget. Higher is better.
 3. **Wall-clock planning time per decision.** How long the planner takes to choose an action. The one-step policy should be fast enough to keep up with the simulator.
-4. **Episode return.** The shaped reward the policy-gradient trainer observes.
+4. **Mass-income growth.** The per-step reward the trainer observes. Useful for diagnosing whether the policy is learning the only active signal.
 
 ## Secondary metrics
 
@@ -33,7 +33,7 @@ Run each goal multiple times and report the mean and standard deviation. Because
 
 Training currently uses greedy action selection, so the main levers for escaping local optima are:
 
-- `TrainConfig::timeout_penalty` — a more negative value makes hitting the step limit much worse than any successful completion, which can push the policy out of timeout loops.
+- `TrainConfig::reward_mass_income_coef` — a larger coefficient makes mass-income changes more influential, which can pull the policy out of directions that stall the economy.
 - Network capacity and training budget — a larger network or more episodes can discover directions the current policy misses.
 
 A separate exploration mechanism will be added later (e.g. temperature-based sampling or parameter-space noise).
@@ -49,28 +49,28 @@ If the policy overfits:
 
 - Reduce network sizes.
 - Train on multiple goals rather than a single goal.
-- Adjust `timeout_penalty` so the policy is not rewarded for trivial behaviors.
+- Adjust `reward_mass_income_coef` so the policy is not rewarded for trivial behaviors.
 
 ## Tuning reward coefficients
 
-The per-step reward is sensitive to coefficient choices:
+The per-step reward is currently just the mass-income delta:
 
-- If the policy builds too many engineers and ignores the goal, reduce the build-power reward or increase the terminal bonus.
-- If the policy is chronically energy-starved, raise the energy stall penalty.
-- If the policy sits on full mass storage, raise the mass overflow penalty.
+- If the policy ignores mass growth entirely, raise `reward_mass_income_coef`.
+- If the policy builds too many extractors and never techs, the mass-only baseline is behaving as expected: it has no goal-seeking term yet. Add a goal-completion bonus or milestone term when you are ready to extend the reward.
+- If single steps produce huge losses or `NaN`, lower `reward_mass_income_coef` or enable gradient clipping.
 
-Because the return is standardized per-episode, the relative scale of coefficients matters more than their absolute scale.
+Because each step is updated individually, the absolute scale of the coefficient maps directly into gradient scale.
 
 ## Diagnosing failure modes
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Policy is much slower than expected | Expensive per-step inference or very small `dt` | Use a smaller network or increase `dt`. |
-| Policy finds worse plans than training best | Policy undertrained or simulation uses deterministic greedy while training sampled actions | Train longer, or check that the saved model is the best model discovered during training (best completion time). |
+| Policy finds worse plans than training best | Policy undertrained; the saved model is the final parameters, not a separately tracked best model | Train longer, or add goal-seeking reward terms. |
 | Policy explores silly actions | Exploration mechanism (when added) is too aggressive | Reduce the exploration strength or temperature. |
 | Policy gets stuck repeating actions | Heuristic returns `Wait` for every direction, or successor bug | Verify `Wait` is always legal, the direction mask is non-empty when actions exist, and the heuristic covers the goal path. |
 | Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling, learning rate, and validation loss. |
-| Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |
+| Policy never reaches the goal | Reward signal is mass-only, so the policy is not directly encouraged to finish the goal | Add a goal-completion reward, or accept that the baseline is economy-only. |
 | Heuristic always returns `Wait` for a direction | `is_direction_legal` or `direction_to_action` mismatch | Add a unit test for that direction from the ACU start state and step through the heuristic. |
 | Simulation with random weights is very slow | No trained model was found; the policy explores a huge horizon with random directions | Train a policy first, or use a tiny `max_sim_time` for smoke tests. |
 
