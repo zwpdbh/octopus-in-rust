@@ -7,16 +7,12 @@ use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
 use super::config::{TrainConfig, TrainStats};
-use super::metric::metrics::{training_progress, FafSimMetrics};
-use super::metric::{FineTuneSummary, TrainEvent};
+use super::metric::metrics::FafSimMetrics;
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
-use crate::planner::core::{Goal, PlannerConfig};
+use crate::planner::core::Goal;
 use crate::planner::policy::macro_net::PolicyBundle;
 use crate::units::Units;
-use burn::data::dataloader::Progress;
-use burn::train::metric::MetricMetadata;
-use burn::train::renderer::ProgressType;
 use burn::train::Interrupter;
 
 /// Save a trained policy bundle to disk.
@@ -74,7 +70,14 @@ pub fn train_policy(
         trainer.stop_requested = flag;
     }
     let stats = trainer.train(units, goal);
-    fine_tune_best_model(trainer, units, goal, &config, stats)
+
+    if let Some(ref mut metrics) = trainer.metrics {
+        let _ = metrics.on_end(None);
+    }
+
+    let best_model = trainer.best_model.take();
+    let model = trainer.into_model();
+    (model, best_model, stats)
 }
 
 /// Continue training an existing policy for `goal`.
@@ -101,81 +104,12 @@ pub fn train_policy_from(
     }
     trainer.best_model = Some(trainer.model.clone());
     let stats = trainer.train(units, goal);
-    fine_tune_best_model(trainer, units, goal, &config, stats)
-}
 
-fn fine_tune_best_model(
-    mut trainer: Trainer,
-    units: &Units,
-    goal: &Goal,
-    config: &TrainConfig,
-    stats: TrainStats,
-) -> (
-    PolicyBundle<TrainBackend>,
-    Option<PolicyBundle<TrainBackend>>,
-    TrainStats,
-) {
-    let Some(trajectory) = trainer.best_trajectory.take() else {
-        if let Some(ref mut metrics) = trainer.metrics {
-            let _ = metrics.on_end(None);
-        }
-        let best_model = trainer.best_model.take();
-        let model = trainer.into_model();
-        return (model, best_model, stats);
-    };
-
-    let model_to_tune = trainer
-        .best_model
-        .take()
-        .unwrap_or_else(|| trainer.model.clone());
-    let mut tuner = Trainer::from_model(*config, model_to_tune);
-    tuner.metrics = trainer.metrics.take();
-    tuner.interrupter = trainer.interrupter.clone();
-    tuner.plan = trainer.plan.clone();
-    let planner_config = PlannerConfig {
-        max_mex_count: config.max_mex_count,
-        ..PlannerConfig::default()
-    };
-
-    for epoch in 0..config.fine_tune_epochs {
-        let loss = tuner.fine_tune_on_trajectory(&trajectory, units, goal, &planner_config);
-        if let Some(ref mut metrics) = tuner.metrics {
-            let metadata = MetricMetadata {
-                progress: burn::data::dataloader::Progress {
-                    items_processed: epoch + 1,
-                    items_total: config.fine_tune_epochs,
-                },
-                global_progress: burn::data::dataloader::Progress {
-                    items_processed: epoch + 1,
-                    items_total: config.fine_tune_epochs,
-                },
-                iteration: Some(epoch + 1),
-                lr: None,
-            };
-            metrics.update(
-                &TrainEvent::FineTuneEpoch(FineTuneSummary {
-                    epoch: epoch + 1,
-                    total_epochs: config.fine_tune_epochs,
-                    loss,
-                }),
-                &metadata,
-            );
-            metrics.render(
-                training_progress(epoch + 1, config.fine_tune_epochs, Some(epoch + 1)),
-                vec![ProgressType::Detailed {
-                    tag: "Fine-tuning".to_string(),
-                    progress: Progress {
-                        items_processed: epoch + 1,
-                        items_total: config.fine_tune_epochs,
-                    },
-                }],
-            );
-        }
-    }
-
-    if let Some(ref mut metrics) = tuner.metrics {
+    if let Some(ref mut metrics) = trainer.metrics {
         let _ = metrics.on_end(None);
     }
-    let fine_tuned = tuner.into_model();
-    (fine_tuned.clone(), Some(fine_tuned), stats)
+
+    let best_model = trainer.best_model.take();
+    let model = trainer.into_model();
+    (model, best_model, stats)
 }

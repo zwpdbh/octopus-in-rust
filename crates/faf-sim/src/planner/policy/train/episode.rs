@@ -15,18 +15,6 @@ pub(crate) struct EpisodeStep {
     pub(crate) return_value: f32,
 }
 
-/// One step of the best discovered trajectory, used for supervised fine-tuning.
-#[derive(Debug, Clone)]
-pub(crate) struct TrajectoryStep {
-    pub(crate) direction_index: usize,
-}
-
-/// In-memory trajectory for the best training episode.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct BuildTrajectory {
-    pub(crate) steps: Vec<TrajectoryStep>,
-}
-
 /// One complete training episode.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Episode {

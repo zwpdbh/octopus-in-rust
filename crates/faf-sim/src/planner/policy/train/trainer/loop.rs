@@ -1,7 +1,7 @@
 //! Trainer main loop for the direction-only policy network.
 
 use super::super::config::TrainStats;
-use super::super::episode::{BuildTrajectory, Episode, TrajectoryStep};
+use super::super::episode::Episode;
 use super::super::metric::metrics::training_progress;
 use super::super::metric::{EpisodeSummary, TrainEvent};
 use std::rc::Rc;
@@ -87,13 +87,11 @@ impl Trainer {
         Some(loss)
     }
 
-    /// Update training statistics, best trajectory, and best model when an
-    /// episode reaches the goal.
+    /// Update training statistics and best model when an episode reaches the goal.
     ///
     /// The saved model is updated whenever a training episode achieves a new
     /// best completion time, so that `simulate` receives a model that has
-    /// demonstrably reached the goal. The best trajectory is retained for
-    /// supervised fine-tuning.
+    /// demonstrably reached the goal.
     /// Returns `true` if the target completion time was hit.
     fn handle_goal_reached(&mut self, episode: &Episode, stats: &mut TrainStats) -> bool {
         stats.goal_reaches += 1;
@@ -105,15 +103,6 @@ impl Trainer {
         if is_new_best {
             self.best_train_time = Some(episode.completion_time);
             self.best_model = Some(self.model.clone());
-            self.best_trajectory = Some(BuildTrajectory {
-                steps: episode
-                    .steps
-                    .iter()
-                    .map(|s| TrajectoryStep {
-                        direction_index: s.direction_index,
-                    })
-                    .collect(),
-            });
         }
 
         self.config

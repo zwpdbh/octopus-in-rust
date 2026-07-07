@@ -17,20 +17,8 @@ pub struct EpisodeSummary {
     pub loss: Option<f32>,
 }
 
-/// Fine-tuning progress report.
-#[derive(Debug, Clone, Copy)]
-pub struct FineTuneSummary {
-    /// One-based epoch index.
-    pub epoch: usize,
-    /// Total number of fine-tuning epochs.
-    pub total_epochs: usize,
-    /// Loss on the best trajectory for this epoch.
-    pub loss: f32,
-}
-
-/// A single training event that metrics can observe.
+/// Training event types emitted by the policy trainer.
 #[derive(Debug, Clone, Copy)]
 pub enum TrainEvent {
     Episode(EpisodeSummary),
-    FineTuneEpoch(FineTuneSummary),
 }

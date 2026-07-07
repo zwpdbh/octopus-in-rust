@@ -19,9 +19,7 @@ pub struct TrainConfig {
     /// goal. A strong negative value makes timeouts clearly worse than any
     /// successful completion.
     pub timeout_penalty: f32,
-    /// Number of supervised fine-tuning epochs to run on the best discovered
-    /// trajectory after REINFORCE training.
-    pub fine_tune_epochs: usize,
+
     /// Global gradient norm clipping threshold. `None` disables clipping.
     /// A value of `1.0` is a safe default for preventing REINFORCE divergence.
     pub grad_clip: Option<f32>,
@@ -62,7 +60,6 @@ impl Default for TrainConfig {
             gamma: 0.99,
             target_time: None,
             timeout_penalty: -1000.0,
-            fine_tune_epochs: 100,
             grad_clip: None,
             max_mex_count: 12,
             reward_bp_coef: 1.0 / 20.0,

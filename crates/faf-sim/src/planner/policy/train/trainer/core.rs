@@ -10,7 +10,6 @@ use burn::optim::{Adam, AdamConfig};
 use rand::rngs::ThreadRng;
 
 use super::super::config::TrainConfig;
-use super::super::episode::BuildTrajectory;
 use super::super::metric::metrics::FafSimMetrics;
 use super::super::{TrainBackend, TrainDevice};
 use crate::planner::plan_graph::PlanGraph;
@@ -23,10 +22,9 @@ pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, Trai
 pub struct Trainer {
     pub(crate) model: PolicyBundle<TrainBackend>,
     pub(crate) best_model: Option<PolicyBundle<TrainBackend>>,
-    pub(crate) best_trajectory: Option<BuildTrajectory>,
     pub(crate) best_train_time: Option<f64>,
     /// Plan graph for the current goal. Built on first use and reused for the
-    /// rest of training so that evaluation and fine-tuning do not rebuild it.
+    /// rest of training so that episode generation does not rebuild it.
     pub(crate) plan: Option<Rc<PlanGraph>>,
     pub(crate) optimizer: AdamOptimizer,
     pub(crate) config: TrainConfig,
@@ -67,7 +65,6 @@ impl Trainer {
         Self {
             model,
             best_model: None,
-            best_trajectory: None,
             best_train_time: None,
             plan: None,
             optimizer,

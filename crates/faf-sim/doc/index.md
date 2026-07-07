@@ -10,7 +10,7 @@ We do not assume you already know Burn. Each chapter introduces the Burn concept
 - **Environment modeling:** how we represent a deterministic RTS economy as a graph that a neural network can consume.
 - **Action-space design:** reducing a combinatorial build graph to six high-level directions, then resolving each direction with a deterministic heuristic.
 - **Policy network:** a small MLP that outputs direction logits over those six directions.
-- **Training:** REINFORCE with return normalization, masked softmax, timeout penalties, and supervised fine-tuning on the best trajectory.
+- **Training:** REINFORCE with return normalization, masked softmax, and timeout penalties.
 - **Simulation:** running the trained policy once per tick in a closed-loop reactive simulator.
 - **Integration:** wiring the planner into a CLI and an actor loop.
 
@@ -26,7 +26,7 @@ You should be comfortable with Rust and with the basics of neural networks and p
 4. **[Actions and the plan graph](03-actions-and-successors.md)** — The universal plan graph, the six `EdgeCategory` directions, and the heuristic layer that turns a direction into a concrete `SimAction`.
 5. **[Building the policy network in Burn](04-value-network.md)** — A direction-only `Module` with shared backbone, `LinearConfig`, forward methods, and the `evaluate_direction` helper.
 6. **[Reward shaping](05-reward-shaping.md)** — Per-step rewards for mass/energy income, storage pressure, and stalls, plus one-time tech milestones and a terminal bonus.
-7. **[Training with REINFORCE](06-training-pipeline.md)** — Episode rollouts, return normalization, masked log-probabilities, timeout penalties, and cross-entropy fine-tuning on the best trajectory.
+7. **[Training with REINFORCE](06-training-pipeline.md)** — Episode rollouts, return normalization, masked log-probabilities, and timeout penalties.
 8. **[Integration and CLI](08-integration.md)** — Wiring the planner into the actor loop and running `train` / `simulate` from the command line.
 9. **[Benchmarking and tuning](09-benchmarking-and-tuning.md)** — Metrics, diagnosing failure modes, and tuning reward coefficients.
 10. **[The heuristic layer](10-heuristic-layer.md)** — The deterministic rules that turn each of the six network directions into a build/upgrade action.

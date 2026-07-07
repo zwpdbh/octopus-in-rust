@@ -35,7 +35,7 @@ The `train` command learns a single **hierarchical policy network** with a share
 3. **Power head** — decides how much build power to allocate to that edge.
 4. **Squad head** — decides the `[T1, T2, T3]` engineer composition.
 
-Training uses REINFORCE with greedy action selection and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
+Training uses REINFORCE with greedy action selection. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
 
 ## Training parameters reference
 
@@ -111,7 +111,6 @@ The live dashboard shows one plot per metric. You can switch metrics with `←`/
 | Metric                    | What it tells you                                                                                                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Episode Loss**          | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                                                                             |
-| **Fine-Tune Loss**        | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                                                                                 |
 | **Episode Steps**         | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.                                                          |
 | **Completion Time (min)** | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.                                                          |
 | **Goal Reach**            | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better.                                                                        |
@@ -154,7 +153,6 @@ Training MLP for UEF Novax Center
 ep=   1 steps=  42 reached=true time=      52m 15.0s best=      52m 15.0s loss=   -2.3456
 ...
 ep= 9500 steps=  38 reached=true time=      35m 23.0s best=      35m 23.0s loss=    1.0438
-Fine-tuned best model on trajectory: epochs=100 loss=1.0438
 Training complete: 9259/10000 episodes reached the goal
 Best completion time: 35m 23.0s
 Saved best-seen model to data/models/mlp-uef-novax-center

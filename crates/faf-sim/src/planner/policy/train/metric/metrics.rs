@@ -7,7 +7,6 @@
 //! | Metric | Source | Interpretation |
 //! |---|---|---|
 //! | Episode Loss | `TrainEvent::Episode` | REINFORCE policy loss for the finished episode. Lower is better; a downward trend means the policy is improving. |
-//! | Fine-Tune Loss | `TrainEvent::FineTuneEpoch` | Supervised fine-tuning loss on the best trajectories. Lower is better. |
 //! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
 //! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal; "N/A" otherwise. Lower is better. |
 //! | Goal Reach | `TrainEvent::Episode` | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better. |
@@ -26,7 +25,7 @@ use burn::train::metric::{
 use burn::train::renderer::{MetricState, MetricsRenderer, ProgressType, TrainingProgress};
 use burn::train::LearnerSummary;
 
-use super::events::{EpisodeSummary, FineTuneSummary, TrainEvent};
+use super::events::{EpisodeSummary, TrainEvent};
 
 /// Episode REINFORCE loss.
 ///
@@ -87,65 +86,6 @@ impl Numeric for EpisodeLossMetric {
     }
 }
 
-/// Supervised fine-tuning loss.
-///
-/// Tracks the cross-entropy (or regression) loss when fine-tuning the policy
-/// on the best trajectories collected so far. A decreasing value indicates the
-/// policy is fitting the high-quality demonstrations.
-#[derive(Clone, Default)]
-pub struct FineTuneLossMetric {
-    name: MetricName,
-    state: NumericMetricState,
-}
-
-impl FineTuneLossMetric {
-    pub fn new() -> Self {
-        Self {
-            name: Arc::new("Fine-Tune Loss".to_string()),
-            state: NumericMetricState::default(),
-        }
-    }
-}
-
-impl Metric for FineTuneLossMetric {
-    type Input = TrainEvent;
-
-    fn name(&self) -> MetricName {
-        self.name.clone()
-    }
-
-    fn attributes(&self) -> MetricAttributes {
-        NumericAttributes {
-            unit: None,
-            higher_is_better: false,
-        }
-        .into()
-    }
-
-    fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let value = match item {
-            TrainEvent::FineTuneEpoch(FineTuneSummary { loss, .. }) => *loss as f64,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
-        };
-        self.state
-            .update(value, 1, FormatOptions::new(self.name()).precision(4))
-    }
-
-    fn clear(&mut self) {
-        self.state.reset();
-    }
-}
-
-impl Numeric for FineTuneLossMetric {
-    fn value(&self) -> NumericEntry {
-        self.state.current_value()
-    }
-
-    fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
-    }
-}
-
 /// Steps taken in an episode.
 ///
 /// Tracks how many simulator steps were executed before the episode ended.
@@ -184,7 +124,6 @@ impl Metric for EpisodeStepsMetric {
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
         let value = match item {
             TrainEvent::Episode(EpisodeSummary { steps, .. }) => *steps as f64,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
         self.state.update(
             value,
@@ -342,7 +281,6 @@ impl Metric for GoalReachMetric {
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
         let reached = match item {
             TrainEvent::Episode(EpisodeSummary { reached_goal, .. }) => *reached_goal,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
         self.history.push_back(if reached { 1.0 } else { 0.0 });
         while self.history.len() > self.window {
@@ -485,7 +423,6 @@ impl Metric for EpisodeSpeedMetric {
     fn update(&mut self, item: &Self::Input, metadata: &MetricMetadata) -> SerializedEntry {
         let episode = match item {
             TrainEvent::Episode(EpisodeSummary { episode, .. }) => *episode,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
         };
 
         let now = Instant::now();
@@ -534,7 +471,6 @@ impl Numeric for EpisodeSpeedMetric {
 pub struct FafSimMetrics {
     renderer: Box<dyn MetricsRenderer>,
     loss: EpisodeLossMetric,
-    fine_tune_loss: FineTuneLossMetric,
     steps: EpisodeStepsMetric,
     completion_time: CompletionTimeMetric,
     goal_reach: GoalReachMetric,
@@ -548,7 +484,6 @@ impl FafSimMetrics {
         Self {
             renderer,
             loss: EpisodeLossMetric::new(),
-            fine_tune_loss: FineTuneLossMetric::new(),
             steps: EpisodeStepsMetric::new(),
             completion_time: CompletionTimeMetric::new(),
             goal_reach: GoalReachMetric::new(),
@@ -570,7 +505,6 @@ impl FafSimMetrics {
         Self::register_metric(&mut *self.renderer, &self.completion_time);
         Self::register_metric(&mut *self.renderer, &self.speed);
         Self::register_metric(&mut *self.renderer, &self.steps);
-        Self::register_metric(&mut *self.renderer, &self.fine_tune_loss);
     }
 
     fn register_metric<M: Metric>(renderer: &mut dyn MetricsRenderer, metric: &M) {
@@ -595,12 +529,6 @@ impl FafSimMetrics {
         );
         Self::update_metric(&mut *self.renderer, &mut self.speed, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.steps, event, metadata);
-        Self::update_metric(
-            &mut *self.renderer,
-            &mut self.fine_tune_loss,
-            event,
-            metadata,
-        );
     }
 
     fn update_metric<M: Metric<Input = TrainEvent> + Numeric>(

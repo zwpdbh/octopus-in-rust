@@ -17,7 +17,6 @@
 | **Episode** | One full rollout from the starting state until the goal is reached or `max_steps` is exceeded. |
 | **Faction** | One of UEF, Cybran, Aeon, or Seraphim. Determines available units and build trees. |
 | **Feature vector** | Fixed-size numerical representation of a `SimulationState` fed into the learned direction network. Currently 11 floats. |
-| **Fine-tuning** | Supervised training on the best trajectory found during REINFORCE, run after the main loop. |
 | **Heuristic layer** | Deterministic rules in `heuristic.rs` that convert a selected `EdgeCategory` direction into a concrete `SimAction`. |
 | **HierarchicalPolicyNet** | The Burn `Module` that implements the direction-only policy: shared backbone plus a single direction head. |
 | **Module** | Burn derive macro that makes a struct recordable, loadable, optimizable, and device-movable. |

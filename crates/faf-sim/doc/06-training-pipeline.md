@@ -1,18 +1,17 @@
 # 6. Training with REINFORCE
 
-This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover return normalization, timeout penalties, and supervised fine-tuning on the best trajectory.
+This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover return normalization and timeout penalties.
 
 ## The training loop at a glance
 
-The full training pipeline has five stages:
+The full training pipeline has four stages:
 
 1. **Configuration** — `TrainConfig` holds hyperparameters.
 2. **Episode generation** — `run_episode` rolls out one trajectory with the current policy.
 3. **Return computation** — `compute_returns` discounts and standardizes rewards.
 4. **Policy update** — `update` computes the REINFORCE loss and applies one gradient step.
-5. **Fine-tuning** — `fine_tune_on_trajectory` distills the best discovered trajectory into the final model.
 
-The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for episode generation and fine-tuning.
+The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for every episode.
 
 ## Configuration
 
@@ -28,7 +27,6 @@ pub struct TrainConfig {
     pub gamma: f32,
     pub timeout_penalty: f32,
     pub target_time: Option<f64>,
-    pub fine_tune_epochs: usize,
     pub grad_clip: Option<f32>,
 }
 ```
@@ -269,122 +267,19 @@ Accumulating the loss over the whole episode and then calling `backward()` once 
 
 Notice that the mask is applied inside the loss, not just during sampling. This is crucial: if we only masked during sampling, the loss would compare the network's unmasked distribution against a legal direction that the unmasked distribution might assign very low probability to. Masking inside the loss ensures the softmax is computed only over legal directions, so the gradient is well-behaved even when most directions are illegal.
 
-## Best model and best trajectory
+## Best model
 
-Whenever a training episode reaches the goal with a new fastest completion time, `Trainer` saves a copy of the current model as `best_model` and records the episode's direction sequence as `best_trajectory`:
+Whenever a training episode reaches the goal with a new fastest completion time, `Trainer` saves a copy of the current model as `best_model`:
 
 ```rust
 // crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 95 — handle_goal_reached
 if is_new_best {
     self.best_train_time = Some(episode.completion_time);
     self.best_model = Some(self.model.clone());
-    self.best_trajectory = Some(BuildTrajectory {
-        steps: episode
-            .steps
-            .iter()
-            .map(|s| TrajectoryStep {
-                direction_index: s.direction_index,
-            })
-            .collect(),
-    });
 }
 ```
 
 REINFORCE alone does not guarantee that the final parameters are the best ones seen, so keeping the model that produced the fastest goal-reaching episode is important for model selection.
-
-## Fine-tuning on the best trajectory
-
-After REINFORCE finishes, the trainer runs supervised fine-tuning on the best trajectory discovered during training. This is a Burn cross-entropy (negative log-likelihood) loss that distills the best episode into the model. It reuses the same cached plan graph:
-
-```rust
-// crates/faf-sim/src/planner/policy/train/trainer/fine_tune.rs ~line 23 — fine_tune_on_trajectory
-pub(crate) fn fine_tune_on_trajectory(
-    &mut self,
-    trajectory: &BuildTrajectory,
-    units: &Units,
-    goal: &Goal,
-    planner_config: &PlannerConfig,
-) -> f32 {
-    if trajectory.steps.is_empty() {
-        return 0.0;
-    }
-
-    let plan = self
-        .plan
-        .as_ref()
-        .expect("plan graph should be built before fine-tuning");
-    let mut state = SimulationState::new(units, &[UnitKind::Commander]);
-    let mut accumulated_loss: Option<Tensor<TrainBackend, 1>> = None;
-    let mut total_loss_value = 0.0f32;
-    let mut step_count = 0usize;
-
-    for step in &trajectory.steps {
-        let mut executable = false;
-        for _ in 0..self.config.max_steps {
-            let direction_mask =
-                legal_direction_mask(&state, units, planner_config, goal, &plan);
-            if !direction_mask[step.direction_index] {
-                state.tick(units, planner_config.dt);
-                continue;
-            }
-
-            let base_features = state_features(&state, units, planner_config);
-            let macro_input = tensor1d_from_vec(&base_features);
-            let latent = self.model.latent(macro_input);
-
-            let direction_logits = self.model.direction_logits(latent).flatten::<1>(0, 1);
-            let direction_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::new(
-                    direction_mask
-                        .iter()
-                        .map(|&legal| if legal { 0.0 } else { MASK_VALUE })
-                        .collect(),
-                    [DIRECTION_COUNT],
-                ),
-                &self.device,
-            );
-            let masked_direction_logits = direction_logits + direction_mask_tensor;
-            let direction_log_probs = log_softmax(masked_direction_logits, 0);
-            let direction_index_tensor =
-                Tensor::<TrainBackend, 1, burn::tensor::Int>::from_data(
-                    TensorData::new(vec![step.direction_index as i64], [1]),
-                    &self.device,
-                );
-            let direction_ce = direction_log_probs.select(0, direction_index_tensor).neg();
-
-            total_loss_value += direction_ce.clone().into_data().as_slice::<f32>().unwrap()[0];
-            accumulated_loss = Some(match accumulated_loss {
-                Some(acc) => acc + direction_ce,
-                None => direction_ce,
-            });
-            step_count += 1;
-
-            let direction = EdgeCategory::ALL[step.direction_index];
-            let action =
-                direction_to_action(direction, &state, units, planner_config, goal, &plan);
-            let _ = execute_action(&mut state, &action, units, planner_config.dt);
-            executable = true;
-            break;
-        }
-
-        if !executable {
-            break;
-        }
-    }
-
-    if let Some(loss) = accumulated_loss {
-        let grads = loss.backward();
-        let grads = burn::optim::GradientsParams::from_grads(grads, &self.model);
-        self.model = self
-            .optimizer
-            .step(self.config.learning_rate, self.model.clone(), grads);
-    }
-
-    total_loss_value / step_count.max(1) as f32
-}
-```
-
-Fine-tuning is supervised because we already know the direction that was taken in the best trajectory. We simply maximize the log-probability of those directions under the current model. This can clean up the policy after noisy REINFORCE exploration.
 
 ## The main loop
 
@@ -480,10 +375,9 @@ if let Some(ref mut metrics) = self.metrics {
 
 ### Train events
 
-There are two event variants:
+There is one event variant:
 
 - `TrainEvent::Episode` — emitted after every REINFORCE episode.
-- `TrainEvent::FineTuneEpoch` — emitted during supervised fine-tuning on the best trajectory.
 
 ### Metrics
 
@@ -497,7 +391,6 @@ There are two event variants:
 | `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
 | `Best Time` | `Episode` (goal reached) | Fastest completion time observed so far across episodes that reached the goal. |
 | `Episodes/sec` | `Episode` | Training throughput. |
-| `Fine-Tune Loss` | `FineTuneEpoch` | Supervised cross-entropy loss on the best trajectory. |
 
 All metrics are numeric and use Burn's `NumericMetricState`, so the renderer receives both a formatted string and a raw value for plotting.
 
@@ -577,6 +470,5 @@ During normal training you should see:
 - **REINFORCE objective.** `-log π * return`.
 - **One gradient step per episode.** Accumulate per-step losses, then `backward()` + `optimizer.step()`.
 - **Best episode chooses the best model.** Track the fastest training completion time among episodes that reached the goal and keep that model.
-- **Fine-tuning distills the best trajectory.** Cross-entropy on the recorded directions can polish the final policy.
 
 With the policy trained, the next chapter shows how to wire it into the reactive simulator.
