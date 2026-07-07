@@ -93,7 +93,7 @@ pub struct PlanArgs {
 /// Arguments for the `train` subcommand.
 #[derive(Parser)]
 #[command(
-    after_help = "Examples:\n  cargo run --release --bin faf-sim -- train -e 2000 -m 10000 -r --epsilon 0.3 --epsilon-final 0.01 uef fatboy"
+    after_help = "Examples:\n  cargo run --release --bin faf-sim -- train -e 2000 -m 10000 -r uef fatboy"
 )]
 pub struct TrainArgs {
     /// Number of training episodes. Must be specified with `-e`. Use `0` to run
@@ -118,20 +118,11 @@ pub struct TrainArgs {
     /// duration. Accepts plain seconds or a suffix (`30m`, `1h`, `1200s`).
     #[arg(short = 't', long, value_parser = parse_duration)]
     pub target_time: Option<f64>,
-    /// Initial epsilon-greedy exploration probability.
-    #[arg(long, default_value = "0.1")]
-    pub epsilon: f32,
-    /// Final epsilon value after decay. Only used with `--epsilon-decay-episodes`.
-    #[arg(long, default_value = "0.01")]
-    pub epsilon_final: f32,
-    /// Number of episodes over which to linearly decay epsilon from `--epsilon`
-    /// to `--epsilon-final`. Defaults to the value of `-e`; pass `0` to disable
-    /// decay entirely.
-    #[arg(long)]
-    pub epsilon_decay_episodes: Option<usize>,
-    /// Keep epsilon constant at `--epsilon` for the whole run (disables decay).
-    #[arg(long, default_value = "false")]
-    pub no_epsilon_decay: bool,
+    /// Penalty applied when an episode hits the step limit without reaching the
+    /// goal. A strong negative value makes failures clearly worse than any
+    /// successful completion.
+    #[arg(long, default_value = "-1000.0")]
+    pub timeout_penalty: f32,
     /// Suppress per-episode and progress output.
     #[arg(long, default_value = "false")]
     pub quiet: bool,

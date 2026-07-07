@@ -13,20 +13,12 @@ pub struct TrainConfig {
     pub learning_rate: f64,
     /// Discount factor for future rewards.
     pub gamma: f32,
-    /// Initial probability of taking a random action during training
-    /// (epsilon-greedy exploration on top of the softmax policy).
-    pub epsilon: f32,
-    /// Final epsilon value after decay. Only used when `epsilon_decay_episodes`
-    /// is non-zero.
-    pub epsilon_final: f32,
-    /// Number of episodes over which to linearly decay `epsilon` to
-    /// `epsilon_final`. `0` means no decay (epsilon stays at `epsilon`).
-    pub epsilon_decay_episodes: usize,
-    /// Entropy bonus coefficient. Higher values encourage more exploration by
-    /// keeping the policy distribution spread out.
-    pub entropy_coef: f32,
     /// Stop early when the best completion time is at most this many seconds.
     pub target_time: Option<f64>,
+    /// Penalty applied when an episode hits the step limit without reaching the
+    /// goal. A strong negative value makes timeouts clearly worse than any
+    /// successful completion.
+    pub timeout_penalty: f32,
     /// Number of supervised fine-tuning epochs to run on the best discovered
     /// trajectory after REINFORCE training.
     pub fine_tune_epochs: usize,
@@ -68,11 +60,8 @@ impl Default for TrainConfig {
             dt: 1.0,
             learning_rate: 1e-3,
             gamma: 0.99,
-            epsilon: 0.1,
-            epsilon_final: 0.1,
-            epsilon_decay_episodes: 0,
-            entropy_coef: 0.01,
             target_time: None,
+            timeout_penalty: -1000.0,
             fine_tune_epochs: 100,
             grad_clip: None,
             max_mex_count: 12,

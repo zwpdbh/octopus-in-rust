@@ -36,8 +36,7 @@ impl Trainer {
                 break;
             }
 
-            let epsilon = self.current_epsilon(ep);
-            let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
+            let episode = self.run_episode(units, goal, &planner_config, &plan);
             let loss = self.update_policy(&episode, &mut stats);
             stats.episode_lengths.push(episode.steps.len());
 
@@ -47,7 +46,7 @@ impl Trainer {
                 false
             };
 
-            self.emit_episode_metrics(ep + 1, &episode, epsilon, loss);
+            self.emit_episode_metrics(ep + 1, &episode, loss);
 
             ep += 1;
 
@@ -123,13 +122,7 @@ impl Trainer {
     }
 
     /// Emit an `Episode` event to the metrics renderer.
-    fn emit_episode_metrics(
-        &mut self,
-        episode: usize,
-        summary: &Episode,
-        epsilon: f32,
-        loss: Option<f32>,
-    ) {
+    fn emit_episode_metrics(&mut self, episode: usize, summary: &Episode, loss: Option<f32>) {
         let Some(ref mut metrics) = self.metrics else {
             return;
         };
@@ -140,7 +133,6 @@ impl Trainer {
                 episode,
                 total_episodes: self.config.episodes,
                 steps: summary.steps.len(),
-                epsilon,
                 reached_goal: summary.reached_goal,
                 completion_time: summary.completion_time,
                 loss,
@@ -151,18 +143,6 @@ impl Trainer {
             training_progress(episode, self.config.episodes, Some(episode)),
             vec![],
         );
-    }
-
-    pub(crate) fn current_epsilon(&self, ep: usize) -> f32 {
-        let decay = self.config.epsilon_decay_episodes;
-        if decay == 0 {
-            return self.config.epsilon;
-        }
-        if ep >= decay {
-            return self.config.epsilon_final;
-        }
-        let progress = ep as f32 / decay as f32;
-        self.config.epsilon - (self.config.epsilon - self.config.epsilon_final) * progress
     }
 }
 

@@ -11,7 +11,6 @@
 //! | Episode Steps | `TrainEvent::Episode` | Number of simulator steps taken in the episode. Lower usually means the agent reached the goal faster. |
 //! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal; "N/A" otherwise. Lower is better. |
 //! | Goal Reach | `TrainEvent::Episode` | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better. |
-//! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
 //! | Best Time (min) | `TrainEvent::Episode` | Best completion time in minutes observed so far from episodes that reached the goal; "N/A" before any episode reaches the goal. Lower is better. |
 //! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
@@ -368,65 +367,6 @@ impl Numeric for GoalReachMetric {
     }
 }
 
-/// Current epsilon-greedy exploration probability.
-///
-/// Tracks the probability of taking a random action instead of the policy's
-/// best action. Epsilon typically decays over training, shifting the agent
-/// from exploration to exploitation.
-#[derive(Clone, Default)]
-pub struct EpsilonMetric {
-    name: MetricName,
-    state: NumericMetricState,
-}
-
-impl EpsilonMetric {
-    pub fn new() -> Self {
-        Self {
-            name: Arc::new("Epsilon".to_string()),
-            state: NumericMetricState::default(),
-        }
-    }
-}
-
-impl Metric for EpsilonMetric {
-    type Input = TrainEvent;
-
-    fn name(&self) -> MetricName {
-        self.name.clone()
-    }
-
-    fn attributes(&self) -> MetricAttributes {
-        NumericAttributes {
-            unit: None,
-            higher_is_better: false,
-        }
-        .into()
-    }
-
-    fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let value = match item {
-            TrainEvent::Episode(EpisodeSummary { epsilon, .. }) => *epsilon as f64,
-            _ => return SerializedEntry::new("-".to_string(), "".to_string()),
-        };
-        self.state
-            .update(value, 1, FormatOptions::new(self.name()).precision(4))
-    }
-
-    fn clear(&mut self) {
-        self.state.reset();
-    }
-}
-
-impl Numeric for EpsilonMetric {
-    fn value(&self) -> NumericEntry {
-        self.state.current_value()
-    }
-
-    fn running_value(&self) -> NumericEntry {
-        self.state.running_value()
-    }
-}
-
 /// Best completion time observed so far, in minutes.
 ///
 /// Tracks the lowest completion time seen across episodes that reached the
@@ -466,20 +406,21 @@ impl Metric for BestTimeMetric {
     }
 
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let completion_time = match item {
-            TrainEvent::Episode(EpisodeSummary {
-                reached_goal: true,
-                completion_time,
-                ..
-            }) => *completion_time,
-            _ => return SerializedEntry::new("N/A".to_string(), "N/A".to_string()),
-        };
-        let is_new_best = self.best_time.is_none_or(|t| completion_time < t);
-        if is_new_best {
-            self.best_time = Some(completion_time);
+        if let TrainEvent::Episode(EpisodeSummary {
+            reached_goal: true,
+            completion_time,
+            ..
+        }) = item
+        {
+            if self.best_time.is_none_or(|t| *completion_time < t) {
+                self.best_time = Some(*completion_time);
+            }
         }
-        let value = self.best_time.unwrap_or(completion_time);
-        let minutes = seconds_to_minutes(value);
+
+        let Some(best) = self.best_time else {
+            return SerializedEntry::new("N/A".to_string(), "N/A".to_string());
+        };
+        let minutes = seconds_to_minutes(best);
         SerializedEntry::new(format!("{minutes:.2} min"), format!("{minutes:.2}"))
     }
 
@@ -597,7 +538,6 @@ pub struct FafSimMetrics {
     steps: EpisodeStepsMetric,
     completion_time: CompletionTimeMetric,
     goal_reach: GoalReachMetric,
-    epsilon: EpsilonMetric,
     best_time: BestTimeMetric,
     speed: EpisodeSpeedMetric,
 }
@@ -612,7 +552,6 @@ impl FafSimMetrics {
             steps: EpisodeStepsMetric::new(),
             completion_time: CompletionTimeMetric::new(),
             goal_reach: GoalReachMetric::new(),
-            epsilon: EpsilonMetric::new(),
             best_time: BestTimeMetric::new(),
             speed: EpisodeSpeedMetric::new(),
         }
@@ -629,7 +568,6 @@ impl FafSimMetrics {
         Self::register_metric(&mut *self.renderer, &self.goal_reach);
         Self::register_metric(&mut *self.renderer, &self.loss);
         Self::register_metric(&mut *self.renderer, &self.completion_time);
-        Self::register_metric(&mut *self.renderer, &self.epsilon);
         Self::register_metric(&mut *self.renderer, &self.speed);
         Self::register_metric(&mut *self.renderer, &self.steps);
         Self::register_metric(&mut *self.renderer, &self.fine_tune_loss);
@@ -655,7 +593,6 @@ impl FafSimMetrics {
             event,
             metadata,
         );
-        Self::update_metric(&mut *self.renderer, &mut self.epsilon, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.speed, event, metadata);
         Self::update_metric(&mut *self.renderer, &mut self.steps, event, metadata);
         Self::update_metric(

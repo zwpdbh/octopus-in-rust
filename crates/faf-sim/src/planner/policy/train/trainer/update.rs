@@ -68,18 +68,11 @@ impl Trainer {
                 .clone()
                 .select(0, direction_index_tensor);
 
-            let direction_probs = direction_log_probs.clone().exp();
-            let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
-
-            let entropy = direction_entropy;
-            let discrete_log_prob = direction_log_prob;
             let return_tensor = Tensor::<TrainBackend, 1>::from_data(
                 TensorData::new(vec![step.return_value], [1]),
                 &self.device,
             );
-            let policy_loss = discrete_log_prob.neg().mul(return_tensor);
-            let entropy_loss = entropy.neg().mul_scalar(self.config.entropy_coef);
-            let loss = policy_loss + entropy_loss;
+            let loss = direction_log_prob.neg().mul(return_tensor);
 
             total_loss += loss.clone().into_data().as_slice::<f32>().unwrap()[0];
             accumulated_loss = Some(match accumulated_loss {

@@ -9,8 +9,6 @@ pub struct EpisodeSummary {
     pub total_episodes: usize,
     /// Number of simulator steps taken in this episode.
     pub steps: usize,
-    /// Epsilon-greedy exploration probability used for this episode.
-    pub epsilon: f32,
     /// Whether the episode reached the goal.
     pub reached_goal: bool,
     /// Simulator time when the goal was reached, or the final simulator time.

@@ -135,13 +135,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         max_steps: args.max_steps,
         dt: args.dt,
         target_time: args.target_time,
-        epsilon: args.epsilon,
-        epsilon_final: args.epsilon_final,
-        epsilon_decay_episodes: if args.no_epsilon_decay {
-            0
-        } else {
-            args.epsilon_decay_episodes.unwrap_or(args.episodes)
-        },
+        timeout_penalty: args.timeout_penalty,
         grad_clip: args.grad_clip,
         max_mex_count: args.max_mex_count,
         reward_bp_coef: args.reward_bp_coef,

@@ -31,6 +31,7 @@ pub struct Trainer {
     pub(crate) optimizer: AdamOptimizer,
     pub(crate) config: TrainConfig,
     pub(crate) device: TrainDevice,
+    #[allow(dead_code)]
     pub(crate) rng: ThreadRng,
     /// Optional Burn-style metric bundle. Kept `pub(crate)` so that higher-level
     /// entry points can move it to a fresh `Trainer` during supervised fine-tuning.

@@ -31,12 +31,12 @@ Run each goal multiple times and report the mean and standard deviation. Because
 
 ## Tuning exploration
 
-During training, exploration is controlled by:
+Training currently uses greedy action selection, so the main levers for escaping local optima are:
 
-- `TrainConfig::epsilon` — random action probability.
-- `TrainConfig::entropy_coef` — entropy bonus that encourages a broader policy distribution.
+- `TrainConfig::timeout_penalty` — a more negative value makes hitting the step limit much worse than any successful completion, which can push the policy out of timeout loops.
+- Network capacity and training budget — a larger network or more episodes can discover directions the current policy misses.
 
-Start with `epsilon = 0.1` and decay to `0.01`. If the policy gets stuck in a local optimum, raise `epsilon` or slow the decay. If the policy is too noisy late in training, lower `epsilon_final` or reduce `entropy_coef`.
+A separate exploration mechanism will be added later (e.g. temperature-based sampling or parameter-space noise).
 
 ## Tuning the network
 
@@ -48,8 +48,8 @@ The direction-only network is small by default (11 inputs, 128-D hidden, 64-D la
 If the policy overfits:
 
 - Reduce network sizes.
-- Increase `epsilon` or `entropy_coef`.
-- Evaluate on multiple goals rather than a single goal.
+- Train on multiple goals rather than a single goal.
+- Adjust `timeout_penalty` so the policy is not rewarded for trivial behaviors.
 
 ## Tuning reward coefficients
 
@@ -67,7 +67,7 @@ Because the return is standardized per-episode, the relative scale of coefficien
 |---------|--------------|-----|
 | Policy is much slower than expected | Expensive per-step inference or very small `dt` | Use a smaller network or increase `dt`. |
 | Policy finds worse plans than training best | Policy undertrained or simulation uses deterministic greedy while training sampled actions | Train longer, or check that the saved model is the best model discovered during training (best completion time). |
-| Policy explores silly actions | `epsilon` too high early, or entropy bonus too large | Lower `epsilon`, reduce `entropy_coef`, or decay faster. |
+| Policy explores silly actions | Exploration mechanism (when added) is too aggressive | Reduce the exploration strength or temperature. |
 | Policy gets stuck repeating actions | Heuristic returns `Wait` for every direction, or successor bug | Verify `Wait` is always legal, the direction mask is non-empty when actions exist, and the heuristic covers the goal path. |
 | Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling, learning rate, and validation loss. |
 | Policy never reaches the goal | Reward signal too sparse or step budget too small | Increase `max_steps`, strengthen reward shaping, or train longer. |

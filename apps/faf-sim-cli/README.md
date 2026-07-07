@@ -13,7 +13,6 @@ cargo run --release --bin faf-sim -- plan
 
 # Train the hierarchical policy for a target unit.
 cargo run --release --bin faf-sim -- train -e 5000 -m 10000 \
-  --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
   --dt 1.0 --grad-clip 1.0 \
   -t 25m --max-mex-count 10 \
   --resume \
@@ -36,7 +35,7 @@ The `train` command learns a single **hierarchical policy network** with a share
 3. **Power head** — decides how much build power to allocate to that edge.
 4. **Squad head** — decides the `[T1, T2, T3]` engineer composition.
 
-Training uses REINFORCE with epsilon-greedy exploration and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
+Training uses REINFORCE with greedy action selection and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
 
 ## Training parameters reference
 
@@ -46,10 +45,7 @@ Training uses REINFORCE with epsilon-greedy exploration and supervised fine-tuni
 | `-m, --max-steps`             | `500`        | Maximum simulator steps per episode. This is a cap: the episode stops earlier if the goal is reached. See the horizon advice below.                                   |
 | `--dt`                        | `1.0`        | Fixed simulator timestep in seconds. Smaller values make the simulation finer but need more steps to cover the same game time. `1.0` is a good default.               |
 | `-t, --target-time`           | none         | Stop early once the best completion time is at most this duration (e.g. `-t 30m`, `-t 1h`, `-t 1800s`).                                                               |
-| `--epsilon`                   | `0.1`        | Initial epsilon-greedy exploration probability. Higher values mean more random actions early on.                                                                      |
-| `--epsilon-final`             | `0.01`       | Final epsilon value after decay.                                                                                                                                      |
-| `--epsilon-decay-episodes`    | same as `-e` | Number of episodes over which epsilon linearly decays from `--epsilon` to `--epsilon-final`.                                                                          |
-| `--no-epsilon-decay`          | off          | Keep epsilon constant at `--epsilon` for the whole run. Useful when resuming and you want to keep exploring.                                                          |
+| `--timeout-penalty`           | `-1000.0`    | Reward applied when an episode hits `max-steps` without reaching the goal. More negative values make failures clearly worse than any successful completion.             |
 | `--grad-clip`                 | none         | Global L2 gradient-clipping threshold. `1.0` is a good default for preventing REINFORCE divergence. Omit to disable clipping.                                         |
 | `--max-mex-count`             | `12`         | Maximum number of mass extractors (including capped upgrades) that may be active at the same time. New mex builds are blocked at this cap; upgrades do not count.     |
 | `--reward-bp-coef`            | `0.05`       | Coefficient for the build-power delta reward. Set to `0.0` to disable.                                                                                                |
@@ -71,7 +67,6 @@ A good first run that balances exploration and training time:
 ```sh
 cargo run --release --bin faf-sim -- \
   train -e 5000 -m 10000 -t 25m \
-  --epsilon 0.3 \
   --dt 1.0 \
   --grad-clip 1.0 \
   --max-mex-count 12 \
@@ -79,7 +74,6 @@ cargo run --release --bin faf-sim -- \
 ```
 
 - `-m 10000` gives the agent enough horizon to finish a T4 target (~160 minutes of game time).
-- `--epsilon 0.3` encourages broad exploration early; it decays to `0.01` over 5000 episodes.
 - `-t 25m` stops early if the policy finds a 25-minute build order.
 - `--grad-clip 1.0` keeps REINFORCE gradients stable.
 
@@ -88,12 +82,11 @@ A shorter smoke-test run to verify the setup:
 ```sh
 cargo run --release --bin faf-sim -- \
   train -e 100 -m 10000 \
-  --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 100 \
   --dt 1.0 --grad-clip 1.0 \
   uef novaxcenter
 ```
 
-With the current heuristic you should see goal reaches within the first few episodes. If the first 20–30 episodes report `reached=false` every time, check the horizon (`-m`) and the exploration rate (`--epsilon`).
+With the current heuristic you should see goal reaches within the first few episodes. If the first 20–30 episodes report `reached=false` every time, check the horizon (`-m`) and the timeout penalty (`--timeout-penalty`).
 
 ### Starting completely fresh
 
@@ -122,7 +115,6 @@ The live dashboard shows one plot per metric. You can switch metrics with `←`/
 | **Episode Steps**         | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.                                                          |
 | **Completion Time (min)** | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.                                                          |
 | **Goal Reach**            | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better.                                                                        |
-| **Epsilon**               | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                                                                             |
 | **Best Time (min)**       | Best completion time in minutes observed so far from episodes that reached the goal. Reported as "N/A" before any episode reaches the goal. Monotonically non-increasing. |
 | **Episodes/sec**          | Training throughput. Higher is faster, but does not indicate learning quality.                                                                                            |
 
@@ -153,26 +145,15 @@ If you run `simulate` before training, the planner uses a randomly initialized n
 
 ## Controlling exploration
 
-Training uses epsilon-greedy exploration. By default epsilon decays from `--epsilon` (default `0.1`) to `--epsilon-final` (default `0.01`) over the full run. If you resume training and want to keep exploring aggressively, disable the decay; epsilon will then stay at the value of `--epsilon`:
-
-```sh
-# Constant 10% random actions for the whole resumed run
-cargo run --release --bin faf-sim -- train -e 10000 -m 10000 --no-epsilon-decay -r uef novaxcenter
-
-# Constant 30% random actions
-# (--epsilon-final is ignored when decay is disabled)
-cargo run --release --bin faf-sim -- train -e 10000 -m 10000 --epsilon 0.3 --no-epsilon-decay uef novaxcenter
-```
-
-You can also keep the default decay but make it slower by setting `--epsilon-decay-episodes` larger than `-e`.
+Training currently uses greedy action selection. Exploration will be reintroduced later as a separate mechanism (e.g. temperature-based sampling or parameter-space noise). For now the main lever is the timeout penalty: a more negative value makes failures much worse than any successful completion, which can help the policy escape local optima that time out.
 
 ## Example training output
 
 ```text
 Training MLP for UEF Novax Center
-ep=   1 steps=  42 eps=0.3000 reached=true time=      52m 15.0s best=      52m 15.0s loss=   -2.3456
+ep=   1 steps=  42 reached=true time=      52m 15.0s best=      52m 15.0s loss=   -2.3456
 ...
-ep= 9500 steps=  38 eps=0.0100 reached=true time=      35m 23.0s best=      35m 23.0s loss=    1.0438
+ep= 9500 steps=  38 reached=true time=      35m 23.0s best=      35m 23.0s loss=    1.0438
 Fine-tuned best model on trajectory: epochs=100 loss=1.0438
 Training complete: 9259/10000 episodes reached the goal
 Best completion time: 35m 23.0s
@@ -213,13 +194,13 @@ Build-order diagram written to:
 ### `0/N reached` after many episodes
 
 1. **Increase `-m`**. The most common cause is a step cap that is too short for the target to finish. For T4 units start with `-m 10000`.
-2. **Increase exploration**. If `--epsilon` is too low the policy can get stuck in a local optimum. Try `--epsilon 0.3`.
+2. **Make `--timeout-penalty` more negative**. A stronger failure penalty can help the policy escape local optima that time out.
 3. **Check the horizon in game time**. Game time is `steps * dt`. With `--dt 1.0` and `-m 10000` the horizon is ~160 minutes; with `--dt 0.5` the same `-m` covers ~80 minutes.
 4. **Use `--fresh`** if you resumed from a bad checkpoint.
 
 ### Loss explodes or `NaN`
 
-Add or tighten gradient clipping: `--grad-clip 1.0`. If it still diverges, try a smaller `--epsilon` or a shorter `--epsilon-decay-episodes` so the policy spends less time taking very random actions while the value estimates are still unstable.
+Add or tighten gradient clipping: `--grad-clip 1.0`. If it still diverges, try lowering the learning rate or using a smaller `--reward-bp-coef` so the policy spends less time taking very large steps while the value estimates are still unstable.
 
 ### Training is very slow
 

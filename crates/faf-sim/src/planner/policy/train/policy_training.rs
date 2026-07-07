@@ -131,6 +131,7 @@ fn fine_tune_best_model(
     let mut tuner = Trainer::from_model(*config, model_to_tune);
     tuner.metrics = trainer.metrics.take();
     tuner.interrupter = trainer.interrupter.clone();
+    tuner.plan = trainer.plan.clone();
     let planner_config = PlannerConfig {
         max_mex_count: config.max_mex_count,
         ..PlannerConfig::default()

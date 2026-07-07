@@ -4,15 +4,21 @@ use crate::planner::policy::train::config::TrainConfig;
 use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
-/// Compute a terminal bonus for reaching the goal.
+/// Compute a terminal bonus for reaching the goal, or a penalty for timing out.
 ///
 /// A large positive reward encourages finishing, while a small time penalty
-/// discourages very slow completions.
-pub(crate) fn compute_terminal_bonus(state: &SimulationState, goal_reached: bool) -> f32 {
+/// discourages very slow completions. Hitting the step limit without reaching
+/// the goal receives a strong negative penalty so the policy learns that
+/// failure is worse than any successful completion.
+pub(crate) fn compute_terminal_bonus(
+    state: &SimulationState,
+    goal_reached: bool,
+    config: &TrainConfig,
+) -> f32 {
     if goal_reached {
         1000.0 - state.time as f32 * 0.2
     } else {
-        0.0
+        config.timeout_penalty
     }
 }
 

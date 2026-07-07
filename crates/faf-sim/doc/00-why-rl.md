@@ -79,7 +79,7 @@ Hand-written build orders work for one target on one map, but they are brittle:
 
 A learned policy discovers these trade-offs from experience. It is trained to maximize a single scalar — negative completion time — and generalizes across the states it has seen during training.
 
-During training the policy explores by sampling from its own output with epsilon-greedy noise. During simulation we typically use the greedy argmax direction, which is deterministic and fast.
+During training the policy selects the greedy argmax direction, exactly as it does during simulation. Exploration is added separately (e.g. through noise injection or alternative rollouts) rather than baked into the action-selection path.
 
 ## Why one-step policy instead of search?
 
@@ -92,7 +92,7 @@ A natural question is: why not wrap the policy in a lookahead search? The answer
 So the relationship is:
 
 - **Training:** REINFORCE on one-step policy rollouts.
-- **Simulation:** one-step greedy (or sampled) policy evaluation per tick.
+- **Simulation:** one-step greedy policy evaluation per tick.
 
 The policy itself is the planner. If a direction looks slightly worse now but leads to much better states later, the policy must learn that from the return signal during training.
 

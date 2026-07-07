@@ -13,7 +13,6 @@ use faf_sim::planner::policy::train::{
 
 const LOSS: &str = "Episode Loss";
 const STEPS: &str = "Episode Steps";
-const EPSILON: &str = "Epsilon";
 const GOAL_REACH: &str = "Goal Reach";
 const COMPLETION_TIME: &str = "Completion Time (min)";
 const BEST_TIME: &str = "Best Time (min)";
@@ -69,7 +68,6 @@ impl MetricsRendererTraining for TextMetricsRenderer {
                     };
                     match name.as_str() {
                         LOSS => format!("{:.4}", value),
-                        EPSILON => format!("{:.4}", value),
                         STEPS => format!("{:.0}", value),
                         GOAL_REACH => {
                             if value > 0.5 {
@@ -109,15 +107,14 @@ impl MetricsRendererTraining for TextMetricsRenderer {
             .or_else(|| item.progress.map(|p| p.items_processed))
             .unwrap_or(0);
         let steps = self.current_value(STEPS).unwrap_or("-");
-        let eps = self.current_value(EPSILON).unwrap_or("-");
         let reached = self.current_value(GOAL_REACH).unwrap_or("false");
         let time = self.current_value(COMPLETION_TIME).unwrap_or("N/A");
         let best = self.current_value(BEST_TIME).unwrap_or("N/A");
         let loss = self.current_value(LOSS).unwrap_or("-");
 
         eprintln!(
-            "ep={:>4} steps={:>4} eps={:>6} reached={:>5} time={:>14} best={:>14} loss={:>10}",
-            episode, steps, eps, reached, time, best, loss
+            "ep={:>4} steps={:>4} reached={:>5} time={:>14} best={:>14} loss={:>10}",
+            episode, steps, reached, time, best, loss
         );
 
         // Clear so that metrics which are not updated in the next event print "-".

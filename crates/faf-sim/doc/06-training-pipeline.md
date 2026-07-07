@@ -1,6 +1,6 @@
 # 6. Training with REINFORCE
 
-This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover entropy regularization, return normalization, and supervised fine-tuning on the best trajectory.
+This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover return normalization, timeout penalties, and supervised fine-tuning on the best trajectory.
 
 ## The training loop at a glance
 
@@ -26,10 +26,7 @@ pub struct TrainConfig {
     pub dt: f64,
     pub learning_rate: f64,
     pub gamma: f32,
-    pub epsilon: f32,
-    pub epsilon_final: f32,
-    pub epsilon_decay_episodes: usize,
-    pub entropy_coef: f32,
+    pub timeout_penalty: f32,
     pub target_time: Option<f64>,
     pub fine_tune_epochs: usize,
     pub grad_clip: Option<f32>,
@@ -40,8 +37,7 @@ Key knobs:
 
 - `learning_rate` — Adam step size. Start around `1e-3`.
 - `gamma` — discount factor for future rewards. We use `0.99`.
-- `epsilon` / `epsilon_final` — probability of taking a random legal direction instead of sampling the policy. Decaying epsilon from `0.1` to `0.01` over a few hundred episodes is common.
-- `entropy_coef` — entropy bonus coefficient. Higher values keep the policy exploratory for longer.
+- `timeout_penalty` — reward given when an episode hits `max_steps` without reaching the goal. A strong negative value (e.g. `-1000.0`) makes failures clearly worse than any successful completion.
 - `grad_clip` — global gradient norm clipping. A value of `1.0` can stabilize REINFORCE early in training.
 
 ## Trainer setup
@@ -87,7 +83,7 @@ pub type AdamOptimizer = OptimizerAdaptor<Adam, PolicyBundle<TrainBackend>, Trai
 
 1. Featurizes the state.
 2. Builds the legal-direction mask.
-3. Samples a direction (epsilon-greedy over the masked softmax).
+3. Selects the highest-probability legal direction (greedy argmax).
 4. Resolves the direction to a concrete action via the heuristic layer.
 5. Executes the action and records the reward.
 
@@ -98,7 +94,6 @@ pub(crate) fn run_episode(
     units: &Units,
     goal: &Goal,
     planner_config: &PlannerConfig,
-    epsilon: f32,
     plan: &PlanGraph,
 ) -> Episode {
     let mut state = SimulationState::new(units, &[UnitKind::Commander]);
@@ -123,19 +118,7 @@ pub(crate) fn run_episode(
             .model
             .evaluate_direction(base_features.clone(), &self.device);
 
-        let direction_idx = if self.rng.random::<f32>() < epsilon {
-            let legal_directions: Vec<usize> = direction_mask
-                .iter()
-                .enumerate()
-                .filter(|(_, &legal)| legal)
-                .map(|(i, _)| i)
-                .collect();
-            *legal_directions
-                .get(self.rng.random_range(0..legal_directions.len()))
-                .unwrap_or(&0)
-        } else {
-            masked_sample_index(&direction_logits, &direction_mask, &mut self.rng).unwrap_or(0)
-        };
+        let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
         let direction = EdgeCategory::ALL[direction_idx];
 
         let action = direction_to_action(direction, &state, units, planner_config, goal, &plan);
@@ -158,7 +141,7 @@ pub(crate) fn run_episode(
         });
     }
 
-    episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);
+    episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal, &self.config);
     self.compute_returns(&mut episode);
     episode
 }
@@ -166,8 +149,8 @@ pub(crate) fn run_episode(
 
 There are two important Burn patterns here:
 
-- **Host-side sampling.** `evaluate_direction` returns a plain `Vec<f32>` of logits. We build the mask and sample on the CPU, then feed the sampled index back into Burn as a tensor for the loss. This is common in RL: the environment interaction happens on the host; only the gradient computation needs tensors.
-- **Action masking.** `legal_direction_mask` tells us which of the six directions are currently feasible. Masking is applied twice: once during sampling (so the policy only picks legal directions) and once during the loss (so gradients do not push toward illegal directions).
+- **Host-side selection.** `evaluate_direction` returns a plain `Vec<f32>` of logits. We build the mask and pick the highest-scoring legal direction on the CPU, then feed the selected index back into Burn as a tensor for the loss. This keeps the environment interaction on the host; only the gradient computation needs tensors.
+- **Action masking.** `legal_direction_mask` tells us which of the six directions are currently feasible. Masking is applied twice: once during direction selection (so the policy only picks legal directions) and once during the loss (so gradients do not push toward illegal directions).
 
 ## Return computation
 
@@ -211,9 +194,8 @@ The update step is where Burn really shines. For each recorded step we:
 2. Run the backbone and direction head to get 6 logits.
 3. Apply the legal-direction mask.
 4. Compute `log_softmax` and extract the log-probability of the selected direction.
-5. Compute the entropy of the masked distribution.
-6. Combine policy loss and entropy loss.
-7. Accumulate losses across the episode and apply one gradient step.
+5. Weight the log-probability by the standardized return.
+6. Accumulate losses across the episode and apply one gradient step.
 
 ```rust
 // crates/faf-sim/src/planner/policy/train/trainer/update.rs ~line 41 — update
@@ -247,16 +229,11 @@ pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
             .clone()
             .select(0, direction_index_tensor);
 
-        let direction_probs = direction_log_probs.clone().exp();
-        let direction_entropy = (direction_probs * direction_log_probs).neg().sum();
-
         let return_tensor = Tensor::<TrainBackend, 1>::from_data(
             TensorData::new(vec![step.return_value], [1]),
             &self.device,
         );
-        let policy_loss = direction_log_prob.neg().mul(return_tensor);
-        let entropy_loss = direction_entropy.neg().mul_scalar(self.config.entropy_coef);
-        let loss = policy_loss + entropy_loss;
+        let loss = direction_log_prob.neg().mul(return_tensor);
 
         total_loss += loss.clone().into_data().as_slice::<f32>().unwrap()[0];
         accumulated_loss = Some(match accumulated_loss {
@@ -281,11 +258,10 @@ pub(crate) fn update(&mut self, episode: &Episode) -> f32 {
 The policy-gradient objective for a single step is:
 
 ```text
-loss = -log π(direction | state) * return - entropy_coef * entropy(π)
+loss = -log π(direction | state) * return
 ```
 
 - `direction_log_prob.neg().mul(return_tensor)` implements `-log π * return`. If the return is positive, this term pushes the network to increase the probability of the selected direction; if negative, it pushes the network to decrease it.
-- `entropy.neg().mul_scalar(entropy_coef)` is the entropy bonus. Entropy is computed from the masked distribution as `Σ -p * log p`. Maximizing entropy keeps the policy spread across legal directions and slows premature convergence.
 
 Accumulating the loss over the whole episode and then calling `backward()` once is equivalent to averaging gradients over the episode. It is also efficient: Burn only builds one computation graph (albeit large) per update.
 
@@ -436,8 +412,7 @@ pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
             break;
         }
 
-        let epsilon = self.current_epsilon(ep);
-        let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
+        let episode = self.run_episode(units, goal, &planner_config, &plan);
         let loss = self.update_policy(&episode, &mut stats);
         stats.episode_lengths.push(episode.steps.len());
 
@@ -446,7 +421,7 @@ pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
             .then(|| self.handle_goal_reached(&episode, &mut stats))
             .unwrap_or(false);
 
-        self.emit_episode_metrics(ep + 1, &episode, epsilon, loss);
+        self.emit_episode_metrics(ep + 1, &episode, loss);
 
         // maybe stop early if target_time was hit
     }
@@ -488,7 +463,6 @@ if let Some(ref mut metrics) = self.metrics {
             episode: ep + 1,
             total_episodes: self.config.episodes,
             steps: episode.steps.len(),
-            epsilon,
             reached_goal: episode.reached_goal,
             completion_time: episode.completion_time,
             loss,
@@ -521,7 +495,6 @@ There are two event variants:
 | `Episode Steps` | `Episode` | Number of simulator steps in the episode. |
 | `Completion Time` | `Episode` (goal reached) | Time in seconds when the goal was reached. |
 | `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
-| `Epsilon` | `Episode` | Current epsilon-greedy exploration probability. |
 | `Best Time` | `Episode` (goal reached) | Fastest completion time observed so far across episodes that reached the goal. |
 | `Episodes/sec` | `Episode` | Training throughput. |
 | `Fine-Tune Loss` | `FineTuneEpoch` | Supervised cross-entropy loss on the best trajectory. |
@@ -570,7 +543,6 @@ Columns:
 
 - `ep` — episode number.
 - `steps` — simulator steps taken.
-- `eps` — current epsilon (exploration probability).
 - `reached` — whether the goal was reached.
 - `time` — completion time if the goal was reached.
 - `best` — best completion time seen so far.
@@ -587,7 +559,6 @@ During normal training you should see:
 - `loss` trending downward as the policy learns.
 - `reached` moving from mostly `false` to mostly `true`.
 - `time` and `best` decreasing as the policy finds faster build orders.
-- `eps` decaying from `epsilon` toward `epsilon_final`.
 
 `best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest goal-reaching episode, not necessarily the final parameters. The TUI plots `Best Time` so you can watch this directly.
 
@@ -601,9 +572,9 @@ During normal training you should see:
 
 ## What you should remember
 
-- **Host-side sampling, tensor-side gradients.** The environment runs with Rust primitives; only the loss and backward pass use Burn tensors.
+- **Host-side selection, tensor-side gradients.** The environment runs with Rust primitives; only the loss and backward pass use Burn tensors.
 - **Mask twice.** Mask during action selection and again inside the loss.
-- **REINFORCE objective.** `-log π * return - entropy_coef * entropy`.
+- **REINFORCE objective.** `-log π * return`.
 - **One gradient step per episode.** Accumulate per-step losses, then `backward()` + `optimizer.step()`.
 - **Best episode chooses the best model.** Track the fastest training completion time among episodes that reached the goal and keep that model.
 - **Fine-tuning distills the best trajectory.** Cross-entropy on the recorded directions can polish the final policy.

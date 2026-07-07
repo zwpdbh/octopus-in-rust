@@ -6,5 +6,5 @@ pub mod metrics;
 pub use events::{EpisodeSummary, FineTuneSummary, TrainEvent};
 pub use metrics::{
     training_progress, BestTimeMetric, CompletionTimeMetric, EpisodeLossMetric, EpisodeSpeedMetric,
-    EpisodeStepsMetric, EpsilonMetric, FafSimMetrics, GoalReachMetric,
+    EpisodeStepsMetric, FafSimMetrics, GoalReachMetric,
 };

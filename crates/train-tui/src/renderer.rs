@@ -142,10 +142,17 @@ impl TrainTuiRenderer {
 
 impl Drop for TrainTuiRenderer {
     fn drop(&mut self) {
-        self.send(RenderMessage::Close);
+        // Send Close directly; do not use `self.send`, because `send` checks the
+        // kill signal and could panic. Panicking inside `drop` would abort the
+        // process and skip terminal cleanup.
+        let _ = self.sender.send(RenderMessage::Close);
         if let Some(handle) = self.handle.lock().unwrap().take() {
             let _ = handle.join();
         }
+        // Fallback: if the render thread panicked before it could restore the
+        // terminal, make sure we leave raw mode and the alternate screen here.
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
 
@@ -581,9 +588,7 @@ impl InnerRenderer {
 
 impl Drop for InnerRenderer {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            self.reset();
-        }
+        self.reset();
     }
 }
 

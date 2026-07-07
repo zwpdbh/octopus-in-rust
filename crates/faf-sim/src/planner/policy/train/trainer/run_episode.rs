@@ -1,7 +1,5 @@
 //! Trainer episode generation for the direction-only policy network.
 
-use rand::RngExt;
-
 use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::{compute_step_reward, compute_terminal_bonus, MilestoneTracker};
 
@@ -10,7 +8,7 @@ use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::execute_action;
 use crate::planner::policy::features::state_features;
 use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal};
-use crate::planner::policy::macro_net::masked_sample_index;
+use crate::planner::policy::macro_net::masked_argmax;
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -23,7 +21,6 @@ impl Trainer {
         units: &Units,
         goal: &Goal,
         planner_config: &PlannerConfig,
-        epsilon: f32,
         plan: &PlanGraph,
     ) -> Episode {
         let mut state = SimulationState::new(units, &[UnitKind::Commander]);
@@ -54,19 +51,7 @@ impl Trainer {
                 .model
                 .evaluate_direction(base_features.clone(), &self.device);
 
-            let direction_idx = if self.rng.random::<f32>() < epsilon {
-                let legal_directions: Vec<usize> = direction_mask
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &legal)| legal)
-                    .map(|(i, _)| i)
-                    .collect();
-                *legal_directions
-                    .get(self.rng.random_range(0..legal_directions.len()))
-                    .unwrap_or(&0)
-            } else {
-                masked_sample_index(&direction_logits, &direction_mask, &mut self.rng).unwrap_or(0)
-            };
+            let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
             let direction = EdgeCategory::ALL[direction_idx];
 
             let action = direction_to_action(direction, &state, units, planner_config, goal, plan);
@@ -89,7 +74,7 @@ impl Trainer {
             });
         }
 
-        episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal);
+        episode.final_reward = compute_terminal_bonus(&state, episode.reached_goal, &self.config);
         self.compute_returns(&mut episode);
         episode
     }
