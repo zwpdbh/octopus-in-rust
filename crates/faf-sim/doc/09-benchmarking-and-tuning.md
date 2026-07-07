@@ -66,7 +66,7 @@ Because the return is standardized per-episode, the relative scale of coefficien
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Policy is much slower than expected | Expensive per-step inference or very small `dt` | Use a smaller network or increase `dt`. |
-| Policy finds worse plans than training best | Policy undertrained or greedy eval differs from training sampling | Train longer, or check that the saved model is the greedy-evaluated best model. |
+| Policy finds worse plans than training best | Policy undertrained or simulation uses deterministic greedy while training sampled actions | Train longer, or check that the saved model is the best model discovered during training (best completion time). |
 | Policy explores silly actions | `epsilon` too high early, or entropy bonus too large | Lower `epsilon`, reduce `entropy_coef`, or decay faster. |
 | Policy gets stuck repeating actions | Heuristic returns `Wait` for every direction, or successor bug | Verify `Wait` is always legal, the direction mask is non-empty when actions exist, and the heuristic covers the goal path. |
 | Policy network returns extreme values | Input normalization wrong or loss diverged | Check feature scaling, learning rate, and validation loss. |

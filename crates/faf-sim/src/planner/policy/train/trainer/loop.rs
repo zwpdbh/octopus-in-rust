@@ -3,12 +3,11 @@
 use super::super::config::TrainStats;
 use super::super::episode::{BuildTrajectory, Episode, TrajectoryStep};
 use super::super::metric::metrics::training_progress;
-use super::super::metric::{EpisodeSummary, GreedyEvalSummary, TrainEvent};
+use super::super::metric::{EpisodeSummary, TrainEvent};
 use std::rc::Rc;
 
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::build_plan_graph;
-use crate::planner::plan_graph::PlanGraph;
 use crate::units::Units;
 use burn::data::dataloader::Progress;
 use burn::train::metric::MetricMetadata;
@@ -30,7 +29,6 @@ impl Trainer {
 
         self.register_metrics();
 
-        let mut best_time = self.initial_best_time(units, goal, &planner_config, &plan);
         let mut ep = 0usize;
 
         loop {
@@ -43,12 +41,12 @@ impl Trainer {
             let loss = self.update_policy(&episode, &mut stats);
             stats.episode_lengths.push(episode.steps.len());
 
-            let target_hit = episode
-                .reached_goal
-                .then(|| self.handle_goal_reached(&episode, &mut stats))
-                .unwrap_or(false);
+            let target_hit = if episode.reached_goal {
+                self.handle_goal_reached(&episode, &mut stats)
+            } else {
+                false
+            };
 
-            self.maybe_evaluate_greedy(units, goal, &planner_config, ep + 1, &mut best_time);
             self.emit_episode_metrics(ep + 1, &episode, epsilon, loss);
 
             ep += 1;
@@ -66,31 +64,6 @@ impl Trainer {
         if let Some(ref mut metrics) = self.metrics {
             metrics.register();
         }
-    }
-
-    /// Compute the initial best time from a pre-existing best model.
-    ///
-    /// When training from scratch this is `None`; when resuming from a
-    /// checkpoint it evaluates the loaded model greedily to establish a
-    /// baseline.
-    fn initial_best_time(
-        &self,
-        units: &Units,
-        goal: &Goal,
-        planner_config: &PlannerConfig,
-        plan: &PlanGraph,
-    ) -> Option<f64> {
-        self.best_model.as_ref().and_then(|model| {
-            Trainer::evaluate_greedy_with_model(
-                model,
-                units,
-                goal,
-                planner_config,
-                plan,
-                &self.config,
-                &self.device,
-            )
-        })
     }
 
     /// Check whether training should stop before starting episode `ep`.
@@ -115,13 +88,13 @@ impl Trainer {
         Some(loss)
     }
 
-    /// Update training statistics and the best trajectory when an episode reaches the goal.
+    /// Update training statistics, best trajectory, and best model when an
+    /// episode reaches the goal.
     ///
-    /// The saved model and the observable "best time" are updated only from
-    /// greedy evaluations (see [`Self::maybe_evaluate_greedy`]) so that
-    /// `simulate`, which uses the greedy policy, receives a validated model.
-    /// The best training-episode trajectory is still retained here for supervised
-    /// fine-tuning.
+    /// The saved model is updated whenever a training episode achieves a new
+    /// best completion time, so that `simulate` receives a model that has
+    /// demonstrably reached the goal. The best trajectory is retained for
+    /// supervised fine-tuning.
     /// Returns `true` if the target completion time was hit.
     fn handle_goal_reached(&mut self, episode: &Episode, stats: &mut TrainStats) -> bool {
         stats.goal_reaches += 1;
@@ -132,6 +105,7 @@ impl Trainer {
             .is_none_or(|t| episode.completion_time < t);
         if is_new_best {
             self.best_train_time = Some(episode.completion_time);
+            self.best_model = Some(self.model.clone());
             self.best_trajectory = Some(BuildTrajectory {
                 steps: episode
                     .steps
@@ -146,34 +120,6 @@ impl Trainer {
         self.config
             .target_time
             .is_some_and(|target| episode.completion_time <= target)
-    }
-
-    /// Run a periodic greedy evaluation and update the best model if it improves.
-    fn maybe_evaluate_greedy(
-        &mut self,
-        units: &Units,
-        goal: &Goal,
-        planner_config: &PlannerConfig,
-        episode: usize,
-        best_time: &mut Option<f64>,
-    ) {
-        let interval = self.config.greedy_eval_interval;
-        if interval == 0 || episode == 0 || !episode.is_multiple_of(interval) {
-            return;
-        }
-
-        let greedy_time = self.evaluate_greedy(units, goal, planner_config);
-
-        if let Some(greedy_time) = greedy_time {
-            let is_new_best = best_time.is_none_or(|t| greedy_time < t);
-            if is_new_best {
-                *best_time = Some(greedy_time);
-                self.best_model = Some(self.model.clone());
-                self.best_trajectory = None;
-            }
-        }
-
-        self.emit_greedy_eval_metrics(episode, *best_time);
     }
 
     /// Emit an `Episode` event to the metrics renderer.
@@ -199,23 +145,6 @@ impl Trainer {
                 completion_time: summary.completion_time,
                 loss,
             }),
-            &metadata,
-        );
-        metrics.render(
-            training_progress(episode, self.config.episodes, Some(episode)),
-            vec![],
-        );
-    }
-
-    /// Emit a `GreedyEval` event to the metrics renderer.
-    fn emit_greedy_eval_metrics(&mut self, episode: usize, best_time: Option<f64>) {
-        let Some(ref mut metrics) = self.metrics else {
-            return;
-        };
-
-        let metadata = metric_metadata(episode, self.config.episodes);
-        metrics.update(
-            &TrainEvent::GreedyEval(GreedyEvalSummary { episode, best_time }),
             &metadata,
         );
         metrics.render(

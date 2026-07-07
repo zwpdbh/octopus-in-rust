@@ -36,31 +36,31 @@ The `train` command learns a single **hierarchical policy network** with a share
 3. **Power head** — decides how much build power to allocate to that edge.
 4. **Squad head** — decides the `[T1, T2, T3]` engineer composition.
 
-Training uses REINFORCE with epsilon-greedy exploration, periodic greedy evaluation, and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
+Training uses REINFORCE with epsilon-greedy exploration and supervised fine-tuning on the best discovered trajectory. `simulate` runs the trained policy once per decision tick, masks illegal directions, and commits to the highest-probability legal direction.
 
 ## Training parameters reference
 
-| Flag                       | Default      | Description                                                                                                                                                       |
-| -------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-e, --episodes`           | **required** | Total number of training episodes. Use `0` to run until `-t` is satisfied or the process is interrupted.                                                          |
-| `-m, --max-steps`          | `500`        | Maximum simulator steps per episode. This is a cap: the episode stops earlier if the goal is reached. See the horizon advice below.                               |
-| `--dt`                     | `1.0`        | Fixed simulator timestep in seconds. Smaller values make the simulation finer but need more steps to cover the same game time. `1.0` is a good default.           |
-| `-t, --target-time`        | none         | Stop early once the best completion time is at most this duration (e.g. `-t 30m`, `-t 1h`, `-t 1800s`).                                                           |
-| `--epsilon`                | `0.1`        | Initial epsilon-greedy exploration probability. Higher values mean more random actions early on.                                                                  |
-| `--epsilon-final`          | `0.01`       | Final epsilon value after decay.                                                                                                                                  |
-| `--epsilon-decay-episodes` | same as `-e` | Number of episodes over which epsilon linearly decays from `--epsilon` to `--epsilon-final`.                                                                      |
-| `--no-epsilon-decay`       | off          | Keep epsilon constant at `--epsilon` for the whole run. Useful when resuming and you want to keep exploring.                                                      |
-| `--grad-clip`              | none         | Global L2 gradient-clipping threshold. `1.0` is a good default for preventing REINFORCE divergence. Omit to disable clipping.                                     |
-| `--max-mex-count`          | `12`         | Maximum number of mass extractors (including capped upgrades) that may be active at the same time. New mex builds are blocked at this cap; upgrades do not count. |
-| `--reward-bp-coef`         | `0.05`       | Coefficient for the build-power delta reward. Set to `0.0` to disable.                                                                                            |
-| `--reward-mass-income-coef`| `0.1`        | Coefficient for the mass-income delta reward. Set to `0.0` to disable.                                                                                            |
-| `--reward-energy-income-coef`| `0.0`      | Coefficient for the energy-income delta reward. Default is `0.0` so the agent learns power management from the energy stall penalty instead of a direct income bonus. |
-| `--energy-stall-penalty`   | `20.0`       | Penalty applied each step when energy storage is empty (energy stall).                                                                                            |
-| `--mass-stall-penalty`     | `1.0`        | Penalty applied each step when mass storage is empty (mass stall).                                                                                                |
-| `-r, --resume`             | off          | Resume training from the existing model for this target, if one exists.                                                                                           |
-| `--fresh`                  | off          | Delete any existing checkpoint for this target before training.                                                                                                   |
-| `--quiet`                  | off          | Suppress per-episode and progress output.                                                                                                                         |
-| `--text`                   | off          | Print plain-text progress to stderr instead of opening the live dashboard.                                                                                        |
+| Flag                          | Default      | Description                                                                                                                                                           |
+| ----------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-e, --episodes`              | **required** | Total number of training episodes. Use `0` to run until `-t` is satisfied or the process is interrupted.                                                              |
+| `-m, --max-steps`             | `500`        | Maximum simulator steps per episode. This is a cap: the episode stops earlier if the goal is reached. See the horizon advice below.                                   |
+| `--dt`                        | `1.0`        | Fixed simulator timestep in seconds. Smaller values make the simulation finer but need more steps to cover the same game time. `1.0` is a good default.               |
+| `-t, --target-time`           | none         | Stop early once the best completion time is at most this duration (e.g. `-t 30m`, `-t 1h`, `-t 1800s`).                                                               |
+| `--epsilon`                   | `0.1`        | Initial epsilon-greedy exploration probability. Higher values mean more random actions early on.                                                                      |
+| `--epsilon-final`             | `0.01`       | Final epsilon value after decay.                                                                                                                                      |
+| `--epsilon-decay-episodes`    | same as `-e` | Number of episodes over which epsilon linearly decays from `--epsilon` to `--epsilon-final`.                                                                          |
+| `--no-epsilon-decay`          | off          | Keep epsilon constant at `--epsilon` for the whole run. Useful when resuming and you want to keep exploring.                                                          |
+| `--grad-clip`                 | none         | Global L2 gradient-clipping threshold. `1.0` is a good default for preventing REINFORCE divergence. Omit to disable clipping.                                         |
+| `--max-mex-count`             | `12`         | Maximum number of mass extractors (including capped upgrades) that may be active at the same time. New mex builds are blocked at this cap; upgrades do not count.     |
+| `--reward-bp-coef`            | `0.05`       | Coefficient for the build-power delta reward. Set to `0.0` to disable.                                                                                                |
+| `--reward-mass-income-coef`   | `0.1`        | Coefficient for the mass-income delta reward. Set to `0.0` to disable.                                                                                                |
+| `--reward-energy-income-coef` | `0.0`        | Coefficient for the energy-income delta reward. Default is `0.0` so the agent learns power management from the energy stall penalty instead of a direct income bonus. |
+| `--energy-stall-penalty`      | `20.0`       | Penalty applied each step when energy storage is empty (energy stall).                                                                                                |
+| `--mass-stall-penalty`        | `1.0`        | Penalty applied each step when mass storage is empty (mass stall).                                                                                                    |
+| `-r, --resume`                | off          | Resume training from the existing model for this target, if one exists.                                                                                               |
+| `--fresh`                     | off          | Delete any existing checkpoint for this target before training.                                                                                                       |
+| `--quiet`                     | off          | Suppress per-episode and progress output.                                                                                                                             |
+| `--text`                      | off          | Print plain-text progress to stderr instead of opening the live dashboard.                                                                                            |
 
 ## Recommended starting points
 
@@ -71,7 +71,7 @@ A good first run that balances exploration and training time:
 ```sh
 cargo run --release --bin faf-sim -- \
   train -e 5000 -m 10000 -t 25m \
-  --epsilon 0.3 --epsilon-final 0.01 --epsilon-decay-episodes 5000 \
+  --epsilon 0.3 \
   --dt 1.0 \
   --grad-clip 1.0 \
   --max-mex-count 12 \
@@ -115,18 +115,31 @@ cargo run --no-default-features --features cpu --release --bin faf-sim -- \
 
 The live dashboard shows one plot per metric. You can switch metrics with `←`/`→` and plot types (recent history / full history) with `↑`/`↓`.
 
-| Metric                     | What it tells you                                                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Episode Loss**           | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                         |
-| **Fine-Tune Loss**         | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                             |
-| **Episode Steps**          | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.      |
-| **Completion Time (min)**  | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.      |
-| **Goal Reach**             | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better.                    |
-| **Epsilon**                | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                         |
-| **Best Time (min)**        | Best completion time in minutes observed so far from periodic greedy evaluations. Reported as "N/A" before any greedy run reaches the goal. Monotonically non-increasing. |
-| **Episodes/sec**           | Training throughput. Higher is faster, but does not indicate learning quality.                                        |
+| Metric                    | What it tells you                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Episode Loss**          | REINFORCE policy loss for the finished episode. Should trend downward as the policy improves.                                                                             |
+| **Fine-Tune Loss**        | Supervised loss when fine-tuning on the best discovered trajectory. Should also decrease.                                                                                 |
+| **Episode Steps**         | Number of simulator steps taken before the episode ended. Lower usually means the agent reached the goal faster.                                                          |
+| **Completion Time (min)** | Completion time in minutes when the goal was reached. Lower is better. Reported as "-" if the episode timed out.                                                          |
+| **Goal Reach**            | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better.                                                                        |
+| **Epsilon**               | Current exploration probability. Should decay smoothly from `--epsilon` to `--epsilon-final`.                                                                             |
+| **Best Time (min)**       | Best completion time in minutes observed so far from episodes that reached the goal. Reported as "N/A" before any episode reaches the goal. Monotonically non-increasing. |
+| **Episodes/sec**          | Training throughput. Higher is faster, but does not indicate learning quality.                                                                                            |
 
 When training is healthy you should see `Goal Reach` rise, `Episode Loss` fall, and `Best Time (min)` drop within the first few hundred episodes.
+
+### Dashboard controls
+
+| Key         | Action                                                |
+| ----------- | ----------------------------------------------------- |
+| `←` / `→`   | Switch metric tab                                     |
+| `↑` / `↓`   | Switch plot between recent history and full history   |
+| `q`         | Open quit options                                     |
+| `s`         | Stop training gracefully at the next episode boundary |
+| `k`         | Kill the training process immediately (panic)         |
+| `c` / `Esc` | Cancel quit and resume training                       |
+
+When training completes, the dashboard shows a **Training Complete** popup. Press any key to dismiss it and inspect the final metrics, then press `q` to exit. After the TUI closes, the CLI prints a text summary.
 
 ## Important: give the episode enough horizon
 
@@ -160,7 +173,6 @@ Training MLP for UEF Novax Center
 ep=   1 steps=  42 eps=0.3000 reached=true time=      52m 15.0s best=      52m 15.0s loss=   -2.3456
 ...
 ep= 9500 steps=  38 eps=0.0100 reached=true time=      35m 23.0s best=      35m 23.0s loss=    1.0438
-  greedy eval at ep=10000: time=35m 23.0s best=35m 23.0s
 Fine-tuned best model on trajectory: epochs=100 loss=1.0438
 Training complete: 9259/10000 episodes reached the goal
 Best completion time: 35m 23.0s

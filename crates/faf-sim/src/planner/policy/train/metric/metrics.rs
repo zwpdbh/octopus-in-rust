@@ -12,7 +12,7 @@
 //! | Completion Time (min) | `TrainEvent::Episode` | Completion time in minutes when the episode reached the goal; "N/A" otherwise. Lower is better. |
 //! | Goal Reach | `TrainEvent::Episode` | Sliding-window success rate over the last 100 episodes, plotted as a percentage. Higher is better. |
 //! | Epsilon | `TrainEvent::Episode` | Current epsilon-greedy exploration probability. Starts high and decays; lower means less random exploration. |
-//! | Best Time (min) | `TrainEvent::GreedyEval` | Best completion time in minutes observed so far from periodic greedy evaluations; "N/A" before any greedy run reaches the goal. Lower is better. |
+//! | Best Time (min) | `TrainEvent::Episode` | Best completion time in minutes observed so far from episodes that reached the goal; "N/A" before any episode reaches the goal. Lower is better. |
 //! | Episodes/sec | `TrainEvent::Episode` | Training throughput, measured as episodes completed per wall-clock second. Higher is better. |
 
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use burn::train::metric::{
 use burn::train::renderer::{MetricState, MetricsRenderer, ProgressType, TrainingProgress};
 use burn::train::LearnerSummary;
 
-use super::events::{EpisodeSummary, FineTuneSummary, GreedyEvalSummary, TrainEvent};
+use super::events::{EpisodeSummary, FineTuneSummary, TrainEvent};
 
 /// Episode REINFORCE loss.
 ///
@@ -429,12 +429,12 @@ impl Numeric for EpsilonMetric {
 
 /// Best completion time observed so far, in minutes.
 ///
-/// Tracks the lowest completion time seen across periodic greedy
-/// evaluations, converted to minutes for readability. Unlike
+/// Tracks the lowest completion time seen across episodes that reached the
+/// goal, converted to minutes for readability. Unlike
 /// [`CompletionTimeMetric`], this value is monotonically non-increasing and
-/// shows the best greedy performance achieved so far. Before any greedy
-/// evaluation reaches the goal, the metric reports "N/A" instead of an
-/// extreme floating-point placeholder.
+/// shows the best performance achieved so far. Before any episode reaches the
+/// goal, the metric reports "N/A" instead of an extreme floating-point
+/// placeholder.
 #[derive(Clone, Default)]
 pub struct BestTimeMetric {
     name: MetricName,
@@ -466,14 +466,19 @@ impl Metric for BestTimeMetric {
     }
 
     fn update(&mut self, item: &Self::Input, _metadata: &MetricMetadata) -> SerializedEntry {
-        let best = match item {
-            TrainEvent::GreedyEval(GreedyEvalSummary { best_time, .. }) => *best_time,
+        let completion_time = match item {
+            TrainEvent::Episode(EpisodeSummary {
+                reached_goal: true,
+                completion_time,
+                ..
+            }) => *completion_time,
             _ => return SerializedEntry::new("N/A".to_string(), "N/A".to_string()),
         };
-        let Some(value) = best else {
-            return SerializedEntry::new("N/A".to_string(), "N/A".to_string());
-        };
-        self.best_time = Some(value);
+        let is_new_best = self.best_time.is_none_or(|t| completion_time < t);
+        if is_new_best {
+            self.best_time = Some(completion_time);
+        }
+        let value = self.best_time.unwrap_or(completion_time);
         let minutes = seconds_to_minutes(value);
         SerializedEntry::new(format!("{minutes:.2} min"), format!("{minutes:.2}"))
     }

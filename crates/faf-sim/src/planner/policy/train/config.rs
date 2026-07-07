@@ -27,9 +27,6 @@ pub struct TrainConfig {
     pub entropy_coef: f32,
     /// Stop early when the best completion time is at most this many seconds.
     pub target_time: Option<f64>,
-    /// Evaluate the current model greedily every N episodes and keep the best
-    /// greedy model. `0` disables periodic greedy evaluation.
-    pub greedy_eval_interval: usize,
     /// Number of supervised fine-tuning epochs to run on the best discovered
     /// trajectory after REINFORCE training.
     pub fine_tune_epochs: usize,
@@ -76,7 +73,6 @@ impl Default for TrainConfig {
             epsilon_decay_episodes: 0,
             entropy_coef: 0.01,
             target_time: None,
-            greedy_eval_interval: 100,
             fine_tune_epochs: 100,
             grad_clip: None,
             max_mex_count: 12,

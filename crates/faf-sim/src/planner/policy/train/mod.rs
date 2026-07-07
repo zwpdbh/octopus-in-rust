@@ -39,7 +39,7 @@ pub mod trainer;
 mod tests;
 
 pub use config::{TrainConfig, TrainStats};
-pub use metric::{EpisodeSummary, FafSimMetrics, FineTuneSummary, GreedyEvalSummary, TrainEvent};
+pub use metric::{EpisodeSummary, FafSimMetrics, FineTuneSummary, TrainEvent};
 pub use policy_training::{load_policy, save_policy, train_policy, train_policy_from};
 pub use trainer::Trainer;
 

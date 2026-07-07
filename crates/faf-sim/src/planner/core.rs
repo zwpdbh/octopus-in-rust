@@ -148,8 +148,8 @@ impl FromStr for ValueNetKind {
 ///
 /// The default `Policy` strategy runs the trained network once per decision,
 /// masks illegal directions, and picks the highest-probability legal direction
-/// (or samples when stochastic). This is the same path used by the training
-/// greedy evaluator and is fast enough for the reactive simulation loop.
+/// (or samples when stochastic). This is the same path used during training
+/// episodes and is fast enough for the reactive simulation loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// Direct one-step policy lookup guided by a learned network.

@@ -367,7 +367,7 @@ let renderer: Box<dyn MetricsRenderer> =
 let metrics = FafSimMetrics::new(renderer);
 ```
 
-Pass `--text` to keep plain-text output, or `--quiet` to suppress live progress entirely. Inside the Burn TUI, use the renderer's normal quit key to stop training gracefully at the next episode boundary.
+Pass `--text` to keep plain-text output, or `--quiet` to suppress live progress entirely. Inside the custom TUI, press `q` to open quit options: `s` stops gracefully at the next episode boundary, `k` kills the process immediately, and `c`/`Esc` cancels. When training finishes, a **Training Complete** popup appears; press any key to dismiss it, then `q` to exit. The CLI then prints a text summary.
 
 ## Model compatibility
 

@@ -7,14 +7,16 @@ use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
 use super::config::{TrainConfig, TrainStats};
-use super::metric::metrics::FafSimMetrics;
+use super::metric::metrics::{training_progress, FafSimMetrics};
 use super::metric::{FineTuneSummary, TrainEvent};
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::policy::macro_net::PolicyBundle;
 use crate::units::Units;
+use burn::data::dataloader::Progress;
 use burn::train::metric::MetricMetadata;
+use burn::train::renderer::ProgressType;
 use burn::train::Interrupter;
 
 /// Save a trained policy bundle to disk.
@@ -114,6 +116,9 @@ fn fine_tune_best_model(
     TrainStats,
 ) {
     let Some(trajectory) = trainer.best_trajectory.take() else {
+        if let Some(ref mut metrics) = trainer.metrics {
+            let _ = metrics.on_end(None);
+        }
         let best_model = trainer.best_model.take();
         let model = trainer.into_model();
         return (model, best_model, stats);
@@ -154,9 +159,22 @@ fn fine_tune_best_model(
                 }),
                 &metadata,
             );
+            metrics.render(
+                training_progress(epoch + 1, config.fine_tune_epochs, Some(epoch + 1)),
+                vec![ProgressType::Detailed {
+                    tag: "Fine-tuning".to_string(),
+                    progress: Progress {
+                        items_processed: epoch + 1,
+                        items_total: config.fine_tune_epochs,
+                    },
+                }],
+            );
         }
     }
 
+    if let Some(ref mut metrics) = tuner.metrics {
+        let _ = metrics.on_end(None);
+    }
     let fine_tuned = tuner.into_model();
     (fine_tuned.clone(), Some(fine_tuned), stats)
 }

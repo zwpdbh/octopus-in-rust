@@ -73,10 +73,9 @@ impl DecisionActor {
             match observation {
                 Observation::State(state) => {
                     // The reactive loop commits to a single action per simulator
-                    // tick. This matches the training-time greedy evaluator where
-                    // the policy evaluates once, executes the chosen direction,
-                    // and then advances the simulation by `dt` before deciding
-                    // again.
+                    // tick. This matches a training episode step: the policy
+                    // evaluates once, executes the chosen direction, and then
+                    // advances the simulation by `dt` before deciding again.
                     let plan = match self.planner.plan(&self.units, state, &self.goal) {
                         Ok(p) => p,
                         Err(_) => continue,

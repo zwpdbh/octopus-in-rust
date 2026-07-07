@@ -1,6 +1,6 @@
 # 6. Training with REINFORCE
 
-This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover entropy regularization, return normalization, greedy evaluation, and supervised fine-tuning on the best trajectory.
+This chapter is the core Burn/RL lesson. We take the policy network from [chapter 5](04-value-network.md), roll out episodes in the FAF simulator, and update the network weights with the REINFORCE policy-gradient algorithm. We also cover entropy regularization, return normalization, and supervised fine-tuning on the best trajectory.
 
 ## The training loop at a glance
 
@@ -12,7 +12,7 @@ The full training pipeline has five stages:
 4. **Policy update** — `update` computes the REINFORCE loss and applies one gradient step.
 5. **Fine-tuning** — `fine_tune_on_trajectory` distills the best discovered trajectory into the final model.
 
-The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for episode generation, greedy evaluation, and fine-tuning.
+The whole loop is driven by `Trainer::train`. Because the plan graph is static for a given `Units` + `Goal`, `Trainer` builds it once on first use and reuses the same `Rc<PlanGraph>` for episode generation and fine-tuning.
 
 ## Configuration
 
@@ -31,7 +31,6 @@ pub struct TrainConfig {
     pub epsilon_decay_episodes: usize,
     pub entropy_coef: f32,
     pub target_time: Option<f64>,
-    pub greedy_eval_interval: usize,
     pub fine_tune_epochs: usize,
     pub grad_clip: Option<f32>,
 }
@@ -294,51 +293,28 @@ Accumulating the loss over the whole episode and then calling `backward()` once 
 
 Notice that the mask is applied inside the loss, not just during sampling. This is crucial: if we only masked during sampling, the loss would compare the network's unmasked distribution against a legal direction that the unmasked distribution might assign very low probability to. Masking inside the loss ensures the softmax is computed only over legal directions, so the gradient is well-behaved even when most directions are illegal.
 
-## Greedy evaluation
+## Best model and best trajectory
 
-During training we periodically evaluate the current model greedily (argmax over masked logits). If the greedy rollout reaches the goal faster than any previous greedy rollout, we save that model as `best_model`. The plan graph is built once by `Trainer::train` and reused for every evaluation:
+Whenever a training episode reaches the goal with a new fastest completion time, `Trainer` saves a copy of the current model as `best_model` and records the episode's direction sequence as `best_trajectory`:
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/eval.rs ~line 33 — evaluate_greedy_with_model
-pub(crate) fn evaluate_greedy_with_model(
-    model: &PolicyBundle<TrainBackend>,
-    units: &Units,
-    goal: &Goal,
-    planner_config: &PlannerConfig,
-    plan: &PlanGraph,
-    config: &TrainConfig,
-    device: &TrainDevice,
-) -> Option<f64> {
-    let mut state = SimulationState::new(units, &[UnitKind::Commander]);
-
-    for _ in 0..max_steps {
-        if state.goal_reached(goal) {
-            return Some(state.time);
-        }
-
-        let features = state_features(&state, units, planner_config);
-        let direction_logits = model.evaluate_direction(features, device);
-        let direction_mask = legal_direction_mask(&state, units, planner_config, goal, &plan);
-
-        if direction_mask.iter().all(|&b| !b) {
-            state.tick(units, config.dt);
-            continue;
-        }
-
-        let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
-        let direction = EdgeCategory::ALL[direction_idx];
-        let action = direction_to_action(direction, &state, units, planner_config, goal, plan);
-
-        if execute_action(&mut state, &action, units, config.dt).is_err() {
-            state.tick(units, config.dt);
-        }
-    }
-
-    None
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 95 — handle_goal_reached
+if is_new_best {
+    self.best_train_time = Some(episode.completion_time);
+    self.best_model = Some(self.model.clone());
+    self.best_trajectory = Some(BuildTrajectory {
+        steps: episode
+            .steps
+            .iter()
+            .map(|s| TrajectoryStep {
+                direction_index: s.direction_index,
+            })
+            .collect(),
+    });
 }
 ```
 
-Greedy evaluation is the source of the best model. REINFORCE alone does not guarantee that the final parameters are the best ones seen.
+REINFORCE alone does not guarantee that the final parameters are the best ones seen, so keeping the model that produced the fastest goal-reaching episode is important for model selection.
 
 ## Fine-tuning on the best trajectory
 
@@ -439,39 +415,40 @@ Fine-tuning is supervised because we already know the direction that was taken i
 `Trainer::train` orchestrates everything:
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 16 — Trainer::train
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 19 — Trainer::train
 pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
-    let planner_config = PlannerConfig::default();
+    let planner_config = PlannerConfig {
+        max_mex_count: self.config.max_mex_count,
+        ..PlannerConfig::default()
+    };
+    if self.plan.is_none() {
+        self.plan = Some(Rc::new(build_plan_graph(units, *goal)));
+    }
+    let plan = Rc::clone(self.plan.as_ref().expect("plan graph just initialized"));
     let mut stats = TrainStats::default();
 
-    // ... optional greedy eval of best_model if resuming ...
+    self.register_metrics();
+
+    let mut ep = 0usize;
 
     loop {
-        // stop on episode limit or user interrupt
+        if self.should_stop_training(ep) {
+            break;
+        }
+
         let epsilon = self.current_epsilon(ep);
         let episode = self.run_episode(units, goal, &planner_config, epsilon, &plan);
+        let loss = self.update_policy(&episode, &mut stats);
+        stats.episode_lengths.push(episode.steps.len());
 
-        let loss = if !episode.steps.is_empty() {
-            let loss = self.update(&episode);
-            stats.losses.push(loss);
-            Some(loss)
-        } else {
-            None
-        };
+        let target_hit = episode
+            .reached_goal
+            .then(|| self.handle_goal_reached(&episode, &mut stats))
+            .unwrap_or(false);
 
-        if episode.reached_goal {
-            // track best time, save best_model and best_trajectory
-        }
+        self.emit_episode_metrics(ep + 1, &episode, epsilon, loss);
 
-        // periodic greedy evaluation
-        if interval > 0 && ep > 0 && (ep + 1).is_multiple_of(interval) {
-            if let Some(greedy_time) = self.evaluate_greedy(units, goal, &planner_config) {
-                // update best_time / best_model
-            }
-        }
-
-        // emit Burn metrics
-        // ...
+        // maybe stop early if target_time was hit
     }
 
     stats
@@ -490,8 +467,7 @@ The pipeline looks like this:
 
 ```text
 Trainer::train
-    ├─ TrainEvent::Episode(EpisodeSummary { ... })
-    └─ TrainEvent::GreedyEval(GreedyEvalSummary { ... })
+    └─ TrainEvent::Episode(EpisodeSummary { ... })
            ↓
        FafSimMetrics::update(event, metadata)
            ↓
@@ -505,7 +481,7 @@ Trainer::train
 In `Trainer::train`:
 
 ```rust
-// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 137
+// crates/faf-sim/src/planner/policy/train/trainer/loop.rs ~line 138
 if let Some(ref mut metrics) = self.metrics {
     metrics.update(
         &TrainEvent::Episode(EpisodeSummary {
@@ -516,7 +492,6 @@ if let Some(ref mut metrics) = self.metrics {
             reached_goal: episode.reached_goal,
             completion_time: episode.completion_time,
             loss,
-            best_time,
         }),
         &metadata,
     );
@@ -531,10 +506,9 @@ if let Some(ref mut metrics) = self.metrics {
 
 ### Train events
 
-There are three event variants:
+There are two event variants:
 
 - `TrainEvent::Episode` — emitted after every REINFORCE episode.
-- `TrainEvent::GreedyEval` — emitted after each periodic greedy evaluation.
 - `TrainEvent::FineTuneEpoch` — emitted during supervised fine-tuning on the best trajectory.
 
 ### Metrics
@@ -548,7 +522,7 @@ There are three event variants:
 | `Completion Time` | `Episode` (goal reached) | Time in seconds when the goal was reached. |
 | `Goal Reach` | `Episode` | `1.0` if the episode reached the goal, `0.0` otherwise. |
 | `Epsilon` | `Episode` | Current epsilon-greedy exploration probability. |
-| `Best Time` | `GreedyEval` | Fastest completion time observed so far across periodic greedy evaluations. |
+| `Best Time` | `Episode` (goal reached) | Fastest completion time observed so far across episodes that reached the goal. |
 | `Episodes/sec` | `Episode` | Training throughput. |
 | `Fine-Tune Loss` | `FineTuneEpoch` | Supervised cross-entropy loss on the best trajectory. |
 
@@ -563,12 +537,12 @@ The renderer is chosen by the CLI, not by the library. `faf-sim` library code on
 By default `faf-sim-cli` opens the custom `train-tui` terminal dashboard when stdout is an interactive terminal. It follows Burn's layout conventions but removes the status panel and expands the metrics text panel:
 
 ```rust
-// apps/faf-sim-cli/src/main.rs ~line 116
+// apps/faf-sim-cli/src/main.rs ~line 123
 let use_tui = !args.quiet && !args.text && std::io::stdout().is_terminal();
 ```
 
 ```rust
-// apps/faf-sim-cli/src/main.rs ~line 177
+// apps/faf-sim-cli/src/main.rs ~line 189
 let renderer: Box<dyn MetricsRenderer> =
     if let Some(inter) = interrupter_for_renderer {
         Box::new(TrainTuiRenderer::new(inter))
@@ -580,7 +554,7 @@ let renderer: Box<dyn MetricsRenderer> =
 let metrics = FafSimMetrics::new(renderer);
 ```
 
-The TUI renderer shows live plots for every registered metric. It also accepts an `Interrupter`, so pressing the stop key in the dashboard gracefully ends training at the next episode boundary.
+The TUI renderer shows live plots for every registered metric. Press `q` to open the controls menu, then `s` to stop gracefully, `k` to kill training immediately, or `c`/`Esc` to cancel the menu.
 
 #### Text renderer (`--text`)
 
@@ -615,14 +589,14 @@ During normal training you should see:
 - `time` and `best` decreasing as the policy finds faster build orders.
 - `eps` decaying from `epsilon` toward `epsilon_final`.
 
-`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest greedy rollout, not necessarily the final parameters. The TUI plots `Best Time` so you can watch this directly.
+`best` is the most important column for model selection. REINFORCE does not guarantee monotonic improvement, so `Trainer::train` keeps the model that produced the fastest goal-reaching episode, not necessarily the final parameters. The TUI plots `Best Time` so you can watch this directly.
 
 ### Integration summary
 
 - The trainer emits typed events.
 - `FafSimMetrics` converts events into numeric metric state.
 - A `MetricsRenderer` draws the state.
-- `faf-sim-cli` chooses between Burn's TUI renderer and a plain-text renderer based on CLI flags.
+- `faf-sim-cli` chooses between the custom `train-tui` dashboard and a plain-text renderer based on CLI flags.
 - The same metric code works for interactive TUI runs, log-friendly text runs, and silent `--quiet` runs.
 
 ## What you should remember
@@ -631,7 +605,7 @@ During normal training you should see:
 - **Mask twice.** Mask during action selection and again inside the loss.
 - **REINFORCE objective.** `-log π * return - entropy_coef * entropy`.
 - **One gradient step per episode.** Accumulate per-step losses, then `backward()` + `optimizer.step()`.
-- **Greedy eval chooses the best model.** Track the fastest greedy completion time and keep that model.
+- **Best episode chooses the best model.** Track the fastest training completion time among episodes that reached the goal and keep that model.
 - **Fine-tuning distills the best trajectory.** Cross-entropy on the recorded directions can polish the final policy.
 
 With the policy trained, the next chapter shows how to wire it into the reactive simulator.

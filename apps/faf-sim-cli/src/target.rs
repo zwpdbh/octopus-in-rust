@@ -292,7 +292,7 @@ impl ResearchTarget {
     ///
     /// All current CLI targets are faction-unique units, so this maps to the
     /// blueprint id wrapped in `UnitKind::Unique`.
-    pub fn to_sim_unit_kind(&self) -> faf_sim::UnitKind {
+    pub fn to_sim_unit_kind(self) -> faf_sim::UnitKind {
         faf_sim::UnitKind::Unique(faf_sim::UnitId(self.blueprint_id().to_string()))
     }
 
@@ -300,7 +300,7 @@ impl ResearchTarget {
     ///
     /// The goal captures the tech level and resource cost of the concrete unit
     /// while discarding faction-specific identity.
-    pub fn to_goal(&self, units: &Units) -> Goal {
+    pub fn to_goal(self, units: &Units) -> Goal {
         let kind = self.to_sim_unit_kind();
         let def = units
             .def(&kind)

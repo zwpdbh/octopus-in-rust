@@ -19,15 +19,6 @@ pub struct EpisodeSummary {
     pub loss: Option<f32>,
 }
 
-/// Summary of a periodic greedy evaluation.
-#[derive(Debug, Clone, Copy)]
-pub struct GreedyEvalSummary {
-    /// One-based episode index at which the evaluation was run.
-    pub episode: usize,
-    /// Best completion time observed so far across greedy evaluations.
-    pub best_time: Option<f64>,
-}
-
 /// Fine-tuning progress report.
 #[derive(Debug, Clone, Copy)]
 pub struct FineTuneSummary {
@@ -43,6 +34,5 @@ pub struct FineTuneSummary {
 #[derive(Debug, Clone, Copy)]
 pub enum TrainEvent {
     Episode(EpisodeSummary),
-    GreedyEval(GreedyEvalSummary),
     FineTuneEpoch(FineTuneSummary),
 }

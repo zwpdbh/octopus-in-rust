@@ -179,7 +179,6 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
 
     let train_result = {
         let units = units.clone();
-        let goal = goal;
         let path = path.clone();
         let model_file = model_file.clone();
         let flag = Arc::clone(&stop_flag);

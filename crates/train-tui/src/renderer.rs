@@ -4,6 +4,14 @@
 //! Metrics text panel more vertical space. The renderer runs on a dedicated
 //! thread so input and redraws stay responsive even when the training thread
 //! is CPU-bound.
+//!
+//! Features:
+//! - Progress bar shows the current phase (training, fine-tuning) via
+//!   [`ProgressType`] indicators.
+//! - Quit flow uses `q` followed by `s` (graceful stop), `k` (kill), or
+//!   `c`/`Esc` (cancel), matching Burn's built-in TUI action options.
+//! - A persistent "Training Complete" popup is shown at the end; any key
+//!   dismisses it so the final metrics remain visible, and `q` exits.
 
 use burn_train::metric::{MetricDefinition, MetricEntry, MetricId, NumericEntry};
 use burn_train::renderer::{
@@ -16,17 +24,18 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Dataset, Gauge, GraphType, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Dataset, Gauge, GraphType, Paragraph, Wrap};
 use ratatui::Terminal;
 use std::collections::HashMap;
 use std::io;
 use std::panic::{set_hook, take_hook};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + Send>;
@@ -38,6 +47,7 @@ type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + S
 pub struct TrainTuiRenderer {
     sender: Sender<RenderMessage>,
     kill_signal: Mutex<Receiver<()>>,
+    handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 enum RenderMessage {
@@ -62,6 +72,9 @@ struct InnerRenderer {
     quit_pending: bool,
     dirty: bool,
     running: bool,
+    done: bool,
+    show_summary: bool,
+    summary: Option<String>,
     previous_panic_hook: Option<Arc<PanicHook>>,
 }
 
@@ -108,10 +121,11 @@ impl TrainTuiRenderer {
     pub fn new(interrupter: Interrupter) -> Self {
         let (sender, receiver) = channel();
         let (kill_sender, kill_receiver) = channel();
-        std::thread::spawn(move || render_thread(receiver, kill_sender, interrupter));
+        let handle = std::thread::spawn(move || render_thread(receiver, kill_sender, interrupter));
         Self {
             sender,
             kill_signal: Mutex::new(kill_receiver),
+            handle: Mutex::new(Some(handle)),
         }
     }
 
@@ -129,6 +143,9 @@ impl TrainTuiRenderer {
 impl Drop for TrainTuiRenderer {
     fn drop(&mut self) {
         self.send(RenderMessage::Close);
+        if let Some(handle) = self.handle.lock().unwrap().take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -195,8 +212,10 @@ fn render_thread(
                     inner.dirty = true;
                 }
                 RenderMessage::End(summary) => {
-                    inner.on_end(summary);
-                    inner.running = false;
+                    inner.summary = summary.map(|s| s.to_string());
+                    inner.done = true;
+                    inner.show_summary = true;
+                    inner.dirty = true;
                 }
                 RenderMessage::Close => {
                     inner.running = false;
@@ -259,6 +278,9 @@ impl InnerRenderer {
             quit_pending: false,
             dirty: true,
             running: true,
+            done: false,
+            show_summary: false,
+            summary: None,
             previous_panic_hook: Some(previous_panic_hook),
         }
     }
@@ -342,10 +364,6 @@ impl InnerRenderer {
         }
     }
 
-    fn on_end(&mut self, _summary: Option<burn_train::LearnerSummary>) {
-        self.dirty = true;
-    }
-
     fn reset(&mut self) {
         if let Some(previous) = self.previous_panic_hook.take() {
             let _ = disable_raw_mode();
@@ -363,7 +381,14 @@ impl InnerRenderer {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                if self.quit_pending {
+                if self.done {
+                    if let KeyCode::Char('q') = key.code {
+                        self.running = false;
+                    } else {
+                        self.show_summary = false;
+                        self.dirty = true;
+                    }
+                } else if self.quit_pending {
                     match key.code {
                         KeyCode::Char('s') | KeyCode::Char('S') => {
                             self.interrupter
@@ -431,7 +456,7 @@ impl InnerRenderer {
     fn draw(&mut self) -> io::Result<()> {
         let controls = controls_widget(self.quit_pending);
         let metrics = metrics_widget(&self.text);
-        let progress = progress_widget(self.progress.as_ref());
+        let progress = progress_widget(self.progress.as_ref(), &self.indicators);
         let tab_line = plot_tab_line(&self.numeric, self.selected_tab);
         let selected_name = self.selected_metric_name().unwrap_or_default();
         let plot_kind = self.plot_kind;
@@ -449,6 +474,8 @@ impl InnerRenderer {
                 (history.name.clone(), points, title.to_string(), bounds)
             })
         });
+        let show_summary = self.show_summary;
+        let summary = self.summary.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -540,6 +567,13 @@ impl InnerRenderer {
             }
 
             frame.render_widget(progress, progress_area);
+
+            if show_summary {
+                let popup = summary_popup_widget(summary.as_deref());
+                let popup_area = centered_rect(60, 40, size);
+                frame.render_widget(Clear, popup_area);
+                frame.render_widget(popup, popup_area);
+            }
         })?;
         Ok(())
     }
@@ -644,14 +678,26 @@ fn metrics_widget(state: &TextState) -> Paragraph<'static> {
         .wrap(Wrap { trim: false })
 }
 
-fn progress_widget(progress: Option<&TrainingProgress>) -> Gauge<'static> {
+fn progress_widget(
+    progress: Option<&TrainingProgress>,
+    indicators: &[ProgressType],
+) -> Gauge<'static> {
+    let phase = indicators.iter().find_map(|p| match p {
+        ProgressType::Detailed { tag, .. } => Some(tag.as_str()),
+        _ => None,
+    });
     let (label, ratio) = if let Some(progress) = progress {
         let total = progress.global_progress.items_total.max(1);
         let current = progress.global_progress.items_processed.min(total);
         let ratio = current as f64 / total as f64;
-        (format!("{} / {}", current, total), ratio)
+        let base = format!("{} / {}", current, total);
+        let label = match phase {
+            Some(phase) => format!("{} | {}", phase, base),
+            None => base,
+        };
+        (label, ratio)
     } else {
-        ("Training".to_string(), 0.0)
+        (phase.unwrap_or("Training").to_string(), 0.0)
     };
     Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("Progress"))
@@ -756,4 +802,38 @@ impl MetricHistory {
         self.min_y = new_min_y;
         self.max_y = new_max_y;
     }
+}
+
+fn summary_popup_widget(summary: Option<&str>) -> Paragraph<'static> {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Training Complete")
+        .style(Style::default().bg(Color::DarkGray));
+    let text = match summary {
+        Some(summary) => format!("{}\n\nPress q to exit.", summary),
+        None => "Training complete.\n\nPress q to exit.".to_string(),
+    };
+    Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true })
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
