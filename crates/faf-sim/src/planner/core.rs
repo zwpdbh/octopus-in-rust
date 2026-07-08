@@ -235,6 +235,8 @@ pub struct PlannerConfig {
     pub max_depth: usize,
     /// Maximum number of mass extractors (including upgrades) to build.
     pub max_mex_count: usize,
+    /// Probability threshold above which the rush head chooses to start the goal.
+    pub rush_threshold: f64,
 }
 
 impl Default for PlannerConfig {
@@ -244,6 +246,7 @@ impl Default for PlannerConfig {
             dt: 1.0,
             max_depth: 400,
             max_mex_count: 12,
+            rush_threshold: 0.5,
         }
     }
 }

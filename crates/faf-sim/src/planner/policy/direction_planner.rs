@@ -8,7 +8,9 @@ use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueN
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::policy::features::state_features;
 use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal};
-use crate::planner::policy::macro_net::{masked_argmax, masked_sample_index};
+use crate::planner::policy::macro_net::{
+    masked_argmax, masked_sample_index, ECO_DIRECTION_INDICES, GOAL_DIRECTION_INDEX,
+};
 use crate::planner::policy::value_net::{MlpValueNet, ValueNet};
 use crate::planner::SimAction;
 use crate::sim::{GraphSimError, SimulationState};
@@ -62,7 +64,8 @@ pub(crate) fn macro_policy_plan(
     };
 
     let features = state_features(&state, units, config);
-    let direction_logits = bundle.evaluate_direction(features);
+    let eco_logits = bundle.evaluate_direction(features.clone());
+    let rush_p = bundle.evaluate_rush(features);
     let direction_mask = legal_direction_mask(&state, units, config, goal, &plan);
 
     if direction_mask.iter().all(|&b| !b) {
@@ -70,14 +73,26 @@ pub(crate) fn macro_policy_plan(
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
-    let direction_idx = if deterministic {
-        masked_argmax(&direction_logits, &direction_mask)
+    // Build the eco-only mask (length 5) from the full direction mask (length 6).
+    let eco_mask: Vec<bool> = ECO_DIRECTION_INDICES
+        .iter()
+        .map(|&i| direction_mask[i])
+        .collect();
+
+    let best_eco_idx = if deterministic {
+        masked_argmax(&eco_logits, &eco_mask)
     } else {
         let mut rng = rand::rng();
-        masked_sample_index(&direction_logits, &direction_mask, &mut rng)
+        masked_sample_index(&eco_logits, &eco_mask, &mut rng)
     }
     .unwrap_or(0);
-    let direction = EdgeCategory::ALL[direction_idx];
+
+    let goal_legal = direction_mask[GOAL_DIRECTION_INDEX];
+    let direction = if goal_legal && should_rush(deterministic, rush_p, config.rush_threshold) {
+        EdgeCategory::Goal
+    } else {
+        EdgeCategory::ALL[ECO_DIRECTION_INDICES[best_eco_idx]]
+    };
 
     let action = direction_to_action(direction, &state, units, config, goal, &plan);
 
@@ -141,6 +156,15 @@ pub(crate) fn execute_action(
         }
     }
     Ok(())
+}
+
+/// Decide whether to start the goal based on the rush head and planner mode.
+fn should_rush(deterministic: bool, rush_p: f32, rush_threshold: f64) -> bool {
+    if deterministic {
+        rush_p >= rush_threshold as f32
+    } else {
+        rand::random::<f32>() < rush_p
+    }
 }
 
 /// Build a [`PlanResult`] that commits to a single immediate action.

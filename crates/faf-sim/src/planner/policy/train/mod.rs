@@ -1,7 +1,8 @@
 //! Policy-gradient training for the direction-only policy.
 //!
-//! Uses REINFORCE: roll out episodes with the current policy, then update the
-//! single direction head from shaped rewards.
+//! Uses REINFORCE for the eco head and a supervised rush-readiness head: roll
+//! out episodes with the current policy, then update the eco direction head and
+//! the rush head from shaped rewards.
 //!
 //! The training backend is selected by Cargo feature. The library default is
 //! `cpu` so tests and library users can run without a GPU. The `faf-sim-cli`
@@ -33,6 +34,7 @@ pub mod math;
 pub mod metric;
 pub mod policy_training;
 pub mod reward;
+pub mod rollout;
 pub mod trainer;
 
 #[cfg(test)]

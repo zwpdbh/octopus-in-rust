@@ -268,6 +268,18 @@ fn pick_storage_action(
         return SimAction::Wait;
     }
 
+    // Delay storage construction until the current energy storage is at least
+    // half full. This lets existing energy fill the storage before engineers
+    // commit build power to it.
+    let energy_ratio = if state.economy.energy_storage_cap > 0.0 {
+        state.economy.energy_storage / state.economy.energy_storage_cap
+    } else {
+        0.0
+    };
+    if energy_ratio < 0.5 {
+        return SimAction::Wait;
+    }
+
     let builders = assign_builders(UnitKind::EnergyStorage, state, units, config.dt);
     if builders.is_empty() {
         return SimAction::Wait;
@@ -354,15 +366,48 @@ fn pick_upgrade_action(
     let Some(old_node) = find_upgrade_source(state, &from) else {
         return SimAction::Wait;
     };
-    let builders = assign_upgrade_builders(&from, &to, state, units, config.dt);
+    let mut builders = assign_upgrade_builders(&from, &to, state, units, config.dt);
     if builders.is_empty() {
         return SimAction::Wait;
     }
+
+    // Model the indirect effect of unlocking higher-tier engineers by adding
+    // up to three extra idle engineers of the same factory tier to the upgrade.
+    let factory_tier = factory_tier(&from);
+    let extra = extra_idle_same_tier_engineers(state, units, factory_tier, &builders, 3);
+    for b in extra {
+        builders.push(b);
+    }
+
     SimAction::Upgrade {
         target_unit_id: to,
         old_node,
         builders,
     }
+}
+
+/// Return up to `count` idle engineers whose tier matches `factory_tier` and
+/// that are not already in `exclude`.
+fn extra_idle_same_tier_engineers(
+    state: &SimulationState,
+    units: &Units,
+    factory_tier: u8,
+    exclude: &[crate::sim::NodeId],
+    count: usize,
+) -> Vec<crate::sim::NodeId> {
+    let mut selected = Vec::new();
+    for &id in state.idle_builders(units).iter() {
+        if selected.len() >= count {
+            break;
+        }
+        if exclude.contains(&id) {
+            continue;
+        }
+        if engineer_tier(&state.graph[id].unit_id) == factory_tier {
+            selected.push(id);
+        }
+    }
+    selected
 }
 
 /// Helper: build or upgrade a target, returning the matching `SimAction`.

@@ -19,6 +19,7 @@ impl Trainer {
     pub fn train(&mut self, units: &Units, goal: &Goal) -> TrainStats {
         let planner_config = PlannerConfig {
             max_mex_count: self.config.max_mex_count,
+            rush_threshold: self.config.rush_threshold as f64,
             ..PlannerConfig::default()
         };
         if self.plan.is_none() {
@@ -36,7 +37,7 @@ impl Trainer {
                 break;
             }
 
-            let (episode, loss) = self.run_episode(units, goal, &planner_config, &plan);
+            let (episode, loss) = self.run_episode(ep, units, goal, &planner_config, &plan);
             stats.episode_lengths.push(episode.steps.len());
             if !episode.steps.is_empty() {
                 stats.losses.push(loss);

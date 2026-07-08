@@ -150,6 +150,30 @@ pub struct TrainArgs {
     /// Penalty applied each step when mass storage is empty (mass stall).
     #[arg(long, default_value = "1.0")]
     pub mass_stall_penalty: f32,
+    /// Horizon in seconds for the phantom-goal eco rollout.
+    #[arg(long, default_value = "60.0")]
+    pub eco_rollout_horizon_secs: f32,
+    /// Maximum seconds to simulate when evaluating a real goal rush.
+    #[arg(long, default_value = "300.0")]
+    pub rush_rollout_cap_secs: f32,
+    /// Fraction of total build power assigned to the phantom/rush goal project.
+    #[arg(long, default_value = "0.8")]
+    pub rollout_bp_fraction: f32,
+    /// Coefficient scaling the delta in mass spent during the eco rollout.
+    #[arg(long, default_value = "0.01")]
+    pub mass_reward_coef: f32,
+    /// Base reward for finishing the real goal within the rush cap.
+    #[arg(long, default_value = "100.0")]
+    pub goal_finish_base_reward: f32,
+    /// Penalty for picking Goal when the goal cannot finish within the rush cap.
+    #[arg(long, default_value = "-10.0")]
+    pub goal_too_early_penalty: f32,
+    /// Initial epsilon for Goal-only exploration.
+    #[arg(long, default_value = "0.3")]
+    pub epsilon_start: f32,
+    /// Rush probability threshold above which Goal is chosen (outside exploration).
+    #[arg(long, default_value = "0.5")]
+    pub rush_threshold: f32,
     /// Faction and unit to target.
     #[command(subcommand)]
     pub target: FactionTarget,

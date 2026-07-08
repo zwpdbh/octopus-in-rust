@@ -15,8 +15,11 @@ use crate::planner::policy::train::{TrainBackend, TrainDevice};
 /// results, so callers do not need to know which Burn backend or architecture
 /// is underneath.
 pub trait ValueNet: std::fmt::Debug + Send + Sync {
-    /// Evaluate the direction head on a single feature vector.
+    /// Evaluate the eco head on a single feature vector.
     fn evaluate_direction(&self, features: Vec<f32>) -> Vec<f32>;
+
+    /// Evaluate the rush head on a single feature vector.
+    fn evaluate_rush(&self, features: Vec<f32>) -> f32;
 
     /// Clone through the trait object.
     fn clone_box(&self) -> Box<dyn ValueNet>;
@@ -64,6 +67,10 @@ impl Default for MlpValueNet {
 impl ValueNet for MlpValueNet {
     fn evaluate_direction(&self, features: Vec<f32>) -> Vec<f32> {
         self.net.evaluate_direction(features, &self.device)
+    }
+
+    fn evaluate_rush(&self, features: Vec<f32>) -> f32 {
+        self.net.evaluate(features, &self.device).1
     }
 
     fn clone_box(&self) -> Box<dyn ValueNet> {

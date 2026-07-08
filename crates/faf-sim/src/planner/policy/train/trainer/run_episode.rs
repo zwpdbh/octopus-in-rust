@@ -2,13 +2,16 @@
 
 use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::compute_step_reward;
+use super::super::rollout::{rush_rollout, RolloutResult};
 
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::execute_action;
 use crate::planner::policy::features::state_features;
 use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal};
-use crate::planner::policy::macro_net::masked_argmax;
+use crate::planner::policy::macro_net::{
+    masked_argmax, ECO_DIRECTION_INDICES, GOAL_DIRECTION_INDEX,
+};
 use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
@@ -19,6 +22,7 @@ impl Trainer {
     /// step. Returns the episode and the average step loss.
     pub(crate) fn run_episode(
         &mut self,
+        episode_idx: usize,
         units: &Units,
         goal: &Goal,
         planner_config: &PlannerConfig,
@@ -48,12 +52,24 @@ impl Trainer {
                 continue;
             }
 
-            let direction_logits = self
-                .model
-                .evaluate_direction(base_features.clone(), &self.device);
+            let (eco_logits, rush_p) = self.model.evaluate(base_features.clone(), &self.device);
 
-            let direction_idx = masked_argmax(&direction_logits, &direction_mask).unwrap_or(0);
-            let direction = EdgeCategory::ALL[direction_idx];
+            let eco_mask: Vec<bool> = ECO_DIRECTION_INDICES
+                .iter()
+                .map(|&i| direction_mask[i])
+                .collect();
+            let best_eco_idx = masked_argmax(&eco_logits, &eco_mask).unwrap_or(0);
+
+            let goal_legal = direction_mask[GOAL_DIRECTION_INDEX];
+            let epsilon = self.current_epsilon(episode_idx);
+            let direction = if goal_legal && self.should_explore_goal(epsilon, rush_p) {
+                EdgeCategory::Goal
+            } else if goal_legal && rush_p >= self.config.rush_threshold {
+                EdgeCategory::Goal
+            } else {
+                EdgeCategory::ALL[ECO_DIRECTION_INDICES[best_eco_idx]]
+            };
+            let direction_idx = direction as usize;
 
             let action = direction_to_action(direction, &state, units, planner_config, goal, plan);
 
@@ -63,14 +79,44 @@ impl Trainer {
                 continue;
             }
 
-            let step_reward = compute_step_reward(&prev_state, &state, units, &self.config);
+            let (reward_eco, rush_target) = if direction == EdgeCategory::Goal {
+                let rush_result = rush_rollout(&state, units, &self.config);
+                let target = if rush_result.goal_finished { 1.0f32 } else { 0.0f32 };
+                let reward = compute_step_reward(
+                    &prev_state,
+                    &state,
+                    direction,
+                    &action,
+                    units,
+                    &self.config,
+                    goal,
+                    rush_result,
+                );
+                (reward, target)
+            } else {
+                let rush_result = RolloutResult::default();
+                let reward = compute_step_reward(
+                    &prev_state,
+                    &state,
+                    direction,
+                    &action,
+                    units,
+                    &self.config,
+                    goal,
+                    rush_result,
+                );
+                (reward, 0.0f32)
+            };
+
             let step = EpisodeStep {
                 base_features,
                 direction_mask,
                 direction_index: direction_idx,
+                rush_p,
+                rush_target,
             };
 
-            accumulated_loss += self.update_step(&step, step_reward);
+            accumulated_loss += self.update_step(&step, reward_eco);
             step_count += 1;
             episode.steps.push(step);
         }
@@ -81,6 +127,22 @@ impl Trainer {
             accumulated_loss / step_count as f32
         };
         (episode, avg_loss)
+    }
+}
+
+impl Trainer {
+    /// Current epsilon for Goal-only exploration, linearly decayed over episodes.
+    fn current_epsilon(&self, episode_idx: usize) -> f32 {
+        let start = self.config.epsilon_start;
+        let end = self.config.epsilon_end;
+        let decay_episodes = self.config.epsilon_decay_episodes.max(1);
+        let progress = (episode_idx as f32 / decay_episodes as f32).min(1.0);
+        start + (end - start) * progress
+    }
+
+    /// True when exploration forces a Goal pick regardless of the rush head.
+    fn should_explore_goal(&self, epsilon: f32, _rush_p: f32) -> bool {
+        rand::random::<f32>() < epsilon
     }
 }
 
@@ -103,7 +165,6 @@ fn legal_direction_mask(
 mod tests {
     use super::*;
     use crate::planner::plan_graph::build_plan_graph;
-    use crate::planner::policy::macro_net::DIRECTION_COUNT;
     use crate::units::{TechLevel, Units};
 
     fn load_units() -> Units {
@@ -129,7 +190,7 @@ mod tests {
         let plan = build_plan_graph(&units, goal);
 
         let mask = legal_direction_mask(&state, &units, &config, &goal, &plan);
-        assert_eq!(mask.len(), DIRECTION_COUNT);
+        assert_eq!(mask.len(), EdgeCategory::ALL.len());
         assert!(mask[EdgeCategory::IncreaseMass as usize]);
     }
 }

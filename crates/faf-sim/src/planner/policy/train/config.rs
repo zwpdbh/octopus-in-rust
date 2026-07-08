@@ -44,6 +44,42 @@ pub struct TrainConfig {
     pub energy_stall_penalty: f32,
     /// Penalty applied each step when mass storage is empty (mass stall).
     pub mass_stall_penalty: f32,
+
+    // ===== Rollout-based reward hyperparameters =====
+    /// Horizon in seconds for the phantom-goal eco rollout.
+    pub eco_rollout_horizon_secs: f32,
+    /// Maximum seconds to simulate when evaluating a real goal rush.
+    pub rush_rollout_cap_secs: f32,
+    /// Fraction of total build power assigned to the phantom/rush goal project.
+    pub rollout_bp_fraction: f32,
+    /// Energy-stall duration must exceed this many seconds to trigger a penalty.
+    pub energy_stall_threshold_secs: f32,
+    /// Stored mass above this fraction of capacity counts as hoarding.
+    pub mass_storage_hoarding_ratio: f32,
+    /// Coefficient scaling the delta in mass spent during the eco rollout.
+    pub mass_reward_coef: f32,
+    /// Fixed penalty when the chosen eco direction does not increase mass spent.
+    pub wasted_action_penalty: f32,
+    /// Penalty when stored mass exceeds the hoarding ratio at rollout end.
+    pub hoarding_penalty: f32,
+    /// Penalty when energy stall lasts longer than the threshold.
+    pub stall_penalty: f32,
+    /// Base reward for finishing the real goal within the rush cap.
+    pub goal_finish_base_reward: f32,
+    /// Additional reward per second saved under the rush cap.
+    pub goal_time_reward_coef: f32,
+    /// Penalty for picking Goal when the goal cannot finish within the rush cap.
+    pub goal_too_early_penalty: f32,
+    /// Initial epsilon for Goal-only exploration.
+    pub epsilon_start: f32,
+    /// Final epsilon for Goal-only exploration.
+    pub epsilon_end: f32,
+    /// Number of episodes over which epsilon decays linearly.
+    pub epsilon_decay_episodes: usize,
+    /// Rush probability threshold above which Goal is chosen (outside exploration).
+    pub rush_threshold: f32,
+    /// Weight for the rush-head loss when combined with the eco-head loss.
+    pub rush_loss_weight: f32,
 }
 
 impl Default for TrainConfig {
@@ -62,6 +98,25 @@ impl Default for TrainConfig {
             reward_energy_income_coef: 0.0,
             energy_stall_penalty: 20.0,
             mass_stall_penalty: 1.0,
+
+            // Rollout-based reward defaults (tuned by experimentation).
+            eco_rollout_horizon_secs: 60.0,
+            rush_rollout_cap_secs: 300.0,
+            rollout_bp_fraction: 0.8,
+            energy_stall_threshold_secs: 5.0,
+            mass_storage_hoarding_ratio: 0.5,
+            mass_reward_coef: 1.0 / 100.0,
+            wasted_action_penalty: 0.5,
+            hoarding_penalty: 1.0,
+            stall_penalty: 5.0,
+            goal_finish_base_reward: 100.0,
+            goal_time_reward_coef: 0.5,
+            goal_too_early_penalty: -10.0,
+            epsilon_start: 0.3,
+            epsilon_end: 0.01,
+            epsilon_decay_episodes: 1000,
+            rush_threshold: 0.5,
+            rush_loss_weight: 1.0,
         }
     }
 }

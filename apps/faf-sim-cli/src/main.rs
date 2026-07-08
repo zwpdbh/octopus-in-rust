@@ -142,6 +142,14 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         reward_energy_income_coef: args.reward_energy_income_coef,
         energy_stall_penalty: args.energy_stall_penalty,
         mass_stall_penalty: args.mass_stall_penalty,
+        eco_rollout_horizon_secs: args.eco_rollout_horizon_secs,
+        rush_rollout_cap_secs: args.rush_rollout_cap_secs,
+        rollout_bp_fraction: args.rollout_bp_fraction,
+        mass_reward_coef: args.mass_reward_coef,
+        goal_finish_base_reward: args.goal_finish_base_reward,
+        goal_too_early_penalty: args.goal_too_early_penalty,
+        epsilon_start: args.epsilon_start,
+        rush_threshold: args.rush_threshold,
         ..Default::default()
     };
 

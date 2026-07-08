@@ -19,58 +19,69 @@ use rand::rngs::ThreadRng;
 
 use super::features::STATE_FEATURE_COUNT;
 
-/// Number of strategic directions the direction head can choose from.
+/// Number of strategic eco directions the eco head can choose from.
 ///
-/// The directions are `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`,
-/// `IncreaseEnergyStorage`, `Goal`, and `UpgradeTech`, in the order defined by
-/// [`EdgeCategory::ALL`](crate::planner::plan_graph::EdgeCategory::ALL).
-pub const DIRECTION_COUNT: usize = 6;
+/// The eco directions are `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`,
+/// `IncreaseEnergyStorage`, and `UpgradeTech`.  The `Goal` direction is handled
+/// by the separate rush head, so it is not part of this count.
+pub const ECO_DIRECTION_COUNT: usize = 5;
+
+/// Indices into [`EdgeCategory::ALL`] that map to eco directions.
+///
+/// Order matches the output of the eco head:
+/// `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `IncreaseEnergyStorage`,
+/// `UpgradeTech`.
+pub const ECO_DIRECTION_INDICES: [usize; 5] = [0, 1, 2, 3, 5];
+
+/// Index into [`EdgeCategory::ALL`] for the `Goal` direction.
+pub const GOAL_DIRECTION_INDEX: usize = 4;
 
 /// Mask value that makes a logit numerically irrelevant after softmax.
 pub(crate) const MASK_VALUE: f32 = -1e9;
 
-/// Direction-only policy network.
+/// Re-export the old name for code that has not been updated yet.
+#[allow(dead_code)]
+pub const DIRECTION_COUNT: usize = ECO_DIRECTION_COUNT;
+
+/// Direction-only policy network with a separate rush-readiness head.
 ///
 /// Input: state features ([`STATE_FEATURE_COUNT`] floats).
-/// Output: direction logits (6) over
-/// [`EdgeCategory::ALL`](crate::planner::plan_graph::EdgeCategory::ALL).
+/// Output:
+/// - eco logits (5) over the eco directions in [`EdgeCategory::ALL`].
+/// - rush probability (1) for whether the economy is ready to start the goal.
 ///
 /// The architecture is intentionally tiny: a shared two-layer backbone
-/// ([`STATE_FEATURE_COUNT`] -> 128 -> 64) followed by a single direction head (64 -> 6).
+/// ([`STATE_FEATURE_COUNT`] -> 128 -> 64) followed by two heads
+/// (eco: 64 -> 5, rush: 64 -> 1).
 ///
-/// The struct owns the learned parameters (the four fields below). The forward
-/// pass is split into two methods so the trainer can reuse the backbone output:
+/// The forward pass is split into methods so the trainer can reuse the backbone
+/// output when computing both losses:
 ///
 /// - `latent` uses `backbone1`, `backbone2`, and `activation`.
-/// - `direction_logits` uses `direction_head`.
-/// - [`evaluate_direction`](Self::evaluate_direction) is the public convenience
-///   wrapper that runs both and returns host-side logits.
+/// - `eco_logits` uses `eco_head`.
+/// - `rush_logit` uses `rush_head`.
+/// - [`evaluate`](Self::evaluate) is the public convenience wrapper.
 #[derive(Module, Debug)]
 pub struct HierarchicalPolicyNet<B: Backend> {
     /// First shared backbone layer: input features -> 128-dim hidden space.
-    ///
-    /// Used by `latent`.
     backbone1: Linear<B>,
     /// Second shared backbone layer: 128-dim hidden -> 64-dim latent vector.
-    ///
-    /// Used by `latent`.
     backbone2: Linear<B>,
     /// ReLU activation used after every backbone layer.
-    ///
-    /// Used by `latent`.
     activation: Relu,
-    /// Direction head: latent (64) -> 6 logits over `EdgeCategory`.
-    ///
-    /// Used by `direction_logits`.
-    direction_head: Linear<B>,
+    /// Eco head: latent (64) -> 5 logits over eco directions.
+    eco_head: Linear<B>,
+    /// Rush head: latent (64) -> 1 logit converted to a probability.
+    rush_head: Linear<B>,
 }
 
 impl<B: Backend> HierarchicalPolicyNet<B> {
     /// Create a new direction-only policy network.
     ///
     /// Architecture:
-    /// - backbone: 11 -> 128 -> 64
-    /// - direction head: 64 -> 6
+    /// - backbone: STATE_FEATURE_COUNT -> 128 -> 64
+    /// - eco head: 64 -> 5
+    /// - rush head: 64 -> 1
     pub fn new(device: &B::Device) -> Self {
         let backbone_input = STATE_FEATURE_COUNT;
         let backbone_hidden = 128;
@@ -80,7 +91,8 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
             backbone1: LinearConfig::new(backbone_input, backbone_hidden).init(device),
             backbone2: LinearConfig::new(backbone_hidden, latent_dim).init(device),
             activation: Relu::new(),
-            direction_head: LinearConfig::new(latent_dim, DIRECTION_COUNT).init(device),
+            eco_head: LinearConfig::new(latent_dim, ECO_DIRECTION_COUNT).init(device),
+            rush_head: LinearConfig::new(latent_dim, 1).init(device),
         }
     }
 
@@ -124,51 +136,52 @@ impl<B: Backend> HierarchicalPolicyNet<B> {
         self.activation.forward(x)
     }
 
-    /// Direction logits from a latent vector.
+    /// Eco logits from a latent vector.
     ///
-    /// `pub(crate)` for the same reason as [`latent`](Self::latent): it is an
-    /// internal piece of the forward pass. Public consumers use
-    /// [`evaluate_direction`](Self::evaluate_direction).
-    ///
-    /// Input shape: `[batch_size, 64]`. Output shape: `[batch_size, 6]`.
-    /// The six values correspond to `EdgeCategory::ALL` in order:
-    /// `IncreaseMass`, `IncreaseEnergy`, `IncreaseBP`, `IncreaseEnergyStorage`,
-    /// `Goal`, `UpgradeTech`.
-    pub(crate) fn direction_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
-        self.direction_head.forward(latent)
+    /// Input shape: `[batch_size, 64]`. Output shape: `[batch_size, 5]`.
+    /// The five values correspond to the eco directions in
+    /// [`ECO_DIRECTION_INDICES`](crate::planner::policy::macro_net::ECO_DIRECTION_INDICES).
+    pub(crate) fn eco_logits(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
+        self.eco_head.forward(latent)
     }
 
-    /// Convenience: evaluate the direction head on a single feature vector.
+    /// Rush logit from a latent vector.
     ///
-    /// This is the public inference entry point. It adds the batch dimension,
-    /// runs the backbone and direction head, and returns the raw logits as a
-    /// host-side `Vec<f32>`.
-    ///
-    /// Operation-by-operation:
-    ///
-    /// 1. `tensor_from_vec` wraps the input in a `[1, STATE_FEATURE_COUNT]` tensor.
-    /// 2. `latent` runs the backbone: Linear → ReLU → Linear → ReLU,
-    ///    producing a `[1, 64]` latent vector.
-    /// 3. `direction_logits` runs the direction head Linear layer,
-    ///    producing a `[1, DIRECTION_COUNT]` logit tensor.
-    /// 4. The final chain converts the tensor back to a `Vec<f32>`.
-    pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
-        // 1. Input vector as a batched tensor: [1, STATE_FEATURE_COUNT].
-        let features = tensor_from_vec(&features, device);
+    /// Input shape: `[batch_size, 64]`. Output shape: `[batch_size, 1]`.
+    pub(crate) fn rush_logit(&self, latent: Tensor<B, 2>) -> Tensor<B, 2> {
+        self.rush_head.forward(latent)
+    }
 
-        // 2. Backbone: matrix multiply → ReLU → matrix multiply → ReLU.
+    /// Convenience: evaluate both heads on a single feature vector.
+    ///
+    /// Returns the raw eco logits and the rush probability.
+    pub fn evaluate(&self, features: Vec<f32>, device: &B::Device) -> (Vec<f32>, f32) {
+        let features = tensor_from_vec(&features, device);
         let latent = self.latent(features);
 
-        // 3. Direction head: final matrix multiply → [1, DIRECTION_COUNT].
-        let logits = self.direction_logits(latent);
+        let eco_logits = self.eco_logits(latent.clone());
+        let rush_logit = self.rush_logit(latent);
 
-        // 4. Convert back to a host-side Vec<f32>.
-        logits.into_data().as_slice::<f32>().unwrap().to_vec()
+        let eco = eco_logits.into_data().as_slice::<f32>().unwrap().to_vec();
+        let rush = rush_logit.into_data().as_slice::<f32>().unwrap()[0];
+        let rush_p = sigmoid(rush);
+
+        (eco, rush_p)
+    }
+
+    /// Backward-compatible convenience that returns only the eco logits.
+    pub fn evaluate_direction(&self, features: Vec<f32>, device: &B::Device) -> Vec<f32> {
+        self.evaluate(features, device).0
     }
 }
 
 /// Compatibility alias for code that refers to the old `PolicyBundle`.
 pub type PolicyBundle<B> = HierarchicalPolicyNet<B>;
+
+/// Scalar sigmoid for converting a rush logit to a probability.
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
 
 /// Build a 2-D tensor of shape `[1, features.len()]` from a feature vector.
 fn tensor_from_vec<B: Backend>(features: &[f32], device: &B::Device) -> Tensor<B, 2> {
@@ -246,10 +259,14 @@ pub fn hierarchical_policy_net_dot() -> String {
     backbone2 -> relu2;
     relu2 -> latent;
 
-    direction_head [label="direction_head\nLinear({}, {})", fillcolor="#ffebee"];
-    direction_out [label="Direction logits\n{} (IncreaseMass/\nIncreaseEnergy/IncreaseBP/\nIncreaseEnergyStorage/Goal/\nUpgradeTech)", fillcolor="#ffcdd2"];
-    latent -> direction_head;
-    direction_head -> direction_out;
+    eco_head [label="eco_head\nLinear({}, {})", fillcolor="#ffebee"];
+    eco_out [label="Eco logits\n{} (IncreaseMass/\nIncreaseEnergy/IncreaseBP/\nIncreaseEnergyStorage/\nUpgradeTech)", fillcolor="#ffcdd2"];
+    rush_head [label="rush_head\nLinear({}, {})", fillcolor="#ffebee"];
+    rush_out [label="Rush logit\n1", fillcolor="#ffcdd2"];
+    latent -> eco_head;
+    eco_head -> eco_out;
+    latent -> rush_head;
+    rush_head -> rush_out;
 }}"##,
         input_dim,
         input_dim,
@@ -257,9 +274,11 @@ pub fn hierarchical_policy_net_dot() -> String {
         backbone_hidden,
         latent_dim,
         latent_dim,
-        DIRECTION_COUNT,
-        DIRECTION_COUNT,
-        DIRECTION_COUNT,
+        ECO_DIRECTION_COUNT,
+        ECO_DIRECTION_COUNT,
+        ECO_DIRECTION_COUNT,
+        1,
+        1,
     )
 }
 
@@ -284,11 +303,14 @@ mod tests {
         let features = vec![0.0f32; STATE_FEATURE_COUNT];
         let latent = net.latent(tensor_from_vec(&features, &device));
 
-        let direction = net.direction_logits(latent);
+        let eco_logits = net.eco_logits(latent.clone());
         assert_eq!(
-            direction.into_data().as_slice::<f32>().unwrap().len(),
-            DIRECTION_COUNT
+            eco_logits.into_data().as_slice::<f32>().unwrap().len(),
+            ECO_DIRECTION_COUNT
         );
+
+        let rush_logit = net.rush_logit(latent);
+        assert_eq!(rush_logit.into_data().as_slice::<f32>().unwrap().len(), 1);
     }
 
     #[test]
