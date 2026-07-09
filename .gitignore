@@ -14,3 +14,7 @@ data/qqbot-data/groups/*
 data/snowluma-data/*
 snowluma-data
 dist
+
+# Generated WASM glue files for faf-sim web build.
+apps/faf-sim-cli/web/faf_sim.js
+apps/faf-sim-cli/web/faf_sim_bg.wasm

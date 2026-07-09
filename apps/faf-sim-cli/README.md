@@ -10,30 +10,30 @@ cargo run --bin faf-sim -- run
 
 ## Web / WASM run
 
-Build the CLI as a WASM module:
+The fastest way is through the workspace `xtask`:
+
+```sh
+cargo xtask web              # build + serve on port 8080
+cargo xtask web --release    # use release builds
+cargo xtask web serve --port 3000
+```
+
+Then open `http://localhost:8080` in a browser.
+
+### Manual steps
+
+If you prefer to run each step yourself:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo build --bin faf-sim --target wasm32-unknown-unknown --features web --release
-```
-
-Bind it for the web:
-
-```sh
 wasm-bindgen \
   --out-dir apps/faf-sim-cli/web \
   --out-name faf_sim \
   --target web \
   target/wasm32-unknown-unknown/release/faf-sim.wasm
-```
-
-Serve it with the embedded Axum server:
-
-```sh
 cargo run --bin faf-sim -- serve --port 8080
 ```
-
-Then open `http://localhost:8080` in a browser.
 
 ## How to play
 
