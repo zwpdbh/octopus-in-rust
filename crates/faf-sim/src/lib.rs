@@ -3,35 +3,31 @@
 //! This crate sits on top of `faf-units` and provides:
 //!
 //! - `economy` — continuous-drain resource model.
-//! - `sim` — economy derivation and graph-growth simulator.
+//! - `engine` — deterministic tick-based simulation engine and graph primitives.
 //! - `planner` — planner trait, strategy registry, and concrete planner
 //!   implementations.
 //! - `units` — unified unit knowledge repository (unit kinds, recipes, stats).
 
-pub mod actors;
 pub mod economy;
+pub mod engine;
 pub mod planner;
 pub mod quantities;
-pub mod sim;
 pub mod units;
 
-pub use actors::decision_actor::DecisionActor;
-pub use actors::message::{Observation, SimulationMsg};
-pub use actors::sim_actor::SimActor;
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
+pub use engine::{
+    derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, EcoEngine,
+    EcoForecast, GameTick, GoalProject, GraphSimError, NodeId, SimulationConfig, SimulationError,
+    SimulationResult, SimulationState, UnitAction, UnitCommand, UnitGraph, UnitNode, UnitNodeState,
+};
 pub use planner::{
     build_plan_graph, EcoPlanner, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,
     PlannerError, RushPlanner, Strategy, ValueNetKind,
 };
-pub use sim::{
-    derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
-    NodeId, SimulationConfig, SimulationError, SimulationResult, SimulationState, UnitNode,
-};
-
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Time};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,

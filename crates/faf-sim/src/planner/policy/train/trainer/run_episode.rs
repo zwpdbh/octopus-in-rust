@@ -4,6 +4,7 @@ use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::compute_step_reward;
 use super::super::rollout::{rush_rollout, RolloutResult};
 
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::execute_action;
@@ -12,7 +13,6 @@ use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal}
 use crate::planner::policy::macro_net::{
     masked_argmax, ECO_DIRECTION_INDICES, GOAL_DIRECTION_INDEX,
 };
-use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
 use super::Trainer;

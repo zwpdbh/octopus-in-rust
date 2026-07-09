@@ -10,8 +10,8 @@
 //! T3 engineers to the goal.  The second is answered by binary-searching mass
 //! income with the economy's continuous-time estimator.
 
+use crate::engine::{NodeId, SimulationState};
 use crate::planner::core::{Goal, PlannerConfig};
-use crate::sim::{NodeId, SimulationState};
 use crate::units::{TechLevel, UnitKind, Units};
 use faf_units::BuildTargetStats;
 

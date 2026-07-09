@@ -3,8 +3,8 @@
 //! Converts a variable-size [`SimulationState`] into a fixed-size `Vec<f32>` that
 //! the direction network consumes.
 
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::core::PlannerConfig;
-use crate::sim::SimulationState;
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Number of state features fed into the direction network.
@@ -91,8 +91,8 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
         .filter(|n| {
             matches!(
                 n.state,
-                crate::sim::UnitNodeState::Constructing { .. }
-                    | crate::sim::UnitNodeState::Upgrading { .. }
+                crate::engine::unit_graph::UnitNodeState::Constructing { .. }
+                    | crate::engine::unit_graph::UnitNodeState::Upgrading { .. }
             )
         })
         .count();

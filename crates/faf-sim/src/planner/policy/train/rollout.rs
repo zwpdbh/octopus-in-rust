@@ -3,9 +3,10 @@
 //! These functions run short, self-contained simulations from a given state to
 //! estimate how good an action was. They never mutate the caller's state.
 
+use crate::engine::simulation_state::GoalProject;
+use crate::engine::simulation_state::SimulationState;
+use crate::engine::unit_graph::builder_power;
 use crate::planner::core::Goal;
-use crate::sim::state::{builder_power, GoalProject};
-use crate::sim::SimulationState;
 use crate::units::Units;
 
 use super::config::TrainConfig;
@@ -146,7 +147,7 @@ fn select_builders_by_power(
     state: &SimulationState,
     units: &Units,
     fraction: f32,
-) -> Vec<crate::sim::NodeId> {
+) -> Vec<crate::engine::unit_graph::NodeId> {
     let total_bp = state.total_active_build_power(units);
     if total_bp <= 0.0 {
         return Vec::new();

@@ -3,8 +3,8 @@
 //! [`SimAction`] is the command vocabulary shared between planning and
 //! simulation. It is emitted by the planner and consumed by the simulator.
 
+use crate::engine::unit_graph::NodeId;
 use crate::planner::core::Goal;
-use crate::sim::NodeId;
 use crate::units::UnitKind;
 
 /// Action that produced a successor state during search.

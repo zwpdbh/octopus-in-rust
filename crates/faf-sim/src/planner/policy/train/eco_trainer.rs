@@ -15,6 +15,7 @@ use super::eco_net::EcoNet;
 use super::eco_reward::{compute_eco_step_reward, eco_episode_bonus};
 use super::math::tensor1d_from_vec;
 use super::{TrainBackend, TrainDevice};
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory};
 use crate::planner::policy::direction_planner::execute_action;
@@ -23,7 +24,6 @@ use crate::planner::policy::heuristic::{direction_to_action, is_direction_legal}
 use crate::planner::policy::macro_net::{
     masked_argmax, masked_sample_index, ECO_DIRECTION_COUNT, ECO_DIRECTION_INDICES, MASK_VALUE,
 };
-use crate::sim::SimulationState;
 use crate::units::{UnitKind, Units};
 
 /// Optimizer type for the eco network.

@@ -5,12 +5,12 @@
 //! target and assigning a greedy high-tech builder squad.
 
 use crate::economy::{compute_drain, RequestedBuildPower};
+use crate::engine::{NodeId, SimulationState};
 use crate::planner::core::Goal;
 use crate::planner::plan_graph::{
     find_upgrade_source, is_plan_edge_legal, EdgeAction, EdgeCategory, PlanGraph,
 };
 use crate::planner::SimAction;
-use crate::sim::{NodeId, SimulationState};
 use crate::units::{TechLevel, UnitKind, Units};
 use petgraph::visit::EdgeRef;
 
@@ -392,9 +392,9 @@ fn extra_idle_same_tier_engineers(
     state: &SimulationState,
     units: &Units,
     factory_tier: u8,
-    exclude: &[crate::sim::NodeId],
+    exclude: &[crate::engine::unit_graph::NodeId],
     count: usize,
-) -> Vec<crate::sim::NodeId> {
+) -> Vec<crate::engine::unit_graph::NodeId> {
     let mut selected = Vec::new();
     for &id in state.idle_builders(units).iter() {
         if selected.len() >= count {

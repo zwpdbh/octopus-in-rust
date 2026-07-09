@@ -4,6 +4,7 @@
 //! learned direction network to pick a high-level strategic direction, then
 //! delegates concrete action selection to the heuristic layer.
 
+use crate::engine::{GraphSimError, SimulationState};
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::policy::features::state_features;
@@ -13,7 +14,6 @@ use crate::planner::policy::macro_net::{
 };
 use crate::planner::policy::value_net::{MlpValueNet, ValueNet};
 use crate::planner::SimAction;
-use crate::sim::{GraphSimError, SimulationState};
 use crate::units::Units;
 
 /// Run the one-step direction-only policy from `initial_state` toward `goal`.

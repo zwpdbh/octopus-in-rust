@@ -3,7 +3,7 @@
 //! This module provides:
 //!
 //! - The [`Planner`] type and [`Strategy`] registry for searching the
-//!   graph-growth model in [`crate::sim`].
+//!   graph-growth model in [`crate::engine`].
 //! - A STRIPS/goal-oriented planning layer (`plan_graph`) for
 //!   reasoning about build/upgrade dependencies symbolically.
 //! - Independent eco and rush planners (`eco_planner`, `rush_planner`) that

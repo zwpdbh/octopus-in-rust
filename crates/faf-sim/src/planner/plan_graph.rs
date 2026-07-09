@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 
+use crate::engine::{NodeId, SimulationState};
 use crate::planner::core::Goal;
-use crate::sim::{NodeId, SimulationState};
 use crate::units::{TechLevel, UnitKind, Units};
 
 /// Concrete action an edge represents in the plan graph.

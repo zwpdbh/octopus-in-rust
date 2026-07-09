@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use crate::sim::state::NodeId;
+use crate::engine::unit_graph::NodeId;
 use crate::units::UnitKind;
 
 /// Maximum number of storage buildings that can contribute to one producer.

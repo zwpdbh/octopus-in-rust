@@ -1,11 +1,11 @@
 //! Rollout-based reward shaping for policy-gradient training.
 
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::core::Goal;
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::policy::train::config::TrainConfig;
 use crate::planner::policy::train::rollout::{eco_rollout, RolloutResult};
 use crate::planner::SimAction;
-use crate::sim::SimulationState;
 use crate::units::Units;
 
 /// Compute the per-step reward using forward-looking rollouts.

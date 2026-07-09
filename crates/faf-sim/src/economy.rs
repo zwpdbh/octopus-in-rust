@@ -14,7 +14,6 @@
 use crate::{
     quantities::{Energy, EnergyRate, Mass, MassRate, Time},
     units::{UnitCost, UnitDef, UnitKind, Units},
-    Goal,
 };
 use faf_units::BuildTargetStats;
 
@@ -408,14 +407,6 @@ impl EconomyState {
         }
 
         elapsed
-    }
-
-    /// Compute the total mass spend on building the goal;
-    /// Considering mass stall and energy stall.
-    /// Assume that whhen energy stall, mass income should be reduced.
-    #[allow(unused)]
-    fn mass_drain_building_goal(self, build_power: f64, period: f64, goal: Goal) -> f64 {
-        todo!()
     }
 }
 

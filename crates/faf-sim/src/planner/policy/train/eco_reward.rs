@@ -1,7 +1,7 @@
 //! Reward shaping for the standalone eco trainer.
 
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::policy::train::config::TrainEcoConfig;
-use crate::sim::SimulationState;
 
 /// Compute the reward for a single eco-training step.
 ///

@@ -8,9 +8,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
+use crate::engine::{BuildEvent, SimulationState};
 use crate::planner::policy::direction_planner;
 use crate::planner::policy::value_net::ValueNet;
-use crate::sim::{BuildEvent, SimulationState};
 use crate::units::{TechLevel, UnitCost, Units};
 
 /// Abstract target for planning and training.
@@ -76,9 +76,9 @@ pub struct PlanResult {
     pub final_economy: EconomyState,
     /// Immediate next action chosen by the planner.
     ///
-    /// In the closed-loop actor design this is the only field the executor
-    /// commits to. It is converted into a [`crate::actors::message::SimulationMsg`]
-    /// and sent to the simulator; the rest of the plan is recomputed next tick.
+    /// In the closed-loop design this is the only field the executor commits
+    /// to. It is translated into a command for the simulator; the rest of the
+    /// plan is recomputed next tick.
     pub first_action: Option<crate::planner::SimAction>,
     /// State after executing [`first_action`].
     ///

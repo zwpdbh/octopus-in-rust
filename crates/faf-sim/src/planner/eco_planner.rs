@@ -10,6 +10,7 @@
 //! [`ValueNet`]) or by a simple built-in heuristic.  This keeps it usable both
 //! during training and as a standalone baseline.
 
+use crate::engine::simulation_state::SimulationState;
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::{execute_action, plan_result_with_action};
@@ -20,7 +21,6 @@ use crate::planner::policy::macro_net::{
 };
 use crate::planner::policy::value_net::{EcoValueNet, ValueNet};
 use crate::planner::SimAction;
-use crate::sim::SimulationState;
 use crate::units::Units;
 
 /// Default mass-income target used by [`EcoPlanner`].
