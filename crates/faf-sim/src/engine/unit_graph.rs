@@ -5,23 +5,21 @@
 //! as long as they use disjoint builder sets.
 //!
 //! [`UnitGraph`] is the unit-specific counterpart to [`EcoEngine`]. It owns the
-//! build graph, adjacency tracker, build events, and unit knowledge, but it does
-//! not own the economy state. Instead it derives an [`EconomyState`] from active
-//! units and mutates an externally provided economy during [`UnitGraph::tick`].
+//! build graph, adjacency tracker, build events, unit knowledge, and living
+//! [`Construction`] actors. It derives an [`EconomyState`] from active units but
+//! does not own the authoritative economy state; that lives in [`EcoEngine`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
-use crate::economy::{
-    apply_tick_graph, compute_drain, EcoConsumer, EcoFlow, EcoProducer, EconomyState,
-    RequestedBuildPower,
-};
+use crate::economy::{EcoConsumer, EcoFlow, EcoProducer, EconomyState};
 use crate::engine::adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
+use crate::engine::ConstructionId;
 use crate::planner::core::Goal;
-use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
+use crate::quantities::{Energy, EnergyRate, Mass, MassRate};
 use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
 /// A single event in the simulated build timeline.
@@ -91,6 +89,19 @@ impl From<usize> for NodeId {
     fn from(index: usize) -> Self {
         Self::new(index)
     }
+}
+
+/// A living construction tracked by the unit graph.
+///
+/// A construction is a temporary actor that bridges an in-progress graph node
+/// and the eco engine. The unit graph owns the construction; the eco engine
+/// only sees the construction id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Construction {
+    /// Engine-local construction id.
+    pub id: ConstructionId,
+    /// The graph node being constructed.
+    pub node_id: NodeId,
 }
 
 /// Lifecycle state of a slot in the build graph.
@@ -342,6 +353,8 @@ pub struct UnitGraph {
     pub units: Units,
     /// The active abstract-goal project, if one has been started.
     pub goal_project: Option<GoalProject>,
+    /// Living constructions indexed by construction id.
+    pub constructions: HashMap<ConstructionId, Construction>,
 }
 
 impl std::ops::Index<NodeId> for UnitGraph {
@@ -405,7 +418,26 @@ impl UnitGraph {
             events: Vec::new(),
             units,
             goal_project: None,
+            constructions: HashMap::new(),
         }
+    }
+
+    /// Register a new construction actor for an in-progress node.
+    pub fn add_construction(&mut self, id: ConstructionId, node_id: NodeId) {
+        self.constructions.insert(id, Construction { id, node_id });
+    }
+
+    /// Remove a construction actor after it finishes or is cancelled.
+    pub fn remove_construction(&mut self, id: ConstructionId) {
+        self.constructions.remove(&id);
+    }
+
+    /// Return the current build power of a construction.
+    pub fn construction_build_power(&self, id: ConstructionId) -> f64 {
+        self.constructions
+            .get(&id)
+            .map(|c| self.project_build_power(c.node_id))
+            .unwrap_or(0.0)
     }
 
     /// Return the ids of all active units: finished units that are not currently
@@ -900,51 +932,8 @@ impl UnitGraph {
         Ok(())
     }
 
-    /// Advance the simulation by `dt` seconds.
-    ///
-    /// Returns the node ids of any units that completed during this tick. The
-    /// caller is responsible for calling [`UnitGraph::derive_economy`] after
-    /// completions if it wants income and storage caps to reflect the new units.
-    pub fn tick(&mut self, economy: &mut EconomyState, dt: f64) -> Vec<NodeId> {
-        if dt <= 0.0 {
-            return Vec::new();
-        }
-
-        let active_projects = self.collect_active_projects();
-        if active_projects.is_empty() && !self.goal_project_active() {
-            self.apply_idle_income(economy, dt);
-            self.time += dt;
-            return Vec::new();
-        }
-
-        let (project_powers, project_mass_drain, project_energy_drain) =
-            self.compute_project_drain(&active_projects);
-        let (goal_power, goal_mass_drain, goal_energy_drain) = self.compute_goal_drain();
-
-        let total_mass_drain = project_mass_drain + goal_mass_drain;
-        let total_energy_drain = project_energy_drain + goal_energy_drain;
-
-        let tick_result = apply_tick_graph(total_mass_drain, total_energy_drain, economy, dt);
-
-        let completed_nodes = self.apply_project_progress(
-            &active_projects,
-            &project_powers,
-            tick_result.effective_factor,
-            dt,
-        );
-        self.apply_goal_progress(goal_power, tick_result.effective_factor, dt);
-
-        economy.mass_storage = tick_result.new_mass_storage;
-        economy.energy_storage = tick_result.new_energy_storage;
-        self.time += dt;
-
-        self.process_completed_nodes(&completed_nodes);
-
-        completed_nodes
-    }
-
-    /// Collect all nodes currently under construction or upgrade.
-    fn collect_active_projects(&self) -> Vec<NodeId> {
+    /// Return the ids of all projects currently under construction or upgrade.
+    pub fn active_project_nodes(&self) -> Vec<NodeId> {
         self.graph
             .graph
             .node_weights()
@@ -958,133 +947,53 @@ impl UnitGraph {
             .collect()
     }
 
-    /// Compute build power and resource drain for each active project.
-    fn compute_project_drain(&self, active_projects: &[NodeId]) -> (Vec<f64>, f64, f64) {
-        let mut project_powers: Vec<f64> = Vec::with_capacity(active_projects.len());
-        let mut total_mass_drain = 0.0;
-        let mut total_energy_drain = 0.0;
-
-        for &target_node in active_projects {
-            let target_id = &self.graph[target_node].unit_id;
-            let Some(cost) = self.units.build_cost(target_id) else {
-                project_powers.push(0.0);
-                continue;
-            };
-
-            let power: f64 = self
-                .graph
-                .graph
-                .edges_directed(target_node.0, Direction::Incoming)
-                .map(|edge| {
-                    builder_power(NodeId::new(edge.source().index()), &self.graph, &self.units)
-                })
-                .sum();
-            project_powers.push(power);
-
-            let Some(drain) = compute_drain(&cost.to_target_stats(), RequestedBuildPower(power))
-            else {
-                continue;
-            };
-            total_mass_drain += drain.mass_per_second;
-            total_energy_drain += drain.energy_per_second;
-        }
-
-        (project_powers, total_mass_drain, total_energy_drain)
+    /// Total build power currently assigned to a project node.
+    pub fn project_build_power(&self, node_id: NodeId) -> f64 {
+        self.graph
+            .graph
+            .edges_directed(node_id.0, Direction::Incoming)
+            .map(|edge| builder_power(NodeId::new(edge.source().index()), &self.graph, &self.units))
+            .sum()
     }
 
-    /// Compute build power and resource drain for the active abstract goal project, if any.
-    fn compute_goal_drain(&self) -> (f64, f64, f64) {
-        let mut goal_power = 0.0;
-        let mut mass_drain = 0.0;
-        let mut energy_drain = 0.0;
-
+    /// Total build power currently assigned to the active abstract goal project.
+    pub fn goal_project_build_power(&self) -> f64 {
         let Some(ref gp) = self.goal_project else {
-            return (goal_power, mass_drain, energy_drain);
+            return 0.0;
         };
         if gp.completed {
-            return (goal_power, mass_drain, energy_drain);
+            return 0.0;
         }
-
-        let power: f64 = gp
-            .started_by
+        gp.started_by
             .iter()
             .chain(gp.assisted_by.iter())
             .map(|&id| builder_power(id, &self.graph, &self.units))
-            .sum();
-        goal_power = power;
-
-        if let Some(drain) = compute_drain(
-            &gp.goal.cost().to_target_stats(),
-            RequestedBuildPower(power),
-        ) {
-            mass_drain = drain.mass_per_second;
-            energy_drain = drain.energy_per_second;
-        } else {
-            goal_power = 0.0;
-        }
-
-        (goal_power, mass_drain, energy_drain)
+            .sum()
     }
 
-    /// Apply progress to the abstract goal project, if it is active and affordable.
-    fn apply_goal_progress(&mut self, goal_power: f64, effective_factor: f64, dt: f64) {
-        if goal_power <= 0.0 {
-            return;
-        }
-        let Some(ref mut gp) = self.goal_project else {
-            return;
-        };
-        if gp.completed {
-            return;
-        }
+    /// Mark a project node as finished and apply completion side effects.
+    pub fn complete_project(&mut self, node_id: NodeId, finish_time: f64) {
+        self.finish_project_node(node_id, finish_time);
+        self.apply_completion_adjacency(&[node_id]);
+        self.emit_build_events(&[node_id]);
+    }
 
-        let progress = effective_factor * goal_power * dt;
-        gp.remaining_work -= progress;
-        if gp.remaining_work <= 0.0 {
+    /// Mark the abstract goal project as finished.
+    pub fn complete_goal_project(&mut self) {
+        if let Some(ref mut gp) = self.goal_project {
             gp.completed = true;
         }
     }
 
-    /// Apply progress to all active projects and return any that finished.
-    fn apply_project_progress(
-        &mut self,
-        active_projects: &[NodeId],
-        project_powers: &[f64],
-        effective_factor: f64,
-        dt: f64,
-    ) -> Vec<NodeId> {
-        let mut completed_nodes = Vec::new();
-
-        for (i, &target_node) in active_projects.iter().enumerate() {
-            let power = project_powers[i];
-            if power <= 0.0 {
-                continue;
-            }
-            let progress = effective_factor * power * dt;
-
-            let (finished, work_before) = match &mut self.graph[target_node].state {
-                UnitNodeState::Constructing { remaining_work, .. }
-                | UnitNodeState::Upgrading { remaining_work, .. } => {
-                    let before = *remaining_work;
-                    *remaining_work -= progress;
-                    (*remaining_work <= 0.0, before)
-                }
-                _ => continue,
-            };
-
-            if finished {
-                let fraction = if progress > 0.0 {
-                    (work_before / progress).min(1.0)
-                } else {
-                    1.0
-                };
-                let finish_time = self.time + fraction * dt;
-                self.finish_project_node(target_node, finish_time);
-                completed_nodes.push(target_node);
-            }
+    /// Apply a batch of completion notifications from the economy engine.
+    ///
+    /// Each pair is a project node id and the wall-clock finish time computed by
+    /// the economy engine. This method updates node states, builder-edge finish
+    /// times, adjacency bonuses, and emits build events.
+    pub fn apply_completions(&mut self, completions: &[(NodeId, f64)]) {
+        for &(node_id, finish_time) in completions {
+            self.complete_project(node_id, finish_time);
         }
-
-        completed_nodes
     }
 
     /// Transition a single project node from in-progress to finished and record builder-edge finish times.
@@ -1124,12 +1033,6 @@ impl UnitGraph {
         }
     }
 
-    /// Handle side effects of completed nodes: adjacency and build events.
-    fn process_completed_nodes(&mut self, completed_nodes: &[NodeId]) {
-        self.apply_completion_adjacency(completed_nodes);
-        self.emit_build_events(completed_nodes);
-    }
-
     /// Apply adjacency bonuses for newly completed storage and capped mexes.
     fn apply_completion_adjacency(&mut self, completed_nodes: &[NodeId]) {
         for &target_node in completed_nodes {
@@ -1167,21 +1070,12 @@ impl UnitGraph {
         }
     }
 
-    /// Collect income for one tick with no active projects.
-    fn apply_idle_income(&self, economy: &mut EconomyState, dt: f64) {
-        let dt = Time::from_raw(dt);
-        economy.mass_storage = (economy.mass_storage + economy.net_mass_income * dt)
-            .min(economy.mass_storage_cap)
-            .max(Mass::zero());
-        economy.energy_storage = (economy.energy_storage + economy.net_energy_income * dt)
-            .min(economy.energy_storage_cap)
-            .max(Energy::zero());
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::simulation::Simulation;
     use crate::engine::tick::GameTick;
     use crate::engine::unit_command::{UnitAction, UnitCommand};
     use crate::units::{TechLevel, Units};
@@ -1219,108 +1113,95 @@ mod tests {
     #[test]
     fn unit_graph_builds_t1_mex() {
         let units = load_units();
-        let mut graph = UnitGraph::new(&[UnitKind::Commander], units.clone());
-        let mut economy = graph.derive_economy();
+        let mut sim = Simulation::new(&[UnitKind::Commander], units, 1);
 
-        graph
-            .start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
+        sim.start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
             .expect("ACU can build mex");
 
         for _ in 0..60 {
-            if !graph.tick(&mut economy, 1.0).is_empty() {
+            if !sim.tick(1.0).is_empty() {
                 break;
             }
         }
 
         assert!(
-            graph
-                .events
+            sim.events()
                 .iter()
                 .any(|e| e.unit_id == UnitKind::Mex(TechLevel::T1)),
             "expected a T1 mex completion event, got {:?}",
-            graph.events
+            sim.events()
         );
     }
 
     #[test]
     fn forecast_build_project_drains_storage() {
         let units = load_units();
-        let mut graph = UnitGraph::new(&[UnitKind::Commander], units.clone());
-        let economy = graph.derive_economy();
+        let mut sim = Simulation::new(&[UnitKind::Commander], units, 1);
 
-        let initial_mass = economy.mass_storage.value();
-        let initial_energy = economy.energy_storage.value();
+        let initial_mass = sim.economy().mass_storage.value();
+        let initial_energy = sim.economy().energy_storage.value();
 
-        graph
-            .start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
+        sim.start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
             .expect("ACU can build mex");
 
-        let mut projected_graph = graph.clone();
-        let mut projected_economy = economy;
+        let mut projected_sim = sim.clone();
         for _ in 0..5 {
-            projected_graph.tick(&mut projected_economy, 1.0);
+            projected_sim.tick(1.0);
         }
 
-        assert!(projected_economy.mass_storage.value() < initial_mass);
-        assert!(projected_economy.energy_storage.value() < initial_energy);
+        assert!(projected_sim.economy().mass_storage.value() < initial_mass);
+        assert!(projected_sim.economy().energy_storage.value() < initial_energy);
     }
 
     #[test]
     fn forecast_contains_build_completion_event() {
         let units = load_units();
-        let mut graph = UnitGraph::new(&[UnitKind::Commander], units.clone());
-        let economy = graph.derive_economy();
+        let mut sim = Simulation::new(&[UnitKind::Commander], units, 1);
 
-        graph
-            .start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
+        sim.start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
             .expect("ACU can build mex");
 
-        let mut projected_graph = graph.clone();
-        let mut projected_economy = economy;
+        let mut projected_sim = sim.clone();
         for _ in 0..60 {
-            if !projected_graph.tick(&mut projected_economy, 1.0).is_empty() {
+            if !projected_sim.tick(1.0).is_empty() {
                 break;
             }
         }
 
         assert!(
-            projected_graph
-                .events
+            projected_sim
+                .events()
                 .iter()
                 .any(|e| e.unit_id == UnitKind::Mex(TechLevel::T1)),
             "expected T1 mex completion in forecast, got {:?}",
-            projected_graph.events
+            projected_sim.events()
         );
     }
 
     #[test]
     fn forecast_does_not_mutate_original_graph() {
         let units = load_units();
-        let mut graph = UnitGraph::new(&[UnitKind::Commander], units.clone());
-        let economy = graph.derive_economy();
+        let mut sim = Simulation::new(&[UnitKind::Commander], units, 1);
 
-        graph
-            .start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
+        sim.start_project(&UnitKind::Mex(TechLevel::T1), &[NodeId::new(0)])
             .expect("ACU can build mex");
 
-        let initial_time = graph.time;
-        let initial_mass = economy.mass_storage.value();
+        let initial_time = sim.time();
+        let initial_mass = sim.economy().mass_storage.value();
 
-        let mut projected_graph = graph.clone();
-        let mut projected_economy = economy.clone();
+        let mut projected_sim = sim.clone();
         for _ in 0..10 {
-            projected_graph.tick(&mut projected_economy, 1.0);
+            projected_sim.tick(1.0);
         }
 
-        assert!((graph.time - initial_time).abs() < f64::EPSILON);
-        assert!((economy.mass_storage.value() - initial_mass).abs() < f64::EPSILON);
+        assert!((sim.time() - initial_time).abs() < f64::EPSILON);
+        assert!((sim.economy().mass_storage.value() - initial_mass).abs() < f64::EPSILON);
     }
 
     #[test]
     fn command_delay_is_applied_by_caller_tick_filter() {
         let units = load_units();
-        let mut graph = UnitGraph::new(&[UnitKind::Commander], units.clone());
-        let mut economy = graph.derive_economy();
+        let mut sim = Simulation::new(&[UnitKind::Commander], units, 1);
 
         // A command issued at tick 0 that executes at tick 3.
         let cmd = UnitCommand::new(
@@ -1334,26 +1215,25 @@ mod tests {
         let mut tick = GameTick::FIRST;
         while tick.0 < 3 {
             if cmd.tick == tick {
-                apply_command(&mut graph, &cmd).unwrap();
+                apply_command(&mut sim, &cmd).unwrap();
             }
-            graph.tick(&mut economy, 1.0);
+            sim.tick(1.0);
             tick = tick.next();
         }
 
         assert!(
-            !graph
-                .events
+            !sim.events()
                 .iter()
                 .any(|e| e.unit_id == UnitKind::Mex(TechLevel::T1)),
             "mex should not complete before delayed start"
         );
 
         // Now execute the delayed command.
-        apply_command(&mut graph, &cmd).unwrap();
+        apply_command(&mut sim, &cmd).unwrap();
         for _ in 0..60 {
-            graph.tick(&mut economy, 1.0);
-            if graph
-                .events
+            sim.tick(1.0);
+            if sim
+                .events()
                 .iter()
                 .any(|e| e.unit_id == UnitKind::Mex(TechLevel::T1))
             {
@@ -1362,8 +1242,7 @@ mod tests {
         }
 
         assert!(
-            graph
-                .events
+            sim.events()
                 .iter()
                 .any(|e| e.unit_id == UnitKind::Mex(TechLevel::T1)),
             "mex should complete after delayed start"
@@ -1373,11 +1252,11 @@ mod tests {
     #[test]
     fn unit_graph_builds_abstract_goal() {
         let units = load_units();
-        let mut graph = UnitGraph::new(
+        let mut sim = Simulation::new(
             &[UnitKind::Commander, UnitKind::Engineer(TechLevel::T3)],
-            units.clone(),
+            units,
+            1,
         );
-        let mut economy = graph.derive_economy();
 
         let goal = crate::planner::core::Goal {
             tech_level: crate::units::TechLevel::T4,
@@ -1386,34 +1265,33 @@ mod tests {
             build_time: 10.0,
         };
 
-        graph
-            .start_goal_project(goal.clone(), &[NodeId::new(1)])
+        sim.start_goal_project(goal.clone(), &[NodeId::new(1)])
             .expect("T3 engineer can start goal project");
 
         for _ in 0..100 {
-            graph.tick(&mut economy, 1.0);
-            if graph.goal_reached(&goal) {
+            sim.tick(1.0);
+            if sim.goal_reached(&goal) {
                 break;
             }
         }
 
-        assert!(graph.goal_reached(&goal));
+        assert!(sim.goal_reached(&goal));
     }
 
-    fn apply_command(graph: &mut UnitGraph, cmd: &UnitCommand) -> Result<(), GraphSimError> {
+    fn apply_command(sim: &mut Simulation, cmd: &UnitCommand) -> Result<(), GraphSimError> {
         match &cmd.action {
             UnitAction::Build { unit, builders } => {
-                graph.start_project(unit, builders)?;
+                sim.start_project(unit, builders)?;
             }
             UnitAction::Assist { project, builders } => {
-                graph.assist_project(*project, builders)?;
+                sim.assist_project(*project, builders)?;
             }
             UnitAction::Upgrade {
                 target,
                 old_node,
                 builders,
             } => {
-                graph.start_upgrade_project(target, *old_node, builders)?;
+                sim.start_upgrade_project(target, *old_node, builders)?;
             }
         }
         Ok(())

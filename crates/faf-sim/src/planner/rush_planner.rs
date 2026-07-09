@@ -107,7 +107,6 @@ impl RushPlanner {
         }
 
         if rollout_state
-            .graph
             .start_goal_project(*goal, &builders)
             .is_err()
         {

@@ -130,19 +130,17 @@ pub(crate) fn execute_action(
 ) -> Result<(), GraphSimError> {
     match action {
         SimAction::Build { unit_id, builders } => {
-            state.graph.start_project(unit_id, builders)?;
+            state.start_project(unit_id, builders)?;
         }
         SimAction::BuildGoal { goal, builders } => {
-            state.graph.start_goal_project(*goal, builders)?;
+            state.start_goal_project(*goal, builders)?;
         }
         SimAction::Upgrade {
             target_unit_id,
             old_node,
             builders,
         } => {
-            state
-                .graph
-                .start_upgrade_project(target_unit_id, *old_node, builders)?;
+            state.start_upgrade_project(target_unit_id, *old_node, builders)?;
         }
         SimAction::Assist {
             project_node,
@@ -151,7 +149,7 @@ pub(crate) fn execute_action(
             if builders.is_empty() {
                 return Ok(());
             }
-            state.graph.assist_project(*project_node, builders)?;
+            state.assist_project(*project_node, builders)?;
         }
         SimAction::Wait => {
             state.tick(dt);

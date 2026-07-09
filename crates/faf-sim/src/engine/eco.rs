@@ -16,11 +16,87 @@
 //! [`UnitGraph`](crate::engine::unit_graph::UnitGraph); a higher-level
 //! simulation layer coordinates the two.
 
+use std::collections::HashMap;
+
 use crate::economy::{apply_tick_graph, compute_drain, EconomyState, RequestedBuildPower};
 use crate::quantities::{Energy, Mass};
 use faf_units::BuildTargetStats;
 
 use super::tick::GameTick;
+
+/// Opaque identifier for a project being simulated by [`EcoEngine`].
+///
+/// The engine does not know what is being built; it only tracks each project by
+/// this id. The caller (usually [`Simulation`](crate::engine::simulation::Simulation))
+/// maps ids back to [`UnitGraph`](crate::engine::unit_graph::UnitGraph) nodes or to
+/// the abstract goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstructionId(pub usize);
+
+impl ConstructionId {
+    /// Reserved id for the abstract goal project.
+    pub const GOAL: ConstructionId = ConstructionId(0);
+}
+
+/// A construction currently being tracked by [`EcoEngine`].
+#[derive(Debug, Clone, Copy)]
+struct EcoConstruction {
+    /// Current build power assigned to this construction.
+    power: f64,
+    /// Build cost used to compute resource drain.
+    cost: BuildTargetStats,
+    /// Remaining build-time work.
+    remaining_work: f64,
+}
+
+/// Command sent to [`EcoEngine`] to change the set of active constructions.
+///
+/// The engine is unit-agnostic: a construction is just an id, a build power,
+/// and a cost. The engine computes mass/energy drain from the cost and power
+/// internally. Higher-level code maps construction ids to [`UnitGraph`] nodes
+/// or to the abstract goal.
+#[derive(Debug, Clone, Copy)]
+pub enum EcoCommand {
+    /// Start tracking a new construction.
+    StartConstruction {
+        /// Engine-local construction id.
+        id: ConstructionId,
+        /// Current build power assigned to the construction.
+        power: f64,
+        /// Build cost used to compute resource drain.
+        cost: BuildTargetStats,
+    },
+    /// Change the build power of an existing construction.
+    UpdateConstruction {
+        /// Engine-local construction id.
+        id: ConstructionId,
+        /// New build power assigned to the construction.
+        power: f64,
+    },
+    /// Stop tracking a construction.
+    CancelConstruction { id: ConstructionId },
+}
+
+/// Event emitted by [`EcoEngine`] when a construction milestone occurs.
+#[derive(Debug, Clone, Copy)]
+pub enum EcoEvent {
+    /// A construction reached zero remaining work.
+    ConstructionCompleted {
+        /// Id of the completed construction.
+        id: ConstructionId,
+        /// Wall-clock finish time within the tick.
+        finish_time: f64,
+    },
+}
+
+/// Result of advancing [`EcoEngine`] by one tick.
+#[derive(Debug, Clone)]
+pub struct EcoTickResult {
+    /// Global stall factor applied to all projects.
+    pub effective_factor: f64,
+    /// Events emitted during this tick.
+    pub events: Vec<EcoEvent>,
+}
 
 /// Errors returned by [`EcoEngine`] pure-economy calculations.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,6 +145,8 @@ pub struct EcoEngine {
     pub command_delay_ticks: u64,
     /// Authoritative economy state.
     pub economy: EconomyState,
+    /// Active constructions indexed by [`ConstructionId`].
+    active_constructions: HashMap<ConstructionId, EcoConstruction>,
 }
 
 impl EcoEngine {
@@ -97,6 +175,7 @@ impl EcoEngine {
             ticks_per_second,
             command_delay_ticks,
             economy,
+            active_constructions: HashMap::new(),
         }
     }
 
@@ -144,14 +223,124 @@ impl EcoEngine {
         self.tick.advance(delay_ticks)
     }
 
-    /// Advance the simulation by one tick.
+    /// Advance the engine by one tick with no active constructions.
     ///
-    /// Applies idle income to the economy and increments the tick counter.
-    /// Active construction drains are the responsibility of the caller (usually
-    /// [`UnitGraph::tick`](crate::engine::unit_graph::UnitGraph::tick)).
+    /// This is a convenience wrapper around [`EcoEngine::tick`] with an empty
+    /// power assignment, so only idle income is applied.
     pub fn step(&mut self) {
-        self.apply_idle_income(self.dt());
-        self.tick = self.tick.next();
+        self.tick(self.dt(), &[]);
+    }
+
+    /// Apply a command sent by the simulation coordinator.
+    ///
+    /// Commands change the set of constructions the engine is tracking. They take
+    /// effect immediately, before the next tick.
+    pub fn apply_command(&mut self, command: EcoCommand) {
+        match command {
+            EcoCommand::StartConstruction { id, power, cost } => {
+                self.active_constructions.insert(
+                    id,
+                    EcoConstruction {
+                        power,
+                        cost,
+                        remaining_work: cost.build_time,
+                    },
+                );
+            }
+            EcoCommand::UpdateConstruction { id, power } => {
+                if let Some(construction) = self.active_constructions.get_mut(&id) {
+                    construction.power = power;
+                }
+            }
+            EcoCommand::CancelConstruction { id } => {
+                self.active_constructions.remove(&id);
+            }
+        }
+    }
+
+    /// Advance the simulation by `dt` seconds with the given per-construction
+    /// build powers.
+    ///
+    /// The engine computes the total resource drain from all active
+    /// constructions, applies the stall model, updates economy storage, advances
+    /// the tick counter, and reports any constructions that finished this tick.
+    ///
+    /// `powers` only needs to include constructions that currently have non-zero
+    /// build power; any registered construction omitted from the slice is treated
+    /// as having zero power for this tick.
+    pub fn tick(&mut self, dt: f64, powers: &[(ConstructionId, f64)]) -> EcoTickResult {
+        if dt <= 0.0 {
+            return EcoTickResult {
+                effective_factor: 1.0,
+                events: Vec::new(),
+            };
+        }
+
+        let start_time = self.time_seconds();
+        let mut power_by_id: HashMap<ConstructionId, f64> = HashMap::new();
+        for &(id, power) in powers {
+            *power_by_id.entry(id).or_insert(0.0) += power;
+        }
+
+        // Update stored powers and compute total drain from all active
+        // constructions.
+        let mut total_mass_drain = 0.0;
+        let mut total_energy_drain = 0.0;
+        for (&id, construction) in self.active_constructions.iter_mut() {
+            let power = power_by_id.get(&id).copied().unwrap_or(0.0);
+            construction.power = power;
+            if power <= 0.0 {
+                continue;
+            }
+            if let Some(drain) = compute_drain(&construction.cost, RequestedBuildPower(power)) {
+                total_mass_drain += drain.mass_per_second;
+                total_energy_drain += drain.energy_per_second;
+            }
+        }
+
+        let result = apply_tick_graph(total_mass_drain, total_energy_drain, &self.economy, dt);
+        self.economy.mass_storage = result.new_mass_storage;
+        self.economy.energy_storage = result.new_energy_storage;
+
+        // Determine which constructions finish this tick.
+        let mut events = Vec::new();
+        for (&id, construction) in &self.active_constructions {
+            if construction.power <= 0.0 {
+                continue;
+            }
+            let progress = result.effective_factor * construction.power * dt;
+            if progress > 0.0 && construction.remaining_work <= progress {
+                let fraction = construction.remaining_work / progress;
+                events.push(EcoEvent::ConstructionCompleted {
+                    id,
+                    finish_time: start_time + fraction * dt,
+                });
+            }
+        }
+
+        // Remove completed constructions before updating remaining work.
+        for EcoEvent::ConstructionCompleted { id, .. } in &events {
+            self.active_constructions.remove(id);
+        }
+
+        // Apply progress to the surviving constructions.
+        for construction in self.active_constructions.values_mut() {
+            if construction.power <= 0.0 {
+                continue;
+            }
+            let progress = result.effective_factor * construction.power * dt;
+            if progress > 0.0 {
+                construction.remaining_work -= progress;
+            }
+        }
+
+        let ticks = Self::seconds_to_ticks(self.ticks_per_second, dt);
+        self.tick = self.tick.advance(ticks);
+
+        EcoTickResult {
+            effective_factor: result.effective_factor,
+            events,
+        }
     }
 
     /// Run the simulation for a fixed number of ticks, applying idle income each
@@ -306,10 +495,6 @@ impl EcoEngine {
         }
 
         Ok((total_mass, total_energy))
-    }
-
-    fn apply_idle_income(&mut self, dt: f64) {
-        Self::apply_idle_income_to(&mut self.economy, dt);
     }
 
     fn apply_idle_income_to(economy: &mut EconomyState, dt: f64) {
