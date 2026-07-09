@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 
-use crate::engine::{NodeId, SimulationState};
+use crate::engine::{NodeId, Simulation};
 use crate::planner::core::Goal;
 use crate::units::{TechLevel, UnitKind, Units};
 
@@ -343,7 +343,7 @@ pub fn is_plan_edge_legal(
     action: EdgeAction,
     source: &PlanNode,
     target: &PlanNode,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> bool {
@@ -351,7 +351,7 @@ pub fn is_plan_edge_legal(
         return false;
     };
 
-    if !state.has_completed_unit(source_kind) {
+    if !state.graph.has_completed_unit(source_kind) {
         return false;
     }
 
@@ -359,14 +359,14 @@ pub fn is_plan_edge_legal(
         EdgeAction::Build => {
             let can_build = match target.as_goal() {
                 Some(goal) => {
-                    !state.goal_reached(goal)
-                        && !state.goal_project_active()
+                    !state.graph.goal_reached(goal)
+                        && !state.graph.goal_project_active()
                         && can_build_goal(source_kind, goal)
                 }
                 None => {
                     let target_kind = target.as_unit().expect("build target must be unit or goal");
-                    !state.has_completed_unit(target_kind)
-                        && !state.active_target_unit_ids().contains(target_kind)
+                    !state.graph.has_completed_unit(target_kind)
+                        && !state.graph.active_target_unit_ids().contains(target_kind)
                         && !would_exceed_mex_cap(state, config, target_kind)
                 }
             };
@@ -382,14 +382,14 @@ pub fn is_plan_edge_legal(
 
 /// True if building `target_kind` would exceed the configured mex cap.
 fn would_exceed_mex_cap(
-    state: &SimulationState,
+    state: &Simulation,
     config: &crate::planner::core::PlannerConfig,
     target_kind: &UnitKind,
 ) -> bool {
     if !is_mex_kind(target_kind) {
         return false;
     }
-    state.count_active_mex() >= config.max_mex_count
+    state.graph.count_active_mex() >= config.max_mex_count
 }
 
 /// True if `kind` is a mass extractor (any tech level or capped variant).
@@ -408,9 +408,10 @@ fn can_build_goal(builder: &UnitKind, _goal: &Goal) -> bool {
 }
 
 /// True if the state has an active, idle builder of the given kind.
-pub fn is_idle_builder(state: &SimulationState, units: &Units, kind: &UnitKind) -> bool {
+pub fn is_idle_builder(state: &Simulation, _units: &Units, kind: &UnitKind) -> bool {
     state
-        .idle_builders(units)
+        .graph
+        .idle_builders()
         .iter()
         .any(|&id| state.graph[id].unit_id == *kind)
 }
@@ -420,13 +421,14 @@ pub fn is_idle_builder(state: &SimulationState, units: &Units, kind: &UnitKind) 
 /// The source unit must be active and not already busy, and there must be an
 /// idle builder capable of performing the upgrade.
 pub fn can_upgrade(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     source: &UnitKind,
     target: &UnitKind,
 ) -> bool {
     // Find an active source unit that is not already upgrading or building.
     let source_nodes: Vec<_> = state
+        .graph
         .graph
         .graph
         .node_weights()
@@ -450,15 +452,17 @@ pub fn can_upgrade(
 
     recipe.builder_options.iter().any(|builder_kind| {
         state
-            .idle_builders(units)
+            .graph
+            .idle_builders()
             .iter()
             .any(|&id| state.graph[id].unit_id == *builder_kind)
     })
 }
 
 /// Find an active source node of the given kind for an upgrade edge.
-pub fn find_upgrade_source(state: &SimulationState, source_kind: &UnitKind) -> Option<NodeId> {
+pub fn find_upgrade_source(state: &Simulation, source_kind: &UnitKind) -> Option<NodeId> {
     state
+        .graph
         .graph
         .graph
         .node_weights()
@@ -592,7 +596,7 @@ mod tests {
         let target = &graph[target_idx];
 
         // With zero active mexes and a cap of zero, building is illegal.
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let zero_cap_config = PlannerConfig {
             max_mex_count: 0,
             ..PlannerConfig::default()
@@ -651,14 +655,15 @@ mod tests {
 
         // One active T2 mex and a cap of one: upgrading should still be legal
         // because upgrades do not increase the total mex count.
-        let state = SimulationState::new(
-            &units,
+        let state = Simulation::new(
             &[
                 UnitKind::Commander,
                 UnitKind::Factory(TechLevel::T1),
                 UnitKind::Engineer(TechLevel::T2),
                 UnitKind::Mex(TechLevel::T2),
             ],
+            units.clone(),
+            10,
         );
         let cap_config = PlannerConfig {
             max_mex_count: 1,

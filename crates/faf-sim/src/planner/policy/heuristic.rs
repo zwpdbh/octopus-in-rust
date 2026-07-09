@@ -5,7 +5,7 @@
 //! target and assigning a greedy high-tech builder squad.
 
 use crate::economy::{compute_drain, RequestedBuildPower};
-use crate::engine::{NodeId, SimulationState};
+use crate::engine::{NodeId, Simulation};
 use crate::planner::core::Goal;
 use crate::planner::plan_graph::{
     find_upgrade_source, is_plan_edge_legal, EdgeAction, EdgeCategory, PlanGraph,
@@ -24,7 +24,7 @@ use petgraph::visit::EdgeRef;
 /// `goal`; this avoids rebuilding the static plan graph on every call.
 pub fn direction_to_action(
     direction: EdgeCategory,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
     goal: &Goal,
@@ -65,7 +65,7 @@ impl Candidate {
 /// once.
 fn legal_candidates(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
     category: EdgeCategory,
@@ -119,7 +119,7 @@ fn legal_candidates(
 /// True if `direction` has at least one legal concrete action in `state`.
 pub fn is_direction_legal(
     direction: EdgeCategory,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
     goal: &Goal,
@@ -134,7 +134,7 @@ pub fn is_direction_legal(
 /// Pick the mass action with the shortest payback time.
 fn pick_mass_action(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -174,7 +174,7 @@ fn pick_mass_action(
 /// Pick the highest-tech legal energy action.
 fn pick_energy_action(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -204,7 +204,7 @@ fn pick_energy_action(
 /// engineers can be produced. Otherwise build the highest-tier legal engineer.
 fn pick_bp_action(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -250,7 +250,7 @@ fn pick_bp_action(
 /// Build energy storage if legal.
 fn pick_storage_action(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -271,8 +271,8 @@ fn pick_storage_action(
     // Delay storage construction until the current energy storage is at least
     // half full. This lets existing energy fill the storage before engineers
     // commit build power to it.
-    let energy_ratio = if state.economy.energy_storage_cap.value() > 0.0 {
-        state.economy.energy_storage / state.economy.energy_storage_cap
+    let energy_ratio = if state.engine.economy.energy_storage_cap.value() > 0.0 {
+        state.engine.economy.energy_storage / state.engine.economy.energy_storage_cap
     } else {
         0.0
     };
@@ -292,7 +292,7 @@ fn pick_storage_action(
 
 /// Start the abstract goal with idle T3 engineers.
 fn pick_goal_action(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
     goal: &Goal,
@@ -302,7 +302,8 @@ fn pick_goal_action(
     }
 
     let mut candidates: Vec<NodeId> = state
-        .idle_builders(units)
+        .graph
+        .idle_builders()
         .into_iter()
         .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(TechLevel::T3)))
         .collect();
@@ -338,7 +339,7 @@ fn pick_goal_action(
 /// Pick the lowest-tier legal factory upgrade.
 fn pick_upgrade_action(
     plan: &PlanGraph,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -389,14 +390,14 @@ fn pick_upgrade_action(
 /// Return up to `count` idle engineers whose tier matches `factory_tier` and
 /// that are not already in `exclude`.
 fn extra_idle_same_tier_engineers(
-    state: &SimulationState,
-    units: &Units,
+    state: &Simulation,
+    _units: &Units,
     factory_tier: u8,
     exclude: &[crate::engine::unit_graph::NodeId],
     count: usize,
 ) -> Vec<crate::engine::unit_graph::NodeId> {
     let mut selected = Vec::new();
-    for &id in state.idle_builders(units).iter() {
+    for &id in state.graph.idle_builders().iter() {
         if selected.len() >= count {
             break;
         }
@@ -414,7 +415,7 @@ fn extra_idle_same_tier_engineers(
 fn build_or_upgrade(
     target: UnitKind,
     source: Option<UnitKind>,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &crate::planner::core::PlannerConfig,
 ) -> SimAction {
@@ -445,19 +446,15 @@ fn build_or_upgrade(
 
 /// Assign capable idle builders to a build target, high-tech first, with a hard
 /// stall gate.
-fn assign_builders(
-    target: UnitKind,
-    state: &SimulationState,
-    units: &Units,
-    dt: f64,
-) -> Vec<NodeId> {
+fn assign_builders(target: UnitKind, state: &Simulation, units: &Units, dt: f64) -> Vec<NodeId> {
     let cost = match units.build_cost(&target) {
         Some(c) => c,
         None => return Vec::new(),
     };
 
     let mut candidates: Vec<NodeId> = state
-        .idle_builders(units)
+        .graph
+        .idle_builders()
         .into_iter()
         .filter(|&id| units.can_build(&state.graph[id].unit_id, &target))
         .collect();
@@ -482,7 +479,7 @@ fn assign_builders(
 fn assign_upgrade_builders(
     from: &UnitKind,
     to: &UnitKind,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     dt: f64,
 ) -> Vec<NodeId> {
@@ -492,7 +489,8 @@ fn assign_upgrade_builders(
     };
 
     let mut candidates: Vec<NodeId> = state
-        .idle_builders(units)
+        .graph
+        .idle_builders()
         .into_iter()
         .filter(|&id| recipe.builder_options.contains(&state.graph[id].unit_id))
         .collect();
@@ -517,7 +515,7 @@ fn assign_upgrade_builders(
 fn greedy_with_stall_gate(
     candidates: Vec<NodeId>,
     target_stats: &faf_units::BuildTargetStats,
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     dt: f64,
 ) -> Vec<NodeId> {
@@ -534,10 +532,10 @@ fn greedy_with_stall_gate(
         };
         let power = total_build_power_of_nodes(&trial, state, units);
         if let Some(drain) = compute_drain(target_stats, RequestedBuildPower(power)) {
-            let mass_ok = state.economy.mass_storage.value() <= 0.0
-                || drain.mass_per_second * dt <= state.economy.mass_storage.value();
-            let energy_ok = state.economy.energy_storage.value() <= 0.0
-                || drain.energy_per_second * dt <= state.economy.energy_storage.value();
+            let mass_ok = state.engine.economy.mass_storage.value() <= 0.0
+                || drain.mass_per_second * dt <= state.engine.economy.mass_storage.value();
+            let energy_ok = state.engine.economy.energy_storage.value() <= 0.0
+                || drain.energy_per_second * dt <= state.engine.economy.energy_storage.value();
             if !mass_ok || !energy_ok {
                 // Stall gate triggered; stop adding builders.
                 break;
@@ -558,15 +556,16 @@ fn greedy_with_stall_gate(
 }
 
 /// True if the state already has at least one factory.
-fn has_factory(state: &SimulationState) -> bool {
+fn has_factory(state: &Simulation) -> bool {
     state
+        .graph
         .graph
         .graph
         .node_weights()
         .any(|n| matches!(n.unit_id, UnitKind::Factory(_)))
 }
 
-fn total_build_power_of_nodes(nodes: &[NodeId], state: &SimulationState, units: &Units) -> f64 {
+fn total_build_power_of_nodes(nodes: &[NodeId], state: &Simulation, units: &Units) -> f64 {
     nodes
         .iter()
         .filter_map(|&id| units.def(&state.graph[id].unit_id))
@@ -651,7 +650,7 @@ mod tests {
     #[test]
     fn mass_direction_builds_t1_mex_from_acu() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let config = crate::planner::core::PlannerConfig::default();
         let goal = t4_goal();
         let plan = build_plan(&units, goal);
@@ -673,14 +672,15 @@ mod tests {
     #[test]
     fn bp_direction_prefers_highest_tier_engineer() {
         let units = load_units();
-        let state = SimulationState::new(
-            &units,
+        let state = Simulation::new(
             &[
                 UnitKind::Commander,
                 UnitKind::Factory(TechLevel::T1),
                 UnitKind::Factory(TechLevel::T2),
                 UnitKind::Factory(TechLevel::T3),
             ],
+            units.clone(),
+            10,
         );
         let config = crate::planner::core::PlannerConfig::default();
         let goal = t4_goal();
@@ -703,13 +703,14 @@ mod tests {
     #[test]
     fn upgrade_direction_prefers_lower_tier_factory() {
         let units = load_units();
-        let state = SimulationState::new(
-            &units,
+        let state = Simulation::new(
             &[
                 UnitKind::Commander,
                 UnitKind::Factory(TechLevel::T1),
                 UnitKind::Factory(TechLevel::T2),
             ],
+            units.clone(),
+            10,
         );
         let config = crate::planner::core::PlannerConfig::default();
         let goal = t4_goal();
@@ -739,7 +740,7 @@ mod tests {
     #[test]
     fn bp_direction_builds_t1_factory_from_acu_when_no_factory_exists() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let config = crate::planner::core::PlannerConfig::default();
         let goal = t4_goal();
         let plan = build_plan(&units, goal);
@@ -762,13 +763,14 @@ mod tests {
     #[test]
     fn goal_direction_uses_idle_t3_engineers_not_factories() {
         let units = load_units();
-        let state = SimulationState::new(
-            &units,
+        let state = Simulation::new(
             &[
                 UnitKind::Commander,
                 UnitKind::Factory(TechLevel::T3),
                 UnitKind::Engineer(TechLevel::T3),
             ],
+            units.clone(),
+            10,
         );
         let config = crate::planner::core::PlannerConfig::default();
         let goal = t4_goal();

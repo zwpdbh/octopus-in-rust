@@ -15,7 +15,7 @@ use super::eco_net::EcoNet;
 use super::eco_reward::{compute_eco_step_reward, eco_episode_bonus};
 use super::math::tensor1d_from_vec;
 use super::{TrainBackend, TrainDevice};
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory};
 use crate::planner::policy::direction_planner::execute_action;
@@ -142,13 +142,14 @@ impl EcoTrainer {
         plan: &crate::planner::plan_graph::PlanGraph,
         episode_idx: usize,
     ) -> EcoEpisodeResult {
-        let mut state = SimulationState::new(units, &[UnitKind::Commander]);
+        let ticks_per_second = (1.0 / self.config.dt).round().max(1.0) as u64;
+        let mut state = Simulation::new(&[UnitKind::Commander], units.clone(), ticks_per_second);
         let mut episode = EcoEpisode::default();
         let mut accumulated_loss = 0.0f32;
         let mut step_count = 0usize;
 
         for _step in 0..self.config.max_steps {
-            if state.economy.net_mass_income.value() >= self.config.eco_target_mass_income {
+            if state.engine.economy.net_mass_income.value() >= self.config.eco_target_mass_income {
                 break;
             }
 
@@ -156,7 +157,7 @@ impl EcoTrainer {
             let direction_mask = legal_eco_direction_mask(&state, units, planner_config, plan);
 
             if direction_mask.iter().all(|&b| !b) {
-                state.tick(units, self.config.dt);
+                state.tick(self.config.dt);
                 continue;
             }
 
@@ -183,12 +184,12 @@ impl EcoTrainer {
 
             let prev_state = state.clone();
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
-                state.tick(units, self.config.dt);
+                state.tick(self.config.dt);
                 continue;
             }
 
-            let mut reward = compute_eco_step_reward(&prev_state, &state, &self.config);
-            if state.economy.net_mass_income.value() >= self.config.eco_target_mass_income {
+            let mut reward = compute_eco_step_reward(&prev_state, &state, units, &self.config);
+            if state.engine.economy.net_mass_income.value() >= self.config.eco_target_mass_income {
                 reward += eco_episode_bonus(&state, self.config.eco_target_mass_income);
             }
 
@@ -212,7 +213,7 @@ impl EcoTrainer {
         EcoEpisodeResult {
             episode,
             avg_loss,
-            final_mass_income: state.economy.net_mass_income.value(),
+            final_mass_income: state.engine.economy.net_mass_income.value(),
         }
     }
 
@@ -299,7 +300,7 @@ struct EcoEpisodeStep {
 
 /// Build a boolean mask over the five eco directions.
 fn legal_eco_direction_mask(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &PlannerConfig,
     plan: &crate::planner::plan_graph::PlanGraph,

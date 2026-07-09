@@ -1,6 +1,6 @@
 //! Eco planner: choose actions that increase mass income.
 //!
-//! Given a [`SimulationState`], the eco planner's only objective is to grow the
+//! Given a [`Simulation`], the eco planner's only objective is to grow the
 //! economy as fast as possible, measured by mass income per second.  The default
 //! target is [`EcoPlanner::DEFAULT_TARGET_MASS_INCOME`] (1000 mass/s); once the
 //! current state reaches or exceeds that income the planner returns
@@ -10,7 +10,7 @@
 //! [`ValueNet`]) or by a simple built-in heuristic.  This keeps it usable both
 //! during training and as a standalone baseline.
 
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::{execute_action, plan_result_with_action};
@@ -75,14 +75,14 @@ impl EcoPlanner {
     /// `first_action`, advance the simulator, and call `plan` again.
     pub fn plan(
         &self,
-        state: SimulationState,
+        state: Simulation,
         units: &Units,
         policy: Option<&dyn ValueNet>,
         deterministic: bool,
     ) -> Result<PlanResult, PlannerError> {
-        if state.economy.net_mass_income.value() >= self.target_mass_income {
+        if state.engine.economy.net_mass_income.value() >= self.target_mass_income {
             let mut done = state.clone();
-            done.tick(units, self.config.dt);
+            done.tick(self.config.dt);
             return Ok(plan_result_with_action(done, SimAction::Wait));
         }
 
@@ -91,7 +91,7 @@ impl EcoPlanner {
 
         if direction_mask.iter().all(|&b| !b) {
             let mut wait_state = state.clone();
-            wait_state.tick(units, self.config.dt);
+            wait_state.tick(self.config.dt);
             return Ok(plan_result_with_action(wait_state, SimAction::Wait));
         }
 
@@ -120,7 +120,7 @@ impl EcoPlanner {
         let mut new_state = state.clone();
         if execute_action(&mut new_state, &action, units, self.config.dt).is_err() {
             let mut fallback = state;
-            fallback.tick(units, self.config.dt);
+            fallback.tick(self.config.dt);
             return Ok(plan_result_with_action(fallback, SimAction::Wait));
         }
 
@@ -133,7 +133,7 @@ impl EcoPlanner {
     /// without having loaded a checkpoint.
     pub fn plan_with_default_net(
         &self,
-        state: SimulationState,
+        state: Simulation,
         units: &Units,
         deterministic: bool,
     ) -> Result<PlanResult, PlannerError> {
@@ -150,7 +150,7 @@ impl Default for EcoPlanner {
 
 /// Build a boolean mask over the five eco directions.
 fn eco_direction_mask(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &PlannerConfig,
     plan: &PlanGraph,
@@ -166,7 +166,7 @@ fn eco_direction_mask(
 
 /// Use the value net to pick the best legal eco direction.
 fn select_network_direction(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &PlannerConfig,
     bundle: &dyn ValueNet,
@@ -235,8 +235,8 @@ mod tests {
     #[test]
     fn eco_planner_returns_wait_when_target_met() {
         let units = load_units();
-        let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
-        state.economy.net_mass_income =
+        let mut state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
+        state.engine.economy.net_mass_income =
             crate::quantities::MassRate::from_raw(DEFAULT_TARGET_MASS_INCOME + 1.0);
 
         let planner = EcoPlanner::default();
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn eco_planner_selects_mass_from_acu_with_heuristic() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
 
         let planner = EcoPlanner::default();
         let result = planner

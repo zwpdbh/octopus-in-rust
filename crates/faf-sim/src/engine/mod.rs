@@ -7,31 +7,31 @@
 //!
 //! The engine is split into two pieces:
 //!
-//! - [`EcoEngine`](crate::engine::engine::EcoEngine) owns the economy state and
+//! - [`EcoEngine`](crate::engine::EcoEngine) owns the economy state and
 //!   the simulation clock. It is unit-agnostic.
 //! - [`UnitGraph`](crate::engine::unit_graph::UnitGraph) owns the build graph,
 //!   adjacency tracker, build events, and unit knowledge. It derives an economy
 //!   state from active units and ticks an externally provided economy.
 //!
-//! A higher-level simulation layer will coordinate the two; the legacy
-//! [`SimulationState`](crate::engine::simulation_state::SimulationState) remains
-//! available while planners and trainers are migrated.
+//! The higher-level [`Simulation`](crate::engine::simulation::Simulation) type
+//! coordinates the two and is the public state object used by planners.
 
 pub mod adjacency;
-pub mod engine;
+pub mod eco;
 pub mod runner;
-pub mod simulation_state;
+pub mod simulation;
+
 pub mod tick;
 pub mod unit_command;
 pub mod unit_graph;
 
 pub use adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
-pub use engine::{EcoEngine, EcoForecast};
+pub use eco::{EcoEngine, EcoEngineError, EcoForecast};
 pub use runner::{run_build_order_simulation, SimulationConfig, SimulationError, SimulationResult};
-pub use simulation_state::{GoalProject, SimulationState};
+pub use simulation::Simulation;
 pub use tick::GameTick;
 pub use unit_command::{UnitAction, UnitCommand};
 pub use unit_graph::{
-    builder_power, derive_economy, BuildEdge, BuildEvent, BuildGraph, GraphSimError, NodeId,
-    UnitGraph, UnitNode, UnitNodeState,
+    builder_power, derive_economy, BuildEdge, BuildEvent, BuildGraph, GoalProject, GraphSimError,
+    NodeId, UnitGraph, UnitNode, UnitNodeState,
 };

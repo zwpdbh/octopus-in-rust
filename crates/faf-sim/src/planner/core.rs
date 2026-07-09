@@ -1,6 +1,6 @@
 //! Planner abstraction for build-order generation.
 //!
-//! A [`Planner`] turns an initial [`SimulationState`] into a [`PlanResult`]
+//! A [`Planner`] turns an initial [`Simulation`] into a [`PlanResult`]
 //! (timeline + completion time). It dispatches to the learned policy strategy.
 
 use std::error::Error;
@@ -8,7 +8,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::economy::EconomyState;
-use crate::engine::{BuildEvent, SimulationState};
+use crate::engine::{BuildEvent, Simulation};
 use crate::planner::policy::direction_planner;
 use crate::planner::policy::value_net::ValueNet;
 use crate::units::{TechLevel, UnitCost, Units};
@@ -84,7 +84,7 @@ pub struct PlanResult {
     ///
     /// This lets callers plan several steps ahead without waiting for the
     /// simulator to report back after every command.
-    pub final_state: SimulationState,
+    pub final_state: Simulation,
 }
 
 /// Planner error type.
@@ -332,7 +332,7 @@ impl Planner {
     pub fn plan(
         &mut self,
         units: &Units,
-        initial_state: SimulationState,
+        initial_state: Simulation,
         goal: &Goal,
     ) -> Result<PlanResult, PlannerError> {
         let Strategy::Policy {

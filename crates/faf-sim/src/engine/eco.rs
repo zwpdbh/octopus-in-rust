@@ -22,6 +22,33 @@ use faf_units::BuildTargetStats;
 
 use super::tick::GameTick;
 
+/// Errors returned by [`EcoEngine`] pure-economy calculations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EcoEngineError {
+    /// The target has zero build time, so drain and completion time are undefined.
+    ZeroBuildTime,
+    /// The requested build power is not positive, so no progress can be made.
+    NonPositiveBuildPower,
+    /// The simulation reached the maximum allowed duration without finishing the target.
+    TimedOut { max_seconds: f64 },
+}
+
+impl std::fmt::Display for EcoEngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EcoEngineError::ZeroBuildTime => write!(f, "target has zero build time"),
+            EcoEngineError::NonPositiveBuildPower => {
+                write!(f, "build power must be positive to finish a target")
+            }
+            EcoEngineError::TimedOut { max_seconds } => {
+                write!(f, "target did not finish within {:.1} seconds", max_seconds)
+            }
+        }
+    }
+}
+
+impl std::error::Error for EcoEngineError {}
+
 /// Deterministic tick-based engine for economy state.
 #[derive(Debug, Clone)]
 pub struct EcoEngine {
@@ -162,6 +189,68 @@ impl EcoEngine {
         }
     }
 
+    /// Compute the time needed to finish a target with the given build power.
+    ///
+    /// This simulates the same stall logic as the full simulation, assuming
+    /// income rates and build power stay constant, and returns the wall-clock
+    /// time at which the target's remaining work reaches zero. If the target
+    /// cannot be finished within `max_seconds` (for example because it is
+    /// permanently resource-starved), [`EcoEngineError::TimedOut`] is returned.
+    ///
+    /// Returns [`EcoEngineError::NonPositiveBuildPower`] if `build_power` is not
+    /// positive and [`EcoEngineError::ZeroBuildTime`] if the target has zero
+    /// build time.
+    pub fn time_to_finish(
+        &self,
+        build_power: f64,
+        cost: &BuildTargetStats,
+        max_seconds: f64,
+    ) -> Result<f64, EcoEngineError> {
+        if build_power <= 0.0 {
+            return Err(EcoEngineError::NonPositiveBuildPower);
+        }
+
+        let drain = compute_drain(cost, RequestedBuildPower(build_power))
+            .ok_or(EcoEngineError::ZeroBuildTime)?;
+        let mut economy = self.economy;
+        let mut remaining_work = cost.build_time;
+        let dt = self.dt();
+        let max_ticks = Self::seconds_to_ticks(self.ticks_per_second, max_seconds);
+
+        for tick in 0..max_ticks {
+            let result =
+                apply_tick_graph(drain.mass_per_second, drain.energy_per_second, &economy, dt);
+
+            let progress = result.effective_factor * build_power * dt;
+            if progress <= 0.0 {
+                economy.mass_storage = result.new_mass_storage;
+                economy.energy_storage = result.new_energy_storage;
+                continue;
+            }
+
+            if progress >= remaining_work {
+                // The project finishes part-way through this tick.
+                let fraction = remaining_work / progress;
+                return Ok(tick as f64 * dt + fraction * dt);
+            }
+
+            remaining_work -= progress;
+            economy.mass_storage = result.new_mass_storage;
+            economy.energy_storage = result.new_energy_storage;
+        }
+
+        Err(EcoEngineError::TimedOut { max_seconds })
+    }
+
+    /// Estimate the time needed to finish a target using the continuous
+    /// approximation provided by [`EconomyState::estimate_remaining_time`].
+    ///
+    /// This is much cheaper than [`EcoEngine::time_to_finish`] but assumes fluid
+    /// resources. It returns `f64::INFINITY` if the target cannot be finished.
+    pub fn estimate_time_to_finish(&self, build_power: f64, cost: BuildTargetStats) -> f64 {
+        self.economy.estimate_remaining_time(cost, build_power)
+    }
+
     /// Compute the effective mass and energy drained when applying `build_power`
     /// to a target with `cost` for `seconds`.
     ///
@@ -170,18 +259,19 @@ impl EcoEngine {
     /// forward using the same stall logic as the full simulation. If the target
     /// would finish before `seconds` elapse, the drain stops at completion.
     ///
-    /// Returns `None` if the target has zero build time (instant build).
+    /// Returns [`EcoEngineError::ZeroBuildTime`] if the target has zero build time.
     pub fn effective_drain(
         &self,
         seconds: f64,
         build_power: f64,
         cost: &BuildTargetStats,
-    ) -> Option<(Mass, Energy)> {
+    ) -> Result<(Mass, Energy), EcoEngineError> {
         if seconds <= 0.0 || build_power <= 0.0 {
-            return Some((Mass::zero(), Energy::zero()));
+            return Ok((Mass::zero(), Energy::zero()));
         }
 
-        let drain = compute_drain(cost, RequestedBuildPower(build_power))?;
+        let drain = compute_drain(cost, RequestedBuildPower(build_power))
+            .ok_or(EcoEngineError::ZeroBuildTime)?;
         let mut economy = self.economy;
         let mut total_mass = Mass::zero();
         let mut total_energy = Energy::zero();
@@ -215,7 +305,7 @@ impl EcoEngine {
             economy.energy_storage = result.new_energy_storage;
         }
 
-        Some((total_mass, total_energy))
+        Ok((total_mass, total_energy))
     }
 
     fn apply_idle_income(&mut self, dt: f64) {
@@ -323,6 +413,89 @@ mod tests {
         assert_eq!(engine.tick, initial_tick);
         assert!((engine.time_seconds() - initial_time).abs() < f64::EPSILON);
         assert!((engine.economy.mass_storage.value() - initial_mass).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn time_to_finish_matches_nominal_build_time() {
+        let engine = EcoEngine::new(default_economy(), 10);
+
+        let cost = faf_units::BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 500.0,
+            build_time: 10.0,
+        };
+
+        // Base build power (1.0) finishes the project in exactly its build time.
+        let time = engine.time_to_finish(1.0, &cost, 30.0).unwrap();
+        assert!((time - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_to_finish_errors_when_timed_out() {
+        let mut economy = default_economy();
+        economy.energy_storage = Energy::zero();
+        economy.energy_storage_cap = Energy::zero();
+        economy.net_energy_income = EnergyRate::zero();
+        let engine = EcoEngine::new(economy, 10);
+
+        let cost = faf_units::BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 500.0,
+            build_time: 10.0,
+        };
+
+        // Base build power cannot make progress without energy.
+        assert!(matches!(
+            engine.time_to_finish(1.0, &cost, 5.0),
+            Err(EcoEngineError::TimedOut { max_seconds: 5.0 })
+        ));
+    }
+
+    #[test]
+    fn time_to_finish_errors_for_non_positive_build_power() {
+        let engine = EcoEngine::new(default_economy(), 10);
+
+        let cost = faf_units::BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 500.0,
+            build_time: 10.0,
+        };
+
+        assert!(matches!(
+            engine.time_to_finish(0.0, &cost, 30.0),
+            Err(EcoEngineError::NonPositiveBuildPower)
+        ));
+    }
+
+    #[test]
+    fn effective_drain_errors_for_zero_build_time() {
+        let engine = EcoEngine::new(default_economy(), 10);
+
+        let cost = faf_units::BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 500.0,
+            build_time: 0.0,
+        };
+
+        assert!(matches!(
+            engine.effective_drain(10.0, 10.0, &cost),
+            Err(EcoEngineError::ZeroBuildTime)
+        ));
+    }
+
+    #[test]
+    fn estimate_time_to_finish_matches_continuous_approximation() {
+        let engine = EcoEngine::new(default_economy(), 10);
+
+        let cost = faf_units::BuildTargetStats {
+            build_cost_mass: 100.0,
+            build_cost_energy: 500.0,
+            build_time: 10.0,
+        };
+
+        // With plenty of resources, the continuous estimate equals the nominal build time.
+        let time = engine.estimate_time_to_finish(1.0, cost);
+        assert!((time - 10.0).abs() < 1e-9);
     }
 
     #[test]

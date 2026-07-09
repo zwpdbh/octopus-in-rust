@@ -28,8 +28,8 @@ use faf_sim::planner::policy::train::{
 };
 use faf_sim::planner::policy::value_net::MlpValueNet;
 use faf_sim::{
-    run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, SimulationConfig,
-    SimulationState, UnitKind as SimUnitKind, Units as SimUnits,
+    run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, Simulation, SimulationConfig,
+    UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
@@ -411,7 +411,7 @@ fn run_simulate_eco(units: &SimUnits, args: SimulateEcoArgs) {
     };
     let planner = EcoPlanner::with_target(config, args.target_mass_income);
 
-    let mut state = SimulationState::new(units, &[SimUnitKind::Commander]);
+    let mut state = Simulation::new(&[SimUnitKind::Commander], units.clone(), 10);
 
     let policy: Option<EcoValueNet> = args.model.as_ref().and_then(|path| {
         load_eco_policy(path)
@@ -438,13 +438,13 @@ fn run_simulate_eco(units: &SimUnits, args: SimulateEcoArgs) {
         println!(
             "step {:3}: time={:6.1}s mass_income={:8.1} action={:?}",
             step,
-            result.final_state.time,
-            result.final_state.economy.net_mass_income,
+            result.final_state.graph.time,
+            result.final_state.engine.economy.net_mass_income,
             result.first_action
         );
 
         state = result.final_state;
-        if state.economy.net_mass_income >= args.target_mass_income {
+        if state.engine.economy.net_mass_income >= args.target_mass_income {
             println!("Target mass income reached after {} steps", step + 1);
             reached = true;
             break;
@@ -454,7 +454,7 @@ fn run_simulate_eco(units: &SimUnits, args: SimulateEcoArgs) {
     if !reached {
         println!(
             "Stopped after {} steps with mass income {:.1}",
-            args.steps, state.economy.net_mass_income
+            args.steps, state.engine.economy.net_mass_income
         );
     }
 }
@@ -538,24 +538,26 @@ async fn run_simulate_rush(units: &SimUnits, target: ResearchTarget, args: Simul
     println!("\nFinal economy:");
     println!(
         "  Mass income:  {:.1} / s",
-        result.final_state.economy.net_mass_income
+        result.final_state.engine.economy.net_mass_income
     );
     println!(
         "  Energy income: {:.1} / s",
-        result.final_state.economy.net_energy_income
+        result.final_state.engine.economy.net_energy_income
     );
     println!(
         "  Mass storage:  {:.0} / {:.0}",
-        result.final_state.economy.mass_storage, result.final_state.economy.mass_storage_cap
+        result.final_state.engine.economy.mass_storage,
+        result.final_state.engine.economy.mass_storage_cap
     );
     println!(
         "  Energy storage: {:.0} / {:.0}",
-        result.final_state.economy.energy_storage, result.final_state.economy.energy_storage_cap
+        result.final_state.engine.economy.energy_storage,
+        result.final_state.engine.economy.energy_storage_cap
     );
     println!("\nTimeline:");
     println!("{:>12}  Unit", "Time");
     println!("{:>12}  ----", "------------");
-    for event in &result.final_state.events {
+    for event in &result.final_state.graph.events {
         println!(
             "{:>12}  {} ({:?})",
             format_time(event.time),
@@ -926,7 +928,7 @@ impl EdgeLabel for SimVisualEdge {
 /// their label shows the final unit and the upgrade time.
 fn build_simulation_visual_graph(
     units: &SimUnits,
-    state: &SimulationState,
+    state: &Simulation,
 ) -> petgraph::graph::DiGraph<SimVisualNode, SimVisualEdge> {
     let mut graph = petgraph::graph::DiGraph::<SimVisualNode, SimVisualEdge>::new();
 
@@ -940,7 +942,7 @@ fn build_simulation_visual_graph(
     let mut first_event_time: HashMap<NodeId, f64> = HashMap::new();
     let mut original_unit: HashMap<NodeId, SimUnitKind> = HashMap::new();
 
-    for node in state.graph.graph.node_weights() {
+    for node in state.graph.graph.graph.node_weights() {
         if node.finish_time() == Some(0.0) {
             first_event_time.insert(node.id, 0.0);
             original_unit.insert(node.id, node.unit_id.clone());
@@ -948,7 +950,7 @@ fn build_simulation_visual_graph(
     }
 
     let mut seen_slots: HashSet<NodeId> = HashSet::new();
-    for event in &state.events {
+    for event in &state.graph.events {
         if seen_slots.insert(event.node_id) {
             first_event_time.insert(event.node_id, event.time);
             original_unit.insert(event.node_id, event.unit_id.clone());
@@ -965,7 +967,7 @@ fn build_simulation_visual_graph(
     });
 
     for (seq, slot_id) in slots.iter().enumerate() {
-        let slot = &state.graph.graph[slot_id.0];
+        let slot = &state.graph.graph[*slot_id];
         let created_at = first_event_time[slot_id];
         let is_starting = created_at == 0.0;
         let is_upgraded = slot.from_unit_id().is_some();
@@ -1005,7 +1007,7 @@ fn build_simulation_visual_graph(
     }
 
     // Builder assignment edges: one edge per build-power contribution.
-    for edge in state.graph.graph.edge_references() {
+    for edge in state.graph.graph.graph.edge_references() {
         let builder_id = NodeId(edge.source());
         let target_id = NodeId(edge.target());
 

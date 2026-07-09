@@ -10,7 +10,7 @@
 //! while the migration is in progress; `run_build_order_simulation` is stubbed
 //! with `todo!()`.
 
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::Goal;
 use crate::planner::Planner;
 use crate::units::Units;
@@ -51,7 +51,7 @@ impl SimulationConfig {
 #[derive(Debug)]
 pub struct SimulationResult {
     /// Final authoritative simulation state.
-    pub final_state: SimulationState,
+    pub final_state: Simulation,
     /// Number of simulation ticks that elapsed.
     pub elapsed_ticks: usize,
 }

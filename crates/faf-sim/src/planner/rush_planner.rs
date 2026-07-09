@@ -1,6 +1,6 @@
 //! Rush planner: assess whether a goal can be finished within a time window.
 //!
-//! The rush planner does not produce a build order.  Given a [`SimulationState`],
+//! The rush planner does not produce a build order.  Given a [`Simulation`],
 //! a [`Goal`], and a `time_window` in seconds, it answers two questions:
 //!
 //! 1. Can the goal be completed within `time_window` if we start it now?
@@ -10,7 +10,7 @@
 //! T3 engineers to the goal.  The second is answered by binary-searching mass
 //! income with the economy's continuous-time estimator.
 
-use crate::engine::{NodeId, SimulationState};
+use crate::engine::{NodeId, Simulation};
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::units::{TechLevel, UnitKind, Units};
 use faf_units::BuildTargetStats;
@@ -81,16 +81,16 @@ impl RushPlanner {
     /// `time_window`.
     pub fn assess(
         &self,
-        state: &SimulationState,
+        state: &Simulation,
         units: &Units,
         goal: &Goal,
         time_window: f64,
     ) -> RushAssessment {
-        if time_window <= 0.0 || state.goal_reached(goal) {
+        if time_window <= 0.0 || state.graph.goal_reached(goal) {
             return RushAssessment {
-                can_finish: state.goal_reached(goal),
+                can_finish: state.graph.goal_reached(goal),
                 expected_finish_time: Some(0.0),
-                required_mass_income: state.economy.net_mass_income.value(),
+                required_mass_income: state.engine.economy.net_mass_income.value(),
             };
         }
 
@@ -107,7 +107,8 @@ impl RushPlanner {
         }
 
         if rollout_state
-            .start_goal_project(*goal, &builders, units)
+            .graph
+            .start_goal_project(*goal, &builders)
             .is_err()
         {
             return RushAssessment {
@@ -124,21 +125,24 @@ impl RushPlanner {
             return RushAssessment {
                 can_finish: true,
                 expected_finish_time: Some(rollout_result.completion_time_secs),
-                required_mass_income: state.economy.net_mass_income.value(),
+                required_mass_income: state.engine.economy.net_mass_income.value(),
             };
         }
 
         // Rollout failed: estimate required mass income.
-        let build_power = state.total_active_build_power(units);
+        let build_power = state.graph.total_active_build_power();
         let cost = goal.cost().to_target_stats();
-        let current_estimate = state.economy.estimate_remaining_time(cost, build_power);
+        let current_estimate = state
+            .engine
+            .economy
+            .estimate_remaining_time(cost, build_power);
 
         let required_mass_income = if current_estimate <= time_window {
             // Static estimator thinks it fits even though the rollout did not;
             // report the current income as sufficient.
-            state.economy.net_mass_income.value()
+            state.engine.economy.net_mass_income.value()
         } else {
-            required_mass_income_for_deadline(&state.economy, cost, build_power, time_window)
+            required_mass_income_for_deadline(&state.engine.economy, cost, build_power, time_window)
         };
 
         RushAssessment {
@@ -156,9 +160,10 @@ impl Default for RushPlanner {
 }
 
 /// Select all idle T3 engineers, highest build-rate first.
-fn select_goal_builders(state: &SimulationState, units: &Units) -> Vec<NodeId> {
+fn select_goal_builders(state: &Simulation, units: &Units) -> Vec<NodeId> {
     let mut candidates: Vec<NodeId> = state
-        .idle_builders(units)
+        .graph
+        .idle_builders()
         .into_iter()
         .filter(|&id| matches!(state.graph[id].unit_id, UnitKind::Engineer(TechLevel::T3)))
         .collect();
@@ -187,33 +192,37 @@ struct RolloutOutcome {
 /// Run `state` forward for up to `time_window` seconds, stopping when the goal
 /// project completes.
 fn run_rush_rollout(
-    state: &mut SimulationState,
-    units: &Units,
+    state: &mut Simulation,
+    _units: &Units,
     time_window: f64,
     dt: f64,
 ) -> RolloutOutcome {
-    let start_time = state.time;
+    let start_time = state.graph.time;
     let steps = ((time_window / dt).ceil() as usize).max(1);
 
     for _ in 0..steps {
         if goal_project_completed(state) {
             return RolloutOutcome {
                 completed: true,
-                completion_time_secs: state.time - start_time,
+                completion_time_secs: state.graph.time - start_time,
             };
         }
-        state.tick(units, dt);
+        state.tick(dt);
     }
 
     RolloutOutcome {
         completed: goal_project_completed(state),
-        completion_time_secs: state.time - start_time,
+        completion_time_secs: state.graph.time - start_time,
     }
 }
 
 /// True if the active goal project is marked completed.
-fn goal_project_completed(state: &SimulationState) -> bool {
-    state.goal_project.as_ref().is_some_and(|p| p.completed)
+fn goal_project_completed(state: &Simulation) -> bool {
+    state
+        .graph
+        .goal_project
+        .as_ref()
+        .is_some_and(|p| p.completed)
 }
 
 /// Binary-search the mass income that brings `estimate_remaining_time` down to
@@ -297,7 +306,7 @@ mod tests {
     #[test]
     fn rush_infeasible_from_acu_alone() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
 
         let planner = RushPlanner::default();
         let assessment = planner.assess(&state, &units, &t4_goal(), 300.0);
@@ -314,8 +323,7 @@ mod tests {
     #[test]
     fn rush_feasible_with_many_t3_engineers() {
         let units = load_units();
-        let mut state = SimulationState::new(
-            &units,
+        let mut state = Simulation::new(
             &[
                 UnitKind::Commander,
                 UnitKind::Engineer(TechLevel::T3),
@@ -329,14 +337,16 @@ mod tests {
                 UnitKind::Engineer(TechLevel::T3),
                 UnitKind::Engineer(TechLevel::T3),
             ],
+            units.clone(),
+            10,
         );
         // Give the economy enough resources to support the build.
-        state.economy.mass_storage = crate::quantities::Mass::from_raw(50_000.0);
-        state.economy.mass_storage_cap = crate::quantities::Mass::from_raw(100_000.0);
-        state.economy.energy_storage = crate::quantities::Energy::from_raw(400_000.0);
-        state.economy.energy_storage_cap = crate::quantities::Energy::from_raw(500_000.0);
-        state.economy.net_mass_income = crate::quantities::MassRate::from_raw(100.0);
-        state.economy.net_energy_income = crate::quantities::EnergyRate::from_raw(5_000.0);
+        state.engine.economy.mass_storage = crate::quantities::Mass::from_raw(50_000.0);
+        state.engine.economy.mass_storage_cap = crate::quantities::Mass::from_raw(100_000.0);
+        state.engine.economy.energy_storage = crate::quantities::Energy::from_raw(400_000.0);
+        state.engine.economy.energy_storage_cap = crate::quantities::Energy::from_raw(500_000.0);
+        state.engine.economy.net_mass_income = crate::quantities::MassRate::from_raw(100.0);
+        state.engine.economy.net_energy_income = crate::quantities::EnergyRate::from_raw(5_000.0);
 
         let planner = RushPlanner::default();
         let assessment = planner.assess(&state, &units, &t4_goal(), 600.0);

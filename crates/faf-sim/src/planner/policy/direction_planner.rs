@@ -4,7 +4,7 @@
 //! learned direction network to pick a high-level strategic direction, then
 //! delegates concrete action selection to the heuristic layer.
 
-use crate::engine::{GraphSimError, SimulationState};
+use crate::engine::{GraphSimError, Simulation};
 use crate::planner::core::{Goal, PlanResult, PlannerConfig, PlannerError, ValueNetKind};
 use crate::planner::plan_graph::{build_plan_graph, EdgeCategory, PlanGraph};
 use crate::planner::policy::features::state_features;
@@ -20,7 +20,7 @@ use crate::units::Units;
 #[allow(clippy::too_many_arguments)]
 pub fn plan(
     units: &Units,
-    initial_state: SimulationState,
+    initial_state: Simulation,
     goal: &Goal,
     _iterations: usize,
     value_net_kind: ValueNetKind,
@@ -46,7 +46,7 @@ pub fn plan(
 /// One-step planner guided by the direction-only policy network.
 pub(crate) fn macro_policy_plan(
     units: &Units,
-    mut state: SimulationState,
+    mut state: Simulation,
     goal: &Goal,
     policy_bundle: Option<&dyn ValueNet>,
     deterministic: bool,
@@ -69,7 +69,7 @@ pub(crate) fn macro_policy_plan(
     let direction_mask = legal_direction_mask(&state, units, config, goal, &plan);
 
     if direction_mask.iter().all(|&b| !b) {
-        state.tick(units, config.dt);
+        state.tick(config.dt);
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
@@ -99,7 +99,7 @@ pub(crate) fn macro_policy_plan(
     let mut new_state = state.clone();
     if execute_action(&mut new_state, &action, units, config.dt).is_err() {
         // Heuristic produced an infeasible action; fall back to wait.
-        state.tick(units, config.dt);
+        state.tick(config.dt);
         return Ok(plan_result_with_action(state, SimAction::Wait));
     }
 
@@ -109,7 +109,7 @@ pub(crate) fn macro_policy_plan(
 /// Build a boolean mask over [`EdgeCategory::ALL`] indicating which directions
 /// have at least one legal concrete action right now.
 fn legal_direction_mask(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
@@ -123,24 +123,26 @@ fn legal_direction_mask(
 
 /// Apply a [`SimAction`] to a mutable simulator state.
 pub(crate) fn execute_action(
-    state: &mut SimulationState,
+    state: &mut Simulation,
     action: &SimAction,
-    units: &Units,
+    _units: &Units,
     dt: f64,
 ) -> Result<(), GraphSimError> {
     match action {
         SimAction::Build { unit_id, builders } => {
-            state.start_project(unit_id, builders, units)?;
+            state.graph.start_project(unit_id, builders)?;
         }
         SimAction::BuildGoal { goal, builders } => {
-            state.start_goal_project(*goal, builders, units)?;
+            state.graph.start_goal_project(*goal, builders)?;
         }
         SimAction::Upgrade {
             target_unit_id,
             old_node,
             builders,
         } => {
-            state.start_upgrade_project(target_unit_id, *old_node, builders, units)?;
+            state
+                .graph
+                .start_upgrade_project(target_unit_id, *old_node, builders)?;
         }
         SimAction::Assist {
             project_node,
@@ -149,10 +151,10 @@ pub(crate) fn execute_action(
             if builders.is_empty() {
                 return Ok(());
             }
-            state.assist_project(*project_node, builders, units)?;
+            state.graph.assist_project(*project_node, builders)?;
         }
         SimAction::Wait => {
-            state.tick(units, dt);
+            state.tick(dt);
         }
     }
     Ok(())
@@ -168,11 +170,11 @@ fn should_rush(deterministic: bool, rush_p: f32, rush_threshold: f64) -> bool {
 }
 
 /// Build a [`PlanResult`] that commits to a single immediate action.
-pub(crate) fn plan_result_with_action(state: SimulationState, action: SimAction) -> PlanResult {
+pub(crate) fn plan_result_with_action(state: Simulation, action: SimAction) -> PlanResult {
     PlanResult {
         events: Vec::new(),
-        completion_time: state.time,
-        final_economy: state.economy,
+        completion_time: state.graph.time,
+        final_economy: state.engine.economy.clone(),
         first_action: Some(action),
         final_state: state,
     }
@@ -191,7 +193,7 @@ mod tests {
     #[test]
     fn macro_plan_selects_build_action_from_acu() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let config = PlannerConfig::default();
 
         let goal = Goal {

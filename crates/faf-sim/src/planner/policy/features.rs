@@ -1,9 +1,9 @@
 //! State featurization for the direction-only policy network.
 //!
-//! Converts a variable-size [`SimulationState`] into a fixed-size `Vec<f32>` that
+//! Converts a variable-size [`Simulation`] into a fixed-size `Vec<f32>` that
 //! the direction network consumes.
 
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::PlannerConfig;
 use crate::units::{TechLevel, UnitKind, Units};
 
@@ -45,9 +45,9 @@ pub const STATE_FEATURE_COUNT: usize = 11;
 /// 8. has T2 factory
 /// 9. has T3 factory
 /// 10. has T3 engineer
-pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerConfig) -> Vec<f32> {
+pub fn state_features(state: &Simulation, _units: &Units, config: &PlannerConfig) -> Vec<f32> {
     let mut features = Vec::with_capacity(STATE_FEATURE_COUNT);
-    let economy = &state.economy;
+    let economy = &state.engine.economy;
 
     // Income features: scaled so typical mid/late-game values land near [-1, 1]
     // before clamping. Energy is scaled by 1000 because it is usually an order
@@ -70,21 +70,22 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     // Total build power determines how fast projects finish. Scaled by 100 so
     // typical values stay small after clamping.
     features.push(clamp(
-        (state.total_active_build_power(units) / 100.0) as f32,
+        (state.graph.total_active_build_power() / 100.0) as f32,
     ));
 
     // Game time gives the network a sense of phase. Scaled by one hour.
-    features.push(clamp((state.time / 3600.0) as f32));
+    features.push(clamp((state.graph.time / 3600.0) as f32));
 
     // Eco-structure saturation: fraction of the configured mex cap. Near 1.0
     // means building more mexes is low-value or impossible.
     features.push(clamp(
-        state.count_active_mex() as f32 / config.max_mex_count as f32,
+        state.graph.count_active_mex() as f32 / config.max_mex_count as f32,
     ));
 
     // Parallelism: how many builders are already committed. A high count means
     // fewer idle builders and fewer immediately executable options.
     let active_project_count = state
+        .graph
         .graph
         .graph
         .node_weights()
@@ -107,13 +108,19 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     //   (e.g. a T4 experimental). Without this flag the policy would have to
     //   deduce goal availability from the much larger unit roster.
     features.push(bool_f32(
-        state.has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
+        state
+            .graph
+            .has_completed_unit(&UnitKind::Factory(TechLevel::T2)),
     ));
     features.push(bool_f32(
-        state.has_completed_unit(&UnitKind::Factory(TechLevel::T3)),
+        state
+            .graph
+            .has_completed_unit(&UnitKind::Factory(TechLevel::T3)),
     ));
     features.push(bool_f32(
-        state.has_completed_unit(&UnitKind::Engineer(TechLevel::T3)),
+        state
+            .graph
+            .has_completed_unit(&UnitKind::Engineer(TechLevel::T3)),
     ));
 
     debug_assert_eq!(features.len(), STATE_FEATURE_COUNT);
@@ -168,7 +175,7 @@ mod tests {
             build_time: 46_250.0,
         };
         let _plan = units.plan_graph(goal);
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let config = PlannerConfig::default();
 
         let features = state_features(&state, &units, &config);

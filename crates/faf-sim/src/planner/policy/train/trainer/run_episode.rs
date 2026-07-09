@@ -4,7 +4,7 @@ use super::super::episode::{Episode, EpisodeStep};
 use super::super::reward::compute_step_reward;
 use super::super::rollout::{rush_rollout, RolloutResult};
 
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::{Goal, PlannerConfig};
 use crate::planner::plan_graph::{EdgeCategory, PlanGraph};
 use crate::planner::policy::direction_planner::execute_action;
@@ -28,7 +28,8 @@ impl Trainer {
         planner_config: &PlannerConfig,
         plan: &PlanGraph,
     ) -> (Episode, f32) {
-        let mut state = SimulationState::new(units, &[UnitKind::Commander]);
+        let ticks_per_second = (1.0 / self.config.dt).round().max(1.0) as u64;
+        let mut state = Simulation::new(&[UnitKind::Commander], units.clone(), ticks_per_second);
         let mut episode = Episode {
             reached_goal: false,
             completion_time: 0.0,
@@ -38,9 +39,9 @@ impl Trainer {
         let mut step_count = 0usize;
 
         for _step in 0..self.config.max_steps {
-            if state.goal_reached(goal) {
+            if state.graph.goal_reached(goal) {
                 episode.reached_goal = true;
-                episode.completion_time = state.time;
+                episode.completion_time = state.graph.time;
                 break;
             }
 
@@ -48,7 +49,7 @@ impl Trainer {
 
             let direction_mask = legal_direction_mask(&state, units, planner_config, goal, plan);
             if direction_mask.iter().all(|&b| !b) {
-                state.tick(units, self.config.dt);
+                state.tick(self.config.dt);
                 continue;
             }
 
@@ -75,7 +76,7 @@ impl Trainer {
 
             let prev_state = state.clone();
             if execute_action(&mut state, &action, units, self.config.dt).is_err() {
-                state.tick(units, self.config.dt);
+                state.tick(self.config.dt);
                 continue;
             }
 
@@ -153,7 +154,7 @@ impl Trainer {
 /// Build a boolean mask over [`EdgeCategory::ALL`] indicating which directions
 /// have at least one legal concrete action right now.
 fn legal_direction_mask(
-    state: &SimulationState,
+    state: &Simulation,
     units: &Units,
     config: &PlannerConfig,
     goal: &Goal,
@@ -188,7 +189,7 @@ mod tests {
     #[test]
     fn legal_direction_mask_includes_mass_from_acu() {
         let units = load_units();
-        let state = SimulationState::new(&units, &[UnitKind::Commander]);
+        let state = Simulation::new(&[UnitKind::Commander], units.clone(), 10);
         let config = PlannerConfig::default();
         let goal = t4_goal();
         let plan = build_plan_graph(&units, goal);

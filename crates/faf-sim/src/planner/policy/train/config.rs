@@ -24,6 +24,13 @@ pub struct TrainEcoConfig {
     /// `(next_mass - prev_mass) * reward_mass_income_coef`. Set to `0.0` to
     /// disable.
     pub reward_mass_income_coef: f32,
+    /// Coefficient for the build-speed reward.
+    ///
+    /// Each step is rewarded for reducing the simulated time needed to build a
+    /// reference T1 mass extractor with the ACU's build power:
+    /// `(prev_time - next_time) * reward_time_to_build_coef`. Set to `0.0` to
+    /// disable.
+    pub reward_time_to_build_coef: f32,
     /// Penalty applied each step when energy storage is empty (energy stall).
     pub energy_stall_penalty: f32,
     /// Penalty applied each step when mass storage is empty (mass stall).
@@ -48,6 +55,7 @@ impl Default for TrainEcoConfig {
             grad_clip: None,
             max_mex_count: 12,
             reward_mass_income_coef: 1.0 / 10.0,
+            reward_time_to_build_coef: 0.0,
             energy_stall_penalty: 20.0,
             mass_stall_penalty: 1.0,
             epsilon_start: 0.3,

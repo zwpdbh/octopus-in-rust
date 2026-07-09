@@ -21,8 +21,9 @@ pub use economy::{
 };
 pub use engine::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, EcoEngine,
-    EcoForecast, GameTick, GoalProject, GraphSimError, NodeId, SimulationConfig, SimulationError,
-    SimulationResult, SimulationState, UnitAction, UnitCommand, UnitGraph, UnitNode, UnitNodeState,
+    EcoEngineError, EcoForecast, GameTick, GoalProject, GraphSimError, NodeId, Simulation,
+    SimulationConfig, SimulationError, SimulationResult, UnitAction, UnitCommand, UnitGraph,
+    UnitNode, UnitNodeState,
 };
 pub use planner::{
     build_plan_graph, EcoPlanner, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,

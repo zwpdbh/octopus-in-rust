@@ -1,6 +1,6 @@
 //! Rollout-based reward shaping for policy-gradient training.
 
-use crate::engine::simulation_state::SimulationState;
+use crate::engine::simulation::Simulation;
 use crate::planner::core::Goal;
 use crate::planner::plan_graph::EdgeCategory;
 use crate::planner::policy::train::config::TrainConfig;
@@ -17,8 +17,8 @@ use crate::units::Units;
 /// five minutes: finishing within the cap is strongly rewarded, failing to
 /// finish is penalized.
 pub(crate) fn compute_step_reward(
-    prev_state: &SimulationState,
-    next_state: &SimulationState,
+    prev_state: &Simulation,
+    next_state: &Simulation,
     chosen_direction: EdgeCategory,
     _action: &SimAction,
     units: &Units,
@@ -34,8 +34,8 @@ pub(crate) fn compute_step_reward(
 }
 
 fn compute_eco_reward(
-    prev_state: &SimulationState,
-    next_state: &SimulationState,
+    prev_state: &Simulation,
+    next_state: &Simulation,
     units: &Units,
     config: &TrainConfig,
     goal: &Goal,
