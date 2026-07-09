@@ -29,6 +29,9 @@ use burn::backend::{Autodiff, NdArray};
 use burn::backend::{Autodiff, Wgpu};
 
 pub mod config;
+pub mod eco_net;
+pub mod eco_reward;
+pub mod eco_trainer;
 pub mod episode;
 pub mod math;
 pub mod metric;
@@ -40,9 +43,12 @@ pub mod trainer;
 #[cfg(test)]
 mod tests;
 
-pub use config::{TrainConfig, TrainStats};
+pub use config::{TrainConfig, TrainEcoConfig, TrainStats};
 pub use metric::{EpisodeSummary, FafSimMetrics, TrainEvent};
-pub use policy_training::{load_policy, save_policy, train_policy, train_policy_from};
+pub use policy_training::{
+    load_eco_policy, load_policy, save_eco_policy, save_policy, train_eco_policy,
+    train_eco_policy_from, train_policy, train_policy_from,
+};
 pub use trainer::Trainer;
 
 // Re-export Burn training/renderer types so the CLI can build a renderer without

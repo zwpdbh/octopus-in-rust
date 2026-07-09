@@ -22,13 +22,14 @@ use clap::Parser;
 use faf_sim::planner::plan_graph::PlanNode;
 use faf_sim::planner::policy::macro_net::hierarchical_policy_net_dot;
 use faf_sim::planner::policy::train::{
-    load_policy, save_policy, train_policy, train_policy_from, FafSimMetrics, Interrupter,
-    MetricsRenderer, TrainConfig,
+    load_eco_policy, load_policy, save_eco_policy, save_policy, train_eco_policy,
+    train_eco_policy_from, train_policy, train_policy_from, FafSimMetrics, Interrupter,
+    MetricsRenderer, TrainConfig, TrainEcoConfig,
 };
 use faf_sim::planner::policy::value_net::MlpValueNet;
 use faf_sim::{
     run_build_order_simulation, EdgeAction, Goal, NodeId, Planner, SimulationConfig,
-    SimulationState, Strategy, UnitKind as SimUnitKind, Units as SimUnits,
+    SimulationState, UnitKind as SimUnitKind, Units as SimUnits,
 };
 use faf_units::DataIndex;
 use petgraph::graph::NodeIndex;
@@ -41,7 +42,10 @@ mod cmdline;
 mod target;
 mod text_renderer;
 
-use cmdline::{Cli, Command as CliCommand, DrawNetArgs, FactionTarget, TrainArgs};
+use cmdline::{
+    Cli, Command as CliCommand, DrawNetArgs, FactionTarget, SimulateEcoArgs, SimulateRushArgs,
+    SimulateSubcommand, TrainEcoArgs, TrainRushArgs, TrainSubcommand,
+};
 use target::{Faction, ResearchTarget, UnitKind};
 use text_renderer::TextMetricsRenderer;
 
@@ -55,23 +59,26 @@ async fn main() {
         CliCommand::Plan(args) => {
             run_plan(&units, &index, args.output);
         }
-        CliCommand::Train(args) => {
-            let (faction, unit) = resolve_faction_target(&args.target);
-            let target = resolve_target(faction, unit);
-            run_train(&units, target, args).await;
-        }
-        CliCommand::Simulate(args) => {
-            let (faction, unit) = resolve_faction_target(&args.target);
-            let target = resolve_target(faction, unit);
-            run_simulate(
-                &units,
-                target,
-                args.strategy,
-                args.max_mex_count,
-                args.output,
-            )
-            .await;
-        }
+        CliCommand::Train { subcommand } => match subcommand {
+            TrainSubcommand::Eco(args) => {
+                run_train_eco(&units, args).await;
+            }
+            TrainSubcommand::Rush(args) => {
+                let (faction, unit) = resolve_faction_target(&args.target);
+                let target = resolve_target(faction, unit);
+                run_train_rush(&units, target, args).await;
+            }
+        },
+        CliCommand::Simulate { subcommand } => match subcommand {
+            SimulateSubcommand::Eco(args) => {
+                run_simulate_eco(&units, args);
+            }
+            SimulateSubcommand::Rush(args) => {
+                let (faction, unit) = resolve_faction_target(&args.target);
+                let target = resolve_target(faction, unit);
+                run_simulate_rush(&units, target, args).await;
+            }
+        },
         CliCommand::DrawNet(args) => {
             let (faction, unit) = resolve_faction_target(&args.target);
             let target = resolve_target(faction, unit);
@@ -117,7 +124,7 @@ fn model_path(target: &ResearchTarget) -> std::path::PathBuf {
     std::path::PathBuf::from("data/models").join(file_name)
 }
 
-async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
+async fn run_train_rush(units: &SimUnits, target: ResearchTarget, args: TrainRushArgs) {
     let goal = target.to_goal(units);
 
     let use_tui = !args.quiet && !args.text && std::io::stdout().is_terminal();
@@ -138,10 +145,7 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
         grad_clip: args.grad_clip,
         max_mex_count: args.max_mex_count,
         reward_bp_coef: args.reward_bp_coef,
-        reward_mass_income_coef: args.reward_mass_income_coef,
         reward_energy_income_coef: args.reward_energy_income_coef,
-        energy_stall_penalty: args.energy_stall_penalty,
-        mass_stall_penalty: args.mass_stall_penalty,
         eco_rollout_horizon_secs: args.eco_rollout_horizon_secs,
         rush_rollout_cap_secs: args.rush_rollout_cap_secs,
         rollout_bp_fraction: args.rollout_bp_fraction,
@@ -285,92 +289,182 @@ async fn run_train(units: &SimUnits, target: ResearchTarget, args: TrainArgs) {
     println!("Saved model to {}", path.display());
 }
 
-/// Run a blocking training closure to completion.
-///
-/// `Ctrl+C`/`SIGINT` requests a graceful stop; the closure should observe
-/// `stop_flag` and return promptly. The final model is then saved by the
-/// caller.
-async fn run_training_with_shutdown<F, T>(training: F, stop_flag: Arc<AtomicBool>) -> T
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    let task = tokio::task::spawn_blocking(training);
-    tokio::pin!(task);
+async fn run_train_eco(units: &SimUnits, args: TrainEcoArgs) {
+    println!(
+        "Training eco network to reach {} mass/s",
+        args.target_mass_income
+    );
 
-    tokio::select! {
-        res = &mut task => res.expect("training task panicked"),
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("Ctrl+C received; stopping training gracefully.");
-            stop_flag.store(true, Ordering::Relaxed);
-            task.await.expect("training task panicked")
-        }
-    }
-}
-
-fn run_draw_net(units: &SimUnits, target: ResearchTarget, args: DrawNetArgs) {
-    let _goal = target.to_goal(units);
-    let dot = hierarchical_policy_net_dot();
-
-    let dot_path = match args.output {
-        Some(path) => path,
-        None => {
-            let file_name = format!(
-                "faf-sim-net-{}-{}.dot",
-                target.faction.display_name().to_ascii_lowercase(),
-                target
-                    .unit
-                    .display_name()
-                    .to_ascii_lowercase()
-                    .replace(' ', "-")
-            );
-            std::env::temp_dir().join(file_name)
-        }
+    let config = TrainEcoConfig {
+        episodes: args.episodes,
+        max_steps: args.max_steps,
+        dt: args.dt,
+        learning_rate: args.learning_rate,
+        grad_clip: args.grad_clip,
+        max_mex_count: args.max_mex_count,
+        reward_mass_income_coef: args.reward_mass_income_coef,
+        energy_stall_penalty: args.energy_stall_penalty,
+        eco_target_mass_income: args.target_mass_income,
+        epsilon_start: args.epsilon_start,
+        epsilon_end: args.epsilon_end,
+        epsilon_decay_episodes: args.epsilon_decay_episodes,
+        ..Default::default()
     };
 
-    std::fs::write(&dot_path, dot).expect("write DOT file");
-    println!("Wrote network architecture DOT to {}", dot_path.display());
+    let path = std::path::PathBuf::from("data/models/mlp-eco");
+    let model_file = path.with_extension("mpk");
 
-    // Render to SVG if Graphviz `dot` is available.
-    let svg_path = dot_path.with_extension("svg");
-    match std::process::Command::new("dot")
-        .args([
-            "-Tsvg",
-            dot_path.to_str().unwrap(),
-            "-o",
-            svg_path.to_str().unwrap(),
-        ])
-        .status()
-    {
-        Ok(status) if status.success() => {
-            println!("Rendered SVG to {}", svg_path.display());
-            if let Ok(absolute) = std::fs::canonicalize(&svg_path) {
-                println!("  file://{}", absolute.display());
-            }
+    if args.fresh && model_file.exists() {
+        println!(
+            "Removing existing eco model checkpoint: {}",
+            model_file.display()
+        );
+        std::fs::remove_file(&model_file).expect("failed to remove existing eco model file");
+    }
+
+    let start_time = std::time::Instant::now();
+
+    let train_result = {
+        let units = units.clone();
+        let path = path.clone();
+        let model_file = model_file.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        run_training_with_shutdown(
+            move || {
+                if args.resume && model_file.exists() {
+                    println!("Resuming eco training from {}", model_file.display());
+                    let model = load_eco_policy(&path).expect("load existing eco model");
+                    train_eco_policy_from(model, &units, config)
+                } else {
+                    train_eco_policy(&units, config)
+                }
+            },
+            stop_flag,
+        )
+        .await
+    };
+
+    let (model, stats) = train_result;
+
+    let elapsed = start_time.elapsed();
+    let total_episodes = stats.episode_lengths.len();
+    let hit_rate = if total_episodes == 0 {
+        0.0
+    } else {
+        stats.target_hits as f64 / total_episodes as f64
+    };
+    let avg_loss = if stats.losses.is_empty() {
+        None
+    } else {
+        Some(stats.losses.iter().sum::<f32>() / stats.losses.len() as f32)
+    };
+    let avg_steps = if total_episodes == 0 {
+        0.0
+    } else {
+        stats.episode_lengths.iter().sum::<usize>() as f64 / total_episodes as f64
+    };
+    let eps_per_sec = if elapsed.as_secs_f64() > 0.0 {
+        total_episodes as f64 / elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    println!("\nEco training summary:");
+    println!("  Total episodes:        {}", total_episodes);
+    println!(
+        "  Target hits:           {}/{} ({:.1}%)",
+        stats.target_hits,
+        total_episodes,
+        hit_rate * 100.0
+    );
+    println!(
+        "  Average loss:          {}",
+        avg_loss
+            .map(|l| format!("{:.4}", l))
+            .unwrap_or_else(|| "---".to_string())
+    );
+    println!("  Average steps:         {:.1}", avg_steps);
+    println!("  Episodes/sec:          {:.2}", eps_per_sec);
+    println!(
+        "  Total time:            {}",
+        format_duration(elapsed.as_secs_f64())
+    );
+
+    save_eco_policy(&model, &path).expect("save trained eco model");
+    println!("Saved eco model to {}", path.display());
+}
+
+fn run_simulate_eco(units: &SimUnits, args: SimulateEcoArgs) {
+    use faf_sim::planner::policy::value_net::EcoValueNet;
+    use faf_sim::EcoPlanner;
+    use faf_sim::PlannerConfig;
+
+    println!(
+        "Eco planner: target {} mass/s, max {} steps",
+        args.target_mass_income, args.steps
+    );
+
+    let config = PlannerConfig {
+        dt: args.dt,
+        max_mex_count: args.max_mex_count,
+        ..PlannerConfig::default()
+    };
+    let planner = EcoPlanner::with_target(config, args.target_mass_income);
+
+    let mut state = SimulationState::new(units, &[SimUnitKind::Commander]);
+
+    let policy: Option<EcoValueNet> = args.model.as_ref().and_then(|path| {
+        load_eco_policy(path)
+            .map(|net| {
+                println!("Loaded eco policy from {}", path.display());
+                EcoValueNet::from_net(net)
+            })
+            .map_err(|e| {
+                eprintln!(
+                    "Warning: failed to load eco policy from {}: {}",
+                    path.display(),
+                    e
+                );
+            })
+            .ok()
+    });
+
+    let mut reached = false;
+    for step in 0..args.steps {
+        let result = planner
+            .plan(state.clone(), units, policy.as_ref().map(|p| p as _), true)
+            .expect("eco plan should succeed");
+
+        println!(
+            "step {:3}: time={:6.1}s mass_income={:8.1} action={:?}",
+            step,
+            result.final_state.time,
+            result.final_state.economy.net_mass_income,
+            result.first_action
+        );
+
+        state = result.final_state;
+        if state.economy.net_mass_income >= args.target_mass_income {
+            println!("Target mass income reached after {} steps", step + 1);
+            reached = true;
+            break;
         }
-        _ => {
-            eprintln!("Graphviz `dot` not available; SVG rendering skipped.");
-            eprintln!(
-                "You can render manually with: dot -Tsvg {} -o {}",
-                dot_path.display(),
-                svg_path.display()
-            );
-        }
+    }
+
+    if !reached {
+        println!(
+            "Stopped after {} steps with mass income {:.1}",
+            args.steps, state.economy.net_mass_income
+        );
     }
 }
 
-async fn run_simulate(
-    units: &SimUnits,
-    target: ResearchTarget,
-    strategy: Strategy,
-    max_mex_count: usize,
-    output: Option<std::path::PathBuf>,
-) {
+async fn run_simulate_rush(units: &SimUnits, target: ResearchTarget, args: SimulateRushArgs) {
     use faf_sim::PlannerConfig;
 
     let goal = target.to_goal(units);
 
-    println!("Strategy: {}", strategy);
+    println!("Strategy: {}", args.strategy);
     println!("Simulate target: {}", target.display_name());
 
     let path = model_path(&target);
@@ -378,7 +472,7 @@ async fn run_simulate(
 
     if !model_file.exists() {
         eprintln!(
-            "No trained model found at {}. Train one first with `faf-sim train <faction> {}`.",
+            "No trained model found at {}. Train one first with `faf-sim train rush <faction> {}`.",
             model_file.display(),
             target.display_name()
         );
@@ -390,9 +484,9 @@ async fn run_simulate(
     println!("Model loaded successfully.");
     let value_net = Box::new(MlpValueNet::from_net(model));
     let planner = Planner::with_config(
-        strategy,
+        args.strategy,
         PlannerConfig {
-            max_mex_count,
+            max_mex_count: args.max_mex_count,
             ..PlannerConfig::default()
         },
         value_net,
@@ -472,7 +566,7 @@ async fn run_simulate(
 
     let visual_graph = build_simulation_visual_graph(units, &result.final_state);
 
-    let svg_path = match output {
+    let svg_path = match args.output {
         Some(path) => path,
         None => {
             let file_name = format!(
@@ -505,6 +599,80 @@ async fn run_simulate(
     println!("  {}", svg_path.display());
     if let Ok(absolute) = std::fs::canonicalize(&svg_path) {
         println!("  file://{}", absolute.display());
+    }
+}
+
+/// Run a blocking training closure to completion.
+///
+/// `Ctrl+C`/`SIGINT` requests a graceful stop; the closure should observe
+/// `stop_flag` and return promptly. The final model is then saved by the
+/// caller.
+async fn run_training_with_shutdown<F, T>(training: F, stop_flag: Arc<AtomicBool>) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let task = tokio::task::spawn_blocking(training);
+    tokio::pin!(task);
+
+    tokio::select! {
+        res = &mut task => res.expect("training task panicked"),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("Ctrl+C received; stopping training gracefully.");
+            stop_flag.store(true, Ordering::Relaxed);
+            task.await.expect("training task panicked")
+        }
+    }
+}
+
+fn run_draw_net(units: &SimUnits, target: ResearchTarget, args: DrawNetArgs) {
+    let _goal = target.to_goal(units);
+    let dot = hierarchical_policy_net_dot();
+
+    let dot_path = match args.output {
+        Some(path) => path,
+        None => {
+            let file_name = format!(
+                "faf-sim-net-{}-{}.dot",
+                target.faction.display_name().to_ascii_lowercase(),
+                target
+                    .unit
+                    .display_name()
+                    .to_ascii_lowercase()
+                    .replace(' ', "-")
+            );
+            std::env::temp_dir().join(file_name)
+        }
+    };
+
+    std::fs::write(&dot_path, dot).expect("write DOT file");
+    println!("Wrote network architecture DOT to {}", dot_path.display());
+
+    // Render to SVG if Graphviz `dot` is available.
+    let svg_path = dot_path.with_extension("svg");
+    match std::process::Command::new("dot")
+        .args([
+            "-Tsvg",
+            dot_path.to_str().unwrap(),
+            "-o",
+            svg_path.to_str().unwrap(),
+        ])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("Rendered SVG to {}", svg_path.display());
+            if let Ok(absolute) = std::fs::canonicalize(&svg_path) {
+                println!("  file://{}", absolute.display());
+            }
+        }
+        _ => {
+            eprintln!("Graphviz `dot` not available; SVG rendering skipped.");
+            eprintln!(
+                "You can render manually with: dot -Tsvg {} -o {}",
+                dot_path.display(),
+                svg_path.display()
+            );
+        }
     }
 }
 

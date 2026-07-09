@@ -42,6 +42,17 @@ impl Goal {
     }
 }
 
+impl Default for Goal {
+    fn default() -> Self {
+        Self {
+            tech_level: TechLevel::T1,
+            mass_cost: 0.0,
+            energy_cost: 0.0,
+            build_time: 0.0,
+        }
+    }
+}
+
 /// Result of running a planner from a single state.
 ///
 /// The planner searches a trajectory from the current state to the goal. Most

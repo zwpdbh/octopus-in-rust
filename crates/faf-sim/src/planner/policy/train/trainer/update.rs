@@ -28,7 +28,13 @@ impl Trainer {
         let eco_logits = self.model.eco_logits(latent.clone()).flatten::<1>(0, 1);
         let eco_mask: Vec<f32> = ECO_DIRECTION_INDICES
             .iter()
-            .map(|&i| if step.direction_mask[i] { 0.0 } else { MASK_VALUE })
+            .map(|&i| {
+                if step.direction_mask[i] {
+                    0.0
+                } else {
+                    MASK_VALUE
+                }
+            })
             .collect();
         let eco_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
             TensorData::new(eco_mask, [ECO_DIRECTION_COUNT]),
@@ -55,10 +61,7 @@ impl Trainer {
             eco_log_prob.neg().mul(reward_tensor)
         } else {
             // Goal was chosen; the eco head is not updated this step.
-            Tensor::<TrainBackend, 1>::from_data(
-                TensorData::new(vec![0.0f32], [1]),
-                &self.device,
-            )
+            Tensor::<TrainBackend, 1>::from_data(TensorData::new(vec![0.0f32], [1]), &self.device)
         };
 
         // --- Rush head loss (MSE against rollout target) ---

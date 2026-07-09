@@ -20,6 +20,7 @@ use crate::economy::{
     RequestedBuildPower,
 };
 use crate::planner::core::Goal;
+use crate::quantities::{Energy, EnergyRate, Mass, MassRate};
 use crate::sim::adjacency::{production_multiplier, AdjacencyKind, AdjacencyTracker};
 use crate::units::{TechLevel, UnitDef, UnitKind, Units};
 
@@ -45,12 +46,12 @@ pub struct BuildEvent {
 pub fn derive_economy(units: &Units, unit_kinds: &[UnitKind]) -> EconomyState {
     let defs: Vec<&UnitDef> = unit_kinds.iter().filter_map(|k| units.def(k)).collect();
 
-    let mut mass_storage = 0.0;
-    let mut energy_storage = 0.0;
+    let mut mass_storage = Mass::zero();
+    let mut energy_storage = Energy::zero();
 
     for def in &defs {
-        mass_storage += def.mass_storage();
-        energy_storage += def.energy_storage();
+        mass_storage = mass_storage + Mass::from_raw(def.mass_storage());
+        energy_storage = energy_storage + Energy::from_raw(def.energy_storage());
     }
 
     let production: EcoFlow = defs.iter().map(|d| d.production()).sum();
@@ -549,10 +550,10 @@ impl SimulationState {
     pub fn rebuild_economy(&mut self, units: &Units) {
         let active_nodes: Vec<NodeId> = self.active_units();
 
-        let mut net_mass = 0.0;
-        let mut net_energy = 0.0;
-        let mut mass_storage_cap = 0.0;
-        let mut energy_storage_cap = 0.0;
+        let mut net_mass = MassRate::zero();
+        let mut net_energy = EnergyRate::zero();
+        let mut mass_storage_cap = Mass::zero();
+        let mut energy_storage_cap = Energy::zero();
 
         for node_id in active_nodes {
             let kind = &self.graph[node_id].unit_id;
@@ -574,10 +575,11 @@ impl SimulationState {
                 energy_income *= production_multiplier(caps);
             }
 
-            net_mass += mass_income;
-            net_energy += energy_income - def.maintenance_energy();
-            mass_storage_cap += def.mass_storage();
-            energy_storage_cap += def.energy_storage();
+            net_mass = net_mass + MassRate::from_raw(mass_income);
+            net_energy =
+                net_energy + EnergyRate::from_raw(energy_income - def.maintenance_energy());
+            mass_storage_cap = mass_storage_cap + Mass::from_raw(def.mass_storage());
+            energy_storage_cap = energy_storage_cap + Energy::from_raw(def.energy_storage());
         }
 
         self.economy.net_mass_income = net_mass;
@@ -1190,13 +1192,14 @@ impl SimulationState {
 
     /// Collect income for one tick with no active projects.
     fn apply_idle_income(&mut self, dt: f64) {
+        let dt = crate::quantities::Time::from_raw(dt);
         self.economy.mass_storage = (self.economy.mass_storage + self.economy.net_mass_income * dt)
             .min(self.economy.mass_storage_cap)
-            .max(0.0);
+            .max(crate::quantities::Mass::zero());
         self.economy.energy_storage = (self.economy.energy_storage
             + self.economy.net_energy_income * dt)
             .min(self.economy.energy_storage_cap)
-            .max(0.0);
+            .max(crate::quantities::Energy::zero());
     }
 }
 
@@ -1215,10 +1218,12 @@ mod tests {
         let units = load_units();
         let state = derive_economy(&units, &[UnitKind::Commander]);
 
-        assert!((state.net_mass_income - 1.0).abs() < 1e-9);
-        assert!((state.net_energy_income - 20.0).abs() < 1e-9);
-        assert!((state.mass_storage - 650.0).abs() < 1e-9);
-        assert!((state.energy_storage - 3900.0).abs() < 1e-9);
+        assert!((state.net_mass_income - crate::quantities::MassRate::from_raw(1.0)).abs() < 1e-9);
+        assert!(
+            (state.net_energy_income - crate::quantities::EnergyRate::from_raw(20.0)).abs() < 1e-9
+        );
+        assert!((state.mass_storage - crate::quantities::Mass::from_raw(650.0)).abs() < 1e-9);
+        assert!((state.energy_storage - crate::quantities::Energy::from_raw(3900.0)).abs() < 1e-9);
     }
 
     #[test]
@@ -1227,8 +1232,10 @@ mod tests {
         let state = derive_economy(&units, &[UnitKind::Commander, UnitKind::Mex(TechLevel::T1)]);
 
         // ACU: +1 mass/s, +20 energy/s. T1 mex: +2 mass/s, -2 energy/s maintenance.
-        assert!((state.net_mass_income - 3.0).abs() < 1e-9);
-        assert!((state.net_energy_income - 18.0).abs() < 1e-9);
+        assert!((state.net_mass_income - crate::quantities::MassRate::from_raw(3.0)).abs() < 1e-9);
+        assert!(
+            (state.net_energy_income - crate::quantities::EnergyRate::from_raw(18.0)).abs() < 1e-9
+        );
     }
 
     #[test]
@@ -1295,10 +1302,14 @@ mod tests {
         // +50% adjacency bonus over the base T2 mex income.
         let expected_boost = t2_mex_def.mass_income() * 0.5;
         assert!(
-            (state.economy.net_mass_income - base_mass - expected_boost).abs() < 1e-6,
+            (state.economy.net_mass_income
+                - base_mass
+                - crate::quantities::MassRate::from_raw(expected_boost))
+            .abs()
+                < 1e-6,
             "expected mass income boost of {}, got {}",
             expected_boost,
-            state.economy.net_mass_income - base_mass
+            state.economy.net_mass_income.value() - base_mass.value()
         );
     }
 
@@ -1331,10 +1342,14 @@ mod tests {
         let pgen_def = units.def(&UnitKind::Pgen(TechLevel::T1)).unwrap();
         let expected_boost = 0.125 * pgen_def.energy_income();
         assert!(
-            (state.economy.net_energy_income - base_energy - expected_boost).abs() < 1e-6,
+            (state.economy.net_energy_income
+                - base_energy
+                - crate::quantities::EnergyRate::from_raw(expected_boost))
+            .abs()
+                < 1e-6,
             "expected energy income boost of {}, got {}",
             expected_boost,
-            state.economy.net_energy_income - base_energy
+            state.economy.net_energy_income.value() - base_energy.value()
         );
         assert_eq!(state.adjacency.count(AdjacencyKind::Energy, pgen_node), 1);
     }
@@ -1425,12 +1440,12 @@ mod tests {
         let eng_node = NodeId::new(1);
 
         // Provide a huge, non-stalling economy so progress runs at full build power.
-        state.economy.mass_storage = 1_000_000.0;
-        state.economy.energy_storage = 10_000_000.0;
-        state.economy.mass_storage_cap = 1_000_000.0;
-        state.economy.energy_storage_cap = 10_000_000.0;
-        state.economy.net_mass_income = 100_000.0;
-        state.economy.net_energy_income = 1_000_000.0;
+        state.economy.mass_storage = crate::quantities::Mass::from_raw(1_000_000.0);
+        state.economy.energy_storage = crate::quantities::Energy::from_raw(10_000_000.0);
+        state.economy.mass_storage_cap = crate::quantities::Mass::from_raw(1_000_000.0);
+        state.economy.energy_storage_cap = crate::quantities::Energy::from_raw(10_000_000.0);
+        state.economy.net_mass_income = crate::quantities::MassRate::from_raw(100_000.0);
+        state.economy.net_energy_income = crate::quantities::EnergyRate::from_raw(1_000_000.0);
 
         let ml_node = state
             .start_project(&monkeylord, &[eng_node], &units)
@@ -1622,10 +1637,10 @@ mod tests {
         // Force an energy-stalled project by starting a huge drain with no
         // energy income. We do this by creating a fake project state manually.
         let mut state = SimulationState::new(&units, &[UnitKind::Commander]);
-        state.economy.net_mass_income = 10.0;
-        state.economy.net_energy_income = 0.0;
-        state.economy.energy_storage = 0.0;
-        state.economy.mass_storage = 0.0;
+        state.economy.net_mass_income = crate::quantities::MassRate::from_raw(10.0);
+        state.economy.net_energy_income = crate::quantities::EnergyRate::from_raw(0.0);
+        state.economy.energy_storage = crate::quantities::Energy::from_raw(0.0);
+        state.economy.mass_storage = crate::quantities::Mass::from_raw(0.0);
 
         let result = apply_tick_graph(0.0, 100.0, &state.economy, 1.0);
         assert!(result.energy_stalled);

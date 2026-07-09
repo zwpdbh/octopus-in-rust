@@ -3,11 +3,10 @@
 //! These functions run short, self-contained simulations from a given state to
 //! estimate how good an action was. They never mutate the caller's state.
 
-
 use crate::planner::core::Goal;
 use crate::sim::state::{builder_power, GoalProject};
 use crate::sim::SimulationState;
-use crate::units::{Units};
+use crate::units::Units;
 
 use super::config::TrainConfig;
 
@@ -108,13 +107,13 @@ fn run_rollout(
             break;
         }
 
-        let prev_mass_storage = state.economy.mass_storage;
-        let mass_income = state.economy.net_mass_income * dt;
+        let prev_mass_storage = state.economy.mass_storage.value();
+        let mass_income = state.economy.net_mass_income.value() * dt;
 
         state.tick(units, dt);
 
         let mass_spent_this_tick =
-            (prev_mass_storage + mass_income - state.economy.mass_storage).max(0.0);
+            (prev_mass_storage + mass_income - state.economy.mass_storage.value()).max(0.0);
         result.mass_spent += mass_spent_this_tick as f32;
 
         if is_energy_stalled(state) {
@@ -126,8 +125,8 @@ fn run_rollout(
         }
     }
 
-    result.mass_hoarded = state.economy.mass_storage
-        > state.economy.mass_storage_cap * (config.mass_storage_hoarding_ratio as f64);
+    result.mass_hoarded = state.economy.mass_storage.value()
+        > state.economy.mass_storage_cap.value() * (config.mass_storage_hoarding_ratio as f64);
 
     result
 }
@@ -135,7 +134,7 @@ fn run_rollout(
 /// True when energy storage is empty and the economy is draining more than it
 /// produces.
 fn is_energy_stalled(state: &SimulationState) -> bool {
-    state.economy.energy_storage <= 1e-6
+    state.economy.energy_storage.value() <= 1e-6
 }
 
 /// Select active builders whose combined build power reaches `fraction` of the
@@ -163,7 +162,9 @@ fn select_builders_by_power(
     builders.sort_by(|&a, &b| {
         let rate_a = builder_power(a, &state.graph, units);
         let rate_b = builder_power(b, &state.graph, units);
-        rate_b.partial_cmp(&rate_a).unwrap_or(std::cmp::Ordering::Equal)
+        rate_b
+            .partial_cmp(&rate_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut selected = Vec::new();
@@ -186,8 +187,6 @@ trait RolloutGoalExt {
 
 impl RolloutGoalExt for SimulationState {
     fn goal_reached_from_project(&self) -> bool {
-        self.goal_project
-            .as_ref()
-            .is_some_and(|p| p.completed)
+        self.goal_project.as_ref().is_some_and(|p| p.completed)
     }
 }

@@ -11,6 +11,7 @@
 pub mod actors;
 pub mod economy;
 pub mod planner;
+pub mod quantities;
 pub mod sim;
 pub mod units;
 
@@ -23,14 +24,15 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use planner::{
-    build_plan_graph, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,
-    PlannerError, Strategy, ValueNetKind,
+    build_plan_graph, EcoPlanner, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,
+    PlannerError, RushPlanner, Strategy, ValueNetKind,
 };
 pub use sim::{
     derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, GraphSimError,
     NodeId, SimulationConfig, SimulationError, SimulationResult, SimulationState, UnitNode,
 };
 
+pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Time};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,

@@ -275,8 +275,8 @@ impl UnitCost {
 impl EcoProducer for UnitDef {
     fn production(&self) -> EcoFlow {
         EcoFlow {
-            mass_per_second: self.mass_income(),
-            energy_per_second: self.energy_income(),
+            mass_per_second: crate::quantities::MassRate::from_raw(self.mass_income()),
+            energy_per_second: crate::quantities::EnergyRate::from_raw(self.energy_income()),
         }
     }
 }
@@ -284,8 +284,8 @@ impl EcoProducer for UnitDef {
 impl EcoConsumer for UnitDef {
     fn consumption(&self) -> EcoFlow {
         EcoFlow {
-            mass_per_second: 0.0,
-            energy_per_second: self.maintenance_energy(),
+            mass_per_second: crate::quantities::MassRate::zero(),
+            energy_per_second: crate::quantities::EnergyRate::from_raw(self.maintenance_energy()),
         }
     }
 }

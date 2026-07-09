@@ -52,19 +52,19 @@ pub fn state_features(state: &SimulationState, units: &Units, config: &PlannerCo
     // Income features: scaled so typical mid/late-game values land near [-1, 1]
     // before clamping. Energy is scaled by 1000 because it is usually an order
     // of magnitude larger than mass income.
-    features.push(clamp((economy.net_mass_income / 100.0) as f32));
-    features.push(clamp((economy.net_energy_income / 1000.0) as f32));
+    features.push(clamp((economy.net_mass_income.value() / 100.0) as f32));
+    features.push(clamp((economy.net_energy_income.value() / 1000.0) as f32));
 
     // Storage ratios: near 0 means an impending stall; near 1 means income is
     // being wasted. The ratio is more useful than the absolute value because
     // storage capacity can vary.
     features.push(storage_ratio(
-        economy.mass_storage,
-        economy.mass_storage_cap,
+        economy.mass_storage.value(),
+        economy.mass_storage_cap.value(),
     ));
     features.push(storage_ratio(
-        economy.energy_storage,
-        economy.energy_storage_cap,
+        economy.energy_storage.value(),
+        economy.energy_storage_cap.value(),
     ));
 
     // Total build power determines how fast projects finish. Scaled by 100 so

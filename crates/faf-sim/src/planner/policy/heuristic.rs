@@ -271,7 +271,7 @@ fn pick_storage_action(
     // Delay storage construction until the current energy storage is at least
     // half full. This lets existing energy fill the storage before engineers
     // commit build power to it.
-    let energy_ratio = if state.economy.energy_storage_cap > 0.0 {
+    let energy_ratio = if state.economy.energy_storage_cap.value() > 0.0 {
         state.economy.energy_storage / state.economy.energy_storage_cap
     } else {
         0.0
@@ -534,10 +534,10 @@ fn greedy_with_stall_gate(
         };
         let power = total_build_power_of_nodes(&trial, state, units);
         if let Some(drain) = compute_drain(target_stats, RequestedBuildPower(power)) {
-            let mass_ok = state.economy.mass_storage <= 0.0
-                || drain.mass_per_second * dt <= state.economy.mass_storage;
-            let energy_ok = state.economy.energy_storage <= 0.0
-                || drain.energy_per_second * dt <= state.economy.energy_storage;
+            let mass_ok = state.economy.mass_storage.value() <= 0.0
+                || drain.mass_per_second * dt <= state.economy.mass_storage.value();
+            let energy_ok = state.economy.energy_storage.value() <= 0.0
+                || drain.energy_per_second * dt <= state.economy.energy_storage.value();
             if !mass_ok || !energy_ok {
                 // Stall gate triggered; stop adding builders.
                 break;

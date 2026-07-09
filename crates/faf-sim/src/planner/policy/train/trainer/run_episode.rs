@@ -81,7 +81,11 @@ impl Trainer {
 
             let (reward_eco, rush_target) = if direction == EdgeCategory::Goal {
                 let rush_result = rush_rollout(&state, units, &self.config);
-                let target = if rush_result.goal_finished { 1.0f32 } else { 0.0f32 };
+                let target = if rush_result.goal_finished {
+                    1.0f32
+                } else {
+                    0.0f32
+                };
                 let reward = compute_step_reward(
                     &prev_state,
                     &state,

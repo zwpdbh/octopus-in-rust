@@ -7,6 +7,7 @@
 
 use crate::planner::core::{PlannerError, ValueNetKind};
 use crate::planner::policy::macro_net::HierarchicalPolicyNet;
+use crate::planner::policy::train::eco_net::EcoNet;
 use crate::planner::policy::train::{TrainBackend, TrainDevice};
 
 /// Trait-object safe interface to the learned direction policy.
@@ -71,6 +72,54 @@ impl ValueNet for MlpValueNet {
 
     fn evaluate_rush(&self, features: Vec<f32>) -> f32 {
         self.net.evaluate(features, &self.device).1
+    }
+
+    fn clone_box(&self) -> Box<dyn ValueNet> {
+        Box::new(self.clone())
+    }
+}
+
+/// Eco-only network wrapper that exposes the `ValueNet` interface.
+#[derive(Debug, Clone)]
+pub struct EcoValueNet {
+    net: EcoNet<TrainBackend>,
+    device: TrainDevice,
+}
+
+impl EcoValueNet {
+    /// Create a randomly initialized eco value net.
+    pub fn new() -> Self {
+        let device: TrainDevice = Default::default();
+        let net = EcoNet::new(&device);
+        Self { net, device }
+    }
+
+    /// Wrap an existing eco network.
+    pub fn from_net(net: EcoNet<TrainBackend>) -> Self {
+        let device: TrainDevice = Default::default();
+        Self { net, device }
+    }
+
+    /// Unwrap the underlying network.
+    pub fn into_net(self) -> EcoNet<TrainBackend> {
+        self.net
+    }
+}
+
+impl Default for EcoValueNet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ValueNet for EcoValueNet {
+    fn evaluate_direction(&self, features: Vec<f32>) -> Vec<f32> {
+        self.net.evaluate_direction(features, &self.device)
+    }
+
+    fn evaluate_rush(&self, _features: Vec<f32>) -> f32 {
+        // The eco-only net has no rush head; always return 0.0.
+        0.0
     }
 
     fn clone_box(&self) -> Box<dyn ValueNet> {

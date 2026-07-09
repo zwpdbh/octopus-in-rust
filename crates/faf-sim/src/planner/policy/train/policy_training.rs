@@ -6,7 +6,9 @@ use std::sync::Arc;
 use burn::module::Module;
 use burn::record::{CompactRecorder, Recorder};
 
-use super::config::{TrainConfig, TrainStats};
+use super::config::{TrainConfig, TrainEcoConfig, TrainStats};
+use super::eco_net::EcoNet;
+use super::eco_trainer::{EcoTrainStats, EcoTrainer};
 use super::metric::metrics::FafSimMetrics;
 use super::trainer::Trainer;
 use super::{TrainBackend, TrainDevice};
@@ -98,6 +100,51 @@ pub fn train_policy_from(
         let _ = metrics.on_end(None);
     }
 
+    let model = trainer.into_model();
+    (model, stats)
+}
+
+/// Save a trained eco network to disk.
+pub fn save_eco_policy(model: &EcoNet<TrainBackend>, path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create model dir: {e}"))?;
+    }
+    let recorder = CompactRecorder::new();
+    recorder
+        .record(model.clone().into_record(), path.to_path_buf())
+        .map_err(|e| format!("failed to save eco model: {e}"))
+}
+
+/// Load a trained eco network from disk.
+pub fn load_eco_policy(path: &std::path::Path) -> Result<EcoNet<TrainBackend>, String> {
+    let device: TrainDevice = Default::default();
+    let recorder = CompactRecorder::new();
+    let record = recorder
+        .load(path.to_path_buf(), &device)
+        .map_err(|e| format!("failed to load eco model: {e}"))?;
+    let model = EcoNet::new(&device).load_record(record);
+    Ok(model)
+}
+
+/// Train the standalone eco network and return the final model and statistics.
+pub fn train_eco_policy(
+    units: &Units,
+    config: TrainEcoConfig,
+) -> (EcoNet<TrainBackend>, EcoTrainStats) {
+    let mut trainer = EcoTrainer::new(config);
+    let stats = trainer.train(units);
+    let model = trainer.into_model();
+    (model, stats)
+}
+
+/// Continue training an existing eco network.
+pub fn train_eco_policy_from(
+    model: EcoNet<TrainBackend>,
+    units: &Units,
+    config: TrainEcoConfig,
+) -> (EcoNet<TrainBackend>, EcoTrainStats) {
+    let mut trainer = EcoTrainer::from_model(config, model);
+    let stats = trainer.train(units);
     let model = trainer.into_model();
     (model, stats)
 }
