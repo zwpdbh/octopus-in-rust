@@ -3,25 +3,29 @@ name = "faf-sim"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "Simulation and build-order planning for Forged Alliance Forever (FAF)."
+description = "Bevy-powered eco/build simulator for Forged Alliance Forever (FAF)."
 license = "MIT"
 
 [features]
-default = ["cpu"]
-# CPU-only training (default for the library so tests run without a GPU).
-cpu = ["burn/ndarray"]
-# NVIDIA GPU training via the Burn CUDA backend.
-cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
-# Cross-platform GPU training via WebGPU (Vulkan/DirectX/Metal).
-wgpu = ["burn/wgpu", "burn/fusion", "burn/autotune"]
+default = ["native"]
+native = ["bevy/x11"]
+web = ["bevy/webgl2", "dep:wasm-bindgen"]
 
 [dependencies]
-burn = { workspace = true, features = ["train", "tui"] }
+bevy = { version = "0.14", default-features = false, features = [
+    "bevy_asset",
+    "bevy_core_pipeline",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_winit",
+    "default_font",
+] }
 faf-units = { workspace = true }
-petgraph = { workspace = true }
-rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+wasm-bindgen = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

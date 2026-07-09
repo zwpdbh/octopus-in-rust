@@ -20,8 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
-use crate::planner::core::Goal;
-use crate::planner::plan_graph::{build_universal_plan_graph, PlanGraph, UniversalPlanGraph};
+
 
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, UpgradeRecipe,
@@ -40,7 +39,6 @@ pub struct Units {
     defs: HashMap<UnitKind, UnitDef>,
     builds: HashMap<UnitKind, BuildRecipe>,
     upgrades: HashMap<UnitKind, Vec<UpgradeRecipe>>,
-    universal_plan_graph: UniversalPlanGraph,
 }
 
 impl Units {
@@ -146,14 +144,11 @@ impl Units {
             }
         }
 
-        let mut units = Self {
+        Self {
             defs,
             builds,
             upgrades,
-            universal_plan_graph: UniversalPlanGraph::default(),
-        };
-        units.universal_plan_graph = build_universal_plan_graph(&units);
-        units
+        }
     }
 
     /// Look up a unit definition by kind.
@@ -220,29 +215,6 @@ impl Units {
     /// True if the unit has at least one registered upgrade target.
     pub fn is_upgradeable(&self, kind: &UnitKind) -> bool {
         !self.upgrade_recipes(kind).is_empty()
-    }
-
-    /// Borrow the universal plan graph shared across all goals.
-    pub fn universal_plan_graph(&self) -> &UniversalPlanGraph {
-        &self.universal_plan_graph
-    }
-
-    /// Build a simplified, ACU-rooted plan graph for the requested goal.
-    pub fn plan_graph(&self, goal: Goal) -> PlanGraph {
-        self.universal_plan_graph.with_goal(goal)
-    }
-
-    /// Return the fixed prerequisite chain for an abstract goal.
-    ///
-    /// The chain lists the technology milestones that must be completed before
-    /// the T3 engineer can start the goal project.
-    pub fn prerequisite_chain(&self, _goal: &Goal) -> Vec<UnitKind> {
-        vec![
-            UnitKind::Factory(TechLevel::T1),
-            UnitKind::Factory(TechLevel::T2),
-            UnitKind::Factory(TechLevel::T3),
-            UnitKind::Engineer(TechLevel::T3),
-        ]
     }
 
     /// Hardcoded build recipes for the common economic/builder units.

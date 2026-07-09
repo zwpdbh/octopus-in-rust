@@ -3,7 +3,7 @@ name = "faf-sim-cli"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "Research CLI for FAF build-order simulation and optimization."
+description = "Launcher for the FAF eco/build simulator."
 license = "MIT"
 
 [[bin]]
@@ -11,17 +11,25 @@ name = "faf-sim"
 path = "src/main.rs"
 
 [features]
-default = ["cuda"]
-cpu = ["faf-sim/cpu"]
-cuda = ["faf-sim/cuda"]
-wgpu = ["faf-sim/wgpu"]
+default = ["native"]
+native = ["faf-sim/native"]
+web = ["faf-sim/web"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = "0.7"
+clap = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = { workspace = true }
+getrandom = { workspace = true, features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
 
 [dependencies]
-clap = { workspace = true }
 faf-sim = { workspace = true, default-features = false }
-faf-units = { workspace = true }
-petgraph = { workspace = true }
-petgraph-svg = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "signal"] }
-train-tui = { workspace = true }

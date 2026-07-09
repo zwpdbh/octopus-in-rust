@@ -1,16 +1,11 @@
-//! Simulation and build-order planning for Forged Alliance Forever (FAF).
+//! Bevy-powered eco/build simulator for Forged Alliance Forever (FAF).
 //!
-//! This crate sits on top of `faf-units` and provides:
-//!
-//! - `economy` — continuous-drain resource model.
-//! - `engine` — deterministic tick-based simulation engine and graph primitives.
-//! - `planner` — planner trait, strategy registry, and concrete planner
-//!   implementations.
-//! - `units` — unified unit knowledge repository (unit kinds, recipes, stats).
+//! This crate now focuses on an interactive build simulator. It keeps the
+//! `units` and `economy` math from `faf-units` and adds a minimal Bevy game
+//! plugin (`game::EcoSimPlugin`) that can run both natively and on the web.
 
 pub mod economy;
-pub mod engine;
-pub mod planner;
+pub mod game;
 pub mod quantities;
 pub mod units;
 
@@ -19,21 +14,18 @@ pub use economy::{
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
-pub use engine::{
-    derive_economy, run_build_order_simulation, BuildEdge, BuildEvent, BuildGraph, EcoEngine,
-    EcoEngineError, EcoForecast, GameTick, GoalProject, GraphSimError, NodeId, Simulation,
-    SimulationConfig, SimulationError, SimulationResult, UnitAction, UnitCommand, UnitGraph,
-    UnitNode, UnitNodeState,
-};
-pub use planner::{
-    build_plan_graph, EcoPlanner, EdgeAction, Goal, PlanGraph, PlanResult, Planner, PlannerConfig,
-    PlannerError, RushPlanner, Strategy, ValueNetKind,
-};
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Time};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,
 };
+
+/// Run the interactive eco simulator.
+///
+/// This is the entry point used by both the native CLI and the WASM build.
+pub fn run_app() {
+    game::run();
+}
 
 #[cfg(test)]
 mod tests {
@@ -67,73 +59,6 @@ mod tests {
         let builders = units.builders_for(&UnitKind::Factory(TechLevel::T1));
         assert!(builders.contains(&UnitKind::Commander));
         assert!(builders.contains(&UnitKind::Engineer(TechLevel::T1)));
-    }
-
-    #[test]
-    fn monkeylord_prerequisites_contain_factory_and_engineer_chains() {
-        let units = load_units();
-
-        let goal = Goal {
-            tech_level: TechLevel::T4,
-            mass_cost: 1.0,
-            energy_cost: 1.0,
-            build_time: 1.0,
-        };
-        let prereqs = units.prerequisite_chain(&goal);
-
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
-            "T1 factory"
-        );
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T2)),
-            "T2 factory"
-        );
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T3)),
-            "T3 factory"
-        );
-
-        // Commanders are the default stopping point, so it is not expanded.
-        assert!(!prereqs.contains(&UnitKind::Commander));
-    }
-
-    #[test]
-    fn fatboy_prerequisites_contain_factory_and_engineer_chains() {
-        let units = load_units();
-
-        let direct = units.builders_for(&UnitKind::Unique(UnitId("UEL0401".to_string())));
-        assert!(
-            direct.contains(&UnitKind::Engineer(TechLevel::T3)),
-            "Fatboy should be buildable by a T3 engineer"
-        );
-        assert!(
-            !direct.contains(&UnitKind::Commander),
-            "base ACU should not build Fatboy"
-        );
-
-        let goal = Goal {
-            tech_level: TechLevel::T4,
-            mass_cost: 1.0,
-            energy_cost: 1.0,
-            build_time: 1.0,
-        };
-        let prereqs = units.prerequisite_chain(&goal);
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T1)),
-            "T1 factory"
-        );
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T2)),
-            "T2 factory"
-        );
-        assert!(
-            prereqs.contains(&UnitKind::Factory(TechLevel::T3)),
-            "T3 factory"
-        );
-
-        // ACU is the default stop point, so it should not appear as a prerequisite.
-        assert!(!prereqs.contains(&UnitKind::Commander));
     }
 
     #[test]

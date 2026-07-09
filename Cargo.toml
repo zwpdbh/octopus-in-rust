@@ -34,10 +34,12 @@ anyhow = "1"
 async-trait = "0.1"
 burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
 chrono = { version = "0.4", features = ["serde"] }
+console_error_panic_hook = "0.1"
 clap = { version = "4", features = ["derive"] }
 extism = "1"
 extism-pdk = "1"
 futures = "0.3"
+getrandom = "0.2"
 futures-util = "0.3"
 http = "1"
 petgraph = "0.8"
@@ -60,5 +62,7 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
-uuid = "1"
+uuid = { version = "1", features = ["js"] }
 walkdir = "2"
+wasm-bindgen = "0.2"
+web-sys = "0.3"
