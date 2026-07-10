@@ -199,7 +199,7 @@ impl AssignmentTarget {
     fn accepts(self, unit: &UnitSummary) -> bool {
         match self {
             AssignmentTarget::ExistingBuilder { .. } | AssignmentTarget::NewBuilder => {
-                unit.build_rate.map(|r| r > 0.0).unwrap_or(false)
+                unit.category == "Construction - Buildpower"
             }
             _ => true,
         }
