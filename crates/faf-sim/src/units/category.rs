@@ -36,7 +36,11 @@ pub fn category_of(kind: &UnitKind) -> UnitCategory {
         UnitKind::Commander => UnitCategory::Commander,
         UnitKind::Engineer(_) => UnitCategory::Engineer,
         UnitKind::Factory(_) => UnitCategory::Factory,
-        UnitKind::Mex(_) | UnitKind::Pgen(_) | UnitKind::EnergyStorage | UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitCategory::Economic,
+        UnitKind::Mex(_)
+        | UnitKind::Pgen(_)
+        | UnitKind::EnergyStorage
+        | UnitKind::CapT2Mex
+        | UnitKind::CapT3Mex => UnitCategory::Economic,
         UnitKind::Unique(id) => {
             // FAF blueprint ids use the second character to indicate tech/role:
             // A = air, L = land, S = structure, R = robot/bot, B = bomber, etc.
@@ -44,7 +48,11 @@ pub fn category_of(kind: &UnitKind) -> UnitCategory {
             let s = id.0.as_str();
             if s.len() >= 2 {
                 match &s[1..2] {
-                    "A" | "L" | "R" | "B" | "S" if s.len() >= 3 && s[2..3].parse::<u8>().is_ok() => UnitCategory::Military,
+                    "A" | "L" | "R" | "B" | "S"
+                        if s.len() >= 3 && s[2..3].parse::<u8>().is_ok() =>
+                    {
+                        UnitCategory::Military
+                    }
                     _ => UnitCategory::Other,
                 }
             } else {

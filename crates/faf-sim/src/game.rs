@@ -16,8 +16,6 @@ use crate::units::{category_of, UnitCategory, Units};
 use crate::units::{TechLevel, UnitId, UnitKind};
 use crate::BuildDrain;
 
-
-
 const BOARD_SIZE: i32 = 16;
 const TILE_SIZE: f32 = 32.0;
 
@@ -196,7 +194,8 @@ pub fn run() {
 impl UnitLibrary {
     fn load() -> Self {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        let index: DataIndex = serde_json::from_str(json).expect("embedded FAF unit index should parse");
+        let index: DataIndex =
+            serde_json::from_str(json).expect("embedded FAF unit index should parse");
         Self {
             units: Units::new(index.clone()),
             index,
@@ -249,7 +248,10 @@ fn setup(
         x: BOARD_SIZE / 2,
         y: BOARD_SIZE / 2,
     };
-    let acu_def = library.units.def(&UnitKind::Commander).expect("ACU defined");
+    let acu_def = library
+        .units
+        .def(&UnitKind::Commander)
+        .expect("ACU defined");
     spawn_unit(
         &mut commands,
         &board,
@@ -261,13 +263,19 @@ fn setup(
     );
 
     // Apply the ACU's production to the starting economy.
-    eco.0.net_mass_income = eco.0.net_mass_income + crate::quantities::MassRate::from_raw(acu_def.mass_income());
+    eco.0.net_mass_income =
+        eco.0.net_mass_income + crate::quantities::MassRate::from_raw(acu_def.mass_income());
     eco.0.net_energy_income = eco.0.net_energy_income
-        + crate::quantities::EnergyRate::from_raw(acu_def.energy_income() - acu_def.maintenance_energy());
+        + crate::quantities::EnergyRate::from_raw(
+            acu_def.energy_income() - acu_def.maintenance_energy(),
+        );
 
     // The ACU is given at game start and counts as completed.
     completed.0.insert(UnitKind::Commander);
-    *counts.0.entry(category_of(&UnitKind::Commander)).or_insert(0) += 1;
+    *counts
+        .0
+        .entry(category_of(&UnitKind::Commander))
+        .or_insert(0) += 1;
 
     // Pre-load icons for all common buildable kinds.
     preload_common_icons(&library.units, &asset_server, &mut atlas);
@@ -314,7 +322,9 @@ fn spawn_unit(
     }
 
     if def.build_rate() > 0.0 {
-        entity.insert(Builder { power: def.build_rate() });
+        entity.insert(Builder {
+            power: def.build_rate(),
+        });
     }
 
     // ACU is not built by a player order, so do not add it to completion tracking here.
@@ -346,8 +356,12 @@ fn common_icon_path(kind: &UnitKind) -> Option<String> {
         UnitKind::Factory(TechLevel::T3) => "icons/strategic/UEF_icon_factory3_land.png",
         UnitKind::Factory(TechLevel::T4) => return None,
         UnitKind::Mex(TechLevel::T1) => "icons/strategic/UEF_icon_structure1_mass.png",
-        UnitKind::Mex(TechLevel::T2) | UnitKind::CapT2Mex => "icons/strategic/UEF_icon_structure2_mass.png",
-        UnitKind::Mex(TechLevel::T3) | UnitKind::CapT3Mex => "icons/strategic/UEF_icon_structure3_mass.png",
+        UnitKind::Mex(TechLevel::T2) | UnitKind::CapT2Mex => {
+            "icons/strategic/UEF_icon_structure2_mass.png"
+        }
+        UnitKind::Mex(TechLevel::T3) | UnitKind::CapT3Mex => {
+            "icons/strategic/UEF_icon_structure3_mass.png"
+        }
         UnitKind::Mex(TechLevel::T4) => return None,
         UnitKind::Pgen(TechLevel::T1) => "icons/strategic/UEF_icon_structure1_energy.png",
         UnitKind::Pgen(TechLevel::T2) => "icons/strategic/UEF_icon_structure2_energy.png",
@@ -396,7 +410,14 @@ fn input_system(
     mut selected: ResMut<SelectedUnit>,
     mut build_target: ResMut<SelectedBuildTarget>,
     builders: Query<(Entity, &Builder, &GridPos, &UnitKindComp), With<UnitKindComp>>,
-    units_on_tile: Query<(Entity, &GridPos, &UnitKindComp), (With<UnitKindComp>, Without<BoardTile>, Without<ConstructionSite>)>,
+    units_on_tile: Query<
+        (Entity, &GridPos, &UnitKindComp),
+        (
+            With<UnitKindComp>,
+            Without<BoardTile>,
+            Without<ConstructionSite>,
+        ),
+    >,
     occupied: Query<&GridPos, Or<(With<UnitKindComp>, With<ConstructionSite>)>>,
     mut contexts: EguiContexts,
 ) {
@@ -454,7 +475,10 @@ fn input_system(
     }
 
     // Otherwise, select the unit under the cursor (if any).
-    selected.0 = units_on_tile.iter().find(|(_, p, _)| **p == pos).map(|(e, _, _)| e);
+    selected.0 = units_on_tile
+        .iter()
+        .find(|(_, p, _)| **p == pos)
+        .map(|(e, _, _)| e);
 }
 
 /// Try to place a construction site for `target` using `builder_entity`.
@@ -538,7 +562,14 @@ fn hover_system(
     camera: Query<(&Camera, &GlobalTransform)>,
     board: Res<BoardConfig>,
     mut hovered: ResMut<HoveredUnit>,
-    units_on_tile: Query<(Entity, &GridPos), (With<UnitKindComp>, Without<BoardTile>, Without<ConstructionSite>)>,
+    units_on_tile: Query<
+        (Entity, &GridPos),
+        (
+            With<UnitKindComp>,
+            Without<BoardTile>,
+            Without<ConstructionSite>,
+        ),
+    >,
     mut contexts: EguiContexts,
 ) {
     if contexts
@@ -566,12 +597,13 @@ fn hover_system(
         return;
     };
 
-    hovered.0 = board
-        .grid_pos(world)
-        .and_then(|(x, y)| {
-            let pos = GridPos { x, y };
-            units_on_tile.iter().find(|(_, p)| **p == pos).map(|(e, _)| e)
-        });
+    hovered.0 = board.grid_pos(world).and_then(|(x, y)| {
+        let pos = GridPos { x, y };
+        units_on_tile
+            .iter()
+            .find(|(_, p)| **p == pos)
+            .map(|(e, _)| e)
+    });
 }
 
 fn eco_system(
@@ -611,7 +643,11 @@ fn eco_system(
     stall.0 = result.effective_factor;
 }
 
-fn compute_drain_for(target: UnitKind, power: f64, units: &Units) -> Option<crate::economy::BuildDrain> {
+fn compute_drain_for(
+    target: UnitKind,
+    power: f64,
+    units: &Units,
+) -> Option<crate::economy::BuildDrain> {
     let cost = units.build_cost(&target)?.to_target_stats();
     compute_drain(&cost, RequestedBuildPower(power))
 }
@@ -658,7 +694,8 @@ fn completion_system(
     mut counts: ResMut<UnitCounts>,
 ) {
     for event in pending.0.drain(..) {
-        let Ok((site, &AssignedBuilder(builder_entity), transform)) = sites.get(event.entity) else {
+        let Ok((site, &AssignedBuilder(builder_entity), transform)) = sites.get(event.entity)
+        else {
             continue;
         };
 
@@ -702,18 +739,27 @@ fn completion_system(
         }
 
         if def.build_rate() > 0.0 {
-            entity.insert(Builder { power: def.build_rate() });
+            entity.insert(Builder {
+                power: def.build_rate(),
+            });
         }
 
         // Add its economy contribution.
-        eco.0.net_mass_income = eco.0.net_mass_income + crate::quantities::MassRate::from_raw(def.mass_income());
+        eco.0.net_mass_income =
+            eco.0.net_mass_income + crate::quantities::MassRate::from_raw(def.mass_income());
         eco.0.net_energy_income = eco.0.net_energy_income
-            + crate::quantities::EnergyRate::from_raw(def.energy_income() - def.maintenance_energy());
-        eco.0.mass_storage_cap = eco.0.mass_storage_cap + crate::quantities::Mass::from_raw(def.mass_storage());
-        eco.0.energy_storage_cap = eco.0.energy_storage_cap + crate::quantities::Energy::from_raw(def.energy_storage());
+            + crate::quantities::EnergyRate::from_raw(
+                def.energy_income() - def.maintenance_energy(),
+            );
+        eco.0.mass_storage_cap =
+            eco.0.mass_storage_cap + crate::quantities::Mass::from_raw(def.mass_storage());
+        eco.0.energy_storage_cap =
+            eco.0.energy_storage_cap + crate::quantities::Energy::from_raw(def.energy_storage());
 
         // Free the builder.
-        commands.entity(builder_entity).insert(Builder { power: site.power });
+        commands
+            .entity(builder_entity)
+            .insert(Builder { power: site.power });
 
         // Track completion.
         completed.0.insert(event.target.clone());
@@ -802,7 +848,10 @@ fn ui_system(
             ui.label(format!("Mass: {:.1}", eco.0.mass_storage.value()));
             ui.label(format!("Energy: {:.1}", eco.0.energy_storage.value()));
             ui.label(format!("Mass income: {:.1}", eco.0.net_mass_income.value()));
-            ui.label(format!("Energy income: {:.1}", eco.0.net_energy_income.value()));
+            ui.label(format!(
+                "Energy income: {:.1}",
+                eco.0.net_energy_income.value()
+            ));
             ui.label(format!("Time: {:.1}s", sim_time.0));
             ui.label(format!("Stall: {:.2}", stall.0));
         });
@@ -912,11 +961,22 @@ fn build_button(
     let recipe = units.build_recipe(&target);
 
     let name = units.display_name(&target);
-    let can_afford = eco.mass_storage.value() >= cost.mass && eco.energy_storage.value() >= cost.energy;
-    let prereq_met = recipe.map(|r| r.prereq.as_ref().map(|p| completed.contains(p)).unwrap_or(true)).unwrap_or(true);
+    let can_afford =
+        eco.mass_storage.value() >= cost.mass && eco.energy_storage.value() >= cost.energy;
+    let prereq_met = recipe
+        .map(|r| {
+            r.prereq
+                .as_ref()
+                .map(|p| completed.contains(p))
+                .unwrap_or(true)
+        })
+        .unwrap_or(true);
     let is_selected = selected_target.as_ref() == Some(&target);
 
-    let tooltip = format!("{}\nMass: {:.0}\nEnergy: {:.0}\nTime: {:.0}", name, cost.mass, cost.energy, cost.build_time);
+    let tooltip = format!(
+        "{}\nMass: {:.0}\nEnergy: {:.0}\nTime: {:.0}",
+        name, cost.mass, cost.energy, cost.build_time
+    );
 
     let label = if is_selected {
         format!("> {} <\nM{:.0} E{:.0}", name, cost.mass, cost.energy)

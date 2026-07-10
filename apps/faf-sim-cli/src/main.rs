@@ -61,8 +61,13 @@ mod native {
 
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         runtime.block_on(async {
-            let listener = tokio::net::TcpListener::bind(addr).await.expect("bind port");
-            println!("Serving FAF Eco Sim at http://{}", listener.local_addr().unwrap());
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("bind port");
+            println!(
+                "Serving FAF Eco Sim at http://{}",
+                listener.local_addr().unwrap()
+            );
             axum::serve(listener, app).await.expect("server");
         });
     }

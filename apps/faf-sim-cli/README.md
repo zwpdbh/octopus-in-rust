@@ -8,14 +8,21 @@ Launcher for the Bevy-powered FAF eco/build simulator.
 cargo run --bin faf-sim -- run
 ```
 
+## Native run via xtask
+
+```sh
+cargo xtask faf-sim              # run the native simulator
+cargo xtask faf-sim --release    # use release builds
+```
+
 ## Web / WASM run
 
 The fastest way is through the workspace `xtask`:
 
 ```sh
-cargo xtask web              # build + serve on port 8080
-cargo xtask web --release    # use release builds
-cargo xtask web serve --port 3000
+cargo xtask faf-sim web              # build + serve on port 8080
+cargo xtask faf-sim web --release    # use release builds
+cargo xtask faf-sim web serve --port 3000
 ```
 
 Then open `http://localhost:8080` in a browser.
@@ -37,6 +44,8 @@ cargo run --bin faf-sim -- serve --port 8080
 
 ## How to play
 
-- Click an empty tile to queue a T1 mass extractor.
-- The ACU will build it, draining mass and energy from the shared economy pool.
-- Watch the mass/energy income and storage in the top-left overlay.
+- Click a unit to select it.
+- If the unit can build, a build palette opens at the bottom; pick a target.
+- Left-click the board to place the target (factories build mobile units on their own tile).
+- Right-click or Esc cancels the active build target.
+- Watch the economy, selected unit info, and category counts in the UI panels.

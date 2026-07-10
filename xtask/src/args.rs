@@ -1,8 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 /// Top-level application selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum App {
+    FafSim,
     Qqbot,
 }
 
@@ -10,13 +11,6 @@ pub enum App {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalCommand {
     Test,
-}
-
-/// Web-specific workflow commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WebCommand {
-    Build,
-    Serve,
 }
 
 /// Parsed command-line invocation.
@@ -27,11 +21,6 @@ pub enum Task {
         command: String,
         rest: Vec<String>,
     },
-    Web {
-        command: WebCommand,
-        release: bool,
-        port: u16,
-    },
     Global(GlobalCommand),
 }
 
@@ -41,16 +30,8 @@ impl Task {
         let first = args.next().unwrap_or_else(|| "help".to_string());
 
         match first.as_str() {
-            "qqbot" => {
-                let command = args.next().unwrap_or_else(|| "help".to_string());
-                let rest: Vec<String> = args.collect();
-                Ok(Task::App {
-                    app: App::Qqbot,
-                    command,
-                    rest,
-                })
-            }
-            "web" => Self::parse_web(args),
+            "faf-sim" => Self::parse_app(App::FafSim, args, "run"),
+            "qqbot" => Self::parse_app(App::Qqbot, args, "help"),
             "test" => Ok(Task::Global(GlobalCommand::Test)),
             "help" | "-h" | "--help" => {
                 print_top_help();
@@ -62,80 +43,41 @@ impl Task {
         }
     }
 
-    fn parse_web(mut args: impl Iterator<Item = String>) -> Result<Task> {
-        let mut command: Option<WebCommand> = None;
-        let mut release = false;
-        let mut port: Option<u16> = None;
-
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "help" | "-h" | "--help" => {
-                    print_web_help();
-                    std::process::exit(0);
-                }
-                "build" => {
-                    if command.is_some() {
-                        bail!("multiple web commands given");
-                    }
-                    command = Some(WebCommand::Build);
-                }
-                "serve" => {
-                    if command.is_some() {
-                        bail!("multiple web commands given");
-                    }
-                    command = Some(WebCommand::Serve);
-                }
-                "--release" => release = true,
-                "--port" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--port requires a value"))?;
-                    port = Some(
-                        value
-                            .parse()
-                            .with_context(|| format!("invalid port number: {value}"))?,
-                    );
-                }
-                other if other.starts_with("--port=") => {
-                    let value = &other["--port=".len()..];
-                    port = Some(
-                        value
-                            .parse()
-                            .with_context(|| format!("invalid port number: {value}"))?,
-                    );
-                }
-                other => {
-                    bail!("unknown web option '{}'", other);
-                }
-            }
-        }
-
-        Ok(Task::Web {
-            command: command.unwrap_or(WebCommand::Serve),
-            release,
-            port: port.unwrap_or(8080),
-        })
+    fn parse_app(
+        app: App,
+        mut args: impl Iterator<Item = String>,
+        default_command: &str,
+    ) -> Result<Task> {
+        let command = args.next().unwrap_or_else(|| default_command.to_string());
+        let rest: Vec<String> = args.collect();
+        Ok(Task::App { app, command, rest })
     }
 }
 
-pub fn print_web_help() {
-    println!("cargo xtask web — build and serve the FAF sim WASM bundle");
+pub fn print_faf_sim_help() {
+    println!("cargo xtask faf-sim — run and serve the FAF eco/build simulator");
     println!();
     println!("Usage:");
-    println!("  cargo xtask web [command] [options]");
+    println!("  cargo xtask faf-sim [command] [options]");
     println!();
     println!("Commands:");
+    println!("  run        Run the native simulator (default)");
+    println!("  web        Build and serve the WASM bundle");
+    println!();
+    println!("Native options:");
+    println!("  --release  Use the release profile");
+    println!();
+    println!("Web options:");
     println!("  build      Build the WASM binary and run wasm-bindgen");
     println!("  serve      Build the bundle and start the embedded Axum server (default)");
-    println!();
-    println!("Options:");
     println!("  --release  Use the release profile for all builds");
     println!("  --port N   Port for the Axum server (default: 8080)");
     println!();
     println!("Examples:");
-    println!("  cargo xtask web");
-    println!("  cargo xtask web build --release");
-    println!("  cargo xtask web serve --port 3000");
+    println!("  cargo xtask faf-sim");
+    println!("  cargo xtask faf-sim --release");
+    println!("  cargo xtask faf-sim web build --release");
+    println!("  cargo xtask faf-sim web serve --port 3000");
 }
 
 pub fn print_top_help() {
@@ -145,18 +87,18 @@ pub fn print_top_help() {
     println!("       cargo xtask <global-command>");
     println!();
     println!("Apps:");
+    println!("  faf-sim      FAF eco/build simulator");
     println!("  qqbot        QQ bot service manager");
     println!();
     println!("Global commands:");
     println!("  test         Run cargo test --workspace");
     println!();
-    println!("Web commands:");
-    println!("  web build              Build the Bevy WASM bundle and run wasm-bindgen");
-    println!("  web serve              Build the WASM bundle and start the Axum server");
-    println!("  web serve --port 3000  Serve on a custom port (default: 8080)");
-    println!("  web --release          Use the release profile for builds");
-    println!();
     println!("Examples:");
+    println!("  cargo xtask faf-sim");
+    println!("  cargo xtask faf-sim --release");
+    println!("  cargo xtask faf-sim web");
+    println!("  cargo xtask faf-sim web build --release");
+    println!("  cargo xtask faf-sim web serve --port 3000");
     println!("  cargo xtask qqbot build");
     println!("  cargo xtask qqbot start");
     println!("  cargo xtask qqbot status");
@@ -164,6 +106,4 @@ pub fn print_top_help() {
     println!("  cargo xtask qqbot deploy");
     println!("  cargo xtask qqbot remote-status");
     println!("  cargo xtask test");
-    println!("  cargo xtask web");
-    println!("  cargo xtask web build --release");
 }

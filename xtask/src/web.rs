@@ -3,9 +3,15 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-use crate::args::WebCommand;
 use crate::cargo;
 use crate::project;
+
+/// Web-specific workflow commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebCommand {
+    Build,
+    Serve,
+}
 
 /// Profile string used by Cargo for the WASM target directory.
 fn wasm_profile_str(release: bool) -> &'static str {
@@ -43,10 +49,7 @@ pub fn build(release: bool) -> Result<()> {
     if release {
         cmd.arg("--release");
     }
-    println!(
-        "Building WASM binary ({})...",
-        wasm_profile_str(release)
-    );
+    println!("Building WASM binary ({})...", wasm_profile_str(release));
     cargo::run(&mut cmd).context("WASM build failed")?;
 
     // 2. Generate the JS glue and WASM bundle with wasm-bindgen.
@@ -72,10 +75,7 @@ pub fn build(release: bool) -> Result<()> {
         "--no-typescript",
         wasm_path.to_str().context("invalid UTF-8 in wasm path")?,
     ]);
-    println!(
-        "Running wasm-bindgen for {}...",
-        wasm_path.display()
-    );
+    println!("Running wasm-bindgen for {}...", wasm_path.display());
     let status = bindgen.status().context("failed to spawn wasm-bindgen")?;
     if !status.success() {
         bail!("wasm-bindgen failed (status: {status})");
@@ -117,14 +117,7 @@ pub fn serve(release: bool, port: u16) -> Result<()> {
     if release {
         args.push("--release");
     }
-    args.extend([
-        "--bin",
-        "faf-sim",
-        "--",
-        "serve",
-        "--port",
-        &port_str,
-    ]);
+    args.extend(["--bin", "faf-sim", "--", "serve", "--port", &port_str]);
 
     let mut cmd = cargo::command();
     cmd.args(args);

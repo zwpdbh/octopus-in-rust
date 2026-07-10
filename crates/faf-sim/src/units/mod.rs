@@ -20,12 +20,10 @@ use std::collections::{HashMap, HashSet};
 
 use faf_units::DataIndex;
 
-
-
+pub use category::{category_of, UnitCategory};
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, UpgradeRecipe,
 };
-pub use category::{UnitCategory, category_of};
 
 mod build;
 mod category;
@@ -536,14 +534,26 @@ mod tests {
 
     #[test]
     fn categories_group_common_units() {
-        use super::category::UnitCategory;
         use super::category::category_of;
+        use super::category::UnitCategory;
 
         assert_eq!(category_of(&UnitKind::Commander), UnitCategory::Commander);
-        assert_eq!(category_of(&UnitKind::Engineer(TechLevel::T1)), UnitCategory::Engineer);
-        assert_eq!(category_of(&UnitKind::Factory(TechLevel::T1)), UnitCategory::Factory);
-        assert_eq!(category_of(&UnitKind::Mex(TechLevel::T1)), UnitCategory::Economic);
-        assert_eq!(category_of(&UnitKind::Pgen(TechLevel::T1)), UnitCategory::Economic);
+        assert_eq!(
+            category_of(&UnitKind::Engineer(TechLevel::T1)),
+            UnitCategory::Engineer
+        );
+        assert_eq!(
+            category_of(&UnitKind::Factory(TechLevel::T1)),
+            UnitCategory::Factory
+        );
+        assert_eq!(
+            category_of(&UnitKind::Mex(TechLevel::T1)),
+            UnitCategory::Economic
+        );
+        assert_eq!(
+            category_of(&UnitKind::Pgen(TechLevel::T1)),
+            UnitCategory::Economic
+        );
     }
 
     #[test]
