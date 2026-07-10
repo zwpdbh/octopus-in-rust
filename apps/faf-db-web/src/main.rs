@@ -95,6 +95,8 @@ fn App() -> Element {
     let active_factions = use_signal(|| HashSet::<String>::new());
     let active_kinds = use_signal(|| HashSet::<String>::new());
     let active_techs = use_signal(|| HashSet::<String>::new());
+    let mut split_pct = use_signal(|| 50.0_f64);
+    let mut drag_start = use_signal(|| None::<(f64, f64)>);
 
     let units_data = units.read().clone();
     match units_data {
@@ -118,10 +120,24 @@ fn App() -> Element {
             rsx! {
                 document::Stylesheet { href: asset!("/assets/tailwind.css") }
                 div {
-                    class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden",
+                    class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden select-none",
+                    class: if drag_start.read().is_some() { "cursor-row-resize" },
+                    onmousemove: move |e| {
+                        if let Some((start_y, start_pct)) = *drag_start.read() {
+                            let height = web_sys::window()
+                                .and_then(|w| w.inner_height().ok())
+                                .and_then(|h| h.as_f64())
+                                .unwrap_or(800.0);
+                            let delta_pct = (e.data.client_coordinates().y - start_y) / height * 100.0;
+                            split_pct.set((start_pct + delta_pct).clamp(20.0, 80.0));
+                        }
+                    },
+                    onmouseup: move |_| drag_start.set(None),
+                    onmouseleave: move |_| drag_start.set(None),
                     // Top half: header + unit grid
                     div {
-                        class: "h-1/2 flex flex-col border-b border-neutral-800",
+                        class: "flex flex-col border-b border-neutral-800",
+                        style: "height: {split_pct}vh;",
                         header {
                             class: "flex flex-wrap items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
                             h1 { class: "text-lg font-semibold text-white tracking-wide", "FAF Unit Database" }
@@ -143,9 +159,17 @@ fn App() -> Element {
                             CategoryGrid { units: filtered, selected }
                         }
                     }
+                    // Draggable divider
+                    div {
+                        class: "h-2 bg-neutral-800 hover:bg-blue-600 flex items-center justify-center transition-colors shrink-0",
+                        class: if drag_start.read().is_some() { "bg-blue-600" },
+                        onmousedown: move |e| drag_start.set(Some((e.data.client_coordinates().y, split_pct()))),
+                        div { class: "w-10 h-1 bg-neutral-500 rounded-full", }
+                    }
                     // Bottom half: interesting area + unit detail
                     div {
-                        class: "h-1/2 flex overflow-hidden",
+                        class: "flex overflow-hidden",
+                        style: "height: {100.0 - *split_pct.read()}vh;",
                         div {
                             class: "flex-1 overflow-auto p-4 bg-neutral-900/30",
                             div { class: "text-neutral-500 text-sm", "Interesting content will go here." }
