@@ -211,10 +211,11 @@ fn SimulateBuild() -> Element {
     let units_res = use_context::<Resource<Option<Vec<UnitSummary>>>>();
     let mut plan = use_signal(|| load_plan_from_storage().unwrap_or_default());
     let mut draft_builder = use_signal(|| None::<UnitSummary>);
-    let draft_builder_count = use_signal(|| 1_u32);
+    let mut draft_builder_count = use_signal(|| 1_u32);
     let mut draft_target = use_signal(|| None::<UnitSummary>);
-    let draft_target_count = use_signal(|| 1_u32);
+    let mut draft_target_count = use_signal(|| 1_u32);
     let mut show_simulation = use_signal(|| false);
+    let mut simulation_requested = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
 
     use_effect(move || {
@@ -245,47 +246,73 @@ fn SimulateBuild() -> Element {
         pending_target.set(None);
     };
 
+    let save_draft = move |_| {
+        let builder = draft_builder.read().clone();
+        let target = draft_target.read().clone();
+        if builder.is_some() && target.is_some() {
+            let next_id = plan.read().items.iter().map(|i| i.id).max().unwrap_or(0) + 1;
+            plan.write().items.push(ConstructionItem {
+                id: next_id,
+                builder,
+                builder_count: (*draft_builder_count.read()).max(1),
+                target,
+                target_count: (*draft_target_count.read()).max(1),
+                start_after_seconds: 0.0,
+            });
+            draft_builder.set(None);
+            draft_target.set(None);
+            draft_builder_count.set(1);
+            draft_target_count.set(1);
+        }
+    };
+
+    let clear_draft = move |_| {
+        draft_builder.set(None);
+        draft_target.set(None);
+        draft_builder_count.set(1);
+        draft_target_count.set(1);
+    };
+
     let units_data = units_res.read().clone();
     match units_data {
         Some(Some(units)) => rsx! {
             if !*show_simulation.read() {
                 div { class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden select-none",
                     AppHeader { active: Route::SimulateBuild {} }
-                    div { class: "flex flex-col flex-1 overflow-hidden",
-                        // Top half: settings + queue
-                        div { class: "flex flex-1 overflow-hidden",
-                            div { class: "flex-1 overflow-hidden flex flex-col bg-neutral-900/30",
-                                div { class: "flex-1 overflow-auto p-4",
-                                    div { class: "flex flex-col lg:flex-row gap-4 h-full",
-                                        EcoPanel { plan }
-                                        ConstructionQueue {
-                                            plan,
-                                            draft_builder,
-                                            draft_builder_count,
-                                            draft_target,
-                                            draft_target_count,
-                                            on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                                        }
-                                    }
+                    div { class: "flex flex-1 overflow-hidden",
+                        // Left sidebar: Eco Settings + new item creator
+                        div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
+                            EcoPanel { plan }
+                            div { class: "my-4 border-t border-neutral-700" }
+                            QueueItemCreator {
+                                draft_builder,
+                                draft_builder_count,
+                                draft_target,
+                                draft_target_count,
+                                on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                                on_save: save_draft,
+                                on_clear: clear_draft,
+                            }
+                        }
+                        // Right area: created queue (top) + simulation results (bottom)
+                        div { class: "flex-1 overflow-hidden flex flex-col",
+                            div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
+                                h3 { class: "text-sm font-semibold text-white mb-3 shrink-0", "Construction Queue" }
+                                QueueItemList {
+                                    plan,
+                                    on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
                                 }
-                                div { class: "flex items-center justify-end px-4 py-2 border-t border-neutral-800 bg-neutral-900/50 shrink-0",
+                            }
+                            div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
+                                div { class: "flex items-center justify-center mb-3 shrink-0",
                                     button {
                                         class: "px-4 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors",
-                                        onclick: move |_| show_simulation.set(true),
+                                        onclick: move |_| simulation_requested.set(true),
                                         "Begin Simulation"
                                     }
                                 }
-                            }
-                        }
-                        // Divider
-                        div { class: "h-2 bg-neutral-800 flex items-center justify-center shrink-0",
-                            div { class: "w-10 h-1 bg-neutral-500 rounded-full", }
-                        }
-                        // Bottom half: results placeholder
-                        div { class: "flex-1 overflow-hidden bg-neutral-900/30 flex items-center justify-center",
-                            div { class: "text-center space-y-2",
-                                h3 { class: "text-lg font-semibold text-white", "Simulation Results" }
-                                p { class: "text-sm text-neutral-500", "Results will appear here once the simulation runs." }
+                                h3 { class: "text-sm font-semibold text-white mb-3 shrink-0", "Simulation Results" }
+                                SimulationResultsPlaceholder { requested: *simulation_requested.read() }
                             }
                         }
                     }
@@ -872,147 +899,120 @@ fn SliderField(
 }
 
 #[component]
-fn ConstructionQueue(
-    plan: Signal<ConstructionPlan>,
-    mut draft_builder: Signal<Option<UnitSummary>>,
-    mut draft_builder_count: Signal<u32>,
-    mut draft_target: Signal<Option<UnitSummary>>,
-    mut draft_target_count: Signal<u32>,
+fn QueueItemCreator(
+    draft_builder: Signal<Option<UnitSummary>>,
+    draft_builder_count: Signal<u32>,
+    draft_target: Signal<Option<UnitSummary>>,
+    draft_target_count: Signal<u32>,
     on_assign_slot: EventHandler<AssignmentTarget>,
+    on_save: EventHandler<()>,
+    on_clear: EventHandler<()>,
 ) -> Element {
-    let items = plan.read().items.clone();
-
-    let save = move |_| {
-        let builder = draft_builder.read().clone();
-        let target = draft_target.read().clone();
-        if builder.is_some() && target.is_some() {
-            let next_id = plan.read().items.iter().map(|i| i.id).max().unwrap_or(0) + 1;
-            plan.write().items.push(ConstructionItem {
-                id: next_id,
-                builder,
-                builder_count: (*draft_builder_count.read()).max(1),
-                target,
-                target_count: (*draft_target_count.read()).max(1),
-                start_after_seconds: 0.0,
-            });
-            draft_builder.set(None);
-            draft_target.set(None);
-            draft_builder_count.set(1);
-            draft_target_count.set(1);
-        }
-    };
-
-    let clear = move |_| {
-        draft_builder.set(None);
-        draft_target.set(None);
-        draft_builder_count.set(1);
-        draft_target_count.set(1);
-    };
-
     rsx! {
-        div {
-            class: "flex flex-col p-3 rounded-lg border border-neutral-700 bg-neutral-900/80",
-            div { class: "flex items-center justify-between mb-3",
-                h3 { class: "text-sm font-semibold text-white", "Construction Queue" }
+        div { class: "flex flex-col gap-3",
+            h3 { class: "text-sm font-semibold text-white", "New Item" }
+            UnitBlock {
+                label: "Builder",
+                unit: draft_builder.read().clone(),
+                count: *draft_builder_count.read(),
+                hint: "Requires build power",
+                on_click: move |_| on_assign_slot.call(AssignmentTarget::NewBuilder),
+                on_count: move |v: u32| draft_builder_count.set(v),
             }
-            div {
-                class: "space-y-2 pr-1",
-                if items.is_empty() {
-                    div { class: "text-neutral-500 text-sm text-center py-4", "Click a slot below to assign units." }
-                }
-                for item in items {
-                    ConstructionItemCard { item, plan, on_assign_slot }
-                }
+            UnitBlock {
+                label: "Target",
+                unit: draft_target.read().clone(),
+                count: *draft_target_count.read(),
+                hint: "Drop any unit",
+                on_click: move |_| on_assign_slot.call(AssignmentTarget::NewTarget),
+                on_count: move |v: u32| draft_target_count.set(v),
             }
-            div {
-                class: "mt-3 pt-3 border-t border-neutral-700 shrink-0",
-                div { class: "text-[10px] uppercase tracking-wide text-neutral-500 mb-2", "New Item" }
-                div { class: "flex items-start gap-3",
-                    DropTarget {
-                        label: "Builder",
-                        unit: draft_builder,
-                        count: draft_builder_count,
-                        kind: DropTargetKind::Builder,
-                        on_click: move |_| on_assign_slot.call(AssignmentTarget::NewBuilder),
-                    }
-                    DropTarget {
-                        label: "Target",
-                        unit: draft_target,
-                        count: draft_target_count,
-                        kind: DropTargetKind::Target,
-                        on_click: move |_| on_assign_slot.call(AssignmentTarget::NewTarget),
-                    }
-                    div { class: "flex items-center gap-2 self-center ml-auto",
-                        button {
-                            class: "px-3 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors",
-                            disabled: draft_builder.read().is_none() || draft_target.read().is_none(),
-                            onclick: save,
-                            "Save"
-                        }
-                        button {
-                            class: "px-3 py-1.5 text-sm rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors",
-                            onclick: clear,
-                            "Clear"
-                        }
-                    }
+            div { class: "flex items-center gap-2",
+                button {
+                    class: "flex-1 px-3 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors",
+                    disabled: draft_builder.read().is_none() || draft_target.read().is_none(),
+                    onclick: move |_| on_save.call(()),
+                    "Save"
+                }
+                button {
+                    class: "flex-1 px-3 py-1.5 text-sm rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors",
+                    onclick: move |_| on_clear.call(()),
+                    "Clear"
                 }
             }
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DropTargetKind {
-    Builder,
-    Target,
-}
-
-impl DropTargetKind {
-    fn hint(self) -> &'static str {
-        match self {
-            DropTargetKind::Builder => "Requires build power",
-            DropTargetKind::Target => "Drop any unit",
         }
     }
 }
 
 #[component]
-fn DropTarget(
+fn UnitBlock(
     label: String,
-    unit: Signal<Option<UnitSummary>>,
-    count: Signal<u32>,
-    kind: DropTargetKind,
+    unit: Option<UnitSummary>,
+    count: u32,
+    hint: String,
     on_click: EventHandler<()>,
+    on_count: EventHandler<u32>,
 ) -> Element {
-    let hint = kind.hint();
-
     rsx! {
-        div { class: "flex flex-col gap-1 flex-1 min-w-0",
+        div { class: "flex flex-col gap-2 p-2 rounded bg-neutral-800/50 border border-neutral-700",
             span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
-            div {
-                class: "flex items-center gap-2 p-2 rounded border border-neutral-600 bg-neutral-800/50 transition-colors hover:border-neutral-500 cursor-pointer",
+            button {
+                class: "w-16 h-16 p-1 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400 self-center",
                 onclick: move |_| on_click.call(()),
-                div {
-                    class: "w-10 h-10 p-0.5 rounded bg-black border border-neutral-600 flex items-center justify-center shrink-0",
-                    if let Some(ref u) = *unit.read() {
-                        img {
-                            src: "/api/portraits/{u.id}.png",
-                            alt: "{u.display_name}",
-                            class: "w-full h-full object-contain",
-                        }
-                    } else {
-                        span { class: "text-neutral-500 text-lg", "?" }
+                title: "Click to select a unit",
+                if let Some(ref u) = unit {
+                    img {
+                        src: "/api/portraits/{u.id}.png",
+                        alt: "{u.display_name}",
+                        class: "w-full h-full object-contain",
                     }
+                } else {
+                    span { class: "text-neutral-500 text-3xl", "?" }
                 }
-                div { class: "flex flex-col min-w-0",
-                    span { class: "text-xs text-neutral-300 truncate",
-                        {unit.read().as_ref().map(|u| u.display_name.as_str()).unwrap_or("—")}
-                    }
-                    CountSlider {
-                        value: *count.read(),
-                        on_change: move |v: u32| count.set(v),
-                    }
-                    span { class: "text-[10px] text-neutral-500 truncate", "{hint}" }
+            }
+            div { class: "flex flex-col items-center text-center gap-1",
+                span { class: "text-sm text-neutral-300 truncate w-full",
+                    {unit.as_ref().map(|u| u.display_name.as_str()).unwrap_or("—")}
+                }
+                CountSlider {
+                    value: count,
+                    on_change: on_count,
+                }
+                span { class: "text-[10px] text-neutral-500", "{hint}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn QueueItemList(
+    plan: Signal<ConstructionPlan>,
+    on_assign_slot: EventHandler<AssignmentTarget>,
+) -> Element {
+    let items = plan.read().items.clone();
+    rsx! {
+        div { class: "flex-1 min-h-0 overflow-auto pr-1",
+            if items.is_empty() {
+                div { class: "text-neutral-500 text-sm text-center py-8", "No items in the queue yet. Use the New Item panel on the left to add one." }
+            }
+            div { class: "grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3 content-start",
+                for item in items {
+                    ConstructionItemCard { item, plan, on_assign_slot }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SimulationResultsPlaceholder(requested: bool) -> Element {
+    rsx! {
+        div { class: "flex-1 flex items-center justify-center",
+            div { class: "text-center space-y-2",
+                if requested {
+                    p { class: "text-sm text-neutral-500", "will be implement" }
+                } else {
+                    p { class: "text-sm text-neutral-500", "Click Begin Simulation to run the simulation." }
                 }
             }
         }
@@ -1066,95 +1066,48 @@ fn ConstructionItemCard(
     };
 
     rsx! {
-        div {
-            class: "p-2 rounded bg-neutral-800/50 border border-neutral-700 text-sm",
-            div { class: "flex items-center gap-3",
-                // Builder
-                div { class: "flex flex-col gap-1",
-                    span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Builder" }
-                    UnitSlot {
-                        unit: item.builder.clone(),
-                        count: item.builder_count,
-                        on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingBuilder { item_id }),
-                        on_count: move |v| update_count("builder", v),
-                    }
-                }
-                // Target
-                div { class: "flex flex-col gap-1 flex-1",
-                    span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Unit" }
-                    UnitSlot {
-                        unit: item.target.clone(),
-                        count: item.target_count,
-                        on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingTarget { item_id }),
-                        on_count: move |v| update_count("target", v),
-                    }
-                }
-                // Start time
-                div { class: "flex flex-col gap-1 w-24",
-                    span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Start After" }
-                    input {
-                        r#type: "number",
-                        value: "{item.start_after_seconds}",
-                        step: "any",
-                        min: "0",
-                        oninput: move |e| {
-                            if let Ok(v) = e.value().parse::<f64>() {
-                                update_count("start", v);
-                            }
-                        },
-                        class: "px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-white text-sm focus:outline-none focus:border-blue-500",
-                    }
-                    span { class: "text-[10px] text-neutral-500", "seconds" }
-                }
-                // Remove
+        div { class: "w-full p-3 rounded-lg bg-neutral-800/50 border border-neutral-700 text-sm",
+            div { class: "flex items-center justify-between mb-2",
+                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Queue Item" }
                 button {
-                    class: "self-start px-2 py-1 rounded bg-red-900/40 hover:bg-red-900/60 text-red-300 text-xs transition-colors",
+                    class: "px-2 py-0.5 rounded bg-red-900/40 hover:bg-red-900/60 text-red-300 text-xs transition-colors",
                     onclick: remove,
                     "×"
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn UnitSlot(
-    unit: Option<UnitSummary>,
-    count: u32,
-    on_click: EventHandler<()>,
-    on_count: EventHandler<f64>,
-) -> Element {
-    rsx! {
-        div { class: "flex items-center gap-2",
-            button {
-                class: "w-10 h-10 p-0.5 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400",
-                onclick: move |_| on_click.call(()),
-                title: "Click to select a unit",
-                if let Some(ref u) = unit {
-                    img {
-                        src: "/api/portraits/{u.id}.png",
-                        alt: "{u.display_name}",
-                        class: "w-full h-full object-contain",
-                    }
-                } else {
-                    span { class: "text-neutral-500 text-lg", "?" }
+            div { class: "flex flex-col gap-2",
+                UnitBlock {
+                    label: "Builder",
+                    unit: item.builder.clone(),
+                    count: item.builder_count,
+                    hint: "Requires build power",
+                    on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingBuilder { item_id }),
+                    on_count: move |v: u32| update_count("builder", v as f64),
+                }
+                UnitBlock {
+                    label: "Target",
+                    unit: item.target.clone(),
+                    count: item.target_count,
+                    hint: "Drop any unit",
+                    on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingTarget { item_id }),
+                    on_count: move |v: u32| update_count("target", v as f64),
                 }
             }
-            div { class: "flex flex-col",
-                span { class: "text-xs text-neutral-300 truncate max-w-[120px]",
-                    {unit.as_ref().map(|u| u.display_name.as_str()).unwrap_or("—")}
-                }
+            div { class: "mt-3 pt-2 border-t border-neutral-700 flex items-center justify-center gap-2",
+                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Start After" }
                 input {
                     r#type: "number",
-                    value: "{count}",
-                    min: "1",
+                    value: "{item.start_after_seconds}",
+                    step: "any",
+                    min: "0",
                     oninput: move |e| {
                         if let Ok(v) = e.value().parse::<f64>() {
-                            on_count.call(v);
+                            update_count("start", v);
                         }
                     },
-                    class: "w-16 px-1 py-0.5 bg-neutral-800 border border-neutral-700 rounded text-white text-xs focus:outline-none focus:border-blue-500",
+                    class: "w-16 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500",
                 }
+                span { class: "text-[10px] text-neutral-500", "s" }
             }
         }
     }
