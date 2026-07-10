@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use gloo_net::http::Request;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 struct UnitSummary {
@@ -12,6 +12,7 @@ struct UnitSummary {
     category: String,
     #[serde(default)]
     strategic_icon_name: Option<String>,
+    kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -91,6 +92,9 @@ fn App() -> Element {
 
     let selected = use_signal(|| None::<UnitSummary>);
     let mut query = use_signal(|| String::new());
+    let active_factions = use_signal(|| HashSet::<String>::new());
+    let active_kinds = use_signal(|| HashSet::<String>::new());
+    let active_techs = use_signal(|| HashSet::<String>::new());
 
     let units_data = units.read().clone();
     match units_data {
@@ -99,9 +103,16 @@ fn App() -> Element {
                 .into_iter()
                 .filter(|u| {
                     let q = query.read().to_lowercase();
-                    q.is_empty()
+                    let text_match = q.is_empty()
                         || u.id.to_lowercase().contains(&q)
-                        || u.display_name.to_lowercase().contains(&q)
+                        || u.display_name.to_lowercase().contains(&q);
+                    let faction_match = active_factions.read().is_empty()
+                        || active_factions.read().contains(&u.faction);
+                    let kind_match = active_kinds.read().is_empty()
+                        || active_kinds.read().contains(&u.kind);
+                    let tech_match = active_techs.read().is_empty()
+                        || active_techs.read().contains(&tech_short(&u.tech));
+                    text_match && faction_match && kind_match && tech_match
                 })
                 .collect();
             rsx! {
@@ -112,7 +123,7 @@ fn App() -> Element {
                     div {
                         class: "h-1/2 flex flex-col border-b border-neutral-800",
                         header {
-                            class: "flex items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
+                            class: "flex flex-wrap items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
                             h1 { class: "text-lg font-semibold text-white tracking-wide", "FAF Unit Database" }
                             input {
                                 r#type: "text",
@@ -120,6 +131,11 @@ fn App() -> Element {
                                 value: "{query.read()}",
                                 oninput: move |e| query.set(e.value().to_string()),
                                 class: "flex-1 max-w-sm px-3 py-1.5 bg-neutral-800 border border-neutral-700 rounded text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-blue-500",
+                            }
+                            FilterBar {
+                                active_factions,
+                                active_kinds,
+                                active_techs,
                             }
                         }
                         div {
@@ -144,6 +160,103 @@ fn App() -> Element {
         }
         Some(None) => rsx! { "Failed to load units" },
         None => rsx! { "Loading..." },
+    }
+}
+
+fn tech_short(tech: &str) -> String {
+    match tech {
+        "TECH1" => "T1",
+        "TECH2" => "T2",
+        "TECH3" => "T3",
+        "TECH4" | "EXPERIMENTAL" => "EXP",
+        _ => tech,
+    }
+    .to_string()
+}
+
+#[component]
+fn FilterBar(
+    active_factions: Signal<HashSet<String>>,
+    active_kinds: Signal<HashSet<String>>,
+    active_techs: Signal<HashSet<String>>,
+) -> Element {
+    rsx! {
+        div {
+            class: "flex items-center gap-4",
+            FilterGroup {
+                items: vec!["uef", "cybran", "aeon", "seraphim", "nomads"],
+                active: active_factions,
+                icon_dir: "embed_icons",
+                extension: "svg",
+            }
+            FilterGroup {
+                items: vec!["Base", "Land", "Air", "Naval"],
+                active: active_kinds,
+                icon_dir: "ui",
+                extension: "png",
+            }
+            FilterGroup {
+                items: vec!["T1", "T2", "T3", "EXP"],
+                active: active_techs,
+                icon_dir: "ui",
+                extension: "png",
+            }
+        }
+    }
+}
+
+#[component]
+fn FilterGroup(
+    items: Vec<&'static str>,
+    active: Signal<HashSet<String>>,
+    icon_dir: &'static str,
+    extension: &'static str,
+) -> Element {
+    rsx! {
+        div {
+            class: "flex items-center gap-1",
+            for item in items {
+                FilterButton {
+                    item,
+                    active,
+                    icon_dir,
+                    extension,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FilterButton(
+    item: &'static str,
+    active: Signal<HashSet<String>>,
+    icon_dir: &'static str,
+    extension: &'static str,
+) -> Element {
+    let is_active = active.read().contains(item);
+    let title = item.to_string();
+    let src = format!("/{}/{}.{}" , icon_dir, item, extension);
+    let active_class = if is_active { "opacity-100 bg-white/10" } else { "opacity-40 grayscale hover:opacity-75 hover:grayscale-[0.5]" };
+
+    rsx! {
+        button {
+            class: "w-8 h-8 p-1 rounded cursor-pointer transition-all {active_class}",
+            title: "{title}",
+            onclick: move |_| {
+                let mut set = active.write();
+                if set.contains(item) {
+                    set.remove(item);
+                } else {
+                    set.insert(item.to_string());
+                }
+            },
+            img {
+                src: "{src}",
+                alt: "{title}",
+                class: "w-full h-full object-contain",
+            }
+        }
     }
 }
 
@@ -180,11 +293,15 @@ fn CategoryPanel(
     units: Vec<UnitSummary>,
     selected: Signal<Option<UnitSummary>>,
 ) -> Element {
-    let techs: Vec<&str> = if category == "Experimental" {
+    let all_techs: Vec<&str> = if category == "Experimental" {
         vec!["EXPERIMENTAL"]
     } else {
         vec!["TECH1", "TECH2", "TECH3"]
     };
+    let techs: Vec<&str> = all_techs
+        .into_iter()
+        .filter(|tech| units.iter().any(|u| u.tech == **tech))
+        .collect();
 
     rsx! {
         div {

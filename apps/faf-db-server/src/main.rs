@@ -25,6 +25,7 @@ struct UnitSummary {
     tech: String,
     category: String,
     strategic_icon_name: Option<String>,
+    kind: String,
 }
 
 #[tokio::main]
@@ -92,6 +93,7 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             tech: unit.tech_level().unwrap_or("TECH1").to_string(),
             category: browser_category(unit).label().to_string(),
             strategic_icon_name: unit.strategic_icon_name.clone(),
+            kind: unit_kind(unit).to_string(),
         })
         .collect();
     Json(summaries)
@@ -154,6 +156,22 @@ impl BrowserCategory {
             BrowserCategory::Experimental => "Experimental",
         }
     }
+}
+
+fn unit_kind(unit: &Unit) -> &'static str {
+    if unit.has_category("MOBILE") {
+        if unit.has_category("AIR") {
+            return "Air";
+        }
+        if unit.has_category("NAVAL") {
+            return "Naval";
+        }
+        return "Land";
+    }
+    if unit.has_category("STRUCTURE") {
+        return "Base";
+    }
+    "Unknown"
 }
 
 fn browser_category(unit: &Unit) -> BrowserCategory {
