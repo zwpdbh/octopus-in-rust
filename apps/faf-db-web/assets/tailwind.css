@@ -31,7 +31,6 @@
     --font-weight-medium: 500;
     --font-weight-semibold: 600;
     --tracking-wide: 0.025em;
-    --tracking-wider: 0.05em;
     --leading-tight: 1.25;
     --radius-lg: 0.5rem;
     --blur-sm: 8px;
@@ -241,9 +240,6 @@
   .h-screen {
     height: 100vh;
   }
-  .min-h-\[54px\] {
-    min-height: 54px;
-  }
   .w-3\.5 {
     width: calc(var(--spacing) * 3.5);
   }
@@ -304,8 +300,14 @@
   .justify-center {
     justify-content: center;
   }
+  .gap-0 {
+    gap: calc(var(--spacing) * 0);
+  }
   .gap-1 {
     gap: calc(var(--spacing) * 1);
+  }
+  .gap-1\.5 {
+    gap: calc(var(--spacing) * 1.5);
   }
   .gap-2 {
     gap: calc(var(--spacing) * 2);
@@ -313,8 +315,8 @@
   .gap-4 {
     gap: calc(var(--spacing) * 4);
   }
-  .gap-\[3px\] {
-    gap: 3px;
+  .gap-\[2px\] {
+    gap: 2px;
   }
   .space-y-3 {
     :where(& > :not(:last-child)) {
@@ -353,6 +355,10 @@
     border-style: var(--tw-border-style);
     border-width: 2px;
   }
+  .border-r-2 {
+    border-right-style: var(--tw-border-style);
+    border-right-width: 2px;
+  }
   .border-b {
     border-bottom-style: var(--tw-border-style);
     border-bottom-width: 1px;
@@ -360,6 +366,10 @@
   .border-l {
     border-left-style: var(--tw-border-style);
     border-left-width: 1px;
+  }
+  .border-dashed {
+    --tw-border-style: dashed;
+    border-style: dashed;
   }
   .border-\[rgba\(120\,236\,150\,0\.33\)\] {
     border-color: rgba(120,236,150,0.33);
@@ -381,6 +391,12 @@
   }
   .border-neutral-800 {
     border-color: var(--color-neutral-800);
+  }
+  .border-white\/60 {
+    border-color: color-mix(in srgb, #fff 60%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-white) 60%, transparent);
+    }
   }
   .bg-\[rgba\(25\,179\,64\,0\.13\)\] {
     background-color: rgba(25,179,64,0.13);
@@ -421,12 +437,6 @@
   .bg-neutral-950 {
     background-color: var(--color-neutral-950);
   }
-  .bg-neutral-950\/50 {
-    background-color: color-mix(in srgb, oklch(14.5% 0 0) 50%, transparent);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--color-neutral-950) 50%, transparent);
-    }
-  }
   .object-contain {
     object-fit: contain;
   }
@@ -462,6 +472,12 @@
   }
   .py-3 {
     padding-block: calc(var(--spacing) * 3);
+  }
+  .pr-1\.5 {
+    padding-right: calc(var(--spacing) * 1.5);
+  }
+  .pl-1\.5 {
+    padding-left: calc(var(--spacing) * 1.5);
   }
   .text-center {
     text-align: center;

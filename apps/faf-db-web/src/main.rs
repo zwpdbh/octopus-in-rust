@@ -179,13 +179,15 @@ fn CategoryPanel(
 
     rsx! {
         div {
-            class: "border border-neutral-700 rounded-lg bg-neutral-900/80 backdrop-blur-sm p-3 min-w-[360px] shadow-lg",
+            class: "border border-neutral-700 rounded-lg bg-neutral-900/80 backdrop-blur-sm p-3 shadow-lg",
             h2 { class: "text-sm font-semibold text-center text-white mb-3 tracking-wide", "{category}" }
             div {
-                class: "flex gap-1",
+                class: "flex",
                 for (i, tech) in techs.iter().enumerate() {
                     div {
-                        class: "flex flex-col gap-1 min-w-[108px]",
+                        class: "flex flex-col gap-1.5",
+                        class: if i > 0 { "pl-1.5" },
+                        class: if i < techs.len() - 1 { "pr-1.5 border-r-2 border-dashed border-white/60" },
                         for faction in FACTION_ORDER.iter().copied() {
                             TechCell {
                                 units: units.iter().filter(|u| u.faction == faction && u.tech == *tech).cloned().collect::<Vec<_>>(),
@@ -193,9 +195,6 @@ fn CategoryPanel(
                                 selected
                             }
                         }
-                    }
-                    if i < techs.len() - 1 {
-                        div { class: "w-px bg-neutral-800 mx-1", }
                     }
                 }
             }
@@ -209,9 +208,12 @@ fn TechCell(
     faction: &'static str,
     selected: Signal<Option<UnitSummary>>,
 ) -> Element {
+    if units.is_empty() {
+        return rsx! {};
+    }
     rsx! {
         div {
-            class: "flex flex-wrap gap-[3px] min-h-[54px] p-1 rounded bg-neutral-950/50",
+            class: "flex flex-wrap gap-1.5",
             for unit in units {
                 PortraitButton { unit, faction, selected }
             }
