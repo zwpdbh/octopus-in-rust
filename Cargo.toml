@@ -13,6 +13,8 @@ members = [
     "plugins/faf-party",
     "apps/docref",
     "apps/faf-sim-cli",
+    "apps/faf-db-server",
+    "apps/faf-db-web",
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
@@ -32,14 +34,17 @@ train-tui = { path = "crates/train-tui" }
 # Common external crates
 anyhow = "1"
 async-trait = "0.1"
+axum = "0.7"
 burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
 chrono = { version = "0.4", features = ["serde"] }
 console_error_panic_hook = "0.1"
 clap = { version = "4", features = ["derive"] }
+dioxus = { version = "0.7", default-features = false, features = ["web", "lib", "launch"] }
 extism = "1"
 extism-pdk = "1"
 futures = "0.3"
 getrandom = "0.2"
+gloo-net = "0.6"
 futures-util = "0.3"
 http = "1"
 petgraph = "0.8"
@@ -59,6 +64,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 tokio-test = "0.4"
 toml = "0.8"
+tower-http = { version = "0.5", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"

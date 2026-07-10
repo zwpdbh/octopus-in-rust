@@ -12,6 +12,7 @@ mod web;
 fn main() -> Result<()> {
     match args::Task::parse()? {
         args::Task::App { app, command, rest } => match app {
+            args::App::FafDb => apps::fafdb::run(&command, &rest),
             args::App::FafSim => apps::fafsim::run(&command, &rest),
             args::App::Qqbot => apps::qqbot::run(&command, &rest),
         },

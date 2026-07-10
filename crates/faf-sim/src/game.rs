@@ -8,12 +8,14 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures};
+use bevy_egui::{
+    egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures,
+};
 use faf_units::DataIndex;
 
 use crate::economy::{apply_tick_graph, compute_drain, EconomyState, RequestedBuildPower};
-use crate::units::{category_of, TechLevel, UnitCategory, Units};
 use crate::units::UnitKind;
+use crate::units::{category_of, TechLevel, UnitCategory, Units};
 use crate::BuildDrain;
 
 const BOARD_SIZE: i32 = 16;
@@ -24,14 +26,14 @@ const TILE_SIZE: f32 = 32.0;
 enum BrowserCategory {
     #[default]
     Land,
-    Air,
     Naval,
-    StructuresFactories,
-    StructuresEconomy,
     StructuresWeapons,
     StructuresSupport,
     StructuresIntelligence,
+    Air,
+    StructuresFactories,
     ConstructionBuildpower,
+    StructuresEconomy,
     Experimental,
 }
 
@@ -39,14 +41,14 @@ impl BrowserCategory {
     fn label(self) -> &'static str {
         match self {
             BrowserCategory::Land => "Land",
-            BrowserCategory::Air => "Air",
             BrowserCategory::Naval => "Naval",
-            BrowserCategory::StructuresFactories => "Structures - Factories",
-            BrowserCategory::StructuresEconomy => "Structures - Economy",
             BrowserCategory::StructuresWeapons => "Structures - Weapons",
             BrowserCategory::StructuresSupport => "Structures - Support",
             BrowserCategory::StructuresIntelligence => "Structures - Intelligence",
+            BrowserCategory::Air => "Air",
+            BrowserCategory::StructuresFactories => "Structures - Factories",
             BrowserCategory::ConstructionBuildpower => "Construction - Buildpower",
+            BrowserCategory::StructuresEconomy => "Structures - Economy",
             BrowserCategory::Experimental => "Experimental",
         }
     }
@@ -81,13 +83,26 @@ fn browser_category(unit: &faf_units::Unit) -> BrowserCategory {
         return BrowserCategory::StructuresFactories;
     }
     if unit.has_category("STRUCTURE") {
-        if unit.has_category("INTELLIGENCE") || unit.has_category("OMNI") || unit.has_category("RADAR") || unit.has_category("SONAR") {
+        if unit.has_category("INTELLIGENCE")
+            || unit.has_category("OMNI")
+            || unit.has_category("RADAR")
+            || unit.has_category("SONAR")
+        {
             return BrowserCategory::StructuresIntelligence;
         }
-        if unit.has_category("ECONOMIC") || unit.has_category("MASSEXTRACTION") || unit.has_category("ENERGYPRODUCTION") || unit.has_category("ENERGYSTORAGE") || unit.has_category("MASSSTORAGE") {
+        if unit.has_category("ECONOMIC")
+            || unit.has_category("MASSEXTRACTION")
+            || unit.has_category("ENERGYPRODUCTION")
+            || unit.has_category("ENERGYSTORAGE")
+            || unit.has_category("MASSSTORAGE")
+        {
             return BrowserCategory::StructuresEconomy;
         }
-        if unit.has_category("WEAPON") || unit.has_category("ARTILLERY") || unit.has_category("NUKE") || unit.has_category("ANTIMISSILE") {
+        if unit.has_category("WEAPON")
+            || unit.has_category("ARTILLERY")
+            || unit.has_category("NUKE")
+            || unit.has_category("ANTIMISSILE")
+        {
             return BrowserCategory::StructuresWeapons;
         }
         return BrowserCategory::StructuresSupport;
@@ -977,10 +992,18 @@ fn ui_system(
     let mut browser_groups: HashMap<BrowserCategory, Vec<UnitKind>> = HashMap::new();
     for kind in library.units.defs().keys() {
         let category = browser_category_for_kind(kind, &library.units, &library.index);
-        browser_groups.entry(category).or_default().push(kind.clone());
+        browser_groups
+            .entry(category)
+            .or_default()
+            .push(kind.clone());
     }
     for group in browser_groups.values_mut() {
-        group.sort_by(|a, b| library.units.display_name(a).cmp(&library.units.display_name(b)));
+        group.sort_by(|a, b| {
+            library
+                .units
+                .display_name(a)
+                .cmp(&library.units.display_name(b))
+        });
     }
 
     // Pre-compute egui texture ids for all browser portraits.
@@ -996,16 +1019,19 @@ fn ui_system(
                 .map(|id| (kind.clone(), id))
         })
         .collect();
-    let browser_portrait_id = browser_kind.as_ref().and_then(|k| portrait_ids.get(k).copied());
+    let browser_portrait_id = browser_kind
+        .as_ref()
+        .and_then(|k| portrait_ids.get(k).copied());
 
     // Group units by browser category, tech level, and faction for the dashboard grid.
     let mut grid_groups: HashMap<(BrowserCategory, TechLevel, BrowserFaction), Vec<UnitKind>> =
         HashMap::new();
     for (category, kinds) in &browser_groups {
         for kind in kinds {
-            if let (Some(tech), Some(faction)) =
-                (browser_tech(kind, &library.units), browser_faction(kind, &library.units))
-            {
+            if let (Some(tech), Some(faction)) = (
+                browser_tech(kind, &library.units),
+                browser_faction(kind, &library.units),
+            ) {
                 grid_groups
                     .entry((*category, tech, faction))
                     .or_default()
@@ -1014,7 +1040,12 @@ fn ui_system(
         }
     }
     for group in grid_groups.values_mut() {
-        group.sort_by(|a, b| library.units.display_name(a).cmp(&library.units.display_name(b)));
+        group.sort_by(|a, b| {
+            library
+                .units
+                .display_name(a)
+                .cmp(&library.units.display_name(b))
+        });
     }
 
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -1023,35 +1054,75 @@ fn ui_system(
 
     let screen = ctx.viewport_rect();
 
+    // Browser layout constants.
+    let icon_size = egui::vec2(22.0, 22.0);
+    let icon_spacing = 1.0;
+    let icons_per_row = 6;
+    let tech_col_width =
+        icons_per_row as f32 * icon_size.x + (icons_per_row as f32 - 1.0) * icon_spacing;
+    let icon_row_height = icon_size.y + icon_spacing;
+    let faction_row_spacing = 4.0;
+
+    // Compute a uniform panel height that fits the tallest category.
+    let mut max_content_height = 0.0f32;
+    for category in browser_groups.keys() {
+        let mut faction_heights = 0.0f32;
+        for faction in [
+            BrowserFaction::Uef,
+            BrowserFaction::Cybran,
+            BrowserFaction::Aeon,
+            BrowserFaction::Seraphim,
+        ] {
+            let mut max_tech_rows = 0usize;
+            for tech in [TechLevel::T1, TechLevel::T2, TechLevel::T3, TechLevel::T4] {
+                let count = grid_groups
+                    .get(&(*category, tech, faction))
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                max_tech_rows = max_tech_rows.max((count + icons_per_row - 1) / icons_per_row);
+            }
+            faction_heights += max_tech_rows as f32 * icon_row_height;
+        }
+        let content_height = faction_heights + 3.0 * faction_row_spacing;
+        max_content_height = max_content_height.max(content_height);
+    }
+    let panel_header_height = 28.0;
+    let panel_height = max_content_height + panel_header_height + 20.0;
+
     // Top section: dashboard of all unit categories.
     egui::Window::new("Unit Browser")
         .title_bar(false)
         .collapsible(false)
         .resizable(true)
         .fixed_pos([0.0, 0.0])
-        .default_size([screen.width(), screen.height() * 0.6])
+        .default_size([screen.width(), panel_height + 20.0])
         .min_size([screen.width(), 200.0])
         .max_size([screen.width(), screen.height() * 0.85])
         .show(ctx, |ui| {
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            ui.with_layout(
+                egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+                |ui| {
                     let mut sorted_categories: Vec<_> = browser_groups.into_iter().collect();
                     sorted_categories.sort_by_key(|(c, _)| *c);
 
                     for (category, _kinds) in sorted_categories {
+                        let stroke = ui.visuals().widgets.noninteractive.fg_stroke;
                         egui::Frame::new()
-                            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                            .fill(ui.visuals().extreme_bg_color)
+                            .stroke(stroke)
                             .inner_margin(6.0)
+                            .corner_radius(4.0)
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(8.0);
+                                ui.set_min_size(egui::vec2(0.0, panel_height));
+                                ui.vertical_centered(|ui| {
                                     ui.heading(category.label());
                                 });
                                 ui.separator();
 
                                 egui::Grid::new(("category_grid", category))
                                     .num_columns(7)
-                                    .spacing([8.0, 4.0])
+                                    .spacing([6.0, faction_row_spacing])
                                     .show(ui, |ui| {
                                         let techs = [
                                             TechLevel::T1,
@@ -1066,26 +1137,34 @@ fn ui_system(
                                             BrowserFaction::Seraphim,
                                         ] {
                                             for (i, tech) in techs.iter().enumerate() {
-                                                ui.horizontal(|ui| {
-                                                    if let Some(kinds) = grid_groups
-                                                        .get(&(category, *tech, faction))
-                                                    {
-                                                        for kind in kinds {
-                                                            let is_selected =
-                                                                browser.0.as_ref() == Some(kind);
-                                                            if browser_portrait_button(
-                                                                ui,
-                                                                &library.units,
-                                                                &portrait_ids,
-                                                                kind,
-                                                                is_selected,
-                                                                faction,
-                                                            ) {
-                                                                browser.0 = Some(kind.clone());
+                                                ui.allocate_ui_with_layout(
+                                                    egui::vec2(tech_col_width, 0.0),
+                                                    egui::Layout::left_to_right(egui::Align::Min)
+                                                        .with_main_wrap(true),
+                                                    |ui| {
+                                                        ui.spacing_mut().item_spacing =
+                                                            egui::vec2(icon_spacing, icon_spacing);
+                                                        if let Some(kinds) = grid_groups
+                                                            .get(&(category, *tech, faction))
+                                                        {
+                                                            for kind in kinds {
+                                                                let is_selected =
+                                                                    browser.0.as_ref()
+                                                                        == Some(kind);
+                                                                if browser_portrait_button(
+                                                                    ui,
+                                                                    &library.units,
+                                                                    &portrait_ids,
+                                                                    kind,
+                                                                    is_selected,
+                                                                    faction,
+                                                                ) {
+                                                                    browser.0 = Some(kind.clone());
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                });
+                                                    },
+                                                );
                                                 if i < techs.len() - 1 {
                                                     ui.add(
                                                         egui::Separator::default()
@@ -1099,8 +1178,8 @@ fn ui_system(
                                     });
                             });
                     }
-                });
-            });
+                },
+            );
         });
 
     // Bottom section: eco summary | placeholder | selected unit detail.
@@ -1190,9 +1269,8 @@ fn ui_system(
                             });
                             ui.separator();
                             if let Some(def) = def {
-                                if let Some((_, Some(builder), _, _)) = selected_info
-                                    .as_ref()
-                                    .filter(|(k, _, _, _)| k == kind)
+                                if let Some((_, Some(builder), _, _)) =
+                                    selected_info.as_ref().filter(|(k, _, _, _)| k == kind)
                                 {
                                     ui.label(format!("Build power: {:.1}", builder.power));
                                 }
@@ -1236,7 +1314,7 @@ fn browser_portrait_button(
     faction: BrowserFaction,
 ) -> bool {
     let portrait_id = portrait_ids.get(kind).copied();
-    let size = egui::vec2(36.0, 36.0);
+    let size = egui::vec2(22.0, 22.0);
 
     let response = if let Some(texture_id) = portrait_id {
         let tint = if is_selected {
@@ -1255,8 +1333,8 @@ fn browser_portrait_button(
     ui.painter().rect_stroke(
         response.rect,
         0.0,
-        egui::Stroke::new(2.0, faction_color(faction)),
-        egui::StrokeKind::Outside,
+        egui::Stroke::new(1.5, faction_color(faction)),
+        egui::StrokeKind::Inside,
     );
 
     response.on_hover_text(units.display_name(kind)).clicked()

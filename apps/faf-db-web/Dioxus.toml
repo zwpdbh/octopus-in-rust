@@ -1,0 +1,8 @@
+[application]
+name = "faf-db-web"
+
+[web.app]
+title = "FAF Unit DB"
+
+[[web.proxy]]
+backend = "http://localhost:8081/api/"
