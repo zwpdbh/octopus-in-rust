@@ -1,3 +1,4 @@
+use std::fs;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -80,7 +81,30 @@ pub fn build(release: bool) -> Result<()> {
         bail!("wasm-bindgen failed (status: {status})");
     }
 
+    // 3. Copy static assets so the WASM build can load icons.
+    let assets_src = root.join("assets");
+    let assets_dst = out_dir.join("assets");
+    if assets_src.exists() {
+        copy_dir_all(&assets_src, &assets_dst)
+            .with_context(|| format!("copying assets to {}", assets_dst.display()))?;
+        println!("Copied assets to {}", assets_dst.display());
+    }
+
     println!("Web build ready at {}", out_dir.display());
+    Ok(())
+}
+
+fn copy_dir_all(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
     Ok(())
 }
 

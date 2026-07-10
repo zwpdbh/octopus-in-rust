@@ -12,7 +12,7 @@ native = ["bevy/x11"]
 web = ["bevy/webgl2", "dep:wasm-bindgen"]
 
 [dependencies]
-bevy = { version = "0.14", default-features = false, features = [
+bevy = { version = "0.19", default-features = false, features = [
     "bevy_asset",
     "bevy_core_pipeline",
     "bevy_render",
@@ -22,6 +22,7 @@ bevy = { version = "0.14", default-features = false, features = [
     "bevy_winit",
     "default_font",
 ] }
+bevy_egui = "0.41"
 faf-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

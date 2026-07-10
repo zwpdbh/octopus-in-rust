@@ -25,8 +25,10 @@ use faf_units::DataIndex;
 pub use kind::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, UpgradeRecipe,
 };
+pub use category::{UnitCategory, category_of};
 
 mod build;
+mod category;
 mod kind;
 
 /// Unified repository of unit knowledge.
@@ -178,6 +180,15 @@ impl Units {
         self.build_recipe(target)
             .map(|r| r.builder_options.contains(builder))
             .unwrap_or(false)
+    }
+
+    /// Return every unit kind that `builder` is allowed to build.
+    pub fn buildable_by(&self, builder: &UnitKind) -> Vec<UnitKind> {
+        self.builds
+            .values()
+            .filter(|r| r.builder_options.contains(builder))
+            .map(|r| r.target.clone())
+            .collect()
     }
 
     /// Return the legal builder kinds for a target.
@@ -498,6 +509,41 @@ mod tests {
         assert!(units
             .upgrade_target(&UnitKind::Engineer(TechLevel::T1))
             .is_none());
+    }
+
+    #[test]
+    fn commander_builds_t1_economy_and_factories() {
+        let units = load_units();
+
+        let buildable = units.buildable_by(&UnitKind::Commander);
+        assert!(buildable.contains(&UnitKind::Mex(TechLevel::T1)));
+        assert!(buildable.contains(&UnitKind::Pgen(TechLevel::T1)));
+        assert!(buildable.contains(&UnitKind::Factory(TechLevel::T1)));
+        assert!(!buildable.contains(&UnitKind::Engineer(TechLevel::T1)));
+    }
+
+    #[test]
+    fn factory_builds_its_tier_engineers() {
+        let units = load_units();
+
+        let t1 = units.buildable_by(&UnitKind::Factory(TechLevel::T1));
+        assert!(t1.contains(&UnitKind::Engineer(TechLevel::T1)));
+        assert!(!t1.contains(&UnitKind::Engineer(TechLevel::T2)));
+
+        let t2 = units.buildable_by(&UnitKind::Factory(TechLevel::T2));
+        assert!(t2.contains(&UnitKind::Engineer(TechLevel::T2)));
+    }
+
+    #[test]
+    fn categories_group_common_units() {
+        use super::category::UnitCategory;
+        use super::category::category_of;
+
+        assert_eq!(category_of(&UnitKind::Commander), UnitCategory::Commander);
+        assert_eq!(category_of(&UnitKind::Engineer(TechLevel::T1)), UnitCategory::Engineer);
+        assert_eq!(category_of(&UnitKind::Factory(TechLevel::T1)), UnitCategory::Factory);
+        assert_eq!(category_of(&UnitKind::Mex(TechLevel::T1)), UnitCategory::Economic);
+        assert_eq!(category_of(&UnitKind::Pgen(TechLevel::T1)), UnitCategory::Economic);
     }
 
     #[test]
