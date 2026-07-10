@@ -23,7 +23,6 @@ const TILE_SIZE: f32 = 32.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 enum BrowserCategory {
     #[default]
-    Commander,
     Land,
     Air,
     Naval,
@@ -39,7 +38,6 @@ enum BrowserCategory {
 impl BrowserCategory {
     fn label(self) -> &'static str {
         match self {
-            BrowserCategory::Commander => "Commander",
             BrowserCategory::Land => "Land",
             BrowserCategory::Air => "Air",
             BrowserCategory::Naval => "Naval",
@@ -73,9 +71,6 @@ fn browser_category_for_kind(kind: &UnitKind, units: &Units, index: &DataIndex) 
 
 /// Derive a browser category from a raw unit.
 fn browser_category(unit: &faf_units::Unit) -> BrowserCategory {
-    if unit.has_category("COMMAND") {
-        return BrowserCategory::Commander;
-    }
     if unit.has_category("ENGINEER") {
         return BrowserCategory::ConstructionBuildpower;
     }
@@ -1038,14 +1033,8 @@ fn ui_system(
         .min_size([screen.width(), 200.0])
         .max_size([screen.width(), screen.height() * 0.85])
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Unit Browser");
-                ui.label("Click a unit to view its eco details.");
-            });
-            ui.separator();
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                ui.horizontal(|ui| {
                     let mut sorted_categories: Vec<_> = browser_groups.into_iter().collect();
                     sorted_categories.sort_by_key(|(c, _)| *c);
 
@@ -1054,30 +1043,32 @@ fn ui_system(
                             .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                             .inner_margin(6.0)
                             .show(ui, |ui| {
-                                ui.set_min_width(280.0);
-                                ui.centered_and_justified(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(8.0);
                                     ui.heading(category.label());
                                 });
                                 ui.separator();
 
                                 egui::Grid::new(("category_grid", category))
-                                    .num_columns(4)
+                                    .num_columns(7)
+                                    .spacing([8.0, 4.0])
                                     .show(ui, |ui| {
+                                        let techs = [
+                                            TechLevel::T1,
+                                            TechLevel::T2,
+                                            TechLevel::T3,
+                                            TechLevel::T4,
+                                        ];
                                         for faction in [
                                             BrowserFaction::Uef,
                                             BrowserFaction::Cybran,
                                             BrowserFaction::Aeon,
                                             BrowserFaction::Seraphim,
                                         ] {
-                                            for tech in [
-                                                TechLevel::T1,
-                                                TechLevel::T2,
-                                                TechLevel::T3,
-                                                TechLevel::T4,
-                                            ] {
-                                                ui.horizontal_wrapped(|ui| {
+                                            for (i, tech) in techs.iter().enumerate() {
+                                                ui.horizontal(|ui| {
                                                     if let Some(kinds) = grid_groups
-                                                        .get(&(category, tech, faction))
+                                                        .get(&(category, *tech, faction))
                                                     {
                                                         for kind in kinds {
                                                             let is_selected =
@@ -1095,6 +1086,13 @@ fn ui_system(
                                                         }
                                                     }
                                                 });
+                                                if i < techs.len() - 1 {
+                                                    ui.add(
+                                                        egui::Separator::default()
+                                                            .vertical()
+                                                            .spacing(4.0),
+                                                    );
+                                                }
                                             }
                                             ui.end_row();
                                         }
