@@ -12,21 +12,68 @@ struct UnitSummary {
     category: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+struct UnitDetailData {
+    id: String,
+    description: String,
+    #[serde(default)]
+    name_zh: Option<String>,
+    #[serde(default)]
+    description_zh: Option<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    general: Option<GeneralDetail>,
+    #[serde(default)]
+    economy: Option<EconomyDetail>,
+    #[serde(default)]
+    defense: Option<DefenseDetail>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+struct GeneralDetail {
+    #[serde(default)]
+    unit_name: Option<String>,
+    #[serde(default)]
+    faction_name: Option<String>,
+    #[serde(default)]
+    tech_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+struct EconomyDetail {
+    #[serde(default)]
+    build_cost_energy: Option<f64>,
+    #[serde(default)]
+    build_cost_mass: Option<f64>,
+    #[serde(default)]
+    build_time: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+struct DefenseDetail {
+    #[serde(default)]
+    max_health: Option<f64>,
+}
+
 const CATEGORY_ORDER: &[&str] = &[
     "Land",
+    "Air",
     "Naval",
+    "Structures - Factories",
+    "Structures - Economy",
     "Structures - Weapons",
     "Structures - Support",
     "Structures - Intelligence",
-    "Air",
-    "Structures - Factories",
     "Construction - Buildpower",
-    "Structures - Economy",
     "Experimental",
 ];
 
 const FACTION_ORDER: &[&str] = &["UEF", "Cybran", "Aeon", "Seraphim"];
-const FACTION_COLORS: &[&str] = &["#1e90ff", "#dc143c", "#32cd32", "#ffd700"];
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -56,27 +103,28 @@ fn App() -> Element {
                 })
                 .collect();
             rsx! {
+                document::Stylesheet { href: asset!("/assets/tailwind.css") }
                 div {
-                    style: "display: flex; flex-direction: column; height: 100vh; color: #ddd; background: #0b0b0b; font-family: sans-serif;",
+                    class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans",
                     header {
-                        style: "padding: 12px 16px; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px;",
-                        h1 { style: "margin: 0; font-size: 18px;", "FAF Unit Database" }
+                        class: "flex items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
+                        h1 { class: "text-lg font-semibold text-white tracking-wide", "FAF Unit Database" }
                         input {
                             r#type: "text",
                             placeholder: "Search units...",
                             value: "{query.read()}",
                             oninput: move |e| query.set(e.value().to_string()),
-                            style: "flex: 1; max-width: 300px; padding: 6px 10px; background: #222; color: #ddd; border: 1px solid #444; border-radius: 4px;",
+                            class: "flex-1 max-w-sm px-3 py-1.5 bg-neutral-800 border border-neutral-700 rounded text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-blue-500",
                         }
                     }
                     div {
-                        style: "flex: 1; display: flex; overflow: hidden;",
+                        class: "flex flex-1 overflow-hidden",
                         div {
-                            style: "flex: 1; overflow: auto; padding: 12px;",
+                            class: "flex-1 overflow-auto p-4",
                             CategoryGrid { units: filtered, selected }
                         }
                         div {
-                            style: "width: 360px; border-left: 1px solid #333; overflow: auto; padding: 12px; background: #141414;",
+                            class: "w-96 shrink-0 border-l border-neutral-800 bg-neutral-900/50 overflow-auto p-4",
                             UnitDetail { selected }
                         }
                     }
@@ -107,7 +155,7 @@ fn CategoryGrid(units: Vec<UnitSummary>, selected: Signal<Option<UnitSummary>>) 
 
     rsx! {
         div {
-            style: "display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;",
+            class: "flex flex-wrap gap-4 items-start content-start",
             for (category, units) in ordered {
                 CategoryPanel { category, units, selected }
             }
@@ -124,18 +172,19 @@ fn CategoryPanel(
     let techs: Vec<&str> = if category == "Experimental" {
         vec!["EXPERIMENTAL"]
     } else {
-        vec!["TECH1", "TECH2", "TECH3", "TECH4"]
+        vec!["TECH1", "TECH2", "TECH3"]
     };
 
     rsx! {
         div {
-            style: "border: 1px solid #444; border-radius: 6px; background: #161616; padding: 10px; min-width: 280px;",
-            h2 { style: "margin: 0 0 10px; font-size: 14px; text-align: center; color: #fff;", "{category}" }
+            class: "border border-neutral-700 rounded-lg bg-neutral-900/80 backdrop-blur-sm p-3 min-w-[360px] shadow-lg",
+            h2 { class: "text-sm font-semibold text-center text-white mb-3 tracking-wide", "{category}" }
             div {
-                style: "display: flex; gap: 10px;",
+                class: "flex gap-1",
                 for (i, tech) in techs.iter().enumerate() {
                     div {
-                        style: "display: flex; flex-direction: column; gap: 6px;",
+                        class: "flex flex-col gap-1 min-w-[108px]",
+                        div { class: "text-[10px] text-center text-neutral-500 uppercase tracking-wider mb-1", "{tech_label(tech)}" }
                         for faction in FACTION_ORDER.iter().copied() {
                             TechCell {
                                 units: units.iter().filter(|u| u.faction == faction && u.tech == *tech).cloned().collect::<Vec<_>>(),
@@ -145,11 +194,22 @@ fn CategoryPanel(
                         }
                     }
                     if i < techs.len() - 1 {
-                        div { style: "width: 1px; background: #444; margin: 0 2px;", }
+                        div { class: "w-px bg-neutral-800 mx-1", }
                     }
                 }
             }
         }
+    }
+}
+
+fn tech_label(tech: &str) -> &str {
+    match tech {
+        "TECH1" => "T1",
+        "TECH2" => "T2",
+        "TECH3" => "T3",
+        "TECH4" => "T4",
+        "EXPERIMENTAL" => "EXP",
+        _ => tech,
     }
 }
 
@@ -159,12 +219,11 @@ fn TechCell(
     faction: &'static str,
     selected: Signal<Option<UnitSummary>>,
 ) -> Element {
-    let color = faction_color(faction);
     rsx! {
         div {
-            style: "display: flex; flex-wrap: wrap; gap: 2px; width: 96px; min-height: 22px;",
+            class: "flex flex-wrap gap-[3px] min-h-[54px] p-1 rounded bg-neutral-950/50",
             for unit in units {
-                PortraitButton { unit, color, selected }
+                PortraitButton { unit, faction, selected }
             }
         }
     }
@@ -173,19 +232,24 @@ fn TechCell(
 #[component]
 fn PortraitButton(
     unit: UnitSummary,
-    color: &'static str,
+    faction: &'static str,
     selected: Signal<Option<UnitSummary>>,
 ) -> Element {
     let id = unit.id.clone();
     let name = unit.display_name.clone();
+    let glow = faction_glow_class(faction);
+    let is_selected = selected.read().as_ref().map(|s| s.id == unit.id).unwrap_or(false);
+
     rsx! {
         button {
-            style: "padding: 0; border: 1.5px solid {color}; background: #000; cursor: pointer; width: 22px; height: 22px;",
+            class: "w-12 h-12 p-[3px] rounded-[5px] bg-black border cursor-pointer transition-transform hover:scale-105 active:scale-[0.99] active:translate-y-px {glow}",
+            class: if is_selected { "ring-2 ring-white" },
+            title: "{name}",
             onclick: move |_| selected.set(Some(unit.clone())),
             img {
                 src: "/api/portraits/{id}.png",
                 alt: "{name}",
-                style: "width: 100%; height: 100%; object-fit: contain; display: block;",
+                class: "w-full h-full object-contain block",
             }
         }
     }
@@ -193,31 +257,110 @@ fn PortraitButton(
 
 #[component]
 fn UnitDetail(selected: Signal<Option<UnitSummary>>) -> Element {
+    let detail = use_resource(move || async move {
+        let summary = selected.read().clone()?;
+        Request::get(&format!("/api/units/{}", summary.id))
+            .send()
+            .await
+            .ok()?
+            .json::<UnitDetailData>()
+            .await
+            .ok()
+    });
+
     match selected.read().clone() {
-        Some(unit) => rsx! {
-            div {
-                h2 { style: "margin-top: 0; font-size: 16px;", "{unit.display_name}" }
-                p { "ID: {unit.id}" }
-                p { "Faction: {unit.faction}" }
-                p { "Tech: {unit.tech}" }
-                p { "Category: {unit.category}" }
-                img {
-                    src: "/api/portraits/{unit.id}.png",
-                    alt: "{unit.display_name}",
-                    style: "width: 128px; height: 128px; border: 2px solid {faction_color(&unit.faction)};",
+        Some(summary) => {
+            let color = faction_color(&summary.faction);
+            let glow = faction_glow_class(&summary.faction);
+            let detail_data = detail.read().clone();
+            rsx! {
+                div { class: "space-y-4",
+                    div { class: "flex items-start gap-4",
+                        img {
+                            src: "/api/portraits/{summary.id}.png",
+                            alt: "{summary.display_name}",
+                            class: "w-24 h-24 object-contain rounded-lg border-2 p-1 {glow}",
+                            style: "border-color: {color};",
+                        }
+                        div { class: "flex-1 min-w-0",
+                            h2 { class: "text-lg font-semibold text-white leading-tight", "{summary.display_name}" }
+                            p { class: "text-xs text-neutral-500 font-mono mt-0.5", "{summary.id}" }
+                            p { class: "text-sm text-neutral-400 mt-1", "{summary.faction} · {summary.tech}" }
+                        }
+                    }
+
+                    match detail_data {
+                        Some(Some(d)) => {
+                            let health = d.defense.as_ref().and_then(|x| x.max_health).map(|v| format!("{v:.0}"));
+                            let mass = d.economy.as_ref().and_then(|x| x.build_cost_mass).map(|v| format!("{v:.0}"));
+                            let energy = d.economy.as_ref().and_then(|x| x.build_cost_energy).map(|v| format!("{v:.0}"));
+                            let build_time = d.economy.as_ref().and_then(|x| x.build_time).map(|v| format!("{v:.0}"));
+                            rsx! {
+                                div { class: "space-y-3",
+                                    if !d.description.is_empty() {
+                                        p { class: "text-sm text-neutral-300 italic", "{d.description}" }
+                                    }
+                                    div { class: "grid grid-cols-2 gap-2 text-sm",
+                                        Stat { label: "Health", value: health }
+                                        Stat { label: "Mass", value: mass }
+                                        Stat { label: "Energy", value: energy }
+                                        Stat { label: "Build Time", value: build_time }
+                                    }
+                                    if !d.categories.is_empty() {
+                                        div { class: "flex flex-wrap gap-1",
+                                            for cat in d.categories {
+                                                span { class: "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded bg-neutral-800 text-neutral-400 border border-neutral-700", "{cat}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Some(None) => rsx! { div { class: "text-red-400 text-sm", "Failed to load details." } },
+                        None => rsx! { div { class: "text-neutral-500 text-sm", "Loading details..." } },
+                    }
                 }
             }
-        },
+        }
         None => rsx! {
-            div { style: "color: #888;", "Select a unit to view details." }
+            div { class: "h-full flex items-center justify-center text-neutral-500 text-sm",
+                "Select a unit to view details."
+            }
         },
     }
 }
 
+#[component]
+fn Stat(label: String, value: Option<String>) -> Element {
+    rsx! {
+        div { class: "flex flex-col px-3 py-2 rounded bg-neutral-800/50 border border-neutral-800",
+            span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
+            span { class: "text-white font-medium",
+                {value.as_deref().unwrap_or("—")}
+            }
+        }
+    }
+}
+
+
 fn faction_color(faction: &str) -> &'static str {
-    FACTION_ORDER
-        .iter()
-        .position(|f| f.eq_ignore_ascii_case(faction))
-        .map(|i| FACTION_COLORS[i])
-        .unwrap_or("#888")
+    match faction.to_lowercase().as_str() {
+        "uef" => "#2d78b2",
+        "cybran" => "#df2d0e",
+        "aeon" => "#19b340",
+        "seraphim" => "#fcb419",
+        _ => "#888",
+    }
+}
+
+/// Tailwind-aware portrait glow class. The returned literals are scanned by
+/// Tailwind so the arbitrary values end up in the generated CSS.
+fn faction_glow_class(faction: &str) -> &'static str {
+    match faction.to_lowercase().as_str() {
+        "uef" => "border-[rgba(148,193,227,0.33)] shadow-[inset_0_0_4px_rgba(70,174,255,0.43)] bg-[rgba(45,120,178,0.13)]",
+        "cybran" => "border-[rgba(247,157,142,0.3)] shadow-[inset_0_0_4px_rgba(255,109,84,0.4)] bg-[rgba(223,45,14,0.1)]",
+        "aeon" => "border-[rgba(120,236,150,0.33)] shadow-[inset_0_0_4px_rgba(51,255,103,0.43)] bg-[rgba(25,179,64,0.13)]",
+        "seraphim" => "border-[rgba(253,229,176,0.3)] shadow-[inset_0_0_4px_rgba(255,213,124,0.4)] bg-[rgba(252,180,25,0.1)]",
+        _ => "border-neutral-600",
+    }
 }
