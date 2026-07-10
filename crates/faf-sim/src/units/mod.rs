@@ -161,6 +161,19 @@ impl Units {
         &self.defs
     }
 
+    /// Blueprint id for a unit kind, if one exists.
+    ///
+    /// Common units map to their canonical UEF representative; unique units return
+    /// their own blueprint id.
+    pub fn blueprint_id(&self, kind: &UnitKind) -> Option<String> {
+        match kind {
+            UnitKind::Unique(id) => Some(id.0.clone()),
+            UnitKind::CapT2Mex => Some("UEB1202".to_string()),
+            UnitKind::CapT3Mex => Some("UEB1302".to_string()),
+            _ => build::canonical_blueprint_id(kind).map(|s| s.to_string()),
+        }
+    }
+
     /// Human-readable name for a unit kind.
     pub fn display_name(&self, kind: &UnitKind) -> String {
         self.def(kind)

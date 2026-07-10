@@ -8,16 +8,103 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures};
 use faf_units::DataIndex;
 
 use crate::economy::{apply_tick_graph, compute_drain, EconomyState, RequestedBuildPower};
 use crate::units::{category_of, UnitCategory, Units};
-use crate::units::{TechLevel, UnitId, UnitKind};
+use crate::units::UnitKind;
 use crate::BuildDrain;
 
 const BOARD_SIZE: i32 = 16;
 const TILE_SIZE: f32 = 32.0;
+
+/// Category used to group units in the browser panel, mirroring etfreeman-db sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+enum BrowserCategory {
+    #[default]
+    Commander,
+    Land,
+    Air,
+    Naval,
+    StructuresFactories,
+    StructuresEconomy,
+    StructuresWeapons,
+    StructuresSupport,
+    StructuresIntelligence,
+    ConstructionBuildpower,
+    Experimental,
+}
+
+impl BrowserCategory {
+    fn label(self) -> &'static str {
+        match self {
+            BrowserCategory::Commander => "Commander",
+            BrowserCategory::Land => "Land",
+            BrowserCategory::Air => "Air",
+            BrowserCategory::Naval => "Naval",
+            BrowserCategory::StructuresFactories => "Structures - Factories",
+            BrowserCategory::StructuresEconomy => "Structures - Economy",
+            BrowserCategory::StructuresWeapons => "Structures - Weapons",
+            BrowserCategory::StructuresSupport => "Structures - Support",
+            BrowserCategory::StructuresIntelligence => "Structures - Intelligence",
+            BrowserCategory::ConstructionBuildpower => "Construction - Buildpower",
+            BrowserCategory::Experimental => "Experimental",
+        }
+    }
+}
+
+/// Derive a browser category for a unit kind using the raw index for unique units.
+fn browser_category_for_kind(kind: &UnitKind, units: &Units, index: &DataIndex) -> BrowserCategory {
+    match kind {
+        UnitKind::Unique(id) => index
+            .find_unit(&id.0)
+            .map(browser_category)
+            .unwrap_or(BrowserCategory::Land),
+        _ => {
+            let id = units.blueprint_id(kind).unwrap_or_default();
+            index
+                .find_unit(&id)
+                .map(browser_category)
+                .unwrap_or(BrowserCategory::Land)
+        }
+    }
+}
+
+/// Derive a browser category from a raw unit.
+fn browser_category(unit: &faf_units::Unit) -> BrowserCategory {
+    if unit.has_category("COMMAND") {
+        return BrowserCategory::Commander;
+    }
+    if unit.has_category("ENGINEER") {
+        return BrowserCategory::ConstructionBuildpower;
+    }
+    if unit.has_category("EXPERIMENTAL") || unit.has_category("TECH4") {
+        return BrowserCategory::Experimental;
+    }
+    if unit.has_category("FACTORY") && !unit.has_category("GATE") {
+        return BrowserCategory::StructuresFactories;
+    }
+    if unit.has_category("STRUCTURE") {
+        if unit.has_category("INTELLIGENCE") || unit.has_category("OMNI") || unit.has_category("RADAR") || unit.has_category("SONAR") {
+            return BrowserCategory::StructuresIntelligence;
+        }
+        if unit.has_category("ECONOMIC") || unit.has_category("MASSEXTRACTION") || unit.has_category("ENERGYPRODUCTION") || unit.has_category("ENERGYSTORAGE") || unit.has_category("MASSSTORAGE") {
+            return BrowserCategory::StructuresEconomy;
+        }
+        if unit.has_category("WEAPON") || unit.has_category("ARTILLERY") || unit.has_category("NUKE") || unit.has_category("ANTIMISSILE") {
+            return BrowserCategory::StructuresWeapons;
+        }
+        return BrowserCategory::StructuresSupport;
+    }
+    if unit.has_category("AIR") {
+        return BrowserCategory::Air;
+    }
+    if unit.has_category("NAVAL") {
+        return BrowserCategory::Naval;
+    }
+    BrowserCategory::Land
+}
 
 /// Wrapper so the unit database can live as a Bevy resource.
 #[derive(Resource, Debug, Clone)]
@@ -78,6 +165,14 @@ struct HoveredUnit(Option<Entity>);
 #[derive(Resource, Debug, Clone, Default)]
 struct SelectedBuildTarget(Option<UnitKind>);
 
+/// Unit kind selected in the browser panel for detail viewing.
+#[derive(Resource, Debug, Clone, Default)]
+struct BrowserSelection(Option<UnitKind>);
+
+/// Currently active category tab in the unit browser.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+struct BrowserCategoryFilter(BrowserCategory);
+
 /// Completed unit kinds, used to check build prerequisites.
 #[derive(Resource, Debug, Clone, Default)]
 struct CompletedUnitKinds(HashSet<UnitKind>);
@@ -89,6 +184,10 @@ struct UnitCounts(HashMap<UnitCategory, usize>);
 /// Loaded strategic icon textures keyed by unit kind.
 #[derive(Resource, Debug, Clone, Default)]
 struct IconAtlas(HashMap<UnitKind, Handle<Image>>);
+
+/// A plain white 1x1 texture used for colored sprites that have no portrait.
+#[derive(Resource, Debug, Clone)]
+struct FallbackImage(Handle<Image>);
 
 /// Grid coordinate of a board entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -169,6 +268,8 @@ pub fn run() {
         .insert_resource(SelectedUnit::default())
         .insert_resource(HoveredUnit::default())
         .insert_resource(SelectedBuildTarget::default())
+        .insert_resource(BrowserSelection::default())
+        .insert_resource(BrowserCategoryFilter::default())
         .insert_resource(CompletedUnitKinds::default())
         .insert_resource(UnitCounts::default())
         .insert_resource(IconAtlas::default())
@@ -203,6 +304,18 @@ impl UnitLibrary {
     }
 }
 
+/// Create a 1x1 white RGBA image for use as a colored sprite base.
+fn create_white_image() -> Image {
+    let mut image = Image::default();
+    image.resize(bevy::render::render_resource::Extent3d {
+        width: 1,
+        height: 1,
+        depth_or_array_layers: 1,
+    });
+    image.data = Some(vec![255, 255, 255, 255]);
+    image
+}
+
 fn initial_economy() -> EconomyState {
     use crate::quantities::{Energy, EnergyRate, Mass, MassRate};
     EconomyState {
@@ -221,19 +334,27 @@ fn setup(
     library: Res<UnitLibrary>,
     mut eco: ResMut<EcoState>,
     asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     mut atlas: ResMut<IconAtlas>,
+    mut egui_textures: ResMut<EguiUserTextures>,
     mut completed: ResMut<CompletedUnitKinds>,
     mut counts: ResMut<UnitCounts>,
 ) {
     commands.spawn(Camera2d);
+
+    // Create a fallback white texture so colored sprites always render, even before portraits load.
+    let fallback = FallbackImage(images.add(create_white_image()));
+    let fallback_handle = fallback.0.clone();
+    commands.insert_resource(fallback.clone());
 
     // Spawn the empty board tiles.
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
             commands.spawn((
                 Sprite {
-                    color: Color::srgb(0.15, 0.18, 0.15),
-                    custom_size: Some(Vec2::new(board.tile_size - 1.0, board.tile_size - 1.0)),
+                    image: fallback_handle.clone(),
+                    color: Color::srgb(0.30, 0.33, 0.30),
+                    custom_size: Some(Vec2::new(board.tile_size - 2.0, board.tile_size - 2.0)),
                     ..default()
                 },
                 Transform::from_translation(board.world_pos(x, y)),
@@ -241,6 +362,14 @@ fn setup(
                 BoardTile,
             ));
         }
+    }
+
+    // Pre-load portrait icons for all known unit kinds so every spawned unit can use them.
+    preload_portraits(&library.units, &asset_server, &mut atlas);
+
+    // Register the loaded portraits as egui user textures so the UI can display them.
+    for handle in atlas.0.values() {
+        egui_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
     }
 
     // Spawn the ACU in the center as the starting builder + producer.
@@ -257,6 +386,7 @@ fn setup(
         &board,
         &library.units,
         &mut atlas,
+        &fallback,
         acu_pos,
         UnitKind::Commander,
         true,
@@ -276,9 +406,6 @@ fn setup(
         .0
         .entry(category_of(&UnitKind::Commander))
         .or_insert(0) += 1;
-
-    // Pre-load icons for all common buildable kinds.
-    preload_common_icons(&library.units, &asset_server, &mut atlas);
 }
 
 /// Spawn a completed unit on the board.
@@ -287,6 +414,7 @@ fn spawn_unit(
     board: &BoardConfig,
     units: &Units,
     atlas: &mut IconAtlas,
+    fallback: &FallbackImage,
     pos: GridPos,
     kind: UnitKind,
     is_acu: bool,
@@ -315,6 +443,7 @@ fn spawn_unit(
         });
     } else {
         entity.insert(Sprite {
+            image: fallback.0.clone(),
             color: unit_color(&kind),
             custom_size: Some(Vec2::splat(size)),
             ..default()
@@ -333,70 +462,30 @@ fn spawn_unit(
     entity.id()
 }
 
-/// Load strategic icons for all common unit kinds that have a build recipe.
-fn preload_common_icons(units: &Units, asset_server: &AssetServer, atlas: &mut IconAtlas) {
+/// Load portrait icons for all known unit kinds.
+fn preload_portraits(units: &Units, asset_server: &AssetServer, atlas: &mut IconAtlas) {
+    // Diagnostic: verify the asset root and a sample file.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let sample_path = format!("assets/icons/units/{}.png", "UEL0001");
+    eprintln!(
+        "[faf-sim] preload_portraits cwd={:?}, sample_exists={}",
+        cwd,
+        std::path::Path::new(&sample_path).exists()
+    );
+
     for kind in units.defs().keys() {
-        if let Some(path) = common_icon_path(kind) {
+        if let Some(path) = portrait_path(units, kind) {
             let handle: Handle<Image> = asset_server.load(path);
             atlas.0.insert(kind.clone(), handle);
         }
     }
 }
 
-/// Icon path for common unit kinds. Unique units are loaded on demand.
-fn common_icon_path(kind: &UnitKind) -> Option<String> {
-    let path = match kind {
-        UnitKind::Commander => "icons/strategic/UEF_icon_commander_generic.png",
-        UnitKind::Engineer(TechLevel::T1) => "icons/strategic/UEF_icon_land1_engineer.png",
-        UnitKind::Engineer(TechLevel::T2) => "icons/strategic/UEF_icon_land2_engineer.png",
-        UnitKind::Engineer(TechLevel::T3) => "icons/strategic/UEF_icon_land3_engineer.png",
-        UnitKind::Engineer(TechLevel::T4) => return None,
-        UnitKind::Factory(TechLevel::T1) => "icons/strategic/UEF_icon_factory1_land.png",
-        UnitKind::Factory(TechLevel::T2) => "icons/strategic/UEF_icon_factory2_land.png",
-        UnitKind::Factory(TechLevel::T3) => "icons/strategic/UEF_icon_factory3_land.png",
-        UnitKind::Factory(TechLevel::T4) => return None,
-        UnitKind::Mex(TechLevel::T1) => "icons/strategic/UEF_icon_structure1_mass.png",
-        UnitKind::Mex(TechLevel::T2) | UnitKind::CapT2Mex => {
-            "icons/strategic/UEF_icon_structure2_mass.png"
-        }
-        UnitKind::Mex(TechLevel::T3) | UnitKind::CapT3Mex => {
-            "icons/strategic/UEF_icon_structure3_mass.png"
-        }
-        UnitKind::Mex(TechLevel::T4) => return None,
-        UnitKind::Pgen(TechLevel::T1) => "icons/strategic/UEF_icon_structure1_energy.png",
-        UnitKind::Pgen(TechLevel::T2) => "icons/strategic/UEF_icon_structure2_energy.png",
-        UnitKind::Pgen(TechLevel::T3) => "icons/strategic/UEF_icon_structure3_energy.png",
-        UnitKind::Pgen(TechLevel::T4) => return None,
-        UnitKind::EnergyStorage => "icons/strategic/UEF_icon_structure_energy_storage.png",
-        UnitKind::Unique(_) => return None,
-    };
-    Some(path.to_string())
-}
-
-/// Try to load a strategic icon for a unique unit on demand.
-fn load_unique_icon(
-    kind: &UnitKind,
-    index: &DataIndex,
-    asset_server: &AssetServer,
-    atlas: &mut IconAtlas,
-) -> Option<Handle<Image>> {
-    let UnitKind::Unique(UnitId(id)) = kind else {
-        return None;
-    };
-
-    if let Some(handle) = atlas.0.get(kind) {
-        return Some(handle.clone());
-    }
-
-    let unit = index.find_unit(id)?;
-    let faction = unit.faction()?.to_uppercase();
-    let icon_name = unit.strategic_icon_name.as_ref()?;
-    // The raw name is like "icon_land1_engineer"; strip the leading "icon_".
-    let suffix = icon_name.strip_prefix("icon_")?;
-    let path = format!("icons/strategic/{}_icon_{}.png", faction, suffix);
-    let handle: Handle<Image> = asset_server.load(path);
-    atlas.0.insert(kind.clone(), handle.clone());
-    Some(handle)
+/// Portrait icon path for a unit kind.
+fn portrait_path(units: &Units, kind: &UnitKind) -> Option<String> {
+    units
+        .blueprint_id(kind)
+        .map(|id| format!("icons/units/{}.png", id))
 }
 
 fn input_system(
@@ -688,8 +777,8 @@ fn completion_system(
     sites: Query<(&ConstructionSite, &AssignedBuilder, &Transform)>,
     mut eco: ResMut<EcoState>,
     library: Res<UnitLibrary>,
-    asset_server: Res<AssetServer>,
-    mut atlas: ResMut<IconAtlas>,
+    atlas: Res<IconAtlas>,
+    fallback: Res<FallbackImage>,
     mut completed: ResMut<CompletedUnitKinds>,
     mut counts: ResMut<UnitCounts>,
 ) {
@@ -704,11 +793,6 @@ fn completion_system(
         };
 
         commands.entity(event.entity).despawn();
-
-        // Load the icon for unique units on demand.
-        if matches!(event.target, UnitKind::Unique(_)) {
-            load_unique_icon(&event.target, &library.index, &asset_server, &mut atlas);
-        }
 
         let size = TILE_SIZE * 0.75;
         let icon = atlas.0.get(&event.target).cloned();
@@ -732,6 +816,7 @@ fn completion_system(
             });
         } else {
             entity.insert(Sprite {
+                image: fallback.0.clone(),
                 color: unit_color(&event.target),
                 custom_size: Some(Vec2::splat(size)),
                 ..default()
@@ -830,166 +915,295 @@ fn ui_system(
     sim_time: Res<SimTime>,
     stall: Res<StallFactor>,
     selected: Res<SelectedUnit>,
-    mut build_target: ResMut<SelectedBuildTarget>,
-    completed: Res<CompletedUnitKinds>,
-    counts: Res<UnitCounts>,
+    mut browser: ResMut<BrowserSelection>,
+    mut category_filter: ResMut<BrowserCategoryFilter>,
+    _counts: Res<UnitCounts>,
+    atlas: Res<IconAtlas>,
+    asset_server: Res<AssetServer>,
+    images: Res<Assets<Image>>,
     unit_query: Query<(&UnitKindComp, Option<&Builder>, Option<&Producer>)>,
 ) {
+    // Pre-compute selected unit info and portrait texture id before borrowing the egui context.
+    let selected_info = selected.0.and_then(|entity| {
+        unit_query
+            .get(entity)
+            .ok()
+            .map(|(kind, builder, producer)| {
+                let portrait_id = atlas.0.get(&kind.0).and_then(|h| contexts.image_id(h));
+                (kind.0.clone(), builder, producer, portrait_id)
+            })
+    });
+
+    // The browser panel selects a unit kind directly.
+    let browser_kind = browser.0.clone();
+
+    // Group all known units by browser category for the selection panel.
+    let mut browser_groups: HashMap<BrowserCategory, Vec<UnitKind>> = HashMap::new();
+    for kind in library.units.defs().keys() {
+        let category = browser_category_for_kind(kind, &library.units, &library.index);
+        browser_groups.entry(category).or_default().push(kind.clone());
+    }
+    for group in browser_groups.values_mut() {
+        group.sort_by(|a, b| library.units.display_name(a).cmp(&library.units.display_name(b)));
+    }
+
+    // Pre-compute egui texture ids for all browser portraits.
+    let portrait_ids: HashMap<UnitKind, egui::TextureId> = library
+        .units
+        .defs()
+        .keys()
+        .filter_map(|kind| {
+            atlas
+                .0
+                .get(kind)
+                .and_then(|h| contexts.image_id(h))
+                .map(|id| (kind.clone(), id))
+        })
+        .collect();
+    let browser_portrait_id = browser_kind.as_ref().and_then(|k| portrait_ids.get(k).copied());
+
+    // Diagnostic: log once how many portraits are registered in egui.
+    static mut LOGGED_ONCE: bool = false;
+    unsafe {
+        if !LOGGED_ONCE {
+            LOGGED_ONCE = true;
+            eprintln!(
+                "[faf-sim] ui_system: atlas={}, portrait_ids={}, loaded={}",
+                atlas.0.len(),
+                portrait_ids.len(),
+                atlas.0.values().filter(|h| asset_server.is_loaded(*h)).count()
+            );
+        }
+    }
+
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
 
-    // Top-left economy HUD.
-    egui::Window::new("Economy")
-        .default_pos([10.0, 10.0])
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.label(format!("Mass: {:.1}", eco.0.mass_storage.value()));
-            ui.label(format!("Energy: {:.1}", eco.0.energy_storage.value()));
-            ui.label(format!("Mass income: {:.1}", eco.0.net_mass_income.value()));
-            ui.label(format!(
-                "Energy income: {:.1}",
-                eco.0.net_energy_income.value()
-            ));
-            ui.label(format!("Time: {:.1}s", sim_time.0));
-            ui.label(format!("Stall: {:.2}", stall.0));
-        });
+    let screen = ctx.viewport_rect();
 
-    // Top-right selection info.
-    if let Some(entity) = selected.0 {
-        if let Ok((kind, builder, producer)) = unit_query.get(entity) {
-            let def = library.units.def(&kind.0);
-            egui::Window::new("Selected Unit")
-                .default_pos([300.0, 10.0])
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.heading(library.units.display_name(&kind.0));
-                    if let Some(def) = def {
-                        if let Some(builder) = builder {
-                            ui.label(format!("Build power: {:.1}", builder.power));
-                        }
-                        ui.label(format!("Mass income: +{:.1}", def.mass_income()));
-                        ui.label(format!(
-                            "Energy income: +{:.1} / -{:.1}",
-                            def.energy_income(),
-                            def.maintenance_energy()
-                        ));
-                        let _ = producer;
-                    }
+    let total_portraits = atlas.0.len();
+    let loaded_portraits = atlas
+        .0
+        .values()
+        .filter(|h| asset_server.is_loaded(*h))
+        .count();
+
+    // Top section: full-width unit browser with category tabs and a portrait grid.
+    egui::Window::new("Unit Browser")
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(true)
+        .fixed_pos([0.0, 0.0])
+        .default_size([screen.width(), 260.0])
+        .min_size([screen.width(), 120.0])
+        .max_size([screen.width(), screen.height() * 0.7])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Unit Browser");
+                ui.label("Click a unit to view its eco details.");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!(
+                        "Portraits: {} registered, {} loaded, {} in atlas",
+                        portrait_ids.len(),
+                        loaded_portraits,
+                        total_portraits
+                    ));
                 });
-        }
-    }
+            });
+            ui.separator();
 
-    // Left category summary.
-    egui::Window::new("Units by Category")
-        .default_pos([10.0, 220.0])
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            let mut categories: Vec<_> = counts.0.iter().collect();
-            categories.sort_by_key(|(c, _)| *c);
-            for (category, count) in categories {
-                ui.label(format!("{}: {}", category.label(), count));
-            }
+            // Category tabs.
+            ui.horizontal_wrapped(|ui| {
+                let mut sorted_categories: Vec<_> = browser_groups.keys().copied().collect();
+                sorted_categories.sort();
+                for category in sorted_categories {
+                    let is_selected = category_filter.0 == category;
+                    let text = egui::RichText::new(category.label())
+                        .color(if is_selected {
+                            ui.visuals().selection.bg_fill
+                        } else {
+                            ui.visuals().text_color()
+                        });
+                    if ui.selectable_label(is_selected, text).clicked() {
+                        category_filter.0 = category;
+                    }
+                }
+            });
+            ui.separator();
+
+            // Portrait grid for the selected category.
+            let selected_count = browser_groups
+                .get(&category_filter.0)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            ui.label(format!(
+                "{}: {} units",
+                category_filter.0.label(),
+                selected_count
+            ));
+
+            egui::Frame::new()
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if let Some(kinds) = browser_groups.get(&category_filter.0) {
+                            ui.horizontal_wrapped(|ui| {
+                                for kind in kinds {
+                                    let is_selected = browser.0.as_ref() == Some(kind);
+                                    if browser_portrait_button(
+                                        ui,
+                                        &library.units,
+                                        &portrait_ids,
+                                        kind,
+                                        is_selected,
+                                    ) {
+                                        browser.0 = Some(kind.clone());
+                                    }
+                                }
+                            });
+                        } else {
+                            ui.label("No units in this category.");
+                        }
+                    });
+                });
         });
 
-    // Bottom build palette for the selected unit.
-    if let Some(entity) = selected.0 {
-        if let Ok((kind, _, _)) = unit_query.get(entity) {
-            let buildable = library.units.buildable_by(&kind.0);
-            if !buildable.is_empty() {
-                egui::Window::new("Build Palette")
-                    .default_pos([200.0, 500.0])
-                    .collapsible(false)
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        ui.label("Left-click a unit, then left-click the board to place.");
+    // Bottom section: eco summary | placeholder | selected unit detail.
+    egui::Window::new("Bottom Bar")
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(true)
+        .anchor(egui::Align2::LEFT_BOTTOM, [0.0, 0.0])
+        .default_size([screen.width(), 220.0])
+        .min_size([screen.width(), 120.0])
+        .max_size([screen.width(), screen.height() * 0.7])
+        .show(ctx, |ui| {
+            let section_width = ui.available_width() / 3.0;
+            let section_height = ui.available_height();
+
+            ui.horizontal(|ui| {
+                // 1. Eco summary.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(section_width, section_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.heading("Eco Summary");
+                        ui.separator();
+                        ui.label(format!("Mass: {:.1}", eco.0.mass_storage.value()));
+                        ui.label(format!("Energy: {:.1}", eco.0.energy_storage.value()));
+                        ui.label(format!(
+                            "Mass income: +{:.1}",
+                            eco.0.net_mass_income.value()
+                        ));
+                        ui.label(format!(
+                            "Energy income: +{:.1}",
+                            eco.0.net_energy_income.value()
+                        ));
+                        ui.label(format!("Time: {:.1}s", sim_time.0));
+                        ui.label(format!("Stall: {:.2}", stall.0));
+                    },
+                );
+
+                ui.separator();
+
+                // 2. Placeholder (left empty).
+                ui.allocate_ui_with_layout(
+                    egui::vec2(section_width, section_height),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        ui.heading("Placeholder");
+                        ui.separator();
+                    },
+                );
+
+                ui.separator();
+
+                // 3. Selected unit eco detail.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(section_width, section_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.heading("Selected Unit");
                         ui.separator();
 
-                        let mut by_category: HashMap<UnitCategory, Vec<UnitKind>> = HashMap::new();
-                        for target in buildable {
-                            by_category
-                                .entry(category_of(&target))
-                                .or_default()
-                                .push(target);
-                        }
+                        let detail_kind = browser_kind
+                            .as_ref()
+                            .or(selected_info.as_ref().map(|(k, _, _, _)| k));
+                        let detail_portrait_id = browser_portrait_id
+                            .or_else(|| selected_info.as_ref().and_then(|(_, _, _, id)| *id));
 
-                        let mut categories: Vec<_> = by_category.into_iter().collect();
-                        categories.sort_by_key(|(c, _)| *c);
+                        if let Some(kind) = detail_kind {
+                            let def = library.units.def(kind);
+                            let cost = library.units.build_cost(kind);
 
-                        for (category, targets) in categories {
-                            ui.collapsing(category.label(), |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    for target in targets {
-                                        if build_button(
-                                            ui,
-                                            &library.units,
-                                            &eco.0,
-                                            &completed.0,
-                                            &build_target.0,
-                                            target.clone(),
-                                        ) {
-                                            build_target.0 = Some(target);
-                                        }
+                            ui.horizontal(|ui| {
+                                if let Some(texture_id) = detail_portrait_id {
+                                    ui.image(egui::load::SizedTexture::new(
+                                        texture_id,
+                                        egui::vec2(64.0, 64.0),
+                                    ));
+                                }
+                                ui.vertical(|ui| {
+                                    ui.heading(library.units.display_name(kind));
+                                    if let Some(cost) = cost {
+                                        ui.label(format!(
+                                            "Mass: {:.0}   Energy: {:.0}   Time: {:.0}",
+                                            cost.mass, cost.energy, cost.build_time
+                                        ));
                                     }
                                 });
                             });
+                            ui.separator();
+                            if let Some(def) = def {
+                                if let Some((_, Some(builder), _, _)) = selected_info
+                                    .as_ref()
+                                    .filter(|(k, _, _, _)| k == kind)
+                                {
+                                    ui.label(format!("Build power: {:.1}", builder.power));
+                                }
+                                ui.label(format!("Mass income: +{:.1}", def.mass_income()));
+                                ui.label(format!(
+                                    "Energy income: +{:.1} / maintenance -{:.1}",
+                                    def.energy_income(),
+                                    def.maintenance_energy()
+                                ));
+                            }
+                        } else {
+                            ui.label("Select a unit from the browser to see its details.");
                         }
-                    });
-            }
-        }
-    }
+                    },
+                );
+            });
+        });
 }
 
-/// Render a single build-palette button.
-fn build_button(
+/// Render a single portrait button in the unit browser.
+fn browser_portrait_button(
     ui: &mut egui::Ui,
     units: &Units,
-    eco: &EconomyState,
-    completed: &HashSet<UnitKind>,
-    selected_target: &Option<UnitKind>,
-    target: UnitKind,
+    portrait_ids: &HashMap<UnitKind, egui::TextureId>,
+    kind: &UnitKind,
+    is_selected: bool,
 ) -> bool {
-    let Some(def) = units.def(&target) else {
-        return false;
-    };
-    let Some(cost) = units.build_cost(&target) else {
-        return false;
-    };
-    let recipe = units.build_recipe(&target);
+    let portrait_id = portrait_ids.get(kind).copied();
+    let size = egui::vec2(40.0, 40.0);
 
-    let name = units.display_name(&target);
-    let can_afford =
-        eco.mass_storage.value() >= cost.mass && eco.energy_storage.value() >= cost.energy;
-    let prereq_met = recipe
-        .map(|r| {
-            r.prereq
-                .as_ref()
-                .map(|p| completed.contains(p))
-                .unwrap_or(true)
-        })
-        .unwrap_or(true);
-    let is_selected = selected_target.as_ref() == Some(&target);
-
-    let tooltip = format!(
-        "{}\nMass: {:.0}\nEnergy: {:.0}\nTime: {:.0}",
-        name, cost.mass, cost.energy, cost.build_time
-    );
-
-    let label = if is_selected {
-        format!("> {} <\nM{:.0} E{:.0}", name, cost.mass, cost.energy)
+    let response = if let Some(texture_id) = portrait_id {
+        let tint = if is_selected {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::LIGHT_GRAY
+        };
+        let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, size))
+            .tint(tint)
+            .sense(egui::Sense::click());
+        ui.add_sized(size, image)
     } else {
-        format!("{}\nM{:.0} E{:.0}", name, cost.mass, cost.energy)
+        ui.add_sized(size, egui::Button::new("?"))
     };
-    let button = egui::Button::new(label);
-    let response = ui
-        .add_enabled(can_afford && prereq_met, button)
-        .on_hover_text(tooltip);
 
-    let _ = def;
-    response.clicked()
+    response.on_hover_text(units.display_name(kind)).clicked()
 }
 
 fn unit_color(kind: &UnitKind) -> Color {
