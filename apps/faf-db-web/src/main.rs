@@ -107,23 +107,32 @@ fn App() -> Element {
             rsx! {
                 document::Stylesheet { href: asset!("/assets/tailwind.css") }
                 div {
-                    class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans",
-                    header {
-                        class: "flex items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
-                        h1 { class: "text-lg font-semibold text-white tracking-wide", "FAF Unit Database" }
-                        input {
-                            r#type: "text",
-                            placeholder: "Search units...",
-                            value: "{query.read()}",
-                            oninput: move |e| query.set(e.value().to_string()),
-                            class: "flex-1 max-w-sm px-3 py-1.5 bg-neutral-800 border border-neutral-700 rounded text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-blue-500",
-                        }
-                    }
+                    class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden",
+                    // Top half: header + unit grid
                     div {
-                        class: "flex flex-1 overflow-hidden",
+                        class: "h-1/2 flex flex-col border-b border-neutral-800",
+                        header {
+                            class: "flex items-center gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
+                            h1 { class: "text-lg font-semibold text-white tracking-wide", "FAF Unit Database" }
+                            input {
+                                r#type: "text",
+                                placeholder: "Search units...",
+                                value: "{query.read()}",
+                                oninput: move |e| query.set(e.value().to_string()),
+                                class: "flex-1 max-w-sm px-3 py-1.5 bg-neutral-800 border border-neutral-700 rounded text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-blue-500",
+                            }
+                        }
                         div {
                             class: "flex-1 overflow-auto p-4",
                             CategoryGrid { units: filtered, selected }
+                        }
+                    }
+                    // Bottom half: interesting area + unit detail
+                    div {
+                        class: "h-1/2 flex overflow-hidden",
+                        div {
+                            class: "flex-1 overflow-auto p-4 bg-neutral-900/30",
+                            div { class: "text-neutral-500 text-sm", "Interesting content will go here." }
                         }
                         div {
                             class: "w-96 shrink-0 border-l border-neutral-800 bg-neutral-900/50 overflow-auto p-4",
