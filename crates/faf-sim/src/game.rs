@@ -12,7 +12,7 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiText
 use faf_units::DataIndex;
 
 use crate::economy::{apply_tick_graph, compute_drain, EconomyState, RequestedBuildPower};
-use crate::units::{category_of, UnitCategory, Units};
+use crate::units::{category_of, TechLevel, UnitCategory, Units};
 use crate::units::UnitKind;
 use crate::BuildDrain;
 
@@ -106,6 +106,43 @@ fn browser_category(unit: &faf_units::Unit) -> BrowserCategory {
     BrowserCategory::Land
 }
 
+/// Faction used to order units within the browser grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum BrowserFaction {
+    Uef,
+    Cybran,
+    Aeon,
+    Seraphim,
+}
+
+/// Derive the browser faction from a unit's blueprint id.
+fn browser_faction(kind: &UnitKind, units: &Units) -> Option<BrowserFaction> {
+    let id = units.blueprint_id(kind)?;
+    id.chars().nth(1).and_then(|c| match c {
+        'E' => Some(BrowserFaction::Uef),
+        'R' => Some(BrowserFaction::Cybran),
+        'A' => Some(BrowserFaction::Aeon),
+        'S' => Some(BrowserFaction::Seraphim),
+        _ => None,
+    })
+}
+
+/// Derive the browser tech level from a unit's blueprint id.
+///
+/// FAF ids place the tech digit at the 5th character (e.g. `UEL0105` is T1).
+/// Tech 0 (ACU/SACU) is mapped to T1 so it still appears in the grid.
+fn browser_tech(kind: &UnitKind, units: &Units) -> Option<TechLevel> {
+    let id = units.blueprint_id(kind)?;
+    id.chars().nth(4).and_then(|c| match c {
+        '1' => Some(TechLevel::T1),
+        '2' => Some(TechLevel::T2),
+        '3' => Some(TechLevel::T3),
+        '4' => Some(TechLevel::T4),
+        '0' => Some(TechLevel::T1),
+        _ => None,
+    })
+}
+
 /// Wrapper so the unit database can live as a Bevy resource.
 #[derive(Resource, Debug, Clone)]
 struct UnitLibrary {
@@ -168,10 +205,6 @@ struct SelectedBuildTarget(Option<UnitKind>);
 /// Unit kind selected in the browser panel for detail viewing.
 #[derive(Resource, Debug, Clone, Default)]
 struct BrowserSelection(Option<UnitKind>);
-
-/// Currently active category tab in the unit browser.
-#[derive(Resource, Debug, Clone, Copy, Default)]
-struct BrowserCategoryFilter(BrowserCategory);
 
 /// Completed unit kinds, used to check build prerequisites.
 #[derive(Resource, Debug, Clone, Default)]
@@ -249,14 +282,35 @@ struct BoardTile;
 
 /// Run the interactive simulator.
 pub fn run() {
+    // Point Bevy's asset source at the workspace root `assets/` folder on native.
+    // On WASM the assets are served from a relative `assets/` directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("faf-sim manifest should have a parent")
+        .parent()
+        .expect("faf-sim crate should be inside the workspace")
+        .join("assets")
+        .to_string_lossy()
+        .to_string();
+    #[cfg(target_arch = "wasm32")]
+    let asset_root = "assets".to_string();
+
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "FAF Eco Sim".to_string(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: asset_root,
+                    ..default()
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "FAF Eco Sim".to_string(),
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         .add_plugins(EguiPlugin::default())
         .insert_resource(UnitLibrary::load())
         .insert_resource(EcoState(initial_economy()))
@@ -269,7 +323,6 @@ pub fn run() {
         .insert_resource(HoveredUnit::default())
         .insert_resource(SelectedBuildTarget::default())
         .insert_resource(BrowserSelection::default())
-        .insert_resource(BrowserCategoryFilter::default())
         .insert_resource(CompletedUnitKinds::default())
         .insert_resource(UnitCounts::default())
         .insert_resource(IconAtlas::default())
@@ -464,15 +517,6 @@ fn spawn_unit(
 
 /// Load portrait icons for all known unit kinds.
 fn preload_portraits(units: &Units, asset_server: &AssetServer, atlas: &mut IconAtlas) {
-    // Diagnostic: verify the asset root and a sample file.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let sample_path = format!("assets/icons/units/{}.png", "UEL0001");
-    eprintln!(
-        "[faf-sim] preload_portraits cwd={:?}, sample_exists={}",
-        cwd,
-        std::path::Path::new(&sample_path).exists()
-    );
-
     for kind in units.defs().keys() {
         if let Some(path) = portrait_path(units, kind) {
             let handle: Handle<Image> = asset_server.load(path);
@@ -916,11 +960,8 @@ fn ui_system(
     stall: Res<StallFactor>,
     selected: Res<SelectedUnit>,
     mut browser: ResMut<BrowserSelection>,
-    mut category_filter: ResMut<BrowserCategoryFilter>,
     _counts: Res<UnitCounts>,
     atlas: Res<IconAtlas>,
-    asset_server: Res<AssetServer>,
-    images: Res<Assets<Image>>,
     unit_query: Query<(&UnitKindComp, Option<&Builder>, Option<&Producer>)>,
 ) {
     // Pre-compute selected unit info and portrait texture id before borrowing the egui context.
@@ -962,18 +1003,23 @@ fn ui_system(
         .collect();
     let browser_portrait_id = browser_kind.as_ref().and_then(|k| portrait_ids.get(k).copied());
 
-    // Diagnostic: log once how many portraits are registered in egui.
-    static mut LOGGED_ONCE: bool = false;
-    unsafe {
-        if !LOGGED_ONCE {
-            LOGGED_ONCE = true;
-            eprintln!(
-                "[faf-sim] ui_system: atlas={}, portrait_ids={}, loaded={}",
-                atlas.0.len(),
-                portrait_ids.len(),
-                atlas.0.values().filter(|h| asset_server.is_loaded(*h)).count()
-            );
+    // Group units by browser category, tech level, and faction for the dashboard grid.
+    let mut grid_groups: HashMap<(BrowserCategory, TechLevel, BrowserFaction), Vec<UnitKind>> =
+        HashMap::new();
+    for (category, kinds) in &browser_groups {
+        for kind in kinds {
+            if let (Some(tech), Some(faction)) =
+                (browser_tech(kind, &library.units), browser_faction(kind, &library.units))
+            {
+                grid_groups
+                    .entry((*category, tech, faction))
+                    .or_default()
+                    .push(kind.clone());
+            }
         }
+    }
+    for group in grid_groups.values_mut() {
+        group.sort_by(|a, b| library.units.display_name(a).cmp(&library.units.display_name(b)));
     }
 
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -982,91 +1028,81 @@ fn ui_system(
 
     let screen = ctx.viewport_rect();
 
-    let total_portraits = atlas.0.len();
-    let loaded_portraits = atlas
-        .0
-        .values()
-        .filter(|h| asset_server.is_loaded(*h))
-        .count();
-
-    // Top section: full-width unit browser with category tabs and a portrait grid.
+    // Top section: dashboard of all unit categories.
     egui::Window::new("Unit Browser")
         .title_bar(false)
         .collapsible(false)
         .resizable(true)
         .fixed_pos([0.0, 0.0])
-        .default_size([screen.width(), 260.0])
-        .min_size([screen.width(), 120.0])
-        .max_size([screen.width(), screen.height() * 0.7])
+        .default_size([screen.width(), screen.height() * 0.6])
+        .min_size([screen.width(), 200.0])
+        .max_size([screen.width(), screen.height() * 0.85])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Unit Browser");
                 ui.label("Click a unit to view its eco details.");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!(
-                        "Portraits: {} registered, {} loaded, {} in atlas",
-                        portrait_ids.len(),
-                        loaded_portraits,
-                        total_portraits
-                    ));
-                });
             });
             ui.separator();
 
-            // Category tabs.
-            ui.horizontal_wrapped(|ui| {
-                let mut sorted_categories: Vec<_> = browser_groups.keys().copied().collect();
-                sorted_categories.sort();
-                for category in sorted_categories {
-                    let is_selected = category_filter.0 == category;
-                    let text = egui::RichText::new(category.label())
-                        .color(if is_selected {
-                            ui.visuals().selection.bg_fill
-                        } else {
-                            ui.visuals().text_color()
-                        });
-                    if ui.selectable_label(is_selected, text).clicked() {
-                        category_filter.0 = category;
-                    }
-                }
-            });
-            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut sorted_categories: Vec<_> = browser_groups.into_iter().collect();
+                    sorted_categories.sort_by_key(|(c, _)| *c);
 
-            // Portrait grid for the selected category.
-            let selected_count = browser_groups
-                .get(&category_filter.0)
-                .map(|v| v.len())
-                .unwrap_or(0);
-            ui.label(format!(
-                "{}: {} units",
-                category_filter.0.label(),
-                selected_count
-            ));
+                    for (category, _kinds) in sorted_categories {
+                        egui::Frame::new()
+                            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                ui.set_min_width(280.0);
+                                ui.centered_and_justified(|ui| {
+                                    ui.heading(category.label());
+                                });
+                                ui.separator();
 
-            egui::Frame::new()
-                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        if let Some(kinds) = browser_groups.get(&category_filter.0) {
-                            ui.horizontal_wrapped(|ui| {
-                                for kind in kinds {
-                                    let is_selected = browser.0.as_ref() == Some(kind);
-                                    if browser_portrait_button(
-                                        ui,
-                                        &library.units,
-                                        &portrait_ids,
-                                        kind,
-                                        is_selected,
-                                    ) {
-                                        browser.0 = Some(kind.clone());
-                                    }
-                                }
+                                egui::Grid::new(("category_grid", category))
+                                    .num_columns(4)
+                                    .show(ui, |ui| {
+                                        for faction in [
+                                            BrowserFaction::Uef,
+                                            BrowserFaction::Cybran,
+                                            BrowserFaction::Aeon,
+                                            BrowserFaction::Seraphim,
+                                        ] {
+                                            for tech in [
+                                                TechLevel::T1,
+                                                TechLevel::T2,
+                                                TechLevel::T3,
+                                                TechLevel::T4,
+                                            ] {
+                                                ui.horizontal_wrapped(|ui| {
+                                                    if let Some(kinds) = grid_groups
+                                                        .get(&(category, tech, faction))
+                                                    {
+                                                        for kind in kinds {
+                                                            let is_selected =
+                                                                browser.0.as_ref() == Some(kind);
+                                                            if browser_portrait_button(
+                                                                ui,
+                                                                &library.units,
+                                                                &portrait_ids,
+                                                                kind,
+                                                                is_selected,
+                                                                faction,
+                                                            ) {
+                                                                browser.0 = Some(kind.clone());
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
                             });
-                        } else {
-                            ui.label("No units in this category.");
-                        }
-                    });
+                    }
                 });
+            });
         });
 
     // Bottom section: eco summary | placeholder | selected unit detail.
@@ -1178,6 +1214,20 @@ fn ui_system(
         });
 }
 
+/// Color used to outline portraits by faction.
+fn faction_color(faction: BrowserFaction) -> egui::Color32 {
+    match faction {
+        // UEF blue.
+        BrowserFaction::Uef => egui::Color32::from_rgb(30, 144, 255),
+        // Cybran red.
+        BrowserFaction::Cybran => egui::Color32::from_rgb(220, 20, 60),
+        // Aeon green.
+        BrowserFaction::Aeon => egui::Color32::from_rgb(50, 205, 50),
+        // Seraphim gold.
+        BrowserFaction::Seraphim => egui::Color32::from_rgb(255, 215, 0),
+    }
+}
+
 /// Render a single portrait button in the unit browser.
 fn browser_portrait_button(
     ui: &mut egui::Ui,
@@ -1185,9 +1235,10 @@ fn browser_portrait_button(
     portrait_ids: &HashMap<UnitKind, egui::TextureId>,
     kind: &UnitKind,
     is_selected: bool,
+    faction: BrowserFaction,
 ) -> bool {
     let portrait_id = portrait_ids.get(kind).copied();
-    let size = egui::vec2(40.0, 40.0);
+    let size = egui::vec2(36.0, 36.0);
 
     let response = if let Some(texture_id) = portrait_id {
         let tint = if is_selected {
@@ -1202,6 +1253,13 @@ fn browser_portrait_button(
     } else {
         ui.add_sized(size, egui::Button::new("?"))
     };
+
+    ui.painter().rect_stroke(
+        response.rect,
+        0.0,
+        egui::Stroke::new(2.0, faction_color(faction)),
+        egui::StrokeKind::Outside,
+    );
 
     response.on_hover_text(units.display_name(kind)).clicked()
 }
