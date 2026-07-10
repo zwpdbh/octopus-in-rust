@@ -366,7 +366,13 @@ fn PortraitButton(
             class: "relative w-12 h-12 p-[3px] rounded-[5px] bg-black border cursor-pointer transition-transform hover:scale-105 active:scale-[0.99] active:translate-y-px {glow}",
             class: if is_selected { "ring-2 ring-white" },
             title: "{name}",
-            onclick: move |_| selected.set(Some(unit.clone())),
+            onclick: move |_| {
+                if is_selected {
+                    selected.set(None);
+                } else {
+                    selected.set(Some(unit.clone()));
+                }
+            },
             img {
                 src: "/api/portraits/{id}.png",
                 alt: "{name}",
