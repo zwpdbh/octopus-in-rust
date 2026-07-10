@@ -24,6 +24,7 @@ struct UnitSummary {
     faction: String,
     tech: String,
     category: String,
+    strategic_icon_name: Option<String>,
 }
 
 #[tokio::main]
@@ -90,6 +91,7 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             faction: unit.faction().unwrap_or("Unknown").to_string(),
             tech: unit.tech_level().unwrap_or("TECH1").to_string(),
             category: browser_category(unit).label().to_string(),
+            strategic_icon_name: unit.strategic_icon_name.clone(),
         })
         .collect();
     Json(summaries)

@@ -10,6 +10,8 @@ struct UnitSummary {
     faction: String,
     tech: String,
     category: String,
+    #[serde(default)]
+    strategic_icon_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -184,7 +186,6 @@ fn CategoryPanel(
                 for (i, tech) in techs.iter().enumerate() {
                     div {
                         class: "flex flex-col gap-1 min-w-[108px]",
-                        div { class: "text-[10px] text-center text-neutral-500 uppercase tracking-wider mb-1", "{tech_label(tech)}" }
                         for faction in FACTION_ORDER.iter().copied() {
                             TechCell {
                                 units: units.iter().filter(|u| u.faction == faction && u.tech == *tech).cloned().collect::<Vec<_>>(),
@@ -199,17 +200,6 @@ fn CategoryPanel(
                 }
             }
         }
-    }
-}
-
-fn tech_label(tech: &str) -> &str {
-    match tech {
-        "TECH1" => "T1",
-        "TECH2" => "T2",
-        "TECH3" => "T3",
-        "TECH4" => "T4",
-        "EXPERIMENTAL" => "EXP",
-        _ => tech,
     }
 }
 
@@ -239,10 +229,13 @@ fn PortraitButton(
     let name = unit.display_name.clone();
     let glow = faction_glow_class(faction);
     let is_selected = selected.read().as_ref().map(|s| s.id == unit.id).unwrap_or(false);
+    let strategic_src = unit.strategic_icon_name.as_deref().map(|icon_name| {
+        format!("/strategic/{}_{}.png", faction, icon_name)
+    });
 
     rsx! {
         button {
-            class: "w-12 h-12 p-[3px] rounded-[5px] bg-black border cursor-pointer transition-transform hover:scale-105 active:scale-[0.99] active:translate-y-px {glow}",
+            class: "relative w-12 h-12 p-[3px] rounded-[5px] bg-black border cursor-pointer transition-transform hover:scale-105 active:scale-[0.99] active:translate-y-px {glow}",
             class: if is_selected { "ring-2 ring-white" },
             title: "{name}",
             onclick: move |_| selected.set(Some(unit.clone())),
@@ -250,6 +243,13 @@ fn PortraitButton(
                 src: "/api/portraits/{id}.png",
                 alt: "{name}",
                 class: "w-full h-full object-contain block",
+            }
+            if let Some(src) = strategic_src {
+                img {
+                    src: "{src}",
+                    alt: "",
+                    class: "absolute top-0.5 left-0.5 w-3.5 h-3.5 object-contain pointer-events-none",
+                }
             }
         }
     }
