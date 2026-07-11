@@ -47,10 +47,20 @@ fn run_simulate(queue: PathBuf, dt: f64, max_time: f64) {
         std::process::exit(1);
     });
 
-    let mut sim = faf_sim::sim::Simulation::new(queue, dt, max_time);
-    while !sim.is_finished() {
-        for event in sim.step() {
-            println!("{}", serde_json::to_string(event).expect("serialize event"));
-        }
+    let mut service = faf_sim::sim::SimulationService::new();
+    service.register_listener(|event| {
+        println!("{}", serde_json::to_string(event).expect("serialize event"));
+    });
+    service.send(faf_sim::sim::SimulationCommand::Start {
+        queue,
+        dt,
+        max_time,
+    });
+
+    while !matches!(
+        service.state(),
+        faf_sim::sim::ServiceState::Idle | faf_sim::sim::ServiceState::Finished
+    ) {
+        service.send(faf_sim::sim::SimulationCommand::Tick { steps: 1 });
     }
 }
