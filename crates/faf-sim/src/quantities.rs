@@ -4,11 +4,12 @@
 //! energy, time, build power, and their rates cannot be accidentally mixed at
 //! compile time.
 
+use serde::{Deserialize, Serialize};
 use std::ops::{Add, Div, Mul, Sub};
 
 macro_rules! quantity {
     ($name:ident) => {
-        #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+        #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
         pub struct $name(f64);
 
         impl $name {

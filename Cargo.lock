@@ -4826,6 +4826,7 @@ dependencies = [
  "console_error_panic_hook",
  "dioxus",
  "dioxus-router",
+ "faf-sim",
  "gloo-net",
  "serde",
  "serde_json",

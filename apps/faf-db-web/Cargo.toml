@@ -7,6 +7,7 @@ edition = "2021"
 console_error_panic_hook = { workspace = true }
 dioxus = { workspace = true }
 dioxus-router = "0.7.3"
+faf-sim = { workspace = true, default-features = false, features = ["web"] }
 gloo-net = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
