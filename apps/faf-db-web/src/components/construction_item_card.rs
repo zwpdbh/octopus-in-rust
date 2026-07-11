@@ -90,7 +90,11 @@ pub fn ConstructionItemCard(
     }
 }
 
-fn resize_with_template(vec: &mut Vec<crate::types::UnitSummary>, new_len: usize, template: Option<crate::types::UnitSummary>) {
+fn resize_with_template(
+    vec: &mut Vec<crate::types::UnitSummary>,
+    new_len: usize,
+    template: Option<crate::types::UnitSummary>,
+) {
     if vec.len() == new_len {
         return;
     }

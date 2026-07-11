@@ -380,14 +380,12 @@ fn create_white_image() -> Image {
 }
 
 fn initial_economy() -> EconomyState {
-    use crate::quantities::{Energy, EnergyRate, Mass, MassRate};
+    use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
     EconomyState {
         net_mass_income: MassRate::from_raw(1.0),
         net_energy_income: EnergyRate::from_raw(20.0),
-        mass_storage: Mass::from_raw(650.0),
-        energy_storage: Energy::from_raw(3900.0),
-        mass_storage_cap: Mass::from_raw(650.0),
-        energy_storage_cap: Energy::from_raw(3900.0),
+        mass_storage: Storage::new(Mass::from_raw(650.0), Mass::from_raw(650.0)),
+        energy_storage: Storage::new(Energy::from_raw(3900.0), Energy::from_raw(3900.0)),
     }
 }
 
@@ -890,10 +888,10 @@ fn completion_system(
             + crate::quantities::EnergyRate::from_raw(
                 def.energy_income() - def.maintenance_energy(),
             );
-        eco.0.mass_storage_cap =
-            eco.0.mass_storage_cap + crate::quantities::Mass::from_raw(def.mass_storage());
-        eco.0.energy_storage_cap =
-            eco.0.energy_storage_cap + crate::quantities::Energy::from_raw(def.energy_storage());
+        eco.0.mass_storage.cap =
+            eco.0.mass_storage.cap + crate::quantities::Mass::from_raw(def.mass_storage());
+        eco.0.energy_storage.cap =
+            eco.0.energy_storage.cap + crate::quantities::Energy::from_raw(def.energy_storage());
 
         // Free the builder.
         commands
@@ -1203,8 +1201,16 @@ fn ui_system(
                     |ui| {
                         ui.heading("Eco Summary");
                         ui.separator();
-                        ui.label(format!("Mass: {:.1}", eco.0.mass_storage.value()));
-                        ui.label(format!("Energy: {:.1}", eco.0.energy_storage.value()));
+                        ui.label(format!(
+                            "Mass: {:.1} / {:.1}",
+                            eco.0.mass_storage.current.value(),
+                            eco.0.mass_storage.cap.value()
+                        ));
+                        ui.label(format!(
+                            "Energy: {:.1} / {:.1}",
+                            eco.0.energy_storage.current.value(),
+                            eco.0.energy_storage.cap.value()
+                        ));
                         ui.label(format!(
                             "Mass income: +{:.1}",
                             eco.0.net_mass_income.value()

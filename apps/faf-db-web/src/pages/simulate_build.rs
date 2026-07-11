@@ -2,7 +2,8 @@ use dioxus::prelude::*;
 use faf_sim::Time;
 
 use crate::components::{
-    AppHeader, QueueItemCreator, QueueItemList, SimulationResultsPlaceholder, UnitSelectorModal,
+    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationResultsPlaceholder,
+    UnitSelectorModal,
 };
 use crate::pages::SimulationPage;
 use crate::route::Route;
@@ -86,8 +87,10 @@ pub fn SimulateBuild() -> Element {
                 div { class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden select-none",
                     AppHeader { active: Route::SimulateBuild {} }
                     div { class: "flex flex-1 overflow-hidden",
-                        // Left sidebar: new item creator
+                        // Left sidebar: Eco Settings + new item creator
                         div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
+                            EcoPanel { plan }
+                            div { class: "my-4 border-t border-neutral-700" }
                             QueueItemCreator {
                                 draft_builder,
                                 draft_builder_count,

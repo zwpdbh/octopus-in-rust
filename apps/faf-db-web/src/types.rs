@@ -1,4 +1,4 @@
-use faf_sim::Time;
+use faf_sim::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,6 +13,25 @@ pub struct UnitSummary {
     pub kind: String,
     #[serde(default)]
     pub build_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EcoInitialSettings {
+    pub mass_income: MassRate,
+    pub energy_income: EnergyRate,
+    pub mass_storage: Storage<Mass>,
+    pub energy_storage: Storage<Energy>,
+}
+
+impl Default for EcoInitialSettings {
+    fn default() -> Self {
+        Self {
+            mass_income: MassRate::from_raw(1.0),
+            energy_income: EnergyRate::from_raw(20.0),
+            mass_storage: Storage::new(Mass::from_raw(650.0), Mass::from_raw(650.0)),
+            energy_storage: Storage::new(Energy::from_raw(4000.0), Energy::from_raw(4000.0)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,6 +50,7 @@ impl ConstructionItem {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConstructionPlan {
+    pub eco: EcoInitialSettings,
     pub items: Vec<ConstructionItem>,
 }
 

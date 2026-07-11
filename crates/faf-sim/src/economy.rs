@@ -12,7 +12,7 @@
 //! growth — that belongs in the simulator layer.
 
 use crate::{
-    quantities::{Energy, EnergyRate, Mass, MassRate, Time},
+    quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time},
     units::{UnitCost, UnitDef, UnitKind, Units},
 };
 use faf_units::BuildTargetStats;
@@ -300,14 +300,10 @@ pub struct EconomyState {
     pub net_mass_income: MassRate,
     /// Energy income per second (can be negative during drains).
     pub net_energy_income: EnergyRate,
-    /// Mass currently in storage.
-    pub mass_storage: Mass,
-    /// Energy currently in storage.
-    pub energy_storage: Energy,
-    /// Maximum mass storage capacity.
-    pub mass_storage_cap: Mass,
-    /// Maximum energy storage capacity.
-    pub energy_storage_cap: Energy,
+    /// Mass storage (current amount + capacity).
+    pub mass_storage: Storage<Mass>,
+    /// Energy storage (current amount + capacity).
+    pub energy_storage: Storage<Energy>,
 }
 
 impl EconomyState {
@@ -340,8 +336,8 @@ impl EconomyState {
         let mut remaining_mass = cost.build_cost_mass;
         let mut remaining_energy = cost.build_cost_energy;
         let mut remaining_work = cost.build_time;
-        let mut mass_storage = self.mass_storage.value();
-        let mut energy_storage = self.energy_storage.value();
+        let mut mass_storage = self.mass_storage.current.value();
+        let mut energy_storage = self.energy_storage.current.value();
         let mass_income = self.net_mass_income.value();
         let energy_income = self.net_energy_income.value();
         let mut elapsed = 0.0;
@@ -420,9 +416,9 @@ pub struct TickResult {
     /// Energy actually consumed.
     pub energy_consumed: Energy,
     /// New mass storage after the tick.
-    pub new_mass_storage: Mass,
+    pub new_mass_storage: Storage<Mass>,
     /// New energy storage after the tick.
-    pub new_energy_storage: Energy,
+    pub new_energy_storage: Storage<Energy>,
     /// True if energy stalled during the tick.
     pub energy_stalled: bool,
     /// True if mass stalled during the tick.
@@ -451,14 +447,14 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
     let mass_factor = if requested_mass.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.mass_storage + mass_income).max(Mass::zero());
+        let available = (state.mass_storage.current + mass_income).max(Mass::zero());
         (available / requested_mass).min(1.0)
     };
 
     let energy_factor = if requested_energy.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.energy_storage + energy_income).max(Energy::zero());
+        let available = (state.energy_storage.current + energy_income).max(Energy::zero());
         (available / requested_energy).min(1.0)
     };
 
@@ -471,12 +467,14 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
     let mass_consumed = requested_mass * effective_factor;
     let energy_consumed = requested_energy * effective_factor;
 
-    let new_mass_storage = (state.mass_storage + mass_income - mass_consumed)
-        .min(state.mass_storage_cap)
+    let new_mass_current = (state.mass_storage.current + mass_income - mass_consumed)
+        .min(state.mass_storage.cap)
         .max(Mass::zero());
-    let new_energy_storage = (state.energy_storage + energy_income - energy_consumed)
-        .min(state.energy_storage_cap)
+    let new_energy_current = (state.energy_storage.current + energy_income - energy_consumed)
+        .min(state.energy_storage.cap)
         .max(Energy::zero());
+    let new_mass_storage = Storage::new(new_mass_current, state.mass_storage.cap);
+    let new_energy_storage = Storage::new(new_energy_current, state.energy_storage.cap);
 
     TickResult {
         effective_build_power,
@@ -503,9 +501,9 @@ pub struct GraphTickResult {
     /// Energy actually consumed across all projects.
     pub energy_consumed: Energy,
     /// New mass storage after the tick.
-    pub new_mass_storage: Mass,
+    pub new_mass_storage: Storage<Mass>,
     /// New energy storage after the tick.
-    pub new_energy_storage: Energy,
+    pub new_energy_storage: Storage<Energy>,
     /// True if energy was the limiting resource.
     pub energy_stalled: bool,
     /// True if mass was the limiting resource.
@@ -538,7 +536,7 @@ pub fn apply_tick_graph(
     let energy_factor = if requested_energy.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.energy_storage + energy_income).max(Energy::zero());
+        let available = (state.energy_storage.current + energy_income).max(Energy::zero());
         (available / requested_energy).min(1.0)
     };
 
@@ -546,7 +544,7 @@ pub fn apply_tick_graph(
     let mass_factor_unscaled = if requested_mass.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.mass_storage + mass_income).max(Mass::zero());
+        let available = (state.mass_storage.current + mass_income).max(Mass::zero());
         (available / requested_mass).min(1.0)
     };
 
@@ -562,7 +560,7 @@ pub fn apply_tick_graph(
     let mass_factor = if requested_mass.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.mass_storage + scaled_mass_income).max(Mass::zero());
+        let available = (state.mass_storage.current + scaled_mass_income).max(Mass::zero());
         (available / requested_mass).min(1.0)
     };
 
@@ -571,12 +569,14 @@ pub fn apply_tick_graph(
     let mass_consumed = requested_mass * effective_factor;
     let energy_consumed = requested_energy * effective_factor;
 
-    let new_mass_storage = (state.mass_storage + scaled_mass_income - mass_consumed)
-        .min(state.mass_storage_cap)
+    let new_mass_current = (state.mass_storage.current + scaled_mass_income - mass_consumed)
+        .min(state.mass_storage.cap)
         .max(Mass::zero());
-    let new_energy_storage = (state.energy_storage + energy_income - energy_consumed)
-        .min(state.energy_storage_cap)
+    let new_energy_current = (state.energy_storage.current + energy_income - energy_consumed)
+        .min(state.energy_storage.cap)
         .max(Energy::zero());
+    let new_mass_storage = Storage::new(new_mass_current, state.mass_storage.cap);
+    let new_energy_storage = Storage::new(new_energy_current, state.energy_storage.cap);
 
     GraphTickResult {
         effective_factor,
@@ -800,10 +800,14 @@ mod tests {
         let state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
-            mass_storage: crate::quantities::Mass::from_raw(50000.0),
-            energy_storage: crate::quantities::Energy::from_raw(500000.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(100000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(50000.0),
+                crate::quantities::Mass::from_raw(100000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(500000.0),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         let result = apply_tick(&drain, &state, 1.0);
@@ -826,17 +830,21 @@ mod tests {
         let state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
-            mass_storage: crate::quantities::Mass::from_raw(50000.0),
-            energy_storage: crate::quantities::Energy::from_raw(drain.energy_per_second * 0.5), // only half a second worth
-            mass_storage_cap: crate::quantities::Mass::from_raw(100000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(50000.0),
+                crate::quantities::Mass::from_raw(100000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(drain.energy_per_second * 0.5),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         let result = apply_tick(&drain, &state, 1.0);
         assert!(result.effective_build_power.0 < 10.0);
         assert!(result.energy_stalled);
         assert!(!result.mass_stalled);
-        assert!(result.new_energy_storage.abs() < 1e-6);
+        assert!(result.new_energy_storage.current.abs() < 1e-6);
     }
 
     #[test]
@@ -853,17 +861,21 @@ mod tests {
         let state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(0.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(1000.0),
-            mass_storage: crate::quantities::Mass::from_raw(drain.mass_per_second * 0.5), // only half a second worth
-            energy_storage: crate::quantities::Energy::from_raw(500000.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(100000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(drain.mass_per_second * 0.5),
+                crate::quantities::Mass::from_raw(100000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(500000.0),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         let result = apply_tick(&drain, &state, 1.0);
         assert!(result.effective_build_power.0 < 10.0);
         assert!(result.mass_stalled);
         assert!(!result.energy_stalled);
-        assert!(result.new_mass_storage.abs() < 1e-6);
+        assert!(result.new_mass_storage.current.abs() < 1e-6);
     }
 
     #[test]
@@ -879,10 +891,14 @@ mod tests {
         let mut state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
-            mass_storage: crate::quantities::Mass::from_raw(10000.0),
-            energy_storage: crate::quantities::Energy::from_raw(100000.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(1000000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(10000.0),
+                crate::quantities::Mass::from_raw(1000000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(100000.0),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         let build_time = project.target.build_time;
@@ -906,10 +922,14 @@ mod tests {
         let mut state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
-            mass_storage: crate::quantities::Mass::from_raw(10000.0),
-            energy_storage: crate::quantities::Energy::from_raw(100000.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(1000000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(10000.0),
+                crate::quantities::Mass::from_raw(1000000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(100000.0),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         // Tick for half the nominal completion time.
@@ -939,10 +959,14 @@ mod tests {
         let mut state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
-            mass_storage: crate::quantities::Mass::from_raw(10000.0),
-            energy_storage: crate::quantities::Energy::from_raw(10.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(1000000.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(10000.0),
+                crate::quantities::Mass::from_raw(1000000.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(10.0),
+                crate::quantities::Energy::from_raw(1000000.0),
+            ),
         };
 
         // Even after the nominal build time, it should not be complete.
@@ -972,27 +996,40 @@ mod tests {
         let mut state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
-            mass_storage: crate::quantities::Mass::from_raw(100.0),
-            energy_storage: crate::quantities::Energy::from_raw(1000.0),
-            mass_storage_cap: crate::quantities::Mass::from_raw(100.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(1000.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(100.0),
+                crate::quantities::Mass::from_raw(100.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(1000.0),
+                crate::quantities::Energy::from_raw(1000.0),
+            ),
         };
 
         let result = apply_tick(&drain, &state, 1.0);
 
         // Storage was already at cap, so income above the drain is wasted.
-        assert!((result.new_mass_storage - crate::quantities::Mass::from_raw(100.0)).abs() < 1e-9);
         assert!(
-            (result.new_energy_storage - crate::quantities::Energy::from_raw(1000.0)).abs() < 1e-9
+            (result.new_mass_storage.current - crate::quantities::Mass::from_raw(100.0)).abs()
+                < 1e-9
+        );
+        assert!(
+            (result.new_energy_storage.current - crate::quantities::Energy::from_raw(1000.0)).abs()
+                < 1e-9
         );
         state.mass_storage = result.new_mass_storage;
         state.energy_storage = result.new_energy_storage;
 
         // Tick again: since storage did not grow, nothing changes except the drain.
         let result2 = apply_tick(&drain, &state, 1.0);
-        assert!((result2.new_mass_storage - crate::quantities::Mass::from_raw(100.0)).abs() < 1e-9);
         assert!(
-            (result2.new_energy_storage - crate::quantities::Energy::from_raw(1000.0)).abs() < 1e-9
+            (result2.new_mass_storage.current - crate::quantities::Mass::from_raw(100.0)).abs()
+                < 1e-9
+        );
+        assert!(
+            (result2.new_energy_storage.current - crate::quantities::Energy::from_raw(1000.0))
+                .abs()
+                < 1e-9
         );
     }
 
@@ -1012,17 +1049,21 @@ mod tests {
         let mut state = EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(0.0),
             net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
-            mass_storage: crate::quantities::Mass::from_raw(total_mass),
-            energy_storage: crate::quantities::Energy::from_raw(total_energy),
-            mass_storage_cap: crate::quantities::Mass::from_raw(total_mass * 2.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(total_energy * 2.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(total_mass),
+                crate::quantities::Mass::from_raw(total_mass * 2.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(total_energy),
+                crate::quantities::Energy::from_raw(total_energy * 2.0),
+            ),
         };
 
         let outcome = project.tick(&mut state, build_time);
 
         assert!(outcome.is_completed());
-        assert!(state.mass_storage.abs() < 1e-6);
-        assert!(state.energy_storage.abs() < 1e-6);
+        assert!(state.mass_storage.current.abs() < 1e-6);
+        assert!(state.energy_storage.current.abs() < 1e-6);
     }
 
     #[test]
@@ -1127,10 +1168,14 @@ mod tests {
         EconomyState {
             net_mass_income: crate::quantities::MassRate::from_raw(mass_income),
             net_energy_income: crate::quantities::EnergyRate::from_raw(energy_income),
-            mass_storage: crate::quantities::Mass::from_raw(mass_storage),
-            energy_storage: crate::quantities::Energy::from_raw(energy_storage),
-            mass_storage_cap: crate::quantities::Mass::from_raw(0.0),
-            energy_storage_cap: crate::quantities::Energy::from_raw(0.0),
+            mass_storage: Storage::new(
+                crate::quantities::Mass::from_raw(mass_storage),
+                crate::quantities::Mass::from_raw(0.0),
+            ),
+            energy_storage: Storage::new(
+                crate::quantities::Energy::from_raw(energy_storage),
+                crate::quantities::Energy::from_raw(0.0),
+            ),
         }
     }
 

@@ -14,7 +14,7 @@ pub use economy::{
     EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
-pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Time};
+pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Storage, Time};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,

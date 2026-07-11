@@ -89,6 +89,23 @@ quantity!(BuildWork);
 quantity!(MassRate);
 quantity!(EnergyRate);
 
+/// A storage container pairing the currently held amount with its capacity.
+///
+/// Used for mass/energy storage in the economy model. Keeping `current` and
+/// `cap` together prevents mixing up the held amount with the maximum capacity.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Storage<T> {
+    pub current: T,
+    pub cap: T,
+}
+
+impl<T> Storage<T> {
+    /// Create a storage container with the given current amount and capacity.
+    pub const fn new(current: T, cap: T) -> Self {
+        Self { current, cap }
+    }
+}
+
 // ---- Addition and subtraction for quantities of the same kind ----
 
 macro_rules! impl_add_sub {
