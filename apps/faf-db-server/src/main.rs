@@ -27,6 +27,9 @@ struct UnitSummary {
     strategic_icon_name: Option<String>,
     kind: String,
     build_rate: Option<f64>,
+    build_cost_mass: Option<f64>,
+    build_cost_energy: Option<f64>,
+    build_time: Option<f64>,
 }
 
 #[tokio::main]
@@ -96,6 +99,9 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             strategic_icon_name: unit.strategic_icon_name.clone(),
             kind: unit_kind(unit).to_string(),
             build_rate: unit.economy.as_ref().and_then(|e| e.build_rate),
+            build_cost_mass: unit.economy.as_ref().and_then(|e| e.build_cost_mass),
+            build_cost_energy: unit.economy.as_ref().and_then(|e| e.build_cost_energy),
+            build_time: unit.economy.as_ref().and_then(|e| e.build_time),
         })
         .collect();
     Json(summaries)

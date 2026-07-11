@@ -1,12 +1,18 @@
-//! Bevy-powered eco/build simulator for Forged Alliance Forever (FAF).
+//! Headless, observable eco/build simulator for Forged Alliance Forever (FAF).
 //!
-//! This crate now focuses on an interactive build simulator. It keeps the
-//! `units` and `economy` math from `faf-units` and adds a minimal Bevy game
-//! plugin (`game::EcoSimPlugin`) that can run both natively and on the web.
+//! The crate provides:
+//!
+//! - `economy` and `quantities`: pure math for drains, stalls, and resource
+//!   tracking.
+//! - `units`: strongly-typed unit knowledge (`Units`, `UnitKind`, recipes).
+//! - `eco`: an observable, steppable ECS economy simulation plugin.
+//! - `sim`: the high-level simulation driver and re-exports.
 
+pub mod eco;
+mod eco_tests;
 pub mod economy;
-pub mod game;
 pub mod quantities;
+pub mod sim;
 pub mod units;
 
 pub use economy::{
@@ -19,13 +25,6 @@ pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,
 };
-
-/// Run the interactive eco simulator.
-///
-/// This is the entry point used by both the native CLI and the WASM build.
-pub fn run_app() {
-    game::run();
-}
 
 #[cfg(test)]
 mod tests {

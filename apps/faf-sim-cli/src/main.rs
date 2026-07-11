@@ -1,90 +1,56 @@
-//! Launcher for the FAF eco/build simulator.
+//! CLI for the FAF build-queue simulator.
 
-#![cfg_attr(target_arch = "wasm32", no_main)]
+use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
-mod native {
-    use std::net::SocketAddr;
-    use std::path::PathBuf;
+use clap::{Parser, Subcommand};
 
-    use axum::Router;
-    use clap::{Parser, Subcommand};
-    use tower_http::services::ServeDir;
-
-    #[derive(Parser, Debug)]
-    #[command(name = "faf-sim", about = "Interactive FAF eco/build simulator")]
-    struct Cli {
-        #[command(subcommand)]
-        command: Command,
-    }
-
-    #[derive(Subcommand, Debug)]
-    enum Command {
-        /// Launch the interactive simulator GUI natively.
-        Run,
-        /// Serve the WASM build with an embedded Axum web server.
-        Serve {
-            /// Port to listen on.
-            #[arg(short, long, default_value = "8080")]
-            port: u16,
-            /// Directory containing the WASM build and `index.html`.
-            #[arg(short, long, default_value = "apps/faf-sim-cli/web")]
-            dir: PathBuf,
-        },
-    }
-
-    pub fn main() {
-        let cli = Cli::parse();
-        match cli.command {
-            Command::Run => faf_sim::run_app(),
-            Command::Serve { port, dir } => {
-                run_server(port, dir);
-            }
-        }
-    }
-
-    fn run_server(port: u16, dir: PathBuf) {
-        tracing_subscriber::fmt::init();
-
-        let index_path = dir.join("index.html");
-        if !index_path.exists() {
-            eprintln!(
-                "Could not read {}. Did you run wasm-bindgen first?",
-                index_path.display()
-            );
-            std::process::exit(1);
-        }
-
-        let app = Router::new().nest_service("/", ServeDir::new(dir));
-
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        runtime.block_on(async {
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("bind port");
-            println!(
-                "Serving FAF Eco Sim at http://{}",
-                listener.local_addr().unwrap()
-            );
-            axum::serve(listener, app).await.expect("server");
-        });
-    }
+#[derive(Parser, Debug)]
+#[command(name = "faf-sim", about = "Headless FAF build-queue simulator")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
 }
 
-#[cfg(target_arch = "wasm32")]
-mod web {
-    use wasm_bindgen::prelude::*;
-
-    #[wasm_bindgen(start)]
-    pub fn start() {
-        console_error_panic_hook::set_once();
-        faf_sim::run_app();
-    }
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Run a build-queue simulation and emit events as NDJSON.
+    Simulate {
+        /// JSON file describing the build queue.
+        queue: PathBuf,
+        /// Simulation step size in seconds.
+        #[arg(short, long, default_value = "0.1")]
+        dt: f64,
+        /// Maximum simulation time in seconds.
+        #[arg(short, long, default_value = "3600.0")]
+        max_time: f64,
+    },
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    native::main();
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Simulate {
+            queue,
+            dt,
+            max_time,
+        } => run_simulate(queue, dt, max_time),
+    }
+}
+
+fn run_simulate(queue: PathBuf, dt: f64, max_time: f64) {
+    let json = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", queue.display(), e);
+        std::process::exit(1);
+    });
+    let queue: faf_sim::sim::BuildQueue = serde_json::from_str(&json).unwrap_or_else(|e| {
+        eprintln!("Failed to parse build queue: {}", e);
+        std::process::exit(1);
+    });
+
+    let mut sim = faf_sim::sim::Simulation::new(queue, dt, max_time);
+    while !sim.is_finished() {
+        for event in sim.step() {
+            println!("{}", serde_json::to_string(event).expect("serialize event"));
+        }
+    }
 }

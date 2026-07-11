@@ -16,6 +16,7 @@ use crate::{
     units::{UnitCost, UnitDef, UnitKind, Units},
 };
 use faf_units::BuildTargetStats;
+use serde::{Deserialize, Serialize};
 
 /// Build power requested for a project, before any stall adjustment.
 ///
@@ -294,7 +295,7 @@ pub fn summarize_economy(
 }
 
 /// Current economy state at a point in time.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct EconomyState {
     /// Mass income per second (can be negative during drains).
     pub net_mass_income: MassRate,

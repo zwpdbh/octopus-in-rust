@@ -3,32 +3,20 @@ name = "faf-sim"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "Bevy-powered eco/build simulator for Forged Alliance Forever (FAF)."
+description = "Headless, observable eco/build simulator for Forged Alliance Forever (FAF)."
 license = "MIT"
 
 [features]
-default = ["native"]
-native = ["bevy/x11"]
-web = ["bevy/webgl2", "dep:wasm-bindgen"]
+default = ["headless"]
+headless = ["dep:bevy_app", "dep:bevy_ecs", "dep:bevy_time"]
 
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = [
-    "bevy_asset",
-    "bevy_core_pipeline",
-    "bevy_render",
-    "bevy_sprite",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_winit",
-    "default_font",
-    "multi_threaded",
-    "png",
-] }
-bevy_egui = "0.41"
+bevy_app = { version = "0.19", optional = true }
+bevy_ecs = { version = "0.19", optional = true }
+bevy_time = { version = "0.19", optional = true }
 faf-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-wasm-bindgen = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

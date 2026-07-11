@@ -2,10 +2,8 @@ use dioxus::prelude::*;
 use faf_sim::Time;
 
 use crate::components::{
-    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationResultsPlaceholder,
-    UnitSelectorModal,
+    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationPanel, UnitSelectorModal,
 };
-use crate::pages::SimulationPage;
 use crate::route::Route;
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
 use crate::types::{AssignmentTarget, ConstructionItem, UnitSummary};
@@ -18,7 +16,6 @@ pub fn SimulateBuild() -> Element {
     let mut draft_builder_count = use_signal(|| 1_u32);
     let mut draft_target = use_signal(|| None::<UnitSummary>);
     let mut draft_target_count = use_signal(|| 1_u32);
-    let mut show_simulation = use_signal(|| false);
     let mut simulation_requested = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
 
@@ -83,62 +80,68 @@ pub fn SimulateBuild() -> Element {
     let units_data = units_res.read().clone();
     match units_data {
         Some(Some(units)) => rsx! {
-            if !*show_simulation.read() {
-                div { class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden select-none",
-                    AppHeader { active: Route::SimulateBuild {} }
-                    div { class: "flex flex-1 overflow-hidden",
-                        // Left sidebar: Eco Settings + new item creator
-                        div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
-                            EcoPanel { plan }
-                            div { class: "my-4 border-t border-neutral-700" }
-                            QueueItemCreator {
-                                draft_builder,
-                                draft_builder_count,
-                                draft_target,
-                                draft_target_count,
+            div { class: "flex flex-col h-screen bg-neutral-950 text-gray-200 font-sans overflow-hidden select-none",
+                AppHeader { active: Route::SimulateBuild {} }
+                div { class: "flex flex-1 overflow-hidden",
+                    // Left sidebar: Eco Settings + new item creator
+                    div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
+                        EcoPanel { plan }
+                        div { class: "my-4 border-t border-neutral-700" }
+                        QueueItemCreator {
+                            draft_builder,
+                            draft_builder_count,
+                            draft_target,
+                            draft_target_count,
+                            on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                            on_save: save_draft,
+                            on_clear: clear_draft,
+                        }
+                    }
+                    // Right area: created queue (top) + simulation results (bottom)
+                    div { class: "flex-1 overflow-hidden flex flex-col",
+                        div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
+                            h3 { class: "text-sm font-semibold text-white mb-3 shrink-0",
+                                "Construction Plan"
+                            }
+                            QueueItemList {
+                                plan,
                                 on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                                on_save: save_draft,
-                                on_clear: clear_draft,
                             }
                         }
-                        // Right area: created queue (top) + simulation results (bottom)
-                        div { class: "flex-1 overflow-hidden flex flex-col",
-                            div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
-                                h3 { class: "text-sm font-semibold text-white mb-3 shrink-0",
-                                    "Construction Plan"
-                                }
-                                QueueItemList {
-                                    plan,
-                                    on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                                }
-                            }
-                            div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
-                                div { class: "flex items-center justify-center mb-3 shrink-0",
-                                    button {
-                                        class: "px-4 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors",
-                                        onclick: move |_| simulation_requested.set(true),
-                                        "Begin Simulation"
+                        div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
+                            div { class: "flex items-center justify-center mb-3 shrink-0",
+                                button {
+                                    class: "px-4 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors",
+                                    onclick: move |_| {
+                                        let current = *simulation_requested.read();
+                                        simulation_requested.set(!current);
+                                    },
+                                    if *simulation_requested.read() {
+                                        "Hide Simulation"
+                                    } else {
+                                        "Run Simulation"
                                     }
                                 }
-                                h3 { class: "text-sm font-semibold text-white mb-3 shrink-0",
-                                    "Simulation Results"
+                            }
+                            if *simulation_requested.read() {
+                                SimulationPanel {
+                                    plan: plan.read().clone(),
+                                    on_close: move |_| simulation_requested.set(false),
                                 }
-                                SimulationResultsPlaceholder { requested: *simulation_requested.read() }
+                            } else {
+                                p { class: "text-sm text-neutral-500 text-center mt-4",
+                                    "Click \"Run Simulation\" to see build timings."
+                                }
                             }
                         }
                     }
-                    UnitSelectorModal {
-                        open: pending_target.read().is_some(),
-                        units,
-                        target: (*pending_target.read()).unwrap_or(AssignmentTarget::NewTarget),
-                        on_select: assign_unit,
-                        on_close: move |_| pending_target.set(None),
-                    }
                 }
-            } else {
-                SimulationPage {
-                    plan: plan.read().clone(),
-                    on_back: move |_| show_simulation.set(false),
+                UnitSelectorModal {
+                    open: pending_target.read().is_some(),
+                    units,
+                    target: (*pending_target.read()).unwrap_or(AssignmentTarget::NewTarget),
+                    on_select: assign_unit,
+                    on_close: move |_| pending_target.set(None),
                 }
             }
         },
