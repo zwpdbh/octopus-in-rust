@@ -7,10 +7,9 @@ edition = "2021"
 console_error_panic_hook = { workspace = true }
 dioxus = { workspace = true }
 dioxus-router = "0.7.3"
+faf-dioxus-ui = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 gloo-net = { workspace = true }
-plotters = { version = "0.3.7", default-features = false, features = ["line_series", "full_palette"] }
-plotters-canvas = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }

@@ -1,18 +1,13 @@
 use dioxus::prelude::*;
+use faf_dioxus_ui::RGBColor;
 use faf_sim::protocol::{SimClientMessage, SimServerMessage};
 use faf_sim::sim::{EcoSnapshot, SimulationEvent};
-use plotters::prelude::*;
-use plotters_canvas::CanvasBackend;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
+use crate::components::{ChartMetric, ChartTab, LineChartPanel};
 use crate::types::ConstructionPlan;
-
-const MASS_INCOME_CANVAS: &str = "mass-income-chart";
-const ENERGY_INCOME_CANVAS: &str = "energy-income-chart";
-const TOTAL_MASS_CANVAS: &str = "total-mass-chart";
-const TOTAL_ENERGY_CANVAS: &str = "total-energy-chart";
 
 const SIMULATION_DT_SECONDS: u32 = 1;
 const MAX_SIMULATION_TIME_SECONDS: u32 = 3600;
@@ -154,38 +149,6 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
         onclose.forget();
     });
 
-    // Redraw charts whenever the snapshot list grows.
-    use_effect(move || {
-        let snaps = snapshots.read();
-        if snaps.len() < 2 {
-            return;
-        }
-        draw_chart(
-            MASS_INCOME_CANVAS,
-            &snaps,
-            |s| s.mass_income,
-            RGBColor(59, 130, 246),
-        );
-        draw_chart(
-            ENERGY_INCOME_CANVAS,
-            &snaps,
-            |s| s.energy_income,
-            RGBColor(234, 179, 8),
-        );
-        draw_chart(
-            TOTAL_MASS_CANVAS,
-            &snaps,
-            |s| s.total_mass_spent,
-            RGBColor(34, 197, 94),
-        );
-        draw_chart(
-            TOTAL_ENERGY_CANVAS,
-            &snaps,
-            |s| s.total_energy_spent,
-            RGBColor(249, 115, 22),
-        );
-    });
-
     let snaps = snapshots.read();
     let current_time = snaps.last().map_or(0.0, |s| s.time);
     let is_playing = *playing.read();
@@ -241,115 +204,32 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
                     }
                 }
             }
-            if snaps.len() < 2 {
-                p { class: "text-sm text-neutral-500 text-center mt-4", "Simulating..." }
-            } else {
-                div { class: "flex-1 overflow-auto",
-                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-3",
-                        MetricCard {
-                            title: "Mass income",
-                            color: "bg-blue-500",
-                            canvas_id: MASS_INCOME_CANVAS,
-                        }
-                        MetricCard {
-                            title: "Energy income",
-                            color: "bg-yellow-500",
-                            canvas_id: ENERGY_INCOME_CANVAS,
-                        }
-                        MetricCard {
-                            title: "Total mass spent",
-                            color: "bg-green-500",
-                            canvas_id: TOTAL_MASS_CANVAS,
-                        }
-                        MetricCard {
-                            title: "Total energy spent",
-                            color: "bg-orange-500",
-                            canvas_id: TOTAL_ENERGY_CANVAS,
-                        }
-                    }
-                }
+            LineChartPanel {
+                data: snapshots,
+                x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
+                tabs: vec![
+                    ChartTab {
+                        label: "Mass income".to_string(),
+                        color: RGBColor(59, 130, 246),
+                        y_extractor: ChartMetric::new(|s| s.mass_income),
+                    },
+                    ChartTab {
+                        label: "Energy income".to_string(),
+                        color: RGBColor(234, 179, 8),
+                        y_extractor: ChartMetric::new(|s| s.energy_income),
+                    },
+                    ChartTab {
+                        label: "Total mass spent".to_string(),
+                        color: RGBColor(34, 197, 94),
+                        y_extractor: ChartMetric::new(|s| s.total_mass_spent),
+                    },
+                    ChartTab {
+                        label: "Total energy spent".to_string(),
+                        color: RGBColor(249, 115, 22),
+                        y_extractor: ChartMetric::new(|s| s.total_energy_spent),
+                    },
+                ],
             }
         }
     }
-}
-
-#[component]
-fn MetricCard(title: String, color: String, canvas_id: String) -> Element {
-    rsx! {
-        div { class: "rounded-lg border border-neutral-800 bg-[#171717] p-2",
-            div { class: "flex items-center gap-2 mb-1",
-                div { class: "w-3 h-3 rounded-full {color}" }
-                h2 { class: "text-sm font-semibold text-white", "{title}" }
-            }
-            canvas {
-                id: "{canvas_id}",
-                width: "400",
-                height: "240",
-                class: "w-full h-auto rounded border border-neutral-800",
-            }
-        }
-    }
-}
-
-fn draw_chart(
-    canvas_id: &str,
-    snapshots: &[EcoSnapshot],
-    metric: fn(&EcoSnapshot) -> f64,
-    color: RGBColor,
-) {
-    let backend = match CanvasBackend::new(canvas_id) {
-        Some(b) => b,
-        None => return,
-    };
-    let root = backend.into_drawing_area();
-    root.fill(&RGBColor(23, 23, 23)).unwrap();
-
-    if snapshots.len() < 2 {
-        root.present().unwrap();
-        return;
-    }
-
-    let full_data: Vec<(f64, f64)> = snapshots.iter().map(|s| (s.time, metric(s))).collect();
-    let max_time = snapshots.last().unwrap().time.max(1.0);
-    let (min_y, max_y) = range_for_series(&full_data);
-
-    let mut chart = ChartBuilder::on(&root)
-        .margin(8)
-        .x_label_area_size(0)
-        .y_label_area_size(0)
-        .build_cartesian_2d(0.0..max_time, min_y..max_y)
-        .unwrap();
-
-    chart
-        .configure_mesh()
-        .x_labels(0)
-        .y_labels(0)
-        .light_line_style(RGBColor(60, 60, 60))
-        .draw()
-        .unwrap();
-
-    chart
-        .draw_series(LineSeries::new(full_data, &color))
-        .unwrap();
-
-    root.present().unwrap();
-}
-
-fn range_for_series(data: &[(f64, f64)]) -> (f64, f64) {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for (_, y) in data {
-        min = min.min(*y);
-        max = max.max(*y);
-    }
-    if min.is_infinite() || max.is_infinite() || min == max {
-        return (0.0, 1.0);
-    }
-    let padding = (max - min) * 0.05;
-    let min = (min - padding).max(0.0);
-    let max = max + padding;
-    if max <= min {
-        return (min, min + 1.0);
-    }
-    (min, max)
 }
