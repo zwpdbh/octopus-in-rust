@@ -6,7 +6,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
-use crate::components::{ChartMetric, ChartTab, LineChartPanel};
+use crate::components::{ChartMetric, ChartTab, UplotChart};
 use crate::types::ConstructionPlan;
 
 const SIMULATION_DT_SECONDS: u32 = 1;
@@ -204,7 +204,7 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
                     }
                 }
             }
-            LineChartPanel {
+            UplotChart {
                 data: snapshots,
                 x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
                 tabs: vec![

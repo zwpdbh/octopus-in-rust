@@ -20,7 +20,7 @@ impl<T> ChartMetric<T> {
         Self(extractor)
     }
 
-    fn extract(&self, value: &T) -> f64 {
+    pub(crate) fn extract(&self, value: &T) -> f64 {
         (self.0)(value)
     }
 }
