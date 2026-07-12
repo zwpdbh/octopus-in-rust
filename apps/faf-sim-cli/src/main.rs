@@ -1,7 +1,8 @@
 //! CLI for the FAF build-queue simulator.
 //!
-//! This client uses `faf-sim-service` directly to run a simulation locally and
-//! emits the streamed events as NDJSON.
+//! This client uses `faf-sim-service` to run a simulation locally and emits the
+//! streamed events as NDJSON. The CLI only needs to know how to start a
+//! simulation in active or passive mode and subscribe to it by id.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,12 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use faf_sim::protocol::SimulationMode;
 use faf_sim::quantities::{StepTime, Time};
 use faf_sim::sim::{BuildQueue, SimulationEvent};
-use faf_sim_service::{
-    RunConfig, SimServiceEvent, SimulationId, SimulationReceiver, SimulationService,
-};
+use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
 
 #[derive(Parser, Debug)]
 #[command(name = "faf-sim", about = "Headless FAF build-queue simulator")]
@@ -78,18 +76,8 @@ fn main() {
     }
 }
 
-/// Shared setup: parse the queue, validate step time, start the simulation, and
-/// subscribe to its event stream.
-fn prepare_simulation(
-    queue: PathBuf,
-    shared: BuildShared,
-    mode: SimulationMode,
-) -> (
-    SimulationService,
-    SimulationId,
-    SimulationReceiver,
-    StepTime,
-) {
+/// Parse the build queue and validate the step time from CLI arguments.
+fn parse_queue_and_dt(queue: PathBuf, shared: BuildShared) -> (BuildQueue, StepTime, Option<Time>) {
     let json = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
         eprintln!("Failed to read {}: {}", queue.display(), e);
         std::process::exit(1);
@@ -105,16 +93,15 @@ fn prepare_simulation(
     });
     let max_time = shared.max_time_seconds.map(|s| Time::from_raw(s as f64));
 
-    let service = SimulationService::new();
-    let config = RunConfig { dt, max_time, mode };
+    (queue, dt, max_time)
+}
 
-    let id = service.start(queue, config);
-    let rx = service.subscribe(id).unwrap_or_else(|e| {
+/// Subscribe to a simulation, exiting the process on failure.
+fn subscribe(service: &SimulationService, id: SimulationId) -> SimulationReceiver {
+    service.subscribe(id).unwrap_or_else(|e| {
         eprintln!("Failed to subscribe to simulation: {e}");
         std::process::exit(1);
-    });
-
-    (service, id, rx, dt)
+    })
 }
 
 /// Run in active mode.
@@ -123,7 +110,11 @@ fn prepare_simulation(
 /// background thread that repeatedly sends `Advance` commands until the
 /// simulation reports it is finished.
 fn run_active(queue: PathBuf, shared: BuildShared) {
-    let (service, id, rx, dt) = prepare_simulation(queue, shared, SimulationMode::Active);
+    let (queue, dt, max_time) = parse_queue_and_dt(queue, shared);
+
+    let service = SimulationService::new();
+    let id = service.start_active_sim(queue, dt, max_time);
+    let rx = subscribe(&service, id);
 
     let is_finished = Arc::new(AtomicBool::new(false));
     let driver = service.clone();
@@ -144,8 +135,12 @@ fn run_active(queue: PathBuf, shared: BuildShared) {
 ///
 /// The service auto-steps, so we only need to consume and print events.
 fn run_passive(queue: PathBuf, shared: BuildShared, tick_interval_ms: u64) {
-    let (_service, _id, rx, _dt) =
-        prepare_simulation(queue, shared, SimulationMode::Passive { tick_interval_ms });
+    let (queue, dt, max_time) = parse_queue_and_dt(queue, shared);
+
+    let service = SimulationService::new();
+    let id = service.start_passive_sim(queue, dt, max_time, tick_interval_ms);
+    let rx = subscribe(&service, id);
+
     let is_finished = Arc::new(AtomicBool::new(false));
     consume_events(rx, &is_finished);
 }

@@ -23,19 +23,29 @@ use uuid::Uuid;
 pub type SimulationId = Uuid;
 
 /// Configuration for a single simulation run.
+///
+/// This type is crate-private so that external clients cannot construct it
+/// directly. Use [`SimulationService::start_active`] or
+/// [`SimulationService::start_passive`] instead.
 #[derive(Debug, Clone, Copy)]
-pub struct RunConfig {
+pub(crate) struct RunConfig {
     /// Simulation step size. Must be an integer number of seconds >= 1.
     /// dt is the granularity of the simulation.
     /// A larger dt means fewer snapshots and less precision;
     /// a smaller dt means more snapshots and finer resolution.
-    pub dt: StepTime,
+    pub(crate) dt: StepTime,
     /// Optional hard cap in simulation time. When `None` the simulation runs
     /// until the build queue is empty.
-    pub max_time: Option<Time>,
+    pub(crate) max_time: Option<Time>,
     /// How the simulation is driven: manual `Advance` commands or real-time
     /// auto-play.
-    pub mode: SimulationMode,
+    pub(crate) mode: SimulationMode,
+}
+
+impl RunConfig {
+    pub(crate) fn new(dt: StepTime, max_time: Option<Time>, mode: SimulationMode) -> Self {
+        Self { dt, max_time, mode }
+    }
 }
 
 impl Default for RunConfig {
@@ -123,7 +133,7 @@ impl SimulationService {
     /// Returns the generated [`SimulationId`]. The simulation will wait for the
     /// first subscriber before stepping. Use [`Self::subscribe`] to receive
     /// events; multiple subscribers can attach to the same simulation.
-    pub fn start(&self, queue: BuildQueue, config: RunConfig) -> SimulationId {
+    pub(crate) fn start(&self, queue: BuildQueue, config: RunConfig) -> SimulationId {
         let id = Uuid::new_v4();
         let (control_tx, control_rx) = unbounded();
         let subscriber_count = Arc::new(AtomicUsize::new(0));
@@ -142,6 +152,38 @@ impl SimulationService {
         });
 
         id
+    }
+
+    /// Start a new simulation in active (manual-advance) mode.
+    ///
+    /// Returns the generated [`SimulationId`]. The simulation will wait for the
+    /// first subscriber before stepping. Use [`Self::subscribe`] to receive
+    /// events; multiple subscribers can attach to the same simulation.
+    pub fn start_active_sim(
+        &self,
+        queue: BuildQueue,
+        dt: StepTime,
+        max_time: Option<Time>,
+    ) -> SimulationId {
+        self.start(queue, RunConfig::new(dt, max_time, SimulationMode::Active))
+    }
+
+    /// Start a new simulation in passive (auto-play) mode.
+    ///
+    /// Returns the generated [`SimulationId`]. The simulation will wait for the
+    /// first subscriber before stepping. Use [`Self::subscribe`] to receive
+    /// events; multiple subscribers can attach to the same simulation.
+    pub fn start_passive_sim(
+        &self,
+        queue: BuildQueue,
+        dt: StepTime,
+        max_time: Option<Time>,
+        tick_interval_ms: u64,
+    ) -> SimulationId {
+        self.start(
+            queue,
+            RunConfig::new(dt, max_time, SimulationMode::Passive { tick_interval_ms }),
+        )
     }
 
     /// Subscribe to an existing simulation.
@@ -449,14 +491,12 @@ mod tests {
     #[test]
     fn pause_emits_state_changed_event() {
         let service = SimulationService::new();
-        let config = RunConfig {
-            dt: StepTime::from_seconds(1).unwrap(),
-            max_time: Some(Time::from_raw(1000.0)),
-            mode: SimulationMode::Passive {
-                tick_interval_ms: 1,
-            },
-        };
-        let id = service.start(make_queue(), config);
+        let id = service.start_passive_sim(
+            make_queue(),
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+            1,
+        );
         let rx = service.subscribe(id).unwrap();
 
         service.pause(id).unwrap();
@@ -478,12 +518,11 @@ mod tests {
     #[test]
     fn advance_while_paused_produces_tick_event() {
         let service = SimulationService::new();
-        let config = RunConfig {
-            dt: StepTime::from_seconds(1).unwrap(),
-            max_time: Some(Time::from_raw(1000.0)),
-            mode: SimulationMode::Active,
-        };
-        let id = service.start(make_queue(), config);
+        let id = service.start_active_sim(
+            make_queue(),
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
         let rx = service.subscribe(id).unwrap();
 
         // Pause before any automatic steps occur.
@@ -520,12 +559,11 @@ mod tests {
     #[test]
     fn multiple_subscribers_receive_same_events() {
         let service = SimulationService::new();
-        let config = RunConfig {
-            dt: StepTime::from_seconds(1).unwrap(),
-            max_time: Some(Time::from_raw(1000.0)),
-            mode: SimulationMode::Active,
-        };
-        let id = service.start(make_queue(), config);
+        let id = service.start_active_sim(
+            make_queue(),
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
         let rx1 = service.subscribe(id).unwrap();
         let rx2 = service.subscribe(id).unwrap();
 
@@ -559,12 +597,11 @@ mod tests {
     #[test]
     fn active_mode_does_not_auto_step() {
         let service = SimulationService::new();
-        let config = RunConfig {
-            dt: StepTime::from_seconds(1).unwrap(),
-            max_time: Some(Time::from_raw(1000.0)),
-            mode: SimulationMode::Active,
-        };
-        let id = service.start(make_queue(), config);
+        let id = service.start_active_sim(
+            make_queue(),
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
         let rx = service.subscribe(id).unwrap();
 
         // Wait a short time to give a hypothetical auto-step loop a chance to
