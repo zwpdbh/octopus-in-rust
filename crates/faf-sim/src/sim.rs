@@ -14,25 +14,26 @@ use crate::eco::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, Producer,
     SimClock, StorageContributor, TotalsSpent,
 };
+use crate::quantities::{StepTime, Time};
 
 /// Steppable economy simulation.
 pub struct Simulation {
     app: App,
-    dt: f64,
+    dt: StepTime,
 }
 
 impl Simulation {
     /// Create a new simulation for the given queue.
     ///
-    /// `dt` is the simulation step size in seconds. `max_time` is an optional
-    /// hard cap in seconds to prevent infinite simulation; when `None` the
-    /// simulation runs until the build queue is empty.
-    pub fn new(queue: BuildQueue, dt: f64, max_time: Option<f64>) -> Self {
+    /// `dt` is the validated simulation step size (integer seconds, at least 1).
+    /// `max_time` is an optional hard cap in seconds; when `None` the simulation
+    /// runs until the build queue is empty.
+    pub fn new(queue: BuildQueue, dt: StepTime, max_time: Option<Time>) -> Self {
         let mut app = App::new();
         app.add_plugins(EcoPlugin)
             .insert_resource(SimClock {
-                time: 0.0,
-                dt,
+                time: Time::from_raw(0.0),
+                dt: dt.as_time(),
                 max_time,
             })
             .insert_resource(PendingTasks(queue.tasks))
@@ -74,7 +75,7 @@ impl Simulation {
     ///
     /// The configured step size is restored after the update so subsequent
     /// [`Self::step`] calls continue to use the original `dt`.
-    pub fn step_with_dt(&mut self, dt: f64) -> &[SimulationEvent] {
+    pub fn step_with_dt(&mut self, dt: StepTime) -> &[SimulationEvent] {
         {
             let mut journal = self.app.world_mut().resource_mut::<EventJournal>();
             journal.0.clear();
@@ -86,14 +87,14 @@ impl Simulation {
 
         {
             let mut clock = self.app.world_mut().resource_mut::<SimClock>();
-            clock.dt = dt;
+            clock.dt = dt.as_time();
         }
 
         self.app.update();
 
         {
             let mut clock = self.app.world_mut().resource_mut::<SimClock>();
-            clock.dt = self.dt;
+            clock.dt = self.dt.as_time();
         }
 
         let journal = self.app.world().resource::<EventJournal>();
@@ -105,8 +106,8 @@ impl Simulation {
         self.app.world().resource::<FinishedFlag>().0
     }
 
-    /// Current simulation time in seconds.
-    pub fn current_time(&self) -> f64 {
+    /// Current simulation time.
+    pub fn current_time(&self) -> Time {
         self.app.world().resource::<SimClock>().time
     }
 }

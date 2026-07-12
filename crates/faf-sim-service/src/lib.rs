@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use faf_sim::protocol::{ControlEvent, SimulationState};
+use faf_sim::protocol::{ControlEvent, SimulationMode, SimulationState};
+use faf_sim::quantities::{StepTime, Time};
 use faf_sim::sim::{BuildQueue, Simulation, SimulationEvent};
 use thiserror::Error;
 use uuid::Uuid;
@@ -24,21 +25,27 @@ pub type SimulationId = Uuid;
 /// Configuration for a single simulation run.
 #[derive(Debug, Clone, Copy)]
 pub struct RunConfig {
-    /// Simulation step size in seconds.
-    pub dt: f64,
-    /// Optional hard cap in seconds. When `None` the simulation runs until the
-    /// build queue is empty.
-    pub max_time: Option<f64>,
-    /// Real-world delay between simulation steps.
-    pub tick_interval: Duration,
+    /// Simulation step size. Must be an integer number of seconds >= 1.
+    /// dt is the granularity of the simulation.
+    /// A larger dt means fewer snapshots and less precision;
+    /// a smaller dt means more snapshots and finer resolution.
+    pub dt: StepTime,
+    /// Optional hard cap in simulation time. When `None` the simulation runs
+    /// until the build queue is empty.
+    pub max_time: Option<Time>,
+    /// How the simulation is driven: manual `Advance` commands or real-time
+    /// auto-play.
+    pub mode: SimulationMode,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
         Self {
-            dt: 0.1,
+            dt: StepTime::from_seconds(1).expect("1 second is a valid step time"),
             max_time: None,
-            tick_interval: Duration::from_millis(50),
+            mode: SimulationMode::Passive {
+                tick_interval_ms: 50,
+            },
         }
     }
 }
@@ -48,7 +55,7 @@ enum ControlCmd {
     Pause,
     Resume,
     Stop,
-    Advance(f64),
+    Advance(StepTime),
     Subscribe(Sender<SimServiceEvent>),
 }
 
@@ -111,21 +118,15 @@ impl SimulationService {
         Self::default()
     }
 
-    /// Start a new simulation and subscribe to its event stream.
+    /// Start a new simulation.
     ///
-    /// Returns the generated [`SimulationId`] and a receiver for the first
-    /// subscriber. Additional subscribers can attach with [`Self::subscribe`].
-    pub fn start(
-        &self,
-        queue: BuildQueue,
-        config: RunConfig,
-    ) -> (SimulationId, SimulationReceiver) {
+    /// Returns the generated [`SimulationId`]. The simulation will wait for the
+    /// first subscriber before stepping. Use [`Self::subscribe`] to receive
+    /// events; multiple subscribers can attach to the same simulation.
+    pub fn start(&self, queue: BuildQueue, config: RunConfig) -> SimulationId {
         let id = Uuid::new_v4();
         let (control_tx, control_rx) = unbounded();
         let subscriber_count = Arc::new(AtomicUsize::new(0));
-        let (event_tx, event_rx) = unbounded();
-
-        subscriber_count.fetch_add(1, Ordering::SeqCst);
 
         let handle = SimulationHandle {
             control_tx,
@@ -136,15 +137,11 @@ impl SimulationService {
         let service = self.simulations.clone();
         let count_for_thread = subscriber_count.clone();
         std::thread::spawn(move || {
-            run_simulation_thread(queue, config, control_rx, vec![event_tx], count_for_thread);
+            run_simulation_thread(queue, config, control_rx, Vec::new(), count_for_thread);
             service.lock().unwrap().remove(&id);
         });
 
-        let receiver = SimulationReceiver {
-            rx: event_rx,
-            subscriber_count,
-        };
-        (id, receiver)
+        id
     }
 
     /// Subscribe to an existing simulation.
@@ -183,8 +180,8 @@ impl SimulationService {
         self.send_control(id, ControlCmd::Stop)
     }
 
-    /// Advance a simulation by one manual step of `dt` simulation seconds.
-    pub fn advance(&self, id: SimulationId, dt: f64) -> Result<(), ServiceError> {
+    /// Advance a simulation by one manual step of `dt`.
+    pub fn advance(&self, id: SimulationId, dt: StepTime) -> Result<(), ServiceError> {
         self.send_control(id, ControlCmd::Advance(dt))
     }
 
@@ -227,25 +224,77 @@ fn run_simulation_thread(
 ) {
     let mut sim = Simulation::new(queue, config.dt, config.max_time);
     let mut subscribers = initial_subscribers;
+
+    match config.mode {
+        SimulationMode::Active => {
+            run_active_loop(&mut sim, control_rx, &mut subscribers, config.mode)
+        }
+        SimulationMode::Passive { tick_interval_ms } => run_passive_loop(
+            &mut sim,
+            control_rx,
+            &mut subscribers,
+            subscriber_count,
+            tick_interval_ms,
+            config.mode,
+        ),
+    }
+}
+
+/// Active mode: the simulation only steps on explicit `Advance` commands.
+fn run_active_loop(
+    sim: &mut Simulation,
+    control_rx: Receiver<ControlCmd>,
+    subscribers: &mut Vec<Sender<SimServiceEvent>>,
+    mode: SimulationMode,
+) {
+    // In active mode the runtime state is always conceptually "paused" because
+    // the simulation never auto-steps. We keep a fixed Paused state so control
+    // events still report a consistent value.
+    let mut state = RunState::Paused;
+
+    loop {
+        match control_rx.recv() {
+            Ok(cmd) => {
+                let events = apply_control_cmd(mode, &mut state, cmd, sim, subscribers);
+                broadcast_events(subscribers, events);
+                if state == RunState::Stopped {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Passive mode: the simulation auto-steps with a real-time delay between ticks.
+fn run_passive_loop(
+    sim: &mut Simulation,
+    control_rx: Receiver<ControlCmd>,
+    subscribers: &mut Vec<Sender<SimServiceEvent>>,
+    subscriber_count: Arc<AtomicUsize>,
+    tick_interval_ms: u64,
+    mode: SimulationMode,
+) {
+    let tick_interval = Duration::from_millis(tick_interval_ms);
     let mut state = RunState::Running;
 
     loop {
         // Process any queued commands first.
         while let Ok(cmd) = control_rx.try_recv() {
-            let events = apply_control_cmd(&mut state, cmd, &mut sim, &mut subscribers);
-            broadcast_events(&mut subscribers, events);
+            let events = apply_control_cmd(mode, &mut state, cmd, sim, subscribers);
+            broadcast_events(subscribers, events);
             if state == RunState::Stopped {
                 return;
             }
         }
 
         if state == RunState::Paused {
-            // While paused we block on the control channel so manual steps are
+            // While paused we block on the control channel so resume/stop is
             // immediately responsive instead of polling on tick_interval.
             match control_rx.recv() {
                 Ok(cmd) => {
-                    let events = apply_control_cmd(&mut state, cmd, &mut sim, &mut subscribers);
-                    broadcast_events(&mut subscribers, events);
+                    let events = apply_control_cmd(mode, &mut state, cmd, sim, subscribers);
+                    broadcast_events(subscribers, events);
                     if state == RunState::Stopped {
                         return;
                     }
@@ -256,7 +305,19 @@ fn run_simulation_thread(
         }
 
         if subscriber_count.load(Ordering::SeqCst) == 0 {
-            return;
+            // No subscribers yet: block until a command arrives instead of
+            // exiting, so callers can start a simulation and subscribe later.
+            match control_rx.recv() {
+                Ok(cmd) => {
+                    let events = apply_control_cmd(mode, &mut state, cmd, sim, subscribers);
+                    broadcast_events(subscribers, events);
+                    if state == RunState::Stopped {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+            continue;
         }
 
         if sim.is_finished() {
@@ -269,46 +330,37 @@ fn run_simulation_thread(
                 &event,
                 SimServiceEvent::Simulation(SimulationEvent::Finished)
             );
-            broadcast(&mut subscribers, event);
+            broadcast(subscribers, event);
             if is_finished {
                 return;
             }
         }
 
-        std::thread::sleep(config.tick_interval);
+        std::thread::sleep(tick_interval);
     }
 }
 
-/// Apply a control command, validating the `(state, cmd)` combination.
+/// Apply a control command, validating the `(mode, state, cmd)` combination.
 ///
 /// Mutates `state` in place and returns any service events produced by the
 /// command. When `state` becomes `RunState::Stopped`, the caller should exit.
 fn apply_control_cmd(
+    mode: SimulationMode,
     state: &mut RunState,
     cmd: ControlCmd,
     sim: &mut Simulation,
     subscribers: &mut Vec<Sender<SimServiceEvent>>,
 ) -> Vec<SimServiceEvent> {
     let old_state = *state;
-    match (old_state, cmd) {
-        // Pause only makes sense while running.
-        (RunState::Running, ControlCmd::Pause) => {
-            *state = RunState::Paused;
-            vec![state_changed_event(old_state, RunState::Paused)]
-        }
-        // Resume only makes sense while paused.
-        (RunState::Paused, ControlCmd::Resume) => {
-            *state = RunState::Running;
-            vec![state_changed_event(old_state, RunState::Running)]
-        }
+    match (mode, old_state, cmd) {
         // Stop is always valid and terminates the thread.
-        (_, ControlCmd::Stop) => {
+        (_, _, ControlCmd::Stop) => {
             *state = RunState::Stopped;
             vec![state_changed_event(old_state, RunState::Stopped)]
         }
-        // Manual advance is only valid while paused.
-        (RunState::Paused, ControlCmd::Advance(dt)) => {
-            if dt > 0.0 && !sim.is_finished() {
+        // In active mode only Advance causes a step; Pause/Resume are no-ops.
+        (SimulationMode::Active, _, ControlCmd::Advance(dt)) => {
+            if !sim.is_finished() {
                 sim.step_with_dt(dt)
                     .iter()
                     .map(|e| SimServiceEvent::Simulation(e.clone()))
@@ -317,13 +369,21 @@ fn apply_control_cmd(
                 vec![]
             }
         }
-        // Subscribers can attach in any state.
-        (_, ControlCmd::Subscribe(tx)) => {
+        // Pause/Resume only make sense in passive mode.
+        (SimulationMode::Passive { .. }, RunState::Running, ControlCmd::Pause) => {
+            *state = RunState::Paused;
+            vec![state_changed_event(old_state, RunState::Paused)]
+        }
+        (SimulationMode::Passive { .. }, RunState::Paused, ControlCmd::Resume) => {
+            *state = RunState::Running;
+            vec![state_changed_event(old_state, RunState::Running)]
+        }
+        // Advance is a no-op in passive mode; Pause/Resume are no-ops in active.
+        // Subscribers can attach in any mode/state.
+        (_, _, ControlCmd::Subscribe(tx)) => {
             subscribers.push(tx);
             vec![]
         }
-        // All other combinations are no-ops (e.g. Resume while running, Pause
-        // while paused, Advance while running).
         _ => vec![],
     }
 }
@@ -353,8 +413,8 @@ fn broadcast_events(subscribers: &mut Vec<Sender<SimServiceEvent>>, events: Vec<
 mod tests {
     use super::*;
     use faf_sim::economy::EconomyState;
-    use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
-    use faf_sim::sim::{BuildQueue, BuildTask, SimulationEvent, UnitDefRef};
+    use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
+    use faf_sim::sim::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitDefRef};
 
     fn rich_eco() -> EconomyState {
         EconomyState {
@@ -390,11 +450,14 @@ mod tests {
     fn pause_emits_state_changed_event() {
         let service = SimulationService::new();
         let config = RunConfig {
-            dt: 1.0,
-            max_time: Some(1000.0),
-            tick_interval: Duration::from_millis(1),
+            dt: StepTime::from_seconds(1).unwrap(),
+            max_time: Some(Time::from_raw(1000.0)),
+            mode: SimulationMode::Passive {
+                tick_interval_ms: 1,
+            },
         };
-        let (id, rx) = service.start(make_queue(), config);
+        let id = service.start(make_queue(), config);
+        let rx = service.subscribe(id).unwrap();
 
         service.pause(id).unwrap();
 
@@ -416,11 +479,12 @@ mod tests {
     fn advance_while_paused_produces_tick_event() {
         let service = SimulationService::new();
         let config = RunConfig {
-            dt: 1.0,
-            max_time: Some(1000.0),
-            tick_interval: Duration::from_millis(1),
+            dt: StepTime::from_seconds(1).unwrap(),
+            max_time: Some(Time::from_raw(1000.0)),
+            mode: SimulationMode::Active,
         };
-        let (id, rx) = service.start(make_queue(), config);
+        let id = service.start(make_queue(), config);
+        let rx = service.subscribe(id).unwrap();
 
         // Pause before any automatic steps occur.
         service.pause(id).unwrap();
@@ -429,7 +493,9 @@ mod tests {
         while rx.try_recv().is_ok() {}
 
         // Manually advance by 2.0 seconds.
-        service.advance(id, 2.0).unwrap();
+        service
+            .advance(id, StepTime::from_seconds(2).unwrap())
+            .unwrap();
 
         // We should receive at least one Ticked event with time == 2.0.
         let mut found = false;
@@ -447,6 +513,64 @@ mod tests {
             }
         }
         assert!(found);
+
+        service.stop(id).unwrap();
+    }
+
+    #[test]
+    fn multiple_subscribers_receive_same_events() {
+        let service = SimulationService::new();
+        let config = RunConfig {
+            dt: StepTime::from_seconds(1).unwrap(),
+            max_time: Some(Time::from_raw(1000.0)),
+            mode: SimulationMode::Active,
+        };
+        let id = service.start(make_queue(), config);
+        let rx1 = service.subscribe(id).unwrap();
+        let rx2 = service.subscribe(id).unwrap();
+
+        // In active mode the simulation does not auto-step, so we can advance
+        // manually without pausing first.
+
+        // Advance manually; both subscribers should see the Ticked event.
+        service
+            .advance(id, StepTime::from_seconds(2).unwrap())
+            .unwrap();
+
+        // Drain events until each subscriber observes the Ticked event from the
+        // manual advance (a TaskStarted event is emitted first).
+        fn recv_ticked(rx: &Receiver<SimServiceEvent>) -> EcoSnapshot {
+            while let Ok(event) = rx.recv() {
+                if let SimServiceEvent::Simulation(SimulationEvent::Ticked(snapshot)) = event {
+                    return snapshot;
+                }
+            }
+            panic!("receiver closed before Ticked event");
+        }
+        let s1 = recv_ticked(&rx1);
+        let s2 = recv_ticked(&rx2);
+
+        assert!((s1.time - 2.0).abs() < 1e-9);
+        assert!((s2.time - 2.0).abs() < 1e-9);
+
+        service.stop(id).unwrap();
+    }
+
+    #[test]
+    fn active_mode_does_not_auto_step() {
+        let service = SimulationService::new();
+        let config = RunConfig {
+            dt: StepTime::from_seconds(1).unwrap(),
+            max_time: Some(Time::from_raw(1000.0)),
+            mode: SimulationMode::Active,
+        };
+        let id = service.start(make_queue(), config);
+        let rx = service.subscribe(id).unwrap();
+
+        // Wait a short time to give a hypothetical auto-step loop a chance to
+        // emit something. In active mode nothing should arrive.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(rx.try_recv().is_err());
 
         service.stop(id).unwrap();
     }

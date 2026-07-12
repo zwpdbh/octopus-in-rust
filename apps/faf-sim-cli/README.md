@@ -8,14 +8,42 @@ other tools, plotted, or piped into a file.
 
 ## Simulate a construction plan
 
+The `build` command has two subcommands that select the simulation mode:
+
+- `build active` — manual advance mode. The simulation starts and waits for
+  external `Advance` commands (useful when driven by the WebSocket server or the
+  service API). The CLI itself does not auto-step.
+- `build passive` — auto-play mode. The simulation steps automatically using the
+  configured tick interval.
+
+### Passive mode
+
 ```sh
-cargo run --bin faf-sim -- build /home/zw/code/rust_programming/octopus/tmp/faf-sim-examples/engineer-builds-factory.json --resolution 10
+cargo run --bin faf-sim -- build passive \
+  tmp/faf-sim-examples/engineer-builds-factory.json \
+  --dt-seconds 1 \
+  --max-time-seconds 1000 \
+  --tick-interval-ms 50
 ```
 
-- `plan.json` — a `BuildQueue` JSON object describing initial economy and build tasks.
-- `--resolution` (`-r`) — simulation resolution in steps per second (default `10`).
-- `--max-time` (`-m`) — optional hard cap in seconds. When omitted the simulation runs until the build queue is empty.
-- `--tick-interval-ms` — real-world delay between simulation steps in milliseconds (default `50`).
+- `<QUEUE>` — a `BuildQueue` JSON object describing initial economy and build tasks.
+- `--dt-seconds` (`-d`) — simulation step size in seconds. Must be an integer `>= 1` (default `1`).
+- `--max-time-seconds` (`-m`) — optional hard cap in seconds. When omitted the simulation runs until the build queue is empty.
+- `--tick-interval-ms` — real-world delay between simulation steps in milliseconds (default `50`). Only available in passive mode.
+
+### Active mode
+
+```sh
+cargo run --bin faf-sim -- build active \
+  tmp/faf-sim-examples/engineer-builds-factory.json \
+  --dt-seconds 1 \
+  --max-time-seconds 1000
+```
+
+Active mode accepts the same `--dt-seconds` and `--max-time-seconds` options as
+passive mode, but it does **not** accept `--tick-interval-ms`. For convenience,
+the CLI drives active mode itself by sending `Advance` commands in a tight loop
+until the simulation finishes.
 
 ## Construction plan format
 
@@ -68,7 +96,11 @@ tmp/faf-sim-examples/engineer-builds-factory.json
 Run it with:
 
 ```sh
-cargo run --bin faf-sim -- build tmp/faf-sim-examples/engineer-builds-factory.json --resolution 1 --max-time 1000
+cargo run --bin faf-sim -- build passive \
+  tmp/faf-sim-examples/engineer-builds-factory.json \
+  --dt-seconds 1 \
+  --max-time-seconds 1000 \
+  --tick-interval-ms 50
 ```
 
 ## Output
@@ -77,7 +109,7 @@ The CLI prints one event per line:
 
 ```json
 {"TaskStarted":{"task_id":1,"time":0.0}}
-{"Ticked":{"time":0.1,"mass_income":1.0,"energy_income":20.0,...}}
+{"Ticked":{"time":1.0,"mass_income":1.0,"energy_income":20.0,...}}
 {"TaskCompleted":{"task_id":1,"time":30.0}}
 "Finished"
 ```
@@ -92,5 +124,5 @@ Event types:
 ## Pipe to a file
 
 ```sh
-cargo run --bin faf-sim -- build plan.json > events.ndjson
+cargo run --bin faf-sim -- build passive plan.json > events.ndjson
 ```

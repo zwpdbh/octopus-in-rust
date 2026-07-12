@@ -89,6 +89,32 @@ quantity!(BuildWork);
 quantity!(MassRate);
 quantity!(EnergyRate);
 
+/// A validated simulation step size.
+///
+/// `StepTime` wraps [`Time`] and guarantees that the step duration is an
+/// integer number of seconds and at least one second. This prevents callers
+/// from accidentally passing a fractional or zero step size to the simulation.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct StepTime(Time);
+
+impl StepTime {
+    /// Create a step time from an integer number of seconds.
+    ///
+    /// Returns `None` if `seconds` is zero.
+    pub const fn from_seconds(seconds: u32) -> Option<Self> {
+        if seconds >= 1 {
+            Some(Self(Time::from_raw(seconds as f64)))
+        } else {
+            None
+        }
+    }
+
+    /// Return the underlying [`Time`].
+    pub const fn as_time(self) -> Time {
+        self.0
+    }
+}
+
 /// A storage container pairing the currently held amount with its capacity.
 ///
 /// Used for mass/energy storage in the economy model. Keeping `current` and

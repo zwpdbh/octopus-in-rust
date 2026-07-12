@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::economy::EconomyState;
-    use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
+    use crate::quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
     use crate::sim::{BuildQueue, BuildTask, Simulation, SimulationEvent, UnitDefRef};
 
     fn rich_eco() -> EconomyState {
@@ -41,7 +41,11 @@ mod tests {
             },
         }]);
 
-        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
         let mut started = false;
         let mut completed = false;
         let mut ticks = 0;
@@ -66,7 +70,7 @@ mod tests {
         assert!(started);
         assert!(completed);
         assert_eq!(ticks, 10);
-        assert!((sim.current_time() - 10.0).abs() < 1e-9);
+        assert!((sim.current_time().value() - 10.0).abs() < 1e-9);
     }
 
     #[test]
@@ -94,7 +98,11 @@ mod tests {
             }],
         };
 
-        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
         let mut saw_stall = false;
 
         while !sim.is_finished() {
@@ -109,7 +117,7 @@ mod tests {
 
         assert!(saw_stall);
         // With only 5 energy available we cannot run at full power.
-        assert!(sim.current_time() > 10.0);
+        assert!(sim.current_time() > Time::from_raw(10.0));
     }
 
     #[test]
@@ -130,17 +138,21 @@ mod tests {
             },
         }]);
 
-        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
 
         // Take one manual step of 2.0 seconds.
-        let events = sim.step_with_dt(2.0);
+        let events = sim.step_with_dt(StepTime::from_seconds(2).unwrap());
         assert!(events
             .iter()
             .any(|e| matches!(e, SimulationEvent::Ticked(_))));
-        assert!((sim.current_time() - 2.0).abs() < 1e-9);
+        assert!((sim.current_time().value() - 2.0).abs() < 1e-9);
 
         // A subsequent normal step should use the configured dt of 1.0.
         sim.step();
-        assert!((sim.current_time() - 3.0).abs() < 1e-9);
+        assert!((sim.current_time().value() - 3.0).abs() < 1e-9);
     }
 }

@@ -14,8 +14,9 @@ const ENERGY_INCOME_CANVAS: &str = "energy-income-chart";
 const TOTAL_MASS_CANVAS: &str = "total-mass-chart";
 const TOTAL_ENERGY_CANVAS: &str = "total-energy-chart";
 
-const SIMULATION_RESOLUTION: u32 = 10;
-const MAX_SIMULATION_TIME: f64 = 3600.0;
+const SIMULATION_DT_SECONDS: u32 = 1;
+const MAX_SIMULATION_TIME_SECONDS: u32 = 3600;
+const SIMULATION_TICK_INTERVAL_MS: u64 = 50;
 
 #[component]
 pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> Element {
@@ -63,8 +64,11 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
             move |_event: Event| {
                 let start = SimClientMessage::Start {
                     queue: queue.clone(),
-                    resolution: SIMULATION_RESOLUTION,
-                    max_time: Some(MAX_SIMULATION_TIME),
+                    dt_seconds: SIMULATION_DT_SECONDS,
+                    max_time_seconds: Some(MAX_SIMULATION_TIME_SECONDS),
+                    mode: faf_sim::protocol::SimulationMode::Passive {
+                        tick_interval_ms: SIMULATION_TICK_INTERVAL_MS,
+                    },
                 };
                 match serde_json::to_string(&start) {
                     Ok(text) => {

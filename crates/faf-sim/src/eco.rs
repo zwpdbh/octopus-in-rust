@@ -140,9 +140,9 @@ pub(crate) struct ConstructionSite {
 
 #[derive(Resource)]
 pub(crate) struct SimClock {
-    pub(crate) time: f64,
-    pub(crate) dt: f64,
-    pub(crate) max_time: Option<f64>,
+    pub(crate) time: Time,
+    pub(crate) dt: Time,
+    pub(crate) max_time: Option<Time>,
 }
 
 #[derive(Resource)]
@@ -206,7 +206,7 @@ fn spawn_tasks_system(
     let mut started = Vec::new();
 
     pending.0.retain(|task| {
-        if task.start_after.value() <= now {
+        if task.start_after <= now {
             let total_power: f64 = task.builders.iter().map(|b| b.build_power).sum();
             let total_work = task.target.build_time.max(0.0);
 
@@ -231,7 +231,7 @@ fn spawn_tasks_system(
     for id in started {
         journal.0.push(SimulationEvent::TaskStarted {
             task_id: id,
-            time: now,
+            time: now.value(),
         });
     }
 }
@@ -293,7 +293,7 @@ fn eco_system(
         total_energy_drain += energy;
     }
 
-    let result = apply_tick_graph(total_mass_drain, total_energy_drain, &eco.0, dt);
+    let result = apply_tick_graph(total_mass_drain, total_energy_drain, &eco.0, dt.value());
 
     let eco = &mut eco.0;
 
@@ -306,10 +306,10 @@ fn eco_system(
     totals.mass += result.mass_consumed.value();
     totals.energy += result.energy_consumed.value();
 
-    clock.time += dt;
+    clock.time = clock.time + dt;
 
     journal.0.push(SimulationEvent::Ticked(EcoSnapshot {
-        time: clock.time,
+        time: clock.time.value(),
         mass_income: result.scaled_net_mass_income.value(),
         energy_income: eco.net_energy_income.value(),
         total_mass_spent: totals.mass,
@@ -327,7 +327,7 @@ fn progress_system(
     clock: Res<SimClock>,
     mut completed: ResMut<CompletedTasks>,
 ) {
-    let dt = clock.dt;
+    let dt = clock.dt.value();
     let effective = factor.0;
 
     for (entity, mut site) in sites.iter_mut() {
@@ -350,7 +350,7 @@ fn completion_system(
     clock: Res<SimClock>,
     mut journal: ResMut<EventJournal>,
 ) {
-    let now = clock.time;
+    let now = clock.time.value();
     let mut finished_ids = Vec::new();
 
     for entity in completed.0.drain(..) {

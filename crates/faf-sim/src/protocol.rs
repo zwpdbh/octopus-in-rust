@@ -8,6 +8,16 @@ pub use crate::eco::{BuildQueue, SimulationEvent};
 /// Identifier for a running simulation.
 pub type SimulationId = Uuid;
 
+/// How a client wants the simulation to be driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SimulationMode {
+    /// The simulation only steps when the client sends `Advance`.
+    Active,
+    /// The simulation auto-steps and streams snapshots in real time.
+    Passive { tick_interval_ms: u64 },
+}
+
 /// Message sent by the client (frontend or CLI) to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -16,11 +26,13 @@ pub enum SimClientMessage {
     Start {
         /// Build queue to simulate.
         queue: BuildQueue,
-        /// Simulation resolution in steps per second.
-        resolution: u32,
+        /// Simulation step size in seconds. Must be an integer >= 1.
+        dt_seconds: u32,
         /// Optional hard cap in seconds. When `None` the simulation runs until
         /// the build queue is empty.
-        max_time: Option<f64>,
+        max_time_seconds: Option<u32>,
+        /// How the simulation should be driven.
+        mode: SimulationMode,
     },
     /// Subscribe to an existing simulation.
     Subscribe { simulation_id: SimulationId },
@@ -30,10 +42,10 @@ pub enum SimClientMessage {
     Resume { simulation_id: SimulationId },
     /// Stop a running simulation.
     Stop { simulation_id: SimulationId },
-    /// Advance a simulation by one manual step of `dt` simulation seconds.
+    /// Advance a simulation by one manual step of `dt_seconds` simulation seconds.
     Advance {
         simulation_id: SimulationId,
-        dt: f64,
+        dt_seconds: u32,
     },
 }
 

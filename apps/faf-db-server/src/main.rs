@@ -9,7 +9,6 @@ use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tower_http::services::ServeDir;
 use tracing::info;
 
@@ -243,6 +242,7 @@ async fn handle_simulation_socket(
 ) {
     use axum::extract::ws::Message;
     use faf_sim::protocol::{SimClientMessage, SimServerMessage};
+    use faf_sim::quantities::{StepTime, Time};
     use faf_sim_service::{RunConfig, SimServiceEvent};
 
     // Wait for the client to start or subscribe to a simulation.
@@ -252,21 +252,42 @@ async fn handle_simulation_socket(
                 match serde_json::from_str::<SimClientMessage>(&text) {
                     Ok(SimClientMessage::Start {
                         queue,
-                        resolution,
-                        max_time,
+                        dt_seconds,
+                        max_time_seconds,
+                        mode,
                     }) => {
-                        let dt = 1.0 / resolution.max(1) as f64;
-                        let config = RunConfig {
-                            dt,
-                            max_time,
-                            tick_interval: Duration::from_millis(50),
+                        let Some(dt) = StepTime::from_seconds(dt_seconds) else {
+                            let error = SimServerMessage::Error {
+                                message: "dt_seconds must be >= 1".to_string(),
+                            };
+                            if send_server_message(&mut socket, error).await.is_err() {
+                                return;
+                            }
+                            continue;
                         };
-                        let (id, rx) = service.start(queue, config);
+                        let max_time = max_time_seconds.map(|s| Time::from_raw(s as f64));
+                        let config = RunConfig { dt, max_time, mode };
+                        let id = service.start(queue, config);
                         let started = SimServerMessage::Started { simulation_id: id };
                         if send_server_message(&mut socket, started).await.is_err() {
                             return;
                         }
-                        break (id, rx);
+                        match service.subscribe(id) {
+                            Ok(rx) => break (id, rx),
+                            Err(e) => {
+                                if send_server_message(
+                                    &mut socket,
+                                    SimServerMessage::Error {
+                                        message: e.to_string(),
+                                    },
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
                     }
                     Ok(SimClientMessage::Subscribe { simulation_id }) => {
                         match service.subscribe(simulation_id) {
@@ -360,8 +381,10 @@ async fn handle_simulation_socket(
                                 let _ = service.stop(sim_id);
                                 break;
                             }
-                            Ok(SimClientMessage::Advance { dt, .. }) => {
-                                let _ = service.advance(sim_id, dt);
+                            Ok(SimClientMessage::Advance { dt_seconds, .. }) => {
+                                if let Some(dt) = StepTime::from_seconds(dt_seconds) {
+                                    let _ = service.advance(sim_id, dt);
+                                }
                             }
                             _ => {}
                         }
