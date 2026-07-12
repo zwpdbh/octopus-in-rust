@@ -292,6 +292,7 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core 0.4.5",
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "http 1.4.0",
@@ -310,8 +311,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper 1.0.2",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "tower",
  "tower-layer",
  "tower-service",
@@ -3215,6 +3218,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
+ "crossbeam-channel",
+ "faf-sim",
  "faf-units",
  "serde",
  "serde_json",
@@ -3233,7 +3238,6 @@ dependencies = [
  "dioxus-router",
  "faf-sim",
  "gloo-net",
- "gloo-timers",
  "plotters",
  "plotters-canvas",
  "serde",
@@ -3288,7 +3292,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "faf-sim",
+ "futures-util",
  "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
 ]
 
 [[package]]
@@ -3831,16 +3838,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "gloo-timers"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]

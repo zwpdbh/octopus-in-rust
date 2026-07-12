@@ -19,12 +19,16 @@ use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct UnitDefRef {
     /// Build power contributed while building. Zero for non-builders.
+    #[serde(default)]
     pub build_power: f64,
     /// Mass required to build the unit.
+    #[serde(default)]
     pub mass_cost: f64,
     /// Energy required to build the unit.
+    #[serde(default)]
     pub energy_cost: f64,
     /// Build time at base build power (1.0).
+    #[serde(default)]
     pub build_time: f64,
     /// Mass income per second after the unit is finished.
     #[serde(default)]
@@ -138,7 +142,7 @@ pub(crate) struct ConstructionSite {
 pub(crate) struct SimClock {
     pub(crate) time: f64,
     pub(crate) dt: f64,
-    pub(crate) max_time: f64,
+    pub(crate) max_time: Option<f64>,
 }
 
 #[derive(Resource)]
@@ -270,8 +274,10 @@ fn eco_system(
     mut journal: ResMut<EventJournal>,
     mut totals: ResMut<TotalsSpent>,
 ) {
-    if clock.time >= clock.max_time {
-        return;
+    if let Some(max_time) = clock.max_time {
+        if clock.time >= max_time {
+            return;
+        }
     }
 
     let dt = clock.dt;
@@ -387,7 +393,7 @@ fn termination_system(
         return;
     }
 
-    let timed_out = clock.time >= clock.max_time;
+    let timed_out = clock.max_time.map_or(false, |max| clock.time >= max);
     let queue_empty = pending.0.is_empty() && sites.is_empty();
 
     if timed_out || queue_empty {

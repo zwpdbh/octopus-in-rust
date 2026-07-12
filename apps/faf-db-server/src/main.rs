@@ -1,10 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
+
+mod sim_service;
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -55,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/units", get(list_units))
         .route("/api/units/:id", get(get_unit))
         .route("/api/portraits/:id", get(get_portrait))
+        .route("/ws/simulate", get(simulate_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))
         .with_state(state);
 
@@ -224,6 +227,87 @@ fn browser_category(unit: &Unit) -> BrowserCategory {
         return BrowserCategory::Naval;
     }
     BrowserCategory::Land
+}
+
+async fn simulate_ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(handle_simulation_socket)
+}
+
+async fn handle_simulation_socket(mut socket: axum::extract::ws::WebSocket) {
+    use axum::extract::ws::Message;
+    use faf_sim::protocol::{SimClientMessage, SimServerMessage};
+    use faf_sim::sim::SimulationEvent;
+
+    // Wait for the client to send the start message.
+    let start_msg = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(text))) => break text,
+            Some(Ok(Message::Close(_))) | None => return,
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => {
+                tracing::warn!("WebSocket receive error: {e}");
+                return;
+            }
+        }
+    };
+
+    let SimClientMessage::Start {
+        queue,
+        resolution,
+        max_time,
+    } = match serde_json::from_str(&start_msg) {
+        Ok(msg) => msg,
+        Err(e) => {
+            let error = SimServerMessage::Error {
+                message: format!("invalid start message: {e}"),
+            };
+            let _ = socket
+                .send(Message::Text(serde_json::to_string(&error).unwrap()))
+                .await;
+            return;
+        }
+    };
+
+    // Run the simulation through the local synchronous stream wrapper and
+    // forward each event to the WebSocket client.
+    let dt = 1.0 / resolution.max(1) as f64;
+    let rx = sim_service::run(queue, dt, max_time);
+
+    // The crossbeam receiver is synchronous, so consume it in a blocking task
+    // and bridge events into the async WebSocket task.
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SimulationEvent>();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(event) = rx.recv() {
+            let is_finished = matches!(event, SimulationEvent::Finished);
+            if event_tx.send(event).is_err() || is_finished {
+                break;
+            }
+        }
+    });
+
+    while let Some(event) = event_rx.recv().await {
+        let is_finished = matches!(event, SimulationEvent::Finished);
+
+        let msg = SimServerMessage::Event(event);
+        let text = match serde_json::to_string(&msg) {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!("failed to serialize simulation event: {e}");
+                continue;
+            }
+        };
+
+        if socket.send(Message::Text(text)).await.is_err() {
+            return;
+        }
+
+        if is_finished {
+            break;
+        }
+    }
+
+    // Simulation ended; close the WebSocket gracefully.
+    let _ = socket.close().await;
 }
 
 fn workspace_path(rel: &str) -> PathBuf {

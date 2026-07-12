@@ -41,7 +41,7 @@ mod tests {
             },
         }]);
 
-        let mut sim = Simulation::new(queue, 1.0, 1000.0);
+        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
         let mut started = false;
         let mut completed = false;
         let mut ticks = 0;
@@ -94,7 +94,7 @@ mod tests {
             }],
         };
 
-        let mut sim = Simulation::new(queue, 1.0, 1000.0);
+        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
         let mut saw_stall = false;
 
         while !sim.is_finished() {

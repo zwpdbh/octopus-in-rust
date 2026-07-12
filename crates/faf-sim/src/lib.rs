@@ -11,6 +11,7 @@
 pub mod eco;
 mod eco_tests;
 pub mod economy;
+pub mod protocol;
 pub mod quantities;
 pub mod sim;
 pub mod units;

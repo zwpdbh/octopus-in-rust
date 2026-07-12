@@ -1,7 +1,11 @@
 use dioxus::prelude::*;
-use faf_sim::sim::{EcoSnapshot, Simulation, SimulationEvent};
+use faf_sim::protocol::{SimClientMessage, SimServerMessage};
+use faf_sim::sim::{EcoSnapshot, SimulationEvent};
 use plotters::prelude::*;
 use plotters_canvas::CanvasBackend;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
+use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
 use crate::types::ConstructionPlan;
 
@@ -10,9 +14,8 @@ const ENERGY_INCOME_CANVAS: &str = "energy-income-chart";
 const TOTAL_MASS_CANVAS: &str = "total-mass-chart";
 const TOTAL_ENERGY_CANVAS: &str = "total-energy-chart";
 
-const SIMULATION_DT: f64 = 0.1;
+const SIMULATION_RESOLUTION: u32 = 10;
 const MAX_SIMULATION_TIME: f64 = 3600.0;
-const STEP_INTERVAL_MS: u32 = 50;
 
 #[component]
 pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> Element {
@@ -21,52 +24,123 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
     let mut snapshots = use_signal(Vec::<EcoSnapshot>::new);
     let mut playing = use_signal(|| true);
     let mut finished = use_signal(|| false);
-    let mut sim = use_signal(|| None::<Simulation>);
-    let mut _interval = use_signal(|| None::<gloo_timers::callback::Interval>);
+    let mut replay_counter = use_signal(|| 0u32);
+    let mut ws = use_signal(|| None::<WebSocket>);
 
-    // Reset the simulation whenever the plan changes.
+    // Open a WebSocket to the backend whenever the plan changes, replay is
+    // requested, or play is resumed.
     use_effect(move || {
-        let new_sim = Simulation::new(queue.read().clone(), SIMULATION_DT, MAX_SIMULATION_TIME);
-        sim.set(Some(new_sim));
-        snapshots.set(vec![]);
-        finished.set(false);
-        playing.set(true);
-    });
-
-    // Start or stop the stepping interval based on play state.
-    use_effect(move || {
+        // Subscribe to plan, play state, and replay counter.
+        let queue = queue.read().clone();
         let is_playing = *playing.read();
-        let is_finished = *finished.read();
+        let _ = *replay_counter.read();
 
-        if !is_playing || is_finished {
-            _interval.set(None);
+        // Close any existing socket before starting a new run.
+        if let Some(old_ws) = ws.write().take() {
+            let _ = old_ws.close();
+        }
+
+        if !is_playing {
             return;
         }
 
-        let mut sim_signal = sim;
-        let mut snapshots_signal = snapshots;
-        let mut finished_signal = finished;
-        let mut playing_signal = playing;
+        snapshots.set(vec![]);
+        finished.set(false);
 
-        let interval = gloo_timers::callback::Interval::new(STEP_INTERVAL_MS, move || {
-            sim_signal.with_mut(|opt| {
-                let Some(sim) = opt else { return };
-                for event in sim.step() {
-                    match event {
-                        SimulationEvent::Ticked(snapshot) => {
-                            snapshots_signal.with_mut(|v| v.push(*snapshot));
+        let new_ws = match WebSocket::new("/ws/simulate") {
+            Ok(ws) => ws,
+            Err(e) => {
+                web_sys::console::error_1(&format!("failed to open websocket: {e:?}").into());
+                finished.set(true);
+                playing.set(false);
+                return;
+            }
+        };
+
+        let onopen = Closure::wrap(Box::new({
+            let ws = new_ws.clone();
+            let queue = queue.clone();
+            move |_event: Event| {
+                let start = SimClientMessage::Start {
+                    queue: queue.clone(),
+                    resolution: SIMULATION_RESOLUTION,
+                    max_time: Some(MAX_SIMULATION_TIME),
+                };
+                match serde_json::to_string(&start) {
+                    Ok(text) => {
+                        if let Err(e) = ws.send_with_str(&text) {
+                            web_sys::console::error_1(
+                                &format!("failed to send start message: {e:?}").into(),
+                            );
                         }
-                        SimulationEvent::Finished => {
-                            finished_signal.set(true);
-                            playing_signal.set(false);
-                        }
-                        _ => {}
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("failed to serialize start message: {e}").into(),
+                        );
                     }
                 }
-            });
-        });
+            }
+        }) as Box<dyn FnMut(Event)>);
+        new_ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        onopen.forget();
 
-        _interval.set(Some(interval));
+        let onmessage = Closure::wrap(Box::new({
+            let mut snapshots_signal = snapshots;
+            let mut finished_signal = finished;
+            let mut playing_signal = playing;
+            let mut ws_signal = ws;
+            move |event: MessageEvent| {
+                let text = event.data().as_string().unwrap_or_default();
+                match serde_json::from_str::<SimServerMessage>(&text) {
+                    Ok(SimServerMessage::Event(SimulationEvent::Ticked(snapshot))) => {
+                        snapshots_signal.with_mut(|v| v.push(snapshot));
+                    }
+                    Ok(SimServerMessage::Event(SimulationEvent::Finished)) => {
+                        finished_signal.set(true);
+                        playing_signal.set(false);
+                        ws_signal.set(None);
+                    }
+                    Ok(SimServerMessage::Event(_)) => {}
+                    Ok(SimServerMessage::Error { message }) => {
+                        web_sys::console::error_1(&format!("simulation error: {message}").into());
+                        finished_signal.set(true);
+                        playing_signal.set(false);
+                        ws_signal.set(None);
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("failed to parse simulation message: {e}").into(),
+                        );
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(MessageEvent)>);
+        new_ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        onmessage.forget();
+
+        let onerror = Closure::wrap(Box::new(move |event: ErrorEvent| {
+            web_sys::console::error_1(&format!("websocket error: {event:?}").into());
+        }) as Box<dyn FnMut(ErrorEvent)>);
+        new_ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+        onerror.forget();
+
+        let onclose = Closure::wrap(Box::new({
+            let mut finished_signal = finished;
+            let mut playing_signal = playing;
+            let mut ws_signal = ws;
+            move |_event: CloseEvent| {
+                // If the socket closes before we saw Finished, mark the run as
+                // done so the UI stops waiting.
+                if !*finished_signal.read() {
+                    finished_signal.set(true);
+                    playing_signal.set(false);
+                }
+                ws_signal.set(None);
+            }
+        }) as Box<dyn FnMut(CloseEvent)>);
+        new_ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+        onclose.forget();
     });
 
     // Redraw charts whenever the snapshot list grows.
@@ -136,15 +210,10 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
                 button {
                     class: "px-3 py-1.5 text-sm rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors",
                     onclick: move |_| {
-                        let new_sim = Simulation::new(
-                            queue.read().clone(),
-                            SIMULATION_DT,
-                            MAX_SIMULATION_TIME,
-                        );
-                        sim.set(Some(new_sim));
                         snapshots.set(vec![]);
                         finished.set(false);
                         playing.set(true);
+                        replay_counter.with_mut(|c| *c = c.wrapping_add(1));
                     },
                     "Replay"
                 }
