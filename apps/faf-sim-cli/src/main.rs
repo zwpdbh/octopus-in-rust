@@ -1,276 +1,173 @@
-//! Research CLI for FAF build-order simulation and optimization.
+//! CLI for the FAF build-queue simulator.
 //!
-//! Targets are specified as a faction flag plus a unit name:
-//!
-//! ```text
-//! faf-sim deps -u fatboy
-//! faf-sim deps -c monkeylord
-//! faf-sim deps -a nuke
-//! faf-sim deps -s arty
-//! ```
+//! This client uses `faf-sim-service` directly to run a simulation locally and
+//! emits the streamed events as NDJSON.
 
-use clap::{Parser, Subcommand};
-use faf_sim::{BuildGraph, SimpleSimulator};
-use faf_units::{DataIndex, Unit};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-mod target;
-use target::{Faction, ResearchTarget, UnitKind};
+use clap::{Args, Parser, Subcommand};
+use faf_sim::protocol::SimulationMode;
+use faf_sim::quantities::{StepTime, Time};
+use faf_sim::sim::{BuildQueue, SimulationEvent};
+use faf_sim_service::{
+    RunConfig, SimServiceEvent, SimulationId, SimulationReceiver, SimulationService,
+};
 
-#[derive(Parser)]
-#[command(name = "faf-sim")]
-#[command(about = "Research CLI for FAF build-order simulation and optimization")]
-#[command(after_help = ResearchTarget::help_text())]
+#[derive(Parser, Debug)]
+#[command(name = "faf-sim", about = "Headless FAF build-queue simulator")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Command,
 }
 
-#[derive(Parser)]
-#[group(required = true, multiple = false)]
-struct FactionArgs {
-    /// UEF faction.
-    #[arg(short = 'u', long)]
-    uef: bool,
-    /// Cybran faction.
-    #[arg(short = 'c', long)]
-    cybran: bool,
-    /// Aeon faction.
-    #[arg(short = 'a', long)]
-    aeon: bool,
-    /// Seraphim faction.
-    #[arg(short = 's', long)]
-    seraphim: bool,
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Run a build-queue simulation and emit events as NDJSON.
+    Build {
+        #[command(subcommand)]
+        mode: BuildMode,
+    },
 }
 
-impl FactionArgs {
-    fn to_faction(&self) -> Faction {
-        // Clap's group guarantees exactly one is true.
-        if self.uef {
-            Faction::Uef
-        } else if self.cybran {
-            Faction::Cybran
-        } else if self.aeon {
-            Faction::Aeon
-        } else {
-            Faction::Seraphim
-        }
-    }
+#[derive(Subcommand, Debug)]
+enum BuildMode {
+    /// Run the simulation in active (manual-advance) mode.
+    Active {
+        /// JSON file describing the build queue.
+        queue: PathBuf,
+        #[command(flatten)]
+        shared: BuildShared,
+    },
+    /// Run the simulation in passive (auto-play) mode.
+    Passive {
+        /// JSON file describing the build queue.
+        queue: PathBuf,
+        #[command(flatten)]
+        shared: BuildShared,
+        /// Real-world delay between simulation steps in milliseconds.
+        #[arg(long, default_value = "50")]
+        tick_interval_ms: u64,
+    },
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Show the dependency graph for a target unit.
-    Deps {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`, `monkeylord`, `nuke`, `arty`.
-        unit: UnitKind,
-        /// Stop expanding prerequisites at these unit ids (default: commanders).
-        #[arg(long, value_delimiter = ',')]
-        stop_at: Vec<String>,
-    },
-    /// Simulate a build order and print timing/resource trace.
-    Simulate {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`.
-        unit: UnitKind,
-        /// Path to a JSON build-order file.
-        #[arg(short, long)]
-        order: Option<String>,
-    },
-    /// Generate a build order for a target unit.
-    Plan {
-        #[command(flatten)]
-        faction: FactionArgs,
-        /// Unit name, e.g. `fatboy`.
-        unit: UnitKind,
-        /// Planner strategy.
-        #[arg(short, long, default_value = "greedy")]
-        strategy: String,
-    },
+#[derive(Args, Debug, Clone, Copy)]
+struct BuildShared {
+    /// Simulation step size in seconds. Must be an integer >= 1.
+    #[arg(short, long, default_value = "1")]
+    dt_seconds: u32,
+    /// Maximum simulation time in seconds. When omitted the simulation
+    /// runs until the build queue is empty.
+    #[arg(short, long)]
+    max_time_seconds: Option<u32>,
 }
 
 fn main() {
     let cli = Cli::parse();
-    let index = load_index();
-    let graph = BuildGraph::new(&index);
-
     match cli.command {
-        Commands::Deps {
-            faction,
-            unit,
-            stop_at,
-        } => {
-            let target = resolve_target(faction, unit);
-            run_deps(&graph, target, &stop_at);
-        }
-        Commands::Simulate {
-            faction,
-            unit,
-            order,
-        } => {
-            let target = resolve_target(faction, unit);
-            run_simulate(&graph, &index, target, order.as_deref());
-        }
-        Commands::Plan {
-            faction,
-            unit,
-            strategy,
-        } => {
-            let target = resolve_target(faction, unit);
-            run_plan(target, &strategy);
-        }
+        Command::Build { mode } => match mode {
+            BuildMode::Active { queue, shared } => run_active(queue, shared),
+            BuildMode::Passive {
+                queue,
+                shared,
+                tick_interval_ms,
+            } => run_passive(queue, shared, tick_interval_ms),
+        },
     }
 }
 
-fn load_index() -> DataIndex {
-    let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-    serde_json::from_str(json).expect("embedded FAF unit index should parse")
-}
-
-fn resolve_target(faction: FactionArgs, unit: UnitKind) -> ResearchTarget {
-    let target = ResearchTarget {
-        faction: faction.to_faction(),
-        unit,
-    };
-    if let Err(e) = target.validate() {
-        eprintln!("Error: {}", e);
+/// Shared setup: parse the queue, validate step time, start the simulation, and
+/// subscribe to its event stream.
+fn prepare_simulation(
+    queue: PathBuf,
+    shared: BuildShared,
+    mode: SimulationMode,
+) -> (
+    SimulationService,
+    SimulationId,
+    SimulationReceiver,
+    StepTime,
+) {
+    let json = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", queue.display(), e);
         std::process::exit(1);
-    }
-    target
+    });
+    let queue: BuildQueue = serde_json::from_str(&json).unwrap_or_else(|e| {
+        eprintln!("Failed to parse build queue: {}", e);
+        std::process::exit(1);
+    });
+
+    let dt = StepTime::from_seconds(shared.dt_seconds).unwrap_or_else(|| {
+        eprintln!("dt_seconds must be >= 1");
+        std::process::exit(1);
+    });
+    let max_time = shared.max_time_seconds.map(|s| Time::from_raw(s as f64));
+
+    let service = SimulationService::new();
+    let config = RunConfig { dt, max_time, mode };
+
+    let id = service.start(queue, config);
+    let rx = service.subscribe(id).unwrap_or_else(|e| {
+        eprintln!("Failed to subscribe to simulation: {e}");
+        std::process::exit(1);
+    });
+
+    (service, id, rx, dt)
 }
 
-fn run_deps(graph: &BuildGraph, target: ResearchTarget, stop_at: &[String]) {
-    let blueprint_id = target.blueprint_id();
-    let unit = match graph.unit(blueprint_id) {
-        Some(u) => u,
-        None => {
-            eprintln!("Blueprint id not found in index: {}", blueprint_id);
-            std::process::exit(1);
+/// Run in active mode.
+///
+/// The service does not auto-step in active mode, so we drive it from a
+/// background thread that repeatedly sends `Advance` commands until the
+/// simulation reports it is finished.
+fn run_active(queue: PathBuf, shared: BuildShared) {
+    let (service, id, rx, dt) = prepare_simulation(queue, shared, SimulationMode::Active);
+
+    let is_finished = Arc::new(AtomicBool::new(false));
+    let driver = service.clone();
+    let finished = Arc::clone(&is_finished);
+    std::thread::spawn(move || {
+        while !finished.load(Ordering::SeqCst) {
+            if driver.advance(id, dt).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
-    };
+    });
 
-    println!(
-        "Target: {} — {} / {} [{}]",
-        target.display_name(),
-        unit.name().unwrap_or("?"),
-        unit.name_zh().unwrap_or("?"),
-        unit.tech_level().unwrap_or("?")
-    );
+    consume_events(rx, &is_finished);
+}
 
-    println!("\nDirect builders:");
-    let builders = graph.builders_for(blueprint_id);
-    if builders.is_empty() {
-        println!("  (none)");
-    } else {
-        for b in builders {
-            println!(
-                "  {} — {} / {} [{}]",
-                b.id,
-                b.name().unwrap_or("?"),
-                b.name_zh().unwrap_or("?"),
-                b.tech_level().unwrap_or("?")
-            );
-        }
-    }
+/// Run in passive mode.
+///
+/// The service auto-steps, so we only need to consume and print events.
+fn run_passive(queue: PathBuf, shared: BuildShared, tick_interval_ms: u64) {
+    let (_service, _id, rx, _dt) =
+        prepare_simulation(queue, shared, SimulationMode::Passive { tick_interval_ms });
+    let is_finished = Arc::new(AtomicBool::new(false));
+    consume_events(rx, &is_finished);
+}
 
-    println!("\nTransitive prerequisites:");
-    let prereqs = if stop_at.is_empty() {
-        graph.all_prerequisites_default(blueprint_id)
-    } else {
-        let refs: Vec<&str> = stop_at.iter().map(|s| s.as_str()).collect();
-        graph.all_prerequisites(blueprint_id, &refs)
-    };
-
-    match prereqs {
-        Ok(units) => {
-            if units.is_empty() {
-                println!("  (none)");
-            } else {
-                for p in units {
-                    println!(
-                        "  {} — {} / {} [{}]",
-                        p.id,
-                        p.name().unwrap_or("?"),
-                        p.name_zh().unwrap_or("?"),
-                        p.tech_level().unwrap_or("?")
-                    );
+/// Print simulation events as NDJSON until the stream ends or the simulation
+/// finishes.
+fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>) {
+    while let Ok(event) = rx.recv() {
+        match event {
+            SimServiceEvent::Simulation(sim_event) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&sim_event).expect("serialize event")
+                );
+                if matches!(sim_event, SimulationEvent::Finished) {
+                    is_finished.store(true, Ordering::SeqCst);
+                    break;
                 }
             }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+            SimServiceEvent::Control(_) => {
+                // Control events are not emitted as NDJSON by the CLI.
+            }
         }
     }
-}
-
-/// Standard land-tech prerequisite chain for a faction.
-///
-/// This is a hand-curated path: ACU → T1 land factory → T2 land factory →
-/// T3 land factory → T3 engineer. It avoids the noise of campaign/special
-/// units in the dependency graph.
-fn standard_tech_chain<'a>(index: &'a DataIndex, faction: Faction) -> Vec<&'a Unit> {
-    let ids = match faction {
-        Faction::Uef => ["UEL0001", "UEB0101", "UEB0201", "UEB0301", "UEL0309"],
-        Faction::Cybran => ["URL0001", "URB0101", "URB0201", "URB0301", "URL0309"],
-        Faction::Aeon => ["UAL0001", "UAB0101", "UAB0201", "UAB0301", "UAL0309"],
-        Faction::Seraphim => ["XSL0001", "XSB0101", "XSB0201", "XSB0301", "XSL0309"],
-    };
-
-    ids.iter().filter_map(|id| index.find_unit(id)).collect()
-}
-
-fn run_simulate(
-    graph: &BuildGraph,
-    index: &DataIndex,
-    target: ResearchTarget,
-    order: Option<&str>,
-) {
-    let blueprint_id = target.blueprint_id();
-    let target_unit = graph
-        .unit(blueprint_id)
-        .expect("target blueprint must exist in index");
-
-    println!("Simulate target: {}", target.display_name());
-
-    let sequence: Vec<&Unit> = if let Some(path) = order {
-        println!("Build order file: {}", path);
-        println!("(Custom build order files are not yet supported.)");
-        return;
-    } else {
-        // Default: standard land-tech chain, then the target.
-        let mut chain = standard_tech_chain(index, target.faction);
-        chain.push(target_unit);
-        chain
-    };
-
-    // The chain starts with the ACU, which we already own.
-    let starting_unit = sequence.first().copied().expect("chain includes ACU");
-    let build_sequence = &sequence[1..];
-
-    let mut sim = SimpleSimulator::new(index, vec![starting_unit], 1.0);
-    let events = sim.simulate_sequence(build_sequence);
-
-    println!("\nTimeline:");
-    println!("{:>10}  {}", "Time (s)", "Unit");
-    println!("{:>10}  {}", "--------", "----");
-    for event in events {
-        println!(
-            "{:>10.1}  {} ({})",
-            event.time,
-            event.unit_name.as_deref().unwrap_or("?"),
-            event.unit_id
-        );
-    }
-}
-
-fn run_plan(target: ResearchTarget, strategy: &str) {
-    println!(
-        "Plan target: {} strategy: {}",
-        target.display_name(),
-        strategy
-    );
-    println!("(Planner not yet implemented.)");
 }

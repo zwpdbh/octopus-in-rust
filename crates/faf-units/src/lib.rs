@@ -5,14 +5,14 @@
 //! CLI, the WASM plugin, and any future simulation crates.
 
 pub mod index;
-pub mod sections;
 pub mod unit;
+pub mod unit_extra;
 pub mod util;
 pub mod weapon;
 
 pub use index::DataIndex;
-pub use sections::*;
 pub use unit::{SplitDamage, Unit};
+pub use unit_extra::*;
 pub use weapon::{DepthCharge, FireTargetLayerCapsTable, Projectile, RackBones, Weapon};
 
 #[cfg(test)]

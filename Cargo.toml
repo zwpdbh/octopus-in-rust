@@ -5,14 +5,72 @@ members = [
     "crates/brain",
     "crates/faf-units",
     "crates/faf-sim",
+    "crates/faf-sim-service",
+    "crates/petgraph-svg",
     "crates/faf-downloader",
+    "crates/train-tui",
     "plugins/example-http",
     "plugins/faf-units",
     "plugins/faf-party",
     "apps/docref",
     "apps/faf-sim-cli",
+    "apps/faf-db-server",
+    "apps/faf-db-web",
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
 ]
 resolver = "3"
+
+[workspace.dependencies]
+# Path crates
+faf-sim = { path = "crates/faf-sim", default-features = false }
+faf-sim-service = { path = "crates/faf-sim-service" }
+faf-units = { path = "crates/faf-units" }
+kosong = { path = "crates/kosong" }
+brain = { path = "crates/brain" }
+qqbot-config = { path = "crates/qqbot-config" }
+petgraph-svg = { path = "crates/petgraph-svg" }
+train-tui = { path = "crates/train-tui" }
+
+# Common external crates
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.7"
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
+chrono = { version = "0.4", features = ["serde"] }
+console_error_panic_hook = "0.1"
+clap = { version = "4", features = ["derive"] }
+dioxus = { version = "0.7", default-features = false, features = ["web", "lib", "launch"] }
+extism = "1"
+extism-pdk = "1"
+futures = "0.3"
+getrandom = "0.2"
+gloo-net = "0.6"
+futures-util = "0.3"
+http = "1"
+petgraph = "0.8"
+rand = "0.10"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tempfile = "3"
+burn-train = { version = "0.21", default-features = false }
+tokio = { version = "1", default-features = false }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-test = "0.4"
+toml = "0.8"
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["js"] }
+walkdir = "2"
+wasm-bindgen = "0.2"
+web-sys = "0.3"

@@ -493,6 +493,44 @@ Callers stay unchanged because `mod.rs` re-exports.
 
 ---
 
+### Avoid Ambiguous Duplicate Module File Names
+
+**Rule:** Do not create two module files with the same base name in the same module hierarchy if they serve different purposes. When a parent module and its submodule both need a logical "episode"/"task"/"item" file, split concerns into descriptively named files such as `types.rs`/`data.rs` for data definitions and `run_*.rs`/`engine.rs` for behavior logic.
+
+**Why:** Duplicate base names make imports, `grep`, stack traces, and doc links confusing. It is hard to tell which `episode` module a symbol comes from, and refactoring one file can silently affect the wrong module.
+
+#### Bad
+
+```text
+planner/policy/train/episode.rs         # EpisodeStep / Episode data
+planner/policy/train/trainer/episode.rs # Trainer::run_episode logic
+```
+
+Both files appear as `episode` in import paths (`train::episode` vs `train::trainer::episode`). The name does not reveal which holds data and which holds behavior.
+
+#### Good
+
+```text
+planner/policy/train/episode.rs         # EpisodeStep / Episode data
+planner/policy/train/trainer/run_episode.rs # episode generation logic
+```
+
+The behavior file is named after what it does, so the two modules are immediately distinguishable.
+
+#### Migration
+
+1. Identify which file is primarily data/definitions and which is primarily behavior.
+2. Rename the behavior file to a verb-led or role-led name (`run_episode.rs`, `engine.rs`, `runner.rs`).
+3. Update the parent `mod.rs` declaration.
+4. Run `cargo test` to confirm the module tree still resolves.
+
+#### Exception
+
+Thin `mod.rs` indexes that re-export a sibling file may share the file's base name intentionally (e.g., `mod episode; pub use episode::*;`).
+
+
+---
+
 ## Documentation Code Snippets
 
 ### Always Annotate Code Snippets with Source Location

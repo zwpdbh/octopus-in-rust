@@ -11,20 +11,20 @@ name = "docref"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.33", features = ["bundled"] }
-regex = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-walkdir = "2"
-sha2 = "0.10"
+clap = { workspace = true }
+rusqlite = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+walkdir = { workspace = true }
+sha2 = { workspace = true }
 hex = "0.4"
 dirs = "6"
 which = "7"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

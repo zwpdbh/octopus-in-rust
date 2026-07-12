@@ -11,13 +11,13 @@ name = "faf-downloader"
 path = "src/main.rs"
 
 [dependencies]
-faf-units = { path = "../faf-units" }
-clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-rusqlite = { version = "0.33", features = ["bundled"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+faf-units = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sections::Enhancement;
-use crate::sections::{
-    Air, Defense, Display, Economy, General, Intel, Physics, Transport, Wreckage,
+use crate::unit_extra::Enhancement;
+use crate::unit_extra::{
+    Air, BuildTargetStats, BuilderCapability, Defense, Display, Economy, General, Intel, Physics,
+    Transport, Wreckage,
 };
 use crate::weapon::Weapon;
 
@@ -117,6 +118,29 @@ impl Unit {
         self.description_zh.as_deref()
     }
 
+    /// Human-readable description, e.g. "Power Generator".
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Best-effort display name for this unit.
+    ///
+    /// Prefers the explicit unit name, falls back to the description, and
+    /// finally to the blueprint id if neither is present.
+    pub fn display_name(&self) -> String {
+        self.name()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                let desc = self.description().trim();
+                if desc.is_empty() {
+                    None
+                } else {
+                    Some(desc.to_string())
+                }
+            })
+            .unwrap_or_else(|| self.id.clone())
+    }
+
     /// Convenience accessor for the faction name when available.
     pub fn faction(&self) -> Option<&str> {
         self.general.as_ref()?.faction_name.as_deref()
@@ -142,5 +166,16 @@ impl Unit {
             "TECH1" | "TECH2" | "TECH3" | "TECH4" | "EXPERIMENTAL" => Some(c.as_str()),
             _ => None,
         })
+    }
+
+    /// Convenience accessor for the stats that describe this unit as a build
+    /// target.
+    pub fn build_target_stats(&self) -> Option<BuildTargetStats> {
+        self.economy.as_ref()?.target_stats()
+    }
+
+    /// Convenience accessor for this unit's capability to build other units.
+    pub fn builder_capability(&self) -> Option<BuilderCapability> {
+        self.economy.as_ref()?.builder_capability()
     }
 }

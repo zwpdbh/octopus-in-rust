@@ -3,11 +3,21 @@ name = "faf-sim"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "Simulation and build-order planning for Forged Alliance Forever (FAF)."
+description = "Headless, observable eco/build simulator for Forged Alliance Forever (FAF)."
 license = "MIT"
 
+[features]
+default = ["headless"]
+headless = ["dep:bevy_app", "dep:bevy_ecs", "dep:bevy_time"]
+
 [dependencies]
-faf-units = { path = "../faf-units" }
+bevy_app = { version = "0.19", optional = true }
+bevy_ecs = { version = "0.19", optional = true }
+bevy_time = { version = "0.19", optional = true }
+faf-units = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }
