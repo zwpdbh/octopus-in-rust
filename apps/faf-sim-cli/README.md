@@ -1,16 +1,10 @@
 # faf-sim-cli
 
-CLI client for the FAF build-queue simulator.
+CLI for the FAF build-queue simulator.
 
-It reads a construction plan as JSON, connects to a `faf-db-server` simulation
-endpoint over WebSocket, and emits the streamed events as NDJSON. These events
-can be consumed by other tools, plotted, or piped into a file.
-
-The server must be running before using the CLI. Start it with:
-
-```sh
-cargo run -p faf-db-server
-```
+It reads a construction plan as JSON, runs the simulation locally through
+`faf-sim-service`, and emits events as NDJSON. These events can be consumed by
+other tools, plotted, or piped into a file.
 
 ## Simulate a construction plan
 
@@ -19,9 +13,9 @@ cargo run --bin faf-sim -- build /home/zw/code/rust_programming/octopus/tmp/faf-
 ```
 
 - `plan.json` — a `BuildQueue` JSON object describing initial economy and build tasks.
-- `--url` (`-u`) — WebSocket URL of the simulation server (default `ws://localhost:8081/ws/simulate`).
 - `--resolution` (`-r`) — simulation resolution in steps per second (default `10`).
 - `--max-time` (`-m`) — optional hard cap in seconds. When omitted the simulation runs until the build queue is empty.
+- `--tick-interval-ms` — real-world delay between simulation steps in milliseconds (default `50`).
 
 ## Construction plan format
 
@@ -74,7 +68,7 @@ tmp/faf-sim-examples/engineer-builds-factory.json
 Run it with:
 
 ```sh
-cargo run --bin faf-sim -- build tmp/faf-sim-examples/engineer-builds-factory.json --url ws://localhost:8081/ws/simulate --resolution 1 --max-time 1000
+cargo run --bin faf-sim -- build tmp/faf-sim-examples/engineer-builds-factory.json --resolution 1 --max-time 1000
 ```
 
 ## Output

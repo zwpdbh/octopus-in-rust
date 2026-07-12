@@ -17,6 +17,7 @@ bevy_time = { version = "0.19", optional = true }
 faf-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

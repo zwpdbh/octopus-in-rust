@@ -5,18 +5,18 @@ use axum::{
     routing::get,
     Json, Router,
 };
-
-mod sim_service;
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::services::ServeDir;
 use tracing::info;
 
 #[derive(Clone)]
 struct AppState {
     index: Arc<DataIndex>,
+    sim_service: Arc<faf_sim_service::SimulationService>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         index: Arc::new(index),
+        sim_service: Arc::new(faf_sim_service::SimulationService::new()),
     };
 
     let app = Router::new()
@@ -229,19 +230,80 @@ fn browser_category(unit: &Unit) -> BrowserCategory {
     BrowserCategory::Land
 }
 
-async fn simulate_ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_simulation_socket)
+async fn simulate_ws_handler(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_simulation_socket(state.sim_service.clone(), socket))
 }
 
-async fn handle_simulation_socket(mut socket: axum::extract::ws::WebSocket) {
+async fn handle_simulation_socket(
+    service: Arc<faf_sim_service::SimulationService>,
+    mut socket: axum::extract::ws::WebSocket,
+) {
     use axum::extract::ws::Message;
     use faf_sim::protocol::{SimClientMessage, SimServerMessage};
-    use faf_sim::sim::SimulationEvent;
+    use faf_sim_service::{RunConfig, SimServiceEvent};
 
-    // Wait for the client to send the start message.
-    let start_msg = loop {
+    // Wait for the client to start or subscribe to a simulation.
+    let (sim_id, rx) = loop {
         match socket.recv().await {
-            Some(Ok(Message::Text(text))) => break text,
+            Some(Ok(Message::Text(text))) => {
+                match serde_json::from_str::<SimClientMessage>(&text) {
+                    Ok(SimClientMessage::Start {
+                        queue,
+                        resolution,
+                        max_time,
+                    }) => {
+                        let dt = 1.0 / resolution.max(1) as f64;
+                        let config = RunConfig {
+                            dt,
+                            max_time,
+                            tick_interval: Duration::from_millis(50),
+                        };
+                        let (id, rx) = service.start(queue, config);
+                        let started = SimServerMessage::Started { simulation_id: id };
+                        if send_server_message(&mut socket, started).await.is_err() {
+                            return;
+                        }
+                        break (id, rx);
+                    }
+                    Ok(SimClientMessage::Subscribe { simulation_id }) => {
+                        match service.subscribe(simulation_id) {
+                            Ok(rx) => break (simulation_id, rx),
+                            Err(e) => {
+                                if send_server_message(
+                                    &mut socket,
+                                    SimServerMessage::Error {
+                                        message: e.to_string(),
+                                    },
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        let error = SimServerMessage::Error {
+                            message: "expected Start or Subscribe first".to_string(),
+                        };
+                        if send_server_message(&mut socket, error).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        let error = SimServerMessage::Error {
+                            message: format!("invalid message: {e}"),
+                        };
+                        if send_server_message(&mut socket, error).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
             Some(Ok(Message::Close(_))) | None => return,
             Some(Ok(_)) => continue,
             Some(Err(e)) => {
@@ -251,63 +313,76 @@ async fn handle_simulation_socket(mut socket: axum::extract::ws::WebSocket) {
         }
     };
 
-    let SimClientMessage::Start {
-        queue,
-        resolution,
-        max_time,
-    } = match serde_json::from_str(&start_msg) {
-        Ok(msg) => msg,
-        Err(e) => {
-            let error = SimServerMessage::Error {
-                message: format!("invalid start message: {e}"),
-            };
-            let _ = socket
-                .send(Message::Text(serde_json::to_string(&error).unwrap()))
-                .await;
-            return;
-        }
-    };
-
-    // Run the simulation through the local synchronous stream wrapper and
-    // forward each event to the WebSocket client.
-    let dt = 1.0 / resolution.max(1) as f64;
-    let rx = sim_service::run(queue, dt, max_time);
-
-    // The crossbeam receiver is synchronous, so consume it in a blocking task
-    // and bridge events into the async WebSocket task.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SimulationEvent>();
+    // Bridge the synchronous simulation receiver into the async WebSocket task.
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SimServiceEvent>();
     tokio::task::spawn_blocking(move || {
         while let Ok(event) = rx.recv() {
-            let is_finished = matches!(event, SimulationEvent::Finished);
+            let is_finished = matches!(
+                event,
+                SimServiceEvent::Simulation(faf_sim::sim::SimulationEvent::Finished)
+            );
             if event_tx.send(event).is_err() || is_finished {
                 break;
             }
         }
     });
 
-    while let Some(event) = event_rx.recv().await {
-        let is_finished = matches!(event, SimulationEvent::Finished);
-
-        let msg = SimServerMessage::Event(event);
-        let text = match serde_json::to_string(&msg) {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!("failed to serialize simulation event: {e}");
-                continue;
+    // Stream events to the client while listening for control messages.
+    loop {
+        tokio::select! {
+            Some(event) = event_rx.recv() => {
+                let is_finished = matches!(
+                    event,
+                    SimServiceEvent::Simulation(faf_sim::sim::SimulationEvent::Finished)
+                );
+                let msg = match event {
+                    SimServiceEvent::Simulation(e) => SimServerMessage::Event(e),
+                    SimServiceEvent::Control(e) => SimServerMessage::ControlEvent(e),
+                };
+                if send_server_message(&mut socket, msg).await.is_err() {
+                    return;
+                }
+                if is_finished {
+                    break;
+                }
             }
-        };
-
-        if socket.send(Message::Text(text)).await.is_err() {
-            return;
-        }
-
-        if is_finished {
-            break;
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<SimClientMessage>(&text) {
+                            Ok(SimClientMessage::Pause { .. }) => {
+                                let _ = service.pause(sim_id);
+                            }
+                            Ok(SimClientMessage::Resume { .. }) => {
+                                let _ = service.resume(sim_id);
+                            }
+                            Ok(SimClientMessage::Stop { .. }) => {
+                                let _ = service.stop(sim_id);
+                                break;
+                            }
+                            Ok(SimClientMessage::Advance { dt, .. }) => {
+                                let _ = service.advance(sim_id, dt);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
         }
     }
 
-    // Simulation ended; close the WebSocket gracefully.
+    // Close the WebSocket gracefully.
     let _ = socket.close().await;
+}
+
+async fn send_server_message(
+    socket: &mut axum::extract::ws::WebSocket,
+    msg: faf_sim::protocol::SimServerMessage,
+) -> Result<(), axum::Error> {
+    let text = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
+    socket.send(axum::extract::ws::Message::Text(text)).await
 }
 
 fn workspace_path(rel: &str) -> PathBuf {

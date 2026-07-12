@@ -111,4 +111,36 @@ mod tests {
         // With only 5 energy available we cannot run at full power.
         assert!(sim.current_time() > 10.0);
     }
+
+    #[test]
+    fn step_with_dt_advances_by_requested_amount_and_restores_default_dt() {
+        let queue = make_queue(vec![BuildTask {
+            id: 1,
+            start_after: Time::from_raw(0.0),
+            builders: vec![UnitDefRef {
+                build_power: 10.0,
+                ..Default::default()
+            }],
+            target: UnitDefRef {
+                build_power: 0.0,
+                mass_cost: 100.0,
+                energy_cost: 100.0,
+                build_time: 100.0,
+                ..Default::default()
+            },
+        }]);
+
+        let mut sim = Simulation::new(queue, 1.0, Some(1000.0));
+
+        // Take one manual step of 2.0 seconds.
+        let events = sim.step_with_dt(2.0);
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SimulationEvent::Ticked(_))));
+        assert!((sim.current_time() - 2.0).abs() < 1e-9);
+
+        // A subsequent normal step should use the configured dt of 1.0.
+        sim.step();
+        assert!((sim.current_time() - 3.0).abs() < 1e-9);
+    }
 }

@@ -18,6 +18,7 @@ use crate::eco::{
 /// Steppable economy simulation.
 pub struct Simulation {
     app: App,
+    dt: f64,
 }
 
 impl Simulation {
@@ -60,11 +61,20 @@ impl Simulation {
             world.insert_resource(EcoState(initial));
         }
 
-        Self { app }
+        Self { app, dt }
     }
 
     /// Advance the simulation by one `dt` and return the events produced.
     pub fn step(&mut self) -> &[SimulationEvent] {
+        self.step_with_dt(self.dt)
+    }
+
+    /// Advance the simulation by one step of the requested size and return the
+    /// events produced.
+    ///
+    /// The configured step size is restored after the update so subsequent
+    /// [`Self::step`] calls continue to use the original `dt`.
+    pub fn step_with_dt(&mut self, dt: f64) -> &[SimulationEvent] {
         {
             let mut journal = self.app.world_mut().resource_mut::<EventJournal>();
             journal.0.clear();
@@ -74,7 +84,17 @@ impl Simulation {
             return &[];
         }
 
+        {
+            let mut clock = self.app.world_mut().resource_mut::<SimClock>();
+            clock.dt = dt;
+        }
+
         self.app.update();
+
+        {
+            let mut clock = self.app.world_mut().resource_mut::<SimClock>();
+            clock.dt = self.dt;
+        }
 
         let journal = self.app.world().resource::<EventJournal>();
         &journal.0

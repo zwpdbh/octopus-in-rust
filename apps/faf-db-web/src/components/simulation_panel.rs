@@ -93,6 +93,9 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
             move |event: MessageEvent| {
                 let text = event.data().as_string().unwrap_or_default();
                 match serde_json::from_str::<SimServerMessage>(&text) {
+                    Ok(SimServerMessage::Started { .. }) => {
+                        // Simulation has started; events will follow.
+                    }
                     Ok(SimServerMessage::Event(SimulationEvent::Ticked(snapshot))) => {
                         snapshots_signal.with_mut(|v| v.push(snapshot));
                     }
@@ -102,6 +105,10 @@ pub fn SimulationPanel(plan: ConstructionPlan, on_close: EventHandler<()>) -> El
                         ws_signal.set(None);
                     }
                     Ok(SimServerMessage::Event(_)) => {}
+                    Ok(SimServerMessage::ControlEvent(_)) => {
+                        // Control events (e.g. state changes) are informational
+                        // and do not affect the chart display.
+                    }
                     Ok(SimServerMessage::Error { message }) => {
                         web_sys::console::error_1(&format!("simulation error: {message}").into());
                         finished_signal.set(true);

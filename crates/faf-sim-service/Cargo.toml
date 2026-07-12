@@ -1,0 +1,14 @@
+[package]
+name = "faf-sim-service"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Multi-simulation service that wraps faf-sim into a stream of events."
+license = "MIT"
+
+[dependencies]
+crossbeam-channel = "0.5"
+faf-sim = { workspace = true, features = ["headless"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

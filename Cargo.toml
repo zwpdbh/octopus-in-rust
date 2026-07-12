@@ -5,6 +5,7 @@ members = [
     "crates/brain",
     "crates/faf-units",
     "crates/faf-sim",
+    "crates/faf-sim-service",
     "crates/petgraph-svg",
     "crates/faf-downloader",
     "crates/train-tui",
@@ -24,6 +25,7 @@ resolver = "3"
 [workspace.dependencies]
 # Path crates
 faf-sim = { path = "crates/faf-sim", default-features = false }
+faf-sim-service = { path = "crates/faf-sim-service" }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }

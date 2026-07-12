@@ -3218,8 +3218,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
- "crossbeam-channel",
  "faf-sim",
+ "faf-sim-service",
  "faf-units",
  "serde",
  "serde_json",
@@ -3284,6 +3284,7 @@ dependencies = [
  "faf-units",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -3292,10 +3293,19 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "faf-sim",
- "futures-util",
+ "faf-sim-service",
  "serde_json",
- "tokio",
- "tokio-tungstenite 0.24.0",
+]
+
+[[package]]
+name = "faf-sim-service"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "faf-sim",
+ "serde",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
