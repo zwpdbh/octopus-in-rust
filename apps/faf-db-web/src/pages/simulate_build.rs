@@ -2,8 +2,7 @@ use dioxus::prelude::*;
 use faf_sim::Time;
 
 use crate::components::{
-    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationCommand, SimulationPanel,
-    UnitSelectorModal,
+    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationPanel, UnitSelectorModal,
 };
 use crate::route::Route;
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
@@ -17,8 +16,7 @@ pub fn SimulateBuild() -> Element {
     let mut draft_builder_count = use_signal(|| 1_u32);
     let mut draft_target = use_signal(|| None::<UnitSummary>);
     let mut draft_target_count = use_signal(|| 1_u32);
-    let simulation_state = use_signal(|| SimulationUiState::Idle);
-    let simulation_command = use_signal(|| None::<SimulationCommand>);
+    let simulation_state = use_signal(|| SimulationUiState::NotStartYet);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
 
     use_effect(move || {
@@ -87,16 +85,23 @@ pub fn SimulateBuild() -> Element {
                 div { class: "flex flex-1 overflow-hidden",
                     // Left sidebar: Eco Settings + new item creator
                     div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
-                        EcoPanel { plan }
-                        div { class: "my-4 border-t border-neutral-700" }
-                        QueueItemCreator {
-                            draft_builder,
-                            draft_builder_count,
-                            draft_target,
-                            draft_target_count,
-                            on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                            on_save: save_draft,
-                            on_clear: clear_draft,
+                        div {
+                            class: if plan_locked(simulation_state) { "pointer-events-none opacity-60" } else { "" },
+                            EcoPanel {
+                                plan,
+                                disabled: plan_locked(simulation_state),
+                            }
+                            div { class: "my-4 border-t border-neutral-700" }
+                            QueueItemCreator {
+                                draft_builder,
+                                draft_builder_count,
+                                draft_target,
+                                draft_target_count,
+                                disabled: plan_locked(simulation_state),
+                                on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                                on_save: save_draft,
+                                on_clear: clear_draft,
+                            }
                         }
                     }
                     // Right area: created queue (top) + simulation results (bottom)
@@ -107,24 +112,14 @@ pub fn SimulateBuild() -> Element {
                             }
                             QueueItemList {
                                 plan,
+                                disabled: plan_locked(simulation_state),
                                 on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
                             }
                         }
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
-                            SimulationControlBar {
+                            SimulationPanel {
+                                plan: plan.read().clone(),
                                 state: simulation_state,
-                                command: simulation_command,
-                            }
-                            if *simulation_state.read() != SimulationUiState::Idle {
-                                SimulationPanel {
-                                    plan: plan.read().clone(),
-                                    state: simulation_state,
-                                    command: simulation_command,
-                                }
-                            } else {
-                                p { class: "text-sm text-neutral-500 text-center mt-4",
-                                    "Click \"Start\" to run the simulation."
-                                }
                             }
                         }
                     }
@@ -143,85 +138,9 @@ pub fn SimulateBuild() -> Element {
     }
 }
 
-#[component]
-fn SimulationControlBar(
-    mut state: Signal<SimulationUiState>,
-    mut command: Signal<Option<SimulationCommand>>,
-) -> Element {
-    let current = *state.read();
-    let start_enabled = current == SimulationUiState::Idle;
-    let pause_enabled =
-        current == SimulationUiState::Running || current == SimulationUiState::Paused;
-    let stop_enabled =
-        current == SimulationUiState::Running || current == SimulationUiState::Paused;
-    let reset_enabled = current == SimulationUiState::Running
-        || current == SimulationUiState::Paused
-        || current == SimulationUiState::Finished;
-    let pause_label = if current == SimulationUiState::Paused {
-        "Resume"
-    } else {
-        "Pause"
-    };
-
-    rsx! {
-        div { class: "flex items-center justify-center gap-2 mb-3 shrink-0",
-            ControlButton {
-                label: "Start",
-                enabled: start_enabled,
-                onclick: move |_| {
-                    command.set(Some(SimulationCommand::Start));
-                    state.set(SimulationUiState::Running);
-                },
-            }
-            ControlButton {
-                label: pause_label.to_string(),
-                enabled: pause_enabled,
-                onclick: move |_| {
-                    let cmd = if current == SimulationUiState::Paused {
-                        SimulationCommand::Resume
-                    } else {
-                        SimulationCommand::Pause
-                    };
-                    command.set(Some(cmd));
-                },
-            }
-            ControlButton {
-                label: "Stop",
-                enabled: stop_enabled,
-                onclick: move |_| {
-                    command.set(Some(SimulationCommand::Stop));
-                },
-            }
-            ControlButton {
-                label: "Reset",
-                enabled: reset_enabled,
-                onclick: move |_| {
-                    command.set(Some(SimulationCommand::Reset));
-                },
-            }
-        }
-    }
-}
-
-#[component]
-fn ControlButton(label: String, enabled: bool, onclick: EventHandler<()>) -> Element {
-    let base = "px-4 py-1.5 text-sm rounded transition-colors";
-    let active_class = if enabled {
-        "bg-blue-700 hover:bg-blue-600 text-white"
-    } else {
-        "bg-neutral-800 text-neutral-500 cursor-not-allowed"
-    };
-
-    rsx! {
-        button {
-            class: "{base} {active_class}",
-            disabled: !enabled,
-            onclick: move |_| {
-                if enabled {
-                    onclick.call(());
-                }
-            },
-            "{label}"
-        }
-    }
+fn plan_locked(state: Signal<SimulationUiState>) -> bool {
+    matches!(
+        *state.read(),
+        SimulationUiState::Running | SimulationUiState::Paused
+    )
 }

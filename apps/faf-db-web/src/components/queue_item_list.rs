@@ -7,6 +7,7 @@ use crate::types::{AssignmentTarget, ConstructionPlan};
 pub fn QueueItemList(
     plan: Signal<ConstructionPlan>,
     on_assign_slot: EventHandler<AssignmentTarget>,
+    #[props(default = false)] disabled: bool,
 ) -> Element {
     let items = plan.read().items.clone();
     rsx! {
@@ -16,7 +17,7 @@ pub fn QueueItemList(
             }
             div { class: "grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3 content-start",
                 for item in items {
-                    ConstructionItemCard { item, plan, on_assign_slot }
+                    ConstructionItemCard { item, plan, disabled, on_assign_slot }
                 }
             }
         }

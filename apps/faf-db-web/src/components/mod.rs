@@ -20,7 +20,7 @@ pub use filter_bar::FilterBar;
 pub use portrait_button::PortraitButton;
 pub use queue_item_creator::QueueItemCreator;
 pub use queue_item_list::QueueItemList;
-pub use simulation_panel::{SimulationCommand, SimulationPanel};
+pub use simulation_panel::SimulationPanel;
 pub use unit_block::UnitBlock;
 pub use unit_detail::UnitDetail;
 pub use unit_selector::UnitSelector;

@@ -196,7 +196,7 @@ impl AssignmentTarget {
 /// (Idle) for control and visibility purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimulationUiState {
-    Idle,
+    NotStartYet,
     Running,
     Paused,
     Finished,

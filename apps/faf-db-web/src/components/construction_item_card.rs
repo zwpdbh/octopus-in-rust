@@ -9,14 +9,20 @@ pub fn ConstructionItemCard(
     item: ConstructionItem,
     mut plan: Signal<ConstructionPlan>,
     on_assign_slot: EventHandler<AssignmentTarget>,
+    #[props(default = false)] disabled: bool,
 ) -> Element {
     let item_id = item.id;
 
     let remove = move |_| {
-        plan.with_mut(|p| p.items.retain(|i| i.id != item_id));
+        if !disabled {
+            plan.with_mut(|p| p.items.retain(|i| i.id != item_id));
+        }
     };
 
     let mut adjust_vec = move |field: &'static str, new_len: u32| {
+        if disabled {
+            return;
+        }
         plan.with_mut(|p| {
             if let Some(i) = p.items.iter_mut().find(|i| i.id == item_id) {
                 match field {
@@ -35,6 +41,9 @@ pub fn ConstructionItemCard(
     };
 
     let mut update_start_after = move |value: f64| {
+        if disabled {
+            return;
+        }
         plan.with_mut(|p| {
             if let Some(i) = p.items.iter_mut().find(|i| i.id == item_id) {
                 i.start_after = Time::from_raw(value.max(0.0));
@@ -47,7 +56,12 @@ pub fn ConstructionItemCard(
             div { class: "flex items-center justify-between mb-2",
                 span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Queue Item" }
                 button {
-                    class: "px-2 py-0.5 rounded bg-red-900/40 hover:bg-red-900/60 text-red-300 text-xs transition-colors",
+                    class: if disabled {
+                        "px-2 py-0.5 rounded bg-red-900/20 text-red-300/50 text-xs cursor-not-allowed"
+                    } else {
+                        "px-2 py-0.5 rounded bg-red-900/40 hover:bg-red-900/60 text-red-300 text-xs transition-colors"
+                    },
+                    disabled: disabled,
                     onclick: remove,
                     "×"
                 }
@@ -58,6 +72,7 @@ pub fn ConstructionItemCard(
                     unit: item.builders.first().cloned(),
                     count: item.builders.len() as u32,
                     hint: "Requires build power",
+                    disabled: disabled,
                     on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingBuilder { item_id }),
                     on_count: move |v: u32| adjust_vec("builders", v),
                 }
@@ -66,6 +81,7 @@ pub fn ConstructionItemCard(
                     unit: item.targets.first().cloned(),
                     count: item.targets.len() as u32,
                     hint: "Drop any unit",
+                    disabled: disabled,
                     on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingTarget { item_id }),
                     on_count: move |v: u32| adjust_vec("targets", v),
                 }
@@ -77,12 +93,19 @@ pub fn ConstructionItemCard(
                     value: "{item.start_after.value()}",
                     step: "any",
                     min: "0",
+                    disabled: disabled,
                     oninput: move |e| {
-                        if let Ok(v) = e.value().parse::<f64>() {
-                            update_start_after(v);
+                        if !disabled {
+                            if let Ok(v) = e.value().parse::<f64>() {
+                                update_start_after(v);
+                            }
                         }
                     },
-                    class: "w-16 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500",
+                    class: if disabled {
+                        "w-16 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-white text-sm text-center cursor-not-allowed opacity-60"
+                    } else {
+                        "w-16 px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                    },
                 }
                 span { class: "text-[10px] text-neutral-500", "s" }
             }
