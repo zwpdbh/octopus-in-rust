@@ -44,10 +44,19 @@ impl Default for EcoInitialSettings {
 impl EcoInitialSettings {
     pub fn to_economy_state(&self) -> faf_sim::EconomyState {
         faf_sim::EconomyState {
-            net_mass_income: self.mass_income,
-            net_energy_income: self.energy_income,
+            mass_income: self.mass_income,
+            energy_income: self.energy_income,
             mass_storage: self.mass_storage,
             energy_storage: self.energy_storage,
+        }
+    }
+
+    pub fn from_economy_state(state: &faf_sim::EconomyState) -> Self {
+        Self {
+            mass_income: state.mass_income,
+            energy_income: state.energy_income,
+            mass_storage: state.mass_storage,
+            energy_storage: state.energy_storage,
         }
     }
 }
@@ -68,6 +77,7 @@ impl ConstructionItem {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConstructionPlan {
+    #[serde(rename = "initial_eco", alias = "eco")]
     pub eco: EcoInitialSettings,
     pub items: Vec<ConstructionItem>,
 }
@@ -89,34 +99,79 @@ impl ConstructionPlan {
                         mass_cost: 0.0,
                         energy_cost: 0.0,
                         build_time: 0.0,
+                        unit_id: Some(u.id.clone()),
                         ..Default::default()
                     })
                     .collect(),
-                target: UnitDefRef {
-                    build_power: 0.0,
-                    mass_cost: item
-                        .targets
-                        .first()
-                        .and_then(|t| t.build_cost_mass)
-                        .unwrap_or(0.0),
-                    energy_cost: item
-                        .targets
-                        .first()
-                        .and_then(|t| t.build_cost_energy)
-                        .unwrap_or(0.0),
-                    build_time: item
-                        .targets
-                        .first()
-                        .and_then(|t| t.build_time)
-                        .unwrap_or(0.0),
-                    ..Default::default()
-                },
+                targets: item
+                    .targets
+                    .iter()
+                    .map(|t| UnitDefRef {
+                        build_power: 0.0,
+                        mass_cost: t.build_cost_mass.unwrap_or(0.0),
+                        energy_cost: t.build_cost_energy.unwrap_or(0.0),
+                        build_time: t.build_time.unwrap_or(0.0),
+                        unit_id: Some(t.id.clone()),
+                        ..Default::default()
+                    })
+                    .collect(),
             })
             .collect();
 
         BuildQueue {
             initial_eco: self.eco.to_economy_state(),
             tasks,
+        }
+    }
+
+    pub fn from_build_queue(queue: BuildQueue, units: &[UnitSummary]) -> Self {
+        let unit_map: std::collections::HashMap<&str, &UnitSummary> =
+            units.iter().map(|u| (u.id.as_str(), u)).collect();
+
+        let find_unit = |r: &UnitDefRef| -> UnitSummary {
+            if let Some(id) = r.unit_id.as_deref() {
+                if let Some(u) = unit_map.get(id) {
+                    return (*u).clone();
+                }
+            }
+            units
+                .iter()
+                .find(|u| {
+                    u.build_rate.unwrap_or(0.0) == r.build_power
+                        && u.build_cost_mass.unwrap_or(0.0) == r.mass_cost
+                        && u.build_cost_energy.unwrap_or(0.0) == r.energy_cost
+                        && u.build_time.unwrap_or(0.0) == r.build_time
+                })
+                .cloned()
+                .unwrap_or_else(|| UnitSummary {
+                    id: r.unit_id.clone().unwrap_or_default(),
+                    display_name: String::new(),
+                    faction: String::new(),
+                    tech: String::new(),
+                    category: String::new(),
+                    strategic_icon_name: None,
+                    kind: String::new(),
+                    build_rate: Some(r.build_power),
+                    build_cost_mass: Some(r.mass_cost),
+                    build_cost_energy: Some(r.energy_cost),
+                    build_time: Some(r.build_time),
+                })
+        };
+
+        let items = queue
+            .tasks
+            .into_iter()
+            .map(|task| ConstructionItem {
+                id: task.id,
+                builders: task.builders.iter().map(find_unit).collect(),
+                targets: task.targets.iter().map(find_unit).collect(),
+                start_after: task.start_after,
+            })
+            .collect();
+
+        Self {
+            eco: EcoInitialSettings::from_economy_state(&queue.initial_eco),
+            items,
         }
     }
 }

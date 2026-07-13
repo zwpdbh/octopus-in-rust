@@ -460,8 +460,8 @@ mod tests {
 
     fn rich_eco() -> EconomyState {
         EconomyState {
-            net_mass_income: MassRate::from_raw(1000.0),
-            net_energy_income: EnergyRate::from_raw(1000.0),
+            mass_income: MassRate::from_raw(1000.0),
+            energy_income: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
             energy_storage: Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0)),
         }
@@ -477,13 +477,13 @@ mod tests {
                     build_power: 10.0,
                     ..Default::default()
                 }],
-                target: UnitDefRef {
+                targets: vec![UnitDefRef {
                     build_power: 0.0,
                     mass_cost: 100.0,
                     energy_cost: 100.0,
                     build_time: 100.0,
                     ..Default::default()
-                },
+                }],
             }],
         }
     }

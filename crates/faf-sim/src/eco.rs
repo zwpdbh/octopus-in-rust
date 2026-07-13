@@ -16,7 +16,7 @@ use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 /// It deliberately does not depend on the full `Units` repository, so callers
 /// (the Dioxus web app, the CLI, tests) can describe units with whatever data
 /// they already have.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct UnitDefRef {
     /// Build power contributed while building. Zero for non-builders.
     #[serde(default)]
@@ -46,6 +46,9 @@ pub struct UnitDefRef {
     /// Energy storage capacity provided after the unit is finished.
     #[serde(default)]
     pub energy_storage: f64,
+    /// Optional unit identifier carried through for round-tripping from UI plans.
+    #[serde(default)]
+    pub unit_id: Option<String>,
 }
 
 impl UnitDefRef {
@@ -71,8 +74,8 @@ pub struct BuildTask {
     pub start_after: Time,
     /// Builders assigned to the task.
     pub builders: Vec<UnitDefRef>,
-    /// Unit being built.
-    pub target: UnitDefRef,
+    /// Units being built, in order. Builders work through the list sequentially.
+    pub targets: Vec<UnitDefRef>,
 }
 
 /// A full build queue to simulate.
@@ -133,7 +136,8 @@ pub(crate) struct StorageContributor {
 #[derive(Component)]
 pub(crate) struct ConstructionSite {
     pub(crate) task_id: u32,
-    pub(crate) target: UnitDefRef,
+    pub(crate) targets: Vec<UnitDefRef>,
+    pub(crate) current_target_index: usize,
     pub(crate) remaining_work: f64,
     pub(crate) power: f64,
 }
@@ -208,7 +212,11 @@ fn spawn_tasks_system(
     pending.0.retain(|task| {
         if task.start_after <= now {
             let total_power: f64 = task.builders.iter().map(|b| b.build_power).sum();
-            let total_work = task.target.build_time.max(0.0);
+            let first_work = task
+                .targets
+                .first()
+                .map(|t| t.build_time.max(0.0))
+                .unwrap_or(0.0);
 
             for builder in &task.builders {
                 commands.spawn((MaintenanceEnergy(builder.maintenance_energy),));
@@ -216,8 +224,9 @@ fn spawn_tasks_system(
 
             commands.spawn((ConstructionSite {
                 task_id: task.id,
-                target: task.target,
-                remaining_work: total_work,
+                targets: task.targets.clone(),
+                current_target_index: 0,
+                remaining_work: first_work,
                 power: total_power,
             },));
 
@@ -260,8 +269,8 @@ fn recompute_base_economy_system(
         energy_cap += s.energy;
     }
 
-    eco.net_mass_income = MassRate::from_raw(mass_income);
-    eco.net_energy_income = EnergyRate::from_raw(energy_income);
+    eco.mass_income = MassRate::from_raw(mass_income);
+    eco.energy_income = EnergyRate::from_raw(energy_income);
     eco.mass_storage.cap = Mass::from_raw(mass_cap.max(0.0));
     eco.energy_storage.cap = Energy::from_raw(energy_cap.max(0.0));
 }
@@ -288,9 +297,11 @@ fn eco_system(
         if site.power <= 0.0 {
             continue;
         }
-        let (mass, energy) = site.target.drain_per_second(site.power);
-        total_mass_drain += mass;
-        total_energy_drain += energy;
+        if let Some(target) = site.targets.get(site.current_target_index) {
+            let (mass, energy) = target.drain_per_second(site.power);
+            total_mass_drain += mass;
+            total_energy_drain += energy;
+        }
     }
 
     let result = apply_tick_graph(total_mass_drain, total_energy_drain, &eco.0, dt.value());
@@ -300,7 +311,7 @@ fn eco_system(
     eco.mass_storage.current = result.new_mass_storage.current;
     eco.mass_storage.cap = result.new_mass_storage.cap;
     eco.energy_storage = result.new_energy_storage;
-    eco.net_mass_income = result.scaled_net_mass_income;
+    eco.mass_income = result.scaled_net_mass_income;
     factor.0 = result.effective_factor;
 
     totals.mass += result.mass_consumed.value();
@@ -311,7 +322,7 @@ fn eco_system(
     journal.0.push(SimulationEvent::Ticked(EcoSnapshot {
         time: clock.time.value(),
         mass_income: result.scaled_net_mass_income.value(),
-        energy_income: eco.net_energy_income.value(),
+        energy_income: eco.energy_income.value(),
         total_mass_spent: totals.mass,
         total_energy_spent: totals.energy,
         mass_storage: eco.mass_storage.current.value(),
@@ -358,10 +369,12 @@ fn completion_system(
             continue;
         };
 
-        finished_ids.push(site.task_id);
-        commands.entity(entity).despawn();
+        let Some(target) = site.targets.get(site.current_target_index) else {
+            continue;
+        };
 
-        let target = site.target;
+        // The current target is finished; it starts contributing economy
+        // immediately if it has production/storage stats.
         commands.spawn((
             Producer {
                 mass_income: target.mass_income,
@@ -372,6 +385,23 @@ fn completion_system(
                 energy: target.energy_storage,
             },
         ));
+
+        let next_index = site.current_target_index + 1;
+        if next_index < site.targets.len() {
+            // Move on to the next target in the same task.
+            let next_work = site.targets[next_index].build_time.max(0.0);
+            commands.entity(entity).insert(ConstructionSite {
+                task_id: site.task_id,
+                targets: site.targets.clone(),
+                current_target_index: next_index,
+                remaining_work: next_work,
+                power: site.power,
+            });
+        } else {
+            // All targets in the task are done.
+            finished_ids.push(site.task_id);
+            commands.entity(entity).despawn();
+        }
     }
 
     for id in finished_ids {

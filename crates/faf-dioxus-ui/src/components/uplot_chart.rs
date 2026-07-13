@@ -77,14 +77,19 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         let id = CHART_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("uplot-chart-{id}")
     });
-    // Stores the active tab index and the live uPlot instance.
-    let chart_state: Rc<RefCell<Option<(usize, JsValue)>>> =
+    // Stores the active tab index, the live uPlot instance, and any closures
+    // installed as hooks so they stay alive as long as the chart.
+    let chart_state: Rc<RefCell<Option<(usize, JsValue, Vec<Closure<dyn FnMut(JsValue)>>)>>> =
         use_hook(|| Rc::new(RefCell::new(None)));
     let chart_state_for_effect = chart_state.clone();
     let chart_state_for_cleanup = chart_state.clone();
 
+    // Tooltip content and pixel position within the chart.
+    let tooltip = use_signal(|| None::<(String, String)>);
+    let tooltip_pos = use_signal(|| (0.0_f64, 0.0_f64));
+
     use_drop(move || {
-        if let Some((_, chart)) = chart_state_for_cleanup.borrow_mut().take() {
+        if let Some((_, chart, _)) = chart_state_for_cleanup.borrow_mut().take() {
             let _ = destroy_chart(&chart);
         }
     });
@@ -101,31 +106,33 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
 
         let mut state = chart_state_for_effect.borrow_mut();
         let should_create = match state.as_ref() {
-            Some((last_index, _)) => *last_index != tab_index,
+            Some((last_index, _, _)) => *last_index != tab_index,
             None => true,
         };
 
         if should_create {
-            if let Some((_, old_chart)) = state.take() {
+            if let Some((_, old_chart, _)) = state.take() {
                 let _ = destroy_chart(&old_chart);
             }
             match create_chart(
                 &chart_id_for_effect,
-                &points,
+                data,
                 x_extractor,
                 tab.y_extractor,
                 &tab.label,
                 &rgb_to_hex(tab.color),
+                tooltip,
+                tooltip_pos,
             ) {
-                Some(chart) => {
-                    *state = Some((tab_index, chart));
+                Some((chart, hooks)) => {
+                    *state = Some((tab_index, chart, hooks));
                 }
                 None => {
                     // uPlot may not be loaded yet. Retry shortly.
                     schedule_retry(load_attempts);
                 }
             }
-        } else if let Some((_, chart)) = state.as_ref() {
+        } else if let Some((_, chart, _)) = state.as_ref() {
             let _ = update_chart(chart, &points, x_extractor, tab.y_extractor);
         }
     });
@@ -175,9 +182,19 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                     }
                     h2 { class: "text-sm font-semibold text-white", "{active_tab.label}" }
                 }
-                div {
-                    id: "{chart_id}",
-                    class: "flex-1 min-h-0 uplot-chart-container",
+                div { class: "flex-1 min-h-0 relative",
+                    div {
+                        id: "{chart_id}",
+                        class: "absolute inset-0 uplot-chart-container",
+                    }
+                    if let Some((time, value)) = tooltip.read().as_ref() {
+                        div {
+                            class: "absolute z-10 px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-xs text-white shadow pointer-events-none",
+                            style: "left: {tooltip_pos.read().0}px; top: {tooltip_pos.read().1 - 40.0}px;",
+                            div { "{time}" }
+                            div { "{value}" }
+                        }
+                    }
                 }
             }
         }
@@ -201,22 +218,28 @@ fn TabButton(label: String, is_active: bool, onclick: EventHandler<()>) -> Eleme
     }
 }
 
-fn create_chart<T>(
+fn create_chart<T: Clone + 'static>(
     element_id: &str,
-    data: &[T],
+    data: Signal<Vec<T>>,
     x_extractor: ChartMetric<T>,
     y_extractor: ChartMetric<T>,
     label: &str,
     color: &str,
-) -> Option<JsValue> {
+    tooltip: Signal<Option<(String, String)>>,
+    tooltip_pos: Signal<(f64, f64)>,
+) -> Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)> {
     let window = window()?;
     let document = window.document()?;
     let container = document.get_element_by_id(element_id)?;
 
-    let series_data = build_series_data(data, x_extractor, y_extractor);
+    let points = data.read();
+    let series_data = build_series_data(&points, x_extractor, y_extractor);
     let width = container.client_width().max(1) as f64;
     let height = container.client_height().max(1) as f64;
-    let opts = build_opts(label, color, width, height);
+
+    let set_cursor =
+        build_set_cursor_closure(data, x_extractor, y_extractor, label, tooltip, tooltip_pos);
+    let opts = build_opts(label, color, width, height, &set_cursor);
 
     let uplot = Reflect::get(&window, &"uPlot".into()).ok()?;
     let uplot_fn = Function::from(uplot);
@@ -224,7 +247,10 @@ fn create_chart<T>(
     args.push(&opts);
     args.push(&series_data);
     args.push(&container);
-    Reflect::construct(&uplot_fn, &args).ok()
+    let chart = Reflect::construct(&uplot_fn, &args).ok()?;
+
+    let hooks = vec![set_cursor];
+    Some((chart, hooks))
 }
 
 fn update_chart<T>(
@@ -264,7 +290,13 @@ fn build_series_data<T>(
     series_data
 }
 
-fn build_opts(label: &str, color: &str, width: f64, height: f64) -> Object {
+fn build_opts(
+    label: &str,
+    color: &str,
+    width: f64,
+    height: f64,
+    set_cursor: &Closure<dyn FnMut(JsValue)>,
+) -> Object {
     let opts = Object::new();
     Reflect::set(&opts, &"width".into(), &JsValue::from_f64(width)).unwrap();
     Reflect::set(&opts, &"height".into(), &JsValue::from_f64(height)).unwrap();
@@ -279,13 +311,20 @@ fn build_opts(label: &str, color: &str, width: f64, height: f64) -> Object {
     Reflect::set(&opts, &"series".into(), &series).unwrap();
 
     let axes = Array::new();
-    axes.push(&axis_opts());
+    axes.push(&x_axis_opts());
     axes.push(&axis_opts());
     Reflect::set(&opts, &"axes".into(), &axes).unwrap();
+
+    let hooks = Object::new();
+    let set_cursor_arr = Array::new();
+    set_cursor_arr.push(set_cursor.as_ref());
+    Reflect::set(&hooks, &"setCursor".into(), &set_cursor_arr).unwrap();
+    Reflect::set(&opts, &"hooks".into(), &hooks).unwrap();
 
     let scales = Object::new();
     let x_scale = Object::new();
     Reflect::set(&x_scale, &"auto".into(), &JsValue::from_bool(true)).unwrap();
+    Reflect::set(&x_scale, &"time".into(), &JsValue::from_bool(false)).unwrap();
     Reflect::set(&scales, &"x".into(), &x_scale).unwrap();
     let y_scale = Object::new();
     Reflect::set(&y_scale, &"auto".into(), &JsValue::from_bool(true)).unwrap();
@@ -293,6 +332,23 @@ fn build_opts(label: &str, color: &str, width: f64, height: f64) -> Object {
     Reflect::set(&opts, &"scales".into(), &scales).unwrap();
 
     opts
+}
+
+fn x_axis_opts() -> Object {
+    let axis = axis_opts();
+    Reflect::set(&axis, &"time".into(), &JsValue::from_bool(false)).unwrap();
+    Reflect::set(&axis, &"label".into(), &"Time".into()).unwrap();
+
+    let values_fn = Function::new_with_args(
+        "_self, splits",
+        r#"return splits.map(function(v) {
+            if (v >= 60) return (v / 60).toFixed(1) + "m";
+            return v.toFixed(0) + "s";
+        });"#,
+    );
+    Reflect::set(&axis, &"values".into(), &values_fn).unwrap();
+
+    axis
 }
 
 fn axis_opts() -> Object {
@@ -310,6 +366,65 @@ fn axis_opts() -> Object {
     Reflect::set(&axis, &"ticks".into(), &ticks).unwrap();
 
     axis
+}
+
+fn build_set_cursor_closure<T: Clone + 'static>(
+    data: Signal<Vec<T>>,
+    x_extractor: ChartMetric<T>,
+    y_extractor: ChartMetric<T>,
+    label: &str,
+    mut tooltip: Signal<Option<(String, String)>>,
+    mut tooltip_pos: Signal<(f64, f64)>,
+) -> Closure<dyn FnMut(JsValue)> {
+    let label = label.to_string();
+    Closure::wrap(Box::new(move |u: JsValue| {
+        let Ok(cursor) = Reflect::get(&u, &"cursor".into()) else {
+            tooltip.set(None);
+            return;
+        };
+        let Ok(idx_val) = Reflect::get(&cursor, &"idx".into()) else {
+            tooltip.set(None);
+            return;
+        };
+        let Some(idx) = idx_val.as_f64() else {
+            tooltip.set(None);
+            return;
+        };
+        if idx < 0.0 {
+            tooltip.set(None);
+            return;
+        }
+
+        let idx = idx as usize;
+        let points = data.read();
+        let Some(point) = points.get(idx) else {
+            tooltip.set(None);
+            return;
+        };
+
+        let x = x_extractor.extract(point);
+        let y = y_extractor.extract(point);
+        tooltip.set(Some((format_time(x), format!("{}: {:.2}", label, y))));
+
+        if let (Some(left), Some(top)) = (
+            Reflect::get(&cursor, &"left".into())
+                .ok()
+                .and_then(|v| v.as_f64()),
+            Reflect::get(&cursor, &"top".into())
+                .ok()
+                .and_then(|v| v.as_f64()),
+        ) {
+            tooltip_pos.set((left, top));
+        }
+    }) as Box<dyn FnMut(JsValue)>)
+}
+
+fn format_time(seconds: f64) -> String {
+    if seconds >= 60.0 {
+        format!("{:.1}m", seconds / 60.0)
+    } else {
+        format!("{:.1}s", seconds)
+    }
 }
 
 fn rgb_to_hex(color: plotters::prelude::RGBColor) -> String {

@@ -52,8 +52,8 @@ impl Simulation {
             let initial = queue.initial_eco;
             let world = app.world_mut();
             world.spawn((Producer {
-                mass_income: initial.net_mass_income.value(),
-                energy_income: initial.net_energy_income.value(),
+                mass_income: initial.mass_income.value(),
+                energy_income: initial.energy_income.value(),
             },));
             world.spawn((StorageContributor {
                 mass: initial.mass_storage.cap.value(),

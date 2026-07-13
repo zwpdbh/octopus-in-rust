@@ -297,10 +297,10 @@ pub fn summarize_economy(
 /// Current economy state at a point in time.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct EconomyState {
-    /// Mass income per second (can be negative during drains).
-    pub net_mass_income: MassRate,
-    /// Energy income per second (can be negative during drains).
-    pub net_energy_income: EnergyRate,
+    /// Mass income per second
+    pub mass_income: MassRate,
+    /// Energy income per second
+    pub energy_income: EnergyRate,
     /// Mass storage (current amount + capacity).
     pub mass_storage: Storage<Mass>,
     /// Energy storage (current amount + capacity).
@@ -339,8 +339,8 @@ impl EconomyState {
         let mut remaining_work = cost.build_time;
         let mut mass_storage = self.mass_storage.current.value();
         let mut energy_storage = self.energy_storage.current.value();
-        let mass_income = self.net_mass_income.value();
-        let energy_income = self.net_energy_income.value();
+        let mass_income = self.mass_income.value();
+        let energy_income = self.energy_income.value();
         let mut elapsed = 0.0;
 
         while remaining_work > 1e-9 {
@@ -436,8 +436,8 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
     let dt = Time::from_raw(dt);
 
     // Gross income during this tick, ignoring the drain.
-    let mass_income = state.net_mass_income * dt;
-    let energy_income = state.net_energy_income * dt;
+    let mass_income = state.mass_income * dt;
+    let energy_income = state.energy_income * dt;
 
     // Requested consumption over the tick.
     let requested_mass = Mass::from_raw(requested.mass_per_second * dt.value());
@@ -527,8 +527,8 @@ pub fn apply_tick_graph(
 ) -> GraphTickResult {
     let dt = Time::from_raw(dt);
 
-    let mass_income = state.net_mass_income * dt;
-    let energy_income = state.net_energy_income * dt;
+    let mass_income = state.mass_income * dt;
+    let energy_income = state.energy_income * dt;
 
     let requested_mass = Mass::from_raw(total_mass_drain * dt.value());
     let requested_energy = Energy::from_raw(total_energy_drain * dt.value());
@@ -551,9 +551,9 @@ pub fn apply_tick_graph(
 
     // If energy is the binding constraint, mass income scales with it.
     let scaled_net_mass_income = if energy_factor <= mass_factor_unscaled {
-        state.net_mass_income * energy_factor
+        state.mass_income * energy_factor
     } else {
-        state.net_mass_income
+        state.mass_income
     };
     let scaled_mass_income = scaled_net_mass_income * dt;
 
@@ -799,8 +799,8 @@ mod tests {
         .expect("valid drain");
 
         let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -829,8 +829,8 @@ mod tests {
 
         // Very little energy income and storage, plenty of mass.
         let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -860,8 +860,8 @@ mod tests {
 
         // Very little mass income and storage, plenty of energy.
         let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(0.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(1000.0),
+            mass_income: crate::quantities::MassRate::from_raw(0.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(drain.mass_per_second * 0.5),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -890,8 +890,8 @@ mod tests {
         project.assigned_build_power = build_power;
 
         let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -921,8 +921,8 @@ mod tests {
         project.assigned_build_power = build_power;
 
         let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -958,8 +958,8 @@ mod tests {
 
         // No energy income and tiny storage: will stall.
         let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -995,8 +995,8 @@ mod tests {
         .expect("valid drain");
 
         let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+            mass_income: crate::quantities::MassRate::from_raw(1000.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(100.0),
                 crate::quantities::Mass::from_raw(100.0),
@@ -1048,8 +1048,8 @@ mod tests {
 
         // No income, but enough storage to pay the full cost.
         let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(0.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+            mass_income: crate::quantities::MassRate::from_raw(0.0),
+            energy_income: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(total_mass),
                 crate::quantities::Mass::from_raw(total_mass * 2.0),
@@ -1167,8 +1167,8 @@ mod tests {
         energy_income: f64,
     ) -> EconomyState {
         EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(mass_income),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(energy_income),
+            mass_income: crate::quantities::MassRate::from_raw(mass_income),
+            energy_income: crate::quantities::EnergyRate::from_raw(energy_income),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(mass_storage),
                 crate::quantities::Mass::from_raw(0.0),
