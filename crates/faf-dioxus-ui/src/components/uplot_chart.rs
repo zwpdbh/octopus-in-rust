@@ -479,8 +479,18 @@ fn schedule_retry(mut load_attempts: Signal<u32>) {
         return;
     };
     let closure = Closure::wrap(Box::new(move || {
-        let next = load_attempts.read().wrapping_add(1);
-        load_attempts.set(next);
+        // The component may have unmounted before the timeout fires. Read
+        // gracefully instead of panicking on a dropped signal.
+        let next = {
+            if let Ok(current) = load_attempts.try_read() {
+                Some((*current).wrapping_add(1))
+            } else {
+                None
+            }
+        };
+        if let Some(next) = next {
+            load_attempts.set(next);
+        }
     }) as Box<dyn FnMut()>);
     let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
         closure.as_ref().unchecked_ref(),

@@ -20,6 +20,16 @@ pub struct UnitSummary {
     pub build_cost_energy: Option<f64>,
     #[serde(default)]
     pub build_time: Option<f64>,
+    #[serde(default)]
+    pub mass_income: Option<f64>,
+    #[serde(default)]
+    pub energy_income: Option<f64>,
+    #[serde(default)]
+    pub maintenance_energy: Option<f64>,
+    #[serde(default)]
+    pub mass_storage: Option<f64>,
+    #[serde(default)]
+    pub energy_storage: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -113,8 +123,12 @@ impl ConstructionPlan {
                         mass_cost: t.build_cost_mass.unwrap_or(0.0),
                         energy_cost: t.build_cost_energy.unwrap_or(0.0),
                         build_time: t.build_time.unwrap_or(0.0),
+                        mass_income: t.mass_income.unwrap_or(0.0),
+                        energy_income: t.energy_income.unwrap_or(0.0),
+                        maintenance_energy: t.maintenance_energy.unwrap_or(0.0),
+                        mass_storage: t.mass_storage.unwrap_or(0.0),
+                        energy_storage: t.energy_storage.unwrap_or(0.0),
                         unit_id: Some(t.id.clone()),
-                        ..Default::default()
                     })
                     .collect(),
             })
@@ -157,6 +171,11 @@ impl ConstructionPlan {
                     build_cost_mass: Some(r.mass_cost),
                     build_cost_energy: Some(r.energy_cost),
                     build_time: Some(r.build_time),
+                    mass_income: Some(r.mass_income),
+                    energy_income: Some(r.energy_income),
+                    maintenance_energy: Some(r.maintenance_energy),
+                    mass_storage: Some(r.mass_storage),
+                    energy_storage: Some(r.energy_storage),
                 })
         };
 
