@@ -156,19 +156,33 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                         tabs: vec![
                             ChartTab {
                                 label: "Mass income".to_string(),
-                                series: vec![ChartSeries::new(
-                                    "Mass income",
-                                    RGBColor(59, 130, 246),
-                                    ChartMetric::new(|s| s.net_mass_income),
-                                )],
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Stable",
+                                        RGBColor(156, 163, 175),
+                                        ChartMetric::new(|s| s.mass_income),
+                                    ),
+                                    ChartSeries::new(
+                                        "Net",
+                                        RGBColor(59, 130, 246),
+                                        ChartMetric::new(|s| s.net_mass_income),
+                                    ),
+                                ],
                             },
                             ChartTab {
                                 label: "Energy income".to_string(),
-                                series: vec![ChartSeries::new(
-                                    "Energy income",
-                                    RGBColor(234, 179, 8),
-                                    ChartMetric::new(|s| s.net_energy_income),
-                                )],
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Stable",
+                                        RGBColor(156, 163, 175),
+                                        ChartMetric::new(|s| s.energy_income),
+                                    ),
+                                    ChartSeries::new(
+                                        "Net",
+                                        RGBColor(234, 179, 8),
+                                        ChartMetric::new(|s| s.net_energy_income),
+                                    ),
+                                ],
                             },
                             ChartTab {
                                 label: "Total mass spent".to_string(),
