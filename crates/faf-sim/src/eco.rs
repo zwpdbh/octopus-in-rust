@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::economy::{apply_tick_graph, EconomyState};
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 
+/// Number of seconds the simulation keeps ticking after the build queue is
+/// empty so the final economy state is visible on the chart.
+const POST_QUEUE_TAIL_SECONDS: f64 = 30.0;
+
 /// Lightweight unit descriptor used by the simulator.
 ///
 /// It deliberately does not depend on the full `Units` repository, so callers
@@ -70,12 +74,35 @@ impl UnitDefRef {
 pub struct BuildTask {
     /// Caller-defined id, echoed back in start/complete events.
     pub id: u32,
-    /// Simulation time at which the task may begin.
+    /// Delay after the previous task finishes before this task may begin.
+    ///
+    /// For the first task this is a delay relative to simulation start (time 0).
+    #[serde(default = "default_start_after")]
     pub start_after: Time,
+
     /// Builders assigned to the task.
     pub builders: Vec<UnitDefRef>,
     /// Units being built, in order. Builders work through the list sequentially.
     pub targets: Vec<UnitDefRef>,
+}
+
+fn default_start_after() -> Time {
+    Time::from_raw(1.0)
+}
+
+/// A pending task together with the absolute simulation time at which it is
+/// allowed to start. The scheduler updates `ready_at` when the preceding task
+/// finishes so that `start_after` is interpreted relative to that finish time.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ScheduledTask {
+    pub task: BuildTask,
+    pub ready_at: Time,
+}
+
+impl ScheduledTask {
+    pub fn new(task: BuildTask, ready_at: Time) -> Self {
+        Self { task, ready_at }
+    }
 }
 
 /// A full build queue to simulate.
@@ -166,7 +193,28 @@ pub(crate) struct SimClock {
 }
 
 #[derive(Resource)]
-pub(crate) struct PendingTasks(pub(crate) Vec<BuildTask>);
+pub(crate) struct PendingTasks(pub(crate) Vec<ScheduledTask>);
+
+impl PendingTasks {
+    /// Schedule a queue of tasks so that each task starts `start_after` seconds
+    /// after the previous task finishes. The first task is delayed relative to
+    /// time 0.
+    pub(crate) fn from_tasks(tasks: Vec<BuildTask>) -> Self {
+        let scheduled = tasks
+            .into_iter()
+            .enumerate()
+            .map(|(index, task)| {
+                let ready_at = if index == 0 {
+                    task.start_after
+                } else {
+                    Time::from_raw(f64::INFINITY)
+                };
+                ScheduledTask::new(task, ready_at)
+            })
+            .collect();
+        Self(scheduled)
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct CompletedTasks(pub(crate) Vec<Entity>);
@@ -188,6 +236,9 @@ pub(crate) struct TotalsSpent {
     pub(crate) mass: f64,
     pub(crate) energy: f64,
 }
+
+#[derive(Resource, Default)]
+pub(crate) struct TailEndTime(pub(crate) Option<Time>);
 
 /// Bevy plugin that registers the economy simulation systems.
 ///
@@ -225,8 +276,9 @@ fn spawn_tasks_system(
     let now = clock.time;
     let mut started = Vec::new();
 
-    pending.0.retain(|task| {
-        if task.start_after <= now {
+    pending.0.retain(|scheduled| {
+        if scheduled.ready_at <= now {
+            let task = &scheduled.task;
             let total_power: f64 = task.builders.iter().map(|b| b.build_power).sum();
             let first_work = task
                 .targets
@@ -383,6 +435,7 @@ fn completion_system(
     sites: Query<&ConstructionSite>,
     clock: Res<SimClock>,
     mut journal: ResMut<EventJournal>,
+    mut pending: ResMut<PendingTasks>,
 ) {
     let now = clock.time.value();
     let mut finished_ids = Vec::new();
@@ -427,6 +480,14 @@ fn completion_system(
         }
     }
 
+    // A finished task unlocks the next pending task after its `start_after`
+    // delay relative to this finish time.
+    if !finished_ids.is_empty() {
+        if let Some(next) = pending.0.first_mut() {
+            next.ready_at = clock.time + next.task.start_after;
+        }
+    }
+
     for id in finished_ids {
         journal.0.push(SimulationEvent::TaskCompleted {
             task_id: id,
@@ -441,6 +502,7 @@ fn termination_system(
     clock: Res<SimClock>,
     mut finished: ResMut<FinishedFlag>,
     mut journal: ResMut<EventJournal>,
+    mut tail_end: ResMut<TailEndTime>,
 ) {
     if finished.0 {
         return;
@@ -449,8 +511,20 @@ fn termination_system(
     let timed_out = clock.max_time.map_or(false, |max| clock.time >= max);
     let queue_empty = pending.0.is_empty() && sites.is_empty();
 
-    if timed_out || queue_empty {
+    if timed_out {
         finished.0 = true;
         journal.0.push(SimulationEvent::Finished);
+        return;
+    }
+
+    if queue_empty {
+        if let Some(end) = tail_end.0 {
+            if clock.time >= end {
+                finished.0 = true;
+                journal.0.push(SimulationEvent::Finished);
+            }
+        } else {
+            tail_end.0 = Some(clock.time + Time::from_raw(POST_QUEUE_TAIL_SECONDS));
+        }
     }
 }

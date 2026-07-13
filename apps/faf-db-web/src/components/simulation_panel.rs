@@ -39,7 +39,10 @@ impl Drop for WsHandle {
 }
 
 #[component]
-pub fn SimulationPanel(plan: Signal<ConstructionPlan>, mut state: Signal<SimulationUiState>) -> Element {
+pub fn SimulationPanel(
+    plan: Signal<ConstructionPlan>,
+    mut state: Signal<SimulationUiState>,
+) -> Element {
     let queue = use_memo(move || plan.read().to_build_queue());
     let snapshots = use_signal(Vec::<EcoSnapshot>::new);
     let mut ws = use_signal(|| None::<WsHandle>);

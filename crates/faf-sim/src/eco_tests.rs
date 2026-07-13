@@ -70,8 +70,74 @@ mod tests {
 
         assert!(started);
         assert!(completed);
-        assert_eq!(ticks, 10);
-        assert!((sim.current_time().value() - 10.0).abs() < 1e-9);
+        // 10 ticks for the build itself plus the 30-second post-queue tail.
+        assert_eq!(ticks, 40);
+        assert!((sim.current_time().value() - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn second_task_starts_after_first_finishes() {
+        let queue = make_queue(vec![
+            BuildTask {
+                id: 1,
+                start_after: Time::from_raw(0.0),
+                builders: vec![UnitDefRef {
+                    build_power: 10.0,
+                    ..Default::default()
+                }],
+                targets: vec![UnitDefRef {
+                    build_power: 0.0,
+                    mass_cost: 100.0,
+                    energy_cost: 100.0,
+                    build_time: 100.0,
+                    ..Default::default()
+                }],
+            },
+            BuildTask {
+                id: 2,
+                start_after: Time::from_raw(0.0),
+                builders: vec![UnitDefRef {
+                    build_power: 10.0,
+                    ..Default::default()
+                }],
+                targets: vec![UnitDefRef {
+                    build_power: 0.0,
+                    mass_cost: 50.0,
+                    energy_cost: 50.0,
+                    build_time: 50.0,
+                    ..Default::default()
+                }],
+            },
+        ]);
+
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
+
+        let mut task1_complete: Option<f64> = None;
+        let mut task2_start: Option<f64> = None;
+        while !sim.is_finished() {
+            for event in sim.step() {
+                match event {
+                    SimulationEvent::TaskCompleted { task_id, time } if *task_id == 1 => {
+                        task1_complete = Some(*time);
+                    }
+                    SimulationEvent::TaskStarted { task_id, time } if *task_id == 2 => {
+                        task2_start = Some(*time);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(task1_complete.is_some(), "task 1 should complete");
+        assert!(task2_start.is_some(), "task 2 should start");
+        assert!(
+            task2_start.unwrap() >= task1_complete.unwrap(),
+            "task 2 must start at or after task 1 finishes (got start={task2_start:?}, complete={task1_complete:?})"
+        );
     }
 
     #[test]

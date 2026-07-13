@@ -12,7 +12,7 @@ use bevy_app::prelude::*;
 pub use crate::eco::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitDefRef};
 use crate::eco::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, Producer,
-    SimClock, StorageContributor, TotalsSpent,
+    SimClock, StorageContributor, TailEndTime, TotalsSpent,
 };
 use crate::quantities::{StepTime, Time};
 
@@ -36,7 +36,7 @@ impl Simulation {
                 dt: dt.as_time(),
                 max_time,
             })
-            .insert_resource(PendingTasks(queue.tasks))
+            .insert_resource(PendingTasks::from_tasks(queue.tasks))
             .insert_resource(CompletedTasks(Vec::new()))
             .insert_resource(EffectiveFactor(1.0))
             .insert_resource(EventJournal::default())
@@ -44,7 +44,8 @@ impl Simulation {
             .insert_resource(TotalsSpent {
                 mass: 0.0,
                 energy: 0.0,
-            });
+            })
+            .insert_resource(TailEndTime::default());
 
         // Seed the world with the initial economy so recompute_base_economy_system
         // preserves the caller's starting income and storage capacity.

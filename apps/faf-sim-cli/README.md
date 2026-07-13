@@ -77,7 +77,7 @@ A plan is a JSON object with `initial_eco` and `tasks`:
 - `initial_eco` — starting mass/energy income and storage.
 - `tasks` — list of build tasks.
   - `id` — caller-defined identifier, echoed in events.
-  - `start_after` — simulation time before the task may begin.
+  - `start_after` — delay after the previous task finishes before this task may begin. For the first task this is a delay relative to simulation start (time 0).
   - `builders` — units providing build power. Only `build_power` is relevant; other fields may be omitted and default to `0.0`.
   - `target` — unit being built. Only `mass_cost`, `energy_cost`, and `build_time` are relevant; `build_power` may be omitted and defaults to `0.0`.
 

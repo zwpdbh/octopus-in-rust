@@ -62,7 +62,7 @@ pub fn SimulateBuild() -> Element {
                 id: next_id,
                 builders: vec![builder; builder_count as usize],
                 targets: vec![target; target_count as usize],
-                start_after: Time::from_raw(0.0),
+                start_after: Time::from_raw(1.0),
             };
             if item.is_valid() {
                 plan.write().items.push(item);

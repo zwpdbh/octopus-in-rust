@@ -87,7 +87,7 @@ pub fn ConstructionItemCard(
                 }
             }
             div { class: "mt-3 pt-2 border-t border-neutral-700 flex items-center justify-center gap-2",
-                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Start After" }
+                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Delay after prev" }
                 input {
                     r#type: "number",
                     value: "{item.start_after.value()}",

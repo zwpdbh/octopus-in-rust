@@ -1,6 +1,6 @@
 use crate::types::ConstructionPlan;
 
-const PLAN_STORAGE_KEY: &str = "faf-db-construction-plan-v9";
+const PLAN_STORAGE_KEY: &str = "faf-db-construction-plan-v10";
 
 pub fn save_plan_to_storage(plan: &ConstructionPlan) {
     if let Ok(json) = serde_json::to_string(plan) {
