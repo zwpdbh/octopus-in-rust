@@ -6,7 +6,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
-use crate::components::{ChartMetric, ChartTab, UplotChart};
+use crate::components::{ChartMetric, ChartSeries, ChartTab, UplotChart};
 use crate::types::{ConstructionPlan, SimulationUiState};
 
 const SIMULATION_DT_SECONDS: u32 = 1;
@@ -156,23 +156,65 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                         tabs: vec![
                             ChartTab {
                                 label: "Mass income".to_string(),
-                                color: RGBColor(59, 130, 246),
-                                y_extractor: ChartMetric::new(|s| s.mass_income),
+                                series: vec![ChartSeries::new(
+                                    "Mass income",
+                                    RGBColor(59, 130, 246),
+                                    ChartMetric::new(|s| s.net_mass_income),
+                                )],
                             },
                             ChartTab {
                                 label: "Energy income".to_string(),
-                                color: RGBColor(234, 179, 8),
-                                y_extractor: ChartMetric::new(|s| s.energy_income),
+                                series: vec![ChartSeries::new(
+                                    "Energy income",
+                                    RGBColor(234, 179, 8),
+                                    ChartMetric::new(|s| s.net_energy_income),
+                                )],
                             },
                             ChartTab {
                                 label: "Total mass spent".to_string(),
-                                color: RGBColor(34, 197, 94),
-                                y_extractor: ChartMetric::new(|s| s.total_mass_spent),
+                                series: vec![ChartSeries::new(
+                                    "Total mass spent",
+                                    RGBColor(34, 197, 94),
+                                    ChartMetric::new(|s| s.total_mass_spent),
+                                )],
                             },
                             ChartTab {
                                 label: "Total energy spent".to_string(),
-                                color: RGBColor(249, 115, 22),
-                                y_extractor: ChartMetric::new(|s| s.total_energy_spent),
+                                series: vec![ChartSeries::new(
+                                    "Total energy spent",
+                                    RGBColor(249, 115, 22),
+                                    ChartMetric::new(|s| s.total_energy_spent),
+                                )],
+                            },
+                            ChartTab {
+                                label: "Mass storage".to_string(),
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Current",
+                                        RGBColor(99, 102, 241),
+                                        ChartMetric::new(|s| s.mass_storage),
+                                    ),
+                                    ChartSeries::new(
+                                        "Cap",
+                                        RGBColor(168, 85, 247),
+                                        ChartMetric::new(|s| s.mass_storage_cap),
+                                    ),
+                                ],
+                            },
+                            ChartTab {
+                                label: "Energy storage".to_string(),
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Current",
+                                        RGBColor(14, 165, 233),
+                                        ChartMetric::new(|s| s.energy_storage),
+                                    ),
+                                    ChartSeries::new(
+                                        "Cap",
+                                        RGBColor(236, 72, 153),
+                                        ChartMetric::new(|s| s.energy_storage_cap),
+                                    ),
+                                ],
                             },
                         ],
                     }

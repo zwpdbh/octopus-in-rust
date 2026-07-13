@@ -10,6 +10,7 @@ mod tests {
             energy_income: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
             energy_storage: Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0)),
+            ..Default::default()
         }
     }
 

@@ -46,6 +46,8 @@ impl EcoInitialSettings {
         faf_sim::EconomyState {
             mass_income: self.mass_income,
             energy_income: self.energy_income,
+            net_mass_income: self.mass_income,
+            net_energy_income: self.energy_income,
             mass_storage: self.mass_storage,
             energy_storage: self.energy_storage,
         }

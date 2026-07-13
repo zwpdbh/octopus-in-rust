@@ -49,15 +49,34 @@ impl<T> PartialEq for ChartMetric<T> {
     }
 }
 
-/// Configuration for one tab/metric in the chart panel.
+/// Configuration for one data series inside a chart tab.
 #[derive(Clone, PartialEq)]
-pub struct ChartTab<T> {
-    /// Label shown on the tab and above the chart.
+pub struct ChartSeries<T> {
+    /// Label shown in the tooltip and legend.
     pub label: String,
-    /// Color used for the line and the indicator dot.
+    /// Color used for the line.
     pub color: RGBColor,
     /// Extracts the y value for a data point.
     pub y_extractor: ChartMetric<T>,
+}
+
+impl<T> ChartSeries<T> {
+    pub fn new(label: impl Into<String>, color: RGBColor, y_extractor: ChartMetric<T>) -> Self {
+        Self {
+            label: label.into(),
+            color,
+            y_extractor,
+        }
+    }
+}
+
+/// Configuration for one tab/metric in the chart panel.
+#[derive(Clone, PartialEq)]
+pub struct ChartTab<T> {
+    /// Label shown on the tab.
+    pub label: String,
+    /// Series plotted together on this tab.
+    pub series: Vec<ChartSeries<T>>,
 }
 
 /// High-performance time-series chart backed by uPlot.
@@ -85,7 +104,8 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     let chart_state_for_cleanup = chart_state.clone();
 
     // Tooltip content and pixel position within the chart.
-    let tooltip = use_signal(|| None::<(String, String)>);
+    // The tuple is (time_label, vec![(series_label, value_label)]).
+    let tooltip = use_signal(|| None::<(String, Vec<(String, String)>)>);
     let tooltip_pos = use_signal(|| (0.0_f64, 0.0_f64));
 
     use_drop(move || {
@@ -118,9 +138,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 &chart_id_for_effect,
                 data,
                 x_extractor,
-                tab.y_extractor,
-                &tab.label,
-                &rgb_to_hex(tab.color),
+                &tab.series,
                 tooltip,
                 tooltip_pos,
             ) {
@@ -133,7 +151,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 }
             }
         } else if let Some((_, chart, _)) = state.as_ref() {
-            let _ = update_chart(chart, &points, x_extractor, tab.y_extractor);
+            let _ = update_chart(chart, &points, x_extractor, &tab.series);
         }
     });
 
@@ -149,6 +167,15 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         .get(*selected_index.read())
         .cloned()
         .unwrap_or_else(|| tabs[0].clone());
+    let active_series = active_tab
+        .series
+        .first()
+        .cloned()
+        .unwrap_or_else(|| ChartSeries {
+            label: active_tab.label.clone(),
+            color: RGBColor(255, 255, 255),
+            y_extractor: ChartMetric::new(|_| 0.0),
+        });
 
     rsx! {
         document::Stylesheet { href: UPLOT_CSS }
@@ -160,6 +187,21 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 height: 100% !important;
             }}
             .uplot-chart-container .uplot .title {{
+                color: #ffffff;
+            }}
+            .uplot-chart-container .uplot .uplot-legend {{
+                position: absolute;
+                top: 0;
+                right: 0;
+                background-color: rgba(23, 23, 23, 0.9);
+                border: 1px solid #404040;
+                border-radius: 0.25rem;
+                padding: 0.25rem 0.5rem;
+                font-size: 0.65rem;
+                color: #ffffff;
+            }}
+            .uplot-chart-container .uplot .uplot-legend th,
+            .uplot-chart-container .uplot .uplot-legend td {{
                 color: #ffffff;
             }}
             "#
@@ -178,7 +220,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 div { class: "flex items-center gap-2 mb-1 shrink-0",
                     div {
                         class: "w-3 h-3 rounded-full",
-                        style: "background-color: {rgb_to_hex(active_tab.color)}",
+                        style: "background-color: {rgb_to_hex(active_series.color)}",
                     }
                     h2 { class: "text-sm font-semibold text-white", "{active_tab.label}" }
                 }
@@ -187,12 +229,14 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                         id: "{chart_id}",
                         class: "absolute inset-0 uplot-chart-container",
                     }
-                    if let Some((time, value)) = tooltip.read().as_ref() {
+                    if let Some((time, values)) = tooltip.read().as_ref() {
                         div {
                             class: "absolute z-10 px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-xs text-white shadow pointer-events-none",
                             style: "left: {tooltip_pos.read().0}px; top: {tooltip_pos.read().1 - 40.0}px;",
                             div { "{time}" }
-                            div { "{value}" }
+                            for (label , value) in values.iter() {
+                                div { "{label}: {value}" }
+                            }
                         }
                     }
                 }
@@ -222,10 +266,8 @@ fn create_chart<T: Clone + 'static>(
     element_id: &str,
     data: Signal<Vec<T>>,
     x_extractor: ChartMetric<T>,
-    y_extractor: ChartMetric<T>,
-    label: &str,
-    color: &str,
-    tooltip: Signal<Option<(String, String)>>,
+    series: &[ChartSeries<T>],
+    tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
     tooltip_pos: Signal<(f64, f64)>,
 ) -> Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)> {
     let window = window()?;
@@ -233,13 +275,12 @@ fn create_chart<T: Clone + 'static>(
     let container = document.get_element_by_id(element_id)?;
 
     let points = data.read();
-    let series_data = build_series_data(&points, x_extractor, y_extractor);
+    let series_data = build_series_data(&points, x_extractor, series);
     let width = container.client_width().max(1) as f64;
     let height = container.client_height().max(1) as f64;
 
-    let set_cursor =
-        build_set_cursor_closure(data, x_extractor, y_extractor, label, tooltip, tooltip_pos);
-    let opts = build_opts(label, color, width, height, &set_cursor);
+    let set_cursor = build_set_cursor_closure(data, x_extractor, series, tooltip, tooltip_pos);
+    let opts = build_opts(series, width, height, &set_cursor);
 
     let uplot = Reflect::get(&window, &"uPlot".into()).ok()?;
     let uplot_fn = Function::from(uplot);
@@ -253,13 +294,13 @@ fn create_chart<T: Clone + 'static>(
     Some((chart, hooks))
 }
 
-fn update_chart<T>(
+fn update_chart<T: Clone>(
     chart: &JsValue,
     data: &[T],
     x_extractor: ChartMetric<T>,
-    y_extractor: ChartMetric<T>,
+    series: &[ChartSeries<T>],
 ) -> Result<(), JsValue> {
-    let series_data = build_series_data(data, x_extractor, y_extractor);
+    let series_data = build_series_data(data, x_extractor, series);
     let set_data = Reflect::get(chart, &"setData".into())?;
     let set_data_fn = Function::from(set_data);
     Reflect::apply(&set_data_fn, chart, &Array::of1(&series_data))?;
@@ -273,26 +314,29 @@ fn destroy_chart(chart: &JsValue) -> Result<(), JsValue> {
     Ok(())
 }
 
-fn build_series_data<T>(
+fn build_series_data<T: Clone>(
     data: &[T],
     x_extractor: ChartMetric<T>,
-    y_extractor: ChartMetric<T>,
+    series: &[ChartSeries<T>],
 ) -> Array {
     let xs = Array::new();
-    let ys = Array::new();
+    let ys_list: Vec<Array> = series.iter().map(|_| Array::new()).collect();
     for point in data {
         xs.push(&JsValue::from_f64(x_extractor.extract(point)));
-        ys.push(&JsValue::from_f64(y_extractor.extract(point)));
+        for (i, s) in series.iter().enumerate() {
+            ys_list[i].push(&JsValue::from_f64(s.y_extractor.extract(point)));
+        }
     }
     let series_data = Array::new();
     series_data.push(&xs);
-    series_data.push(&ys);
+    for ys in ys_list {
+        series_data.push(&ys);
+    }
     series_data
 }
 
-fn build_opts(
-    label: &str,
-    color: &str,
+fn build_opts<T: Clone>(
+    series: &[ChartSeries<T>],
     width: f64,
     height: f64,
     set_cursor: &Closure<dyn FnMut(JsValue)>,
@@ -301,14 +345,16 @@ fn build_opts(
     Reflect::set(&opts, &"width".into(), &JsValue::from_f64(width)).unwrap();
     Reflect::set(&opts, &"height".into(), &JsValue::from_f64(height)).unwrap();
 
-    let series = Array::new();
-    series.push(&Object::new()); // x-axis series placeholder
-    let y_series = Object::new();
-    Reflect::set(&y_series, &"label".into(), &label.into()).unwrap();
-    Reflect::set(&y_series, &"stroke".into(), &color.into()).unwrap();
-    Reflect::set(&y_series, &"width".into(), &JsValue::from_f64(2.0)).unwrap();
-    series.push(&y_series);
-    Reflect::set(&opts, &"series".into(), &series).unwrap();
+    let series_arr = Array::new();
+    series_arr.push(&Object::new()); // x-axis series placeholder
+    for s in series {
+        let y_series = Object::new();
+        Reflect::set(&y_series, &"label".into(), &s.label.as_str().into()).unwrap();
+        Reflect::set(&y_series, &"stroke".into(), &rgb_to_hex(s.color).into()).unwrap();
+        Reflect::set(&y_series, &"width".into(), &JsValue::from_f64(2.0)).unwrap();
+        series_arr.push(&y_series);
+    }
+    Reflect::set(&opts, &"series".into(), &series_arr).unwrap();
 
     let axes = Array::new();
     axes.push(&x_axis_opts());
@@ -320,6 +366,10 @@ fn build_opts(
     set_cursor_arr.push(set_cursor.as_ref());
     Reflect::set(&hooks, &"setCursor".into(), &set_cursor_arr).unwrap();
     Reflect::set(&opts, &"hooks".into(), &hooks).unwrap();
+
+    let legend = Object::new();
+    Reflect::set(&legend, &"show".into(), &JsValue::from_bool(true)).unwrap();
+    Reflect::set(&opts, &"legend".into(), &legend).unwrap();
 
     let scales = Object::new();
     let x_scale = Object::new();
@@ -371,12 +421,11 @@ fn axis_opts() -> Object {
 fn build_set_cursor_closure<T: Clone + 'static>(
     data: Signal<Vec<T>>,
     x_extractor: ChartMetric<T>,
-    y_extractor: ChartMetric<T>,
-    label: &str,
-    mut tooltip: Signal<Option<(String, String)>>,
+    series: &[ChartSeries<T>],
+    mut tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
     mut tooltip_pos: Signal<(f64, f64)>,
 ) -> Closure<dyn FnMut(JsValue)> {
-    let label = label.to_string();
+    let series = series.to_vec();
     Closure::wrap(Box::new(move |u: JsValue| {
         let Ok(cursor) = Reflect::get(&u, &"cursor".into()) else {
             tooltip.set(None);
@@ -403,8 +452,14 @@ fn build_set_cursor_closure<T: Clone + 'static>(
         };
 
         let x = x_extractor.extract(point);
-        let y = y_extractor.extract(point);
-        tooltip.set(Some((format_time(x), format!("{}: {:.2}", label, y))));
+        let values = series
+            .iter()
+            .map(|s| {
+                let y = s.y_extractor.extract(point);
+                (s.label.clone(), format!("{:.2}", y))
+            })
+            .collect();
+        tooltip.set(Some((format_time(x), values)));
 
         if let (Some(left), Some(top)) = (
             Reflect::get(&cursor, &"left".into())
