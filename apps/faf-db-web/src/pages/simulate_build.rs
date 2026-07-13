@@ -135,7 +135,7 @@ pub fn SimulateBuild() -> Element {
                         }
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
                             SimulationPanel {
-                                plan: plan.read().clone(),
+                                plan,
                                 state: simulation_state,
                             }
                         }
