@@ -167,15 +167,6 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         .get(*selected_index.read())
         .cloned()
         .unwrap_or_else(|| tabs[0].clone());
-    let active_series = active_tab
-        .series
-        .first()
-        .cloned()
-        .unwrap_or_else(|| ChartSeries {
-            label: active_tab.label.clone(),
-            color: RGBColor(255, 255, 255),
-            y_extractor: ChartMetric::new(|_| 0.0),
-        });
 
     rsx! {
         document::Stylesheet { href: UPLOT_CSS }
@@ -189,25 +180,11 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
             .uplot-chart-container .uplot .title {{
                 color: #ffffff;
             }}
-            .uplot-chart-container .uplot .uplot-legend {{
-                position: absolute;
-                top: 0;
-                right: 0;
-                background-color: rgba(23, 23, 23, 0.9);
-                border: 1px solid #404040;
-                border-radius: 0.25rem;
-                padding: 0.25rem 0.5rem;
-                font-size: 0.65rem;
-                color: #ffffff;
-            }}
-            .uplot-chart-container .uplot .uplot-legend th,
-            .uplot-chart-container .uplot .uplot-legend td {{
-                color: #ffffff;
-            }}
+
             "#
         }
         div { class: "flex-1 flex flex-col min-h-0",
-            div { class: "flex gap-1 mb-2 shrink-0 flex-wrap",
+            div { class: "flex gap-1 mb-2 shrink-0 flex-wrap justify-center",
                 for (index , tab) in tabs.iter().enumerate() {
                     TabButton {
                         label: tab.label.clone(),
@@ -217,12 +194,13 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 }
             }
             div { class: "flex-1 rounded-lg border border-neutral-800 bg-[#171717] p-2 min-h-0 overflow-hidden flex flex-col",
-                div { class: "flex items-center gap-2 mb-1 shrink-0",
-                    div {
-                        class: "w-3 h-3 rounded-full",
-                        style: "background-color: {rgb_to_hex(active_series.color)}",
+                div { class: "flex items-center justify-center gap-4 mb-1 shrink-0",
+                    for s in active_tab.series.iter() {
+                        LegendItem {
+                            color: rgb_to_hex(s.color),
+                            label: s.label.clone(),
+                        }
                     }
-                    h2 { class: "text-sm font-semibold text-white", "{active_tab.label}" }
                 }
                 div { class: "flex-1 min-h-0 relative",
                     div {
@@ -258,6 +236,20 @@ fn TabButton(label: String, is_active: bool, onclick: EventHandler<()>) -> Eleme
             class: "{base} {active_class}",
             onclick: move |_| onclick.call(()),
             "{label}"
+        }
+    }
+}
+
+#[component]
+fn LegendItem(color: String, label: String) -> Element {
+    rsx! {
+        div { class: "flex items-center gap-1.5",
+            span {
+                class: "text-lg leading-none select-none",
+                style: "color: {color}",
+                "▬"
+            }
+            span { class: "text-xs text-neutral-300", "{label}" }
         }
     }
 }
@@ -366,10 +358,6 @@ fn build_opts<T: Clone>(
     set_cursor_arr.push(set_cursor.as_ref());
     Reflect::set(&hooks, &"setCursor".into(), &set_cursor_arr).unwrap();
     Reflect::set(&opts, &"hooks".into(), &hooks).unwrap();
-
-    let legend = Object::new();
-    Reflect::set(&legend, &"show".into(), &JsValue::from_bool(true)).unwrap();
-    Reflect::set(&opts, &"legend".into(), &legend).unwrap();
 
     let scales = Object::new();
     let x_scale = Object::new();
