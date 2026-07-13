@@ -27,4 +27,6 @@ pub use unit_selector::UnitSelector;
 pub use unit_selector_modal::UnitSelectorModal;
 
 // Re-export generic UI primitives from the business-agnostic UI crate.
-pub use faf_dioxus_ui::{ChartMetric, ChartSeries, ChartTab, CountSlider, SliderField, Stat, UplotChart};
+pub use faf_dioxus_ui::{
+    ChartMetric, ChartSeries, ChartTab, CountSlider, SliderField, Stat, UplotChart,
+};

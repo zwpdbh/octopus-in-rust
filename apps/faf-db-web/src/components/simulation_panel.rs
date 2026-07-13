@@ -120,8 +120,7 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                     label: "Reset",
                     enabled: reset_enabled,
                     onclick: move |_| {
-                        previous_queue.set(queue.read().clone());
-                        start_run(&queue.read().clone(), snapshots, ws, state, simulation_id);
+                        reset_run(snapshots, ws, state, simulation_id);
                     },
                 }
             }
@@ -263,6 +262,18 @@ fn ControlButton(label: String, enabled: bool, onclick: EventHandler<()>) -> Ele
             "{label}"
         }
     }
+}
+
+fn reset_run(
+    mut snapshots: Signal<Vec<EcoSnapshot>>,
+    mut ws: Signal<Option<WsHandle>>,
+    mut state: Signal<SimulationUiState>,
+    mut simulation_id: Signal<Option<faf_sim::protocol::SimulationId>>,
+) {
+    ws.set(None);
+    snapshots.set(vec![]);
+    simulation_id.set(None);
+    state.set(SimulationUiState::NotStartYet);
 }
 
 fn start_run(

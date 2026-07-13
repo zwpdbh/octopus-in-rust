@@ -13,11 +13,7 @@ use dioxus::prelude::*;
 use js_sys::{Array, Function, Object, Reflect};
 use plotters::prelude::RGBColor;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::window;
-
-const UPLOT_CSS: &str = "https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.min.css";
-const UPLOT_JS: &str = "https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.iife.min.js";
 
 static CHART_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -91,7 +87,6 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     tabs: Vec<ChartTab<T>>,
 ) -> Element {
     let mut selected_index = use_signal(|| 0usize);
-    let load_attempts = use_signal(|| 0u32);
     let chart_id = use_hook(|| {
         let id = CHART_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("uplot-chart-{id}")
@@ -117,7 +112,6 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     let tabs_for_effect = tabs.clone();
     let chart_id_for_effect = chart_id.clone();
     use_effect(move || {
-        let _ = *load_attempts.read();
         let points = data.read();
         let tab_index = *selected_index.read();
         let Some(tab) = tabs_for_effect.get(tab_index) else {
@@ -145,10 +139,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 Some((chart, hooks)) => {
                     *state = Some((tab_index, chart, hooks));
                 }
-                None => {
-                    // uPlot may not be loaded yet. Retry shortly.
-                    schedule_retry(load_attempts);
-                }
+                None => {}
             }
         } else if let Some((_, chart, _)) = state.as_ref() {
             let _ = update_chart(chart, &points, x_extractor, &tab.series);
@@ -169,8 +160,6 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         .unwrap_or_else(|| tabs[0].clone());
 
     rsx! {
-        document::Stylesheet { href: UPLOT_CSS }
-        document::Script { src: UPLOT_JS }
         document::Style {
             r#"
             .uplot-chart-container .uplot {{
@@ -472,29 +461,4 @@ fn format_time(seconds: f64) -> String {
 
 fn rgb_to_hex(color: plotters::prelude::RGBColor) -> String {
     format!("#{:02x}{:02x}{:02x}", color.0, color.1, color.2)
-}
-
-fn schedule_retry(mut load_attempts: Signal<u32>) {
-    let Some(window) = window() else {
-        return;
-    };
-    let closure = Closure::wrap(Box::new(move || {
-        // The component may have unmounted before the timeout fires. Read
-        // gracefully instead of panicking on a dropped signal.
-        let next = {
-            if let Ok(current) = load_attempts.try_read() {
-                Some((*current).wrapping_add(1))
-            } else {
-                None
-            }
-        };
-        if let Some(next) = next {
-            load_attempts.set(next);
-        }
-    }) as Box<dyn FnMut()>);
-    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-        closure.as_ref().unchecked_ref(),
-        50,
-    );
-    closure.forget();
 }

@@ -110,8 +110,14 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             build_cost_mass: unit.economy.as_ref().and_then(|e| e.build_cost_mass),
             build_cost_energy: unit.economy.as_ref().and_then(|e| e.build_cost_energy),
             build_time: unit.economy.as_ref().and_then(|e| e.build_time),
-            mass_income: unit.economy.as_ref().and_then(|e| e.production_per_second_mass),
-            energy_income: unit.economy.as_ref().and_then(|e| e.production_per_second_energy),
+            mass_income: unit
+                .economy
+                .as_ref()
+                .and_then(|e| e.production_per_second_mass),
+            energy_income: unit
+                .economy
+                .as_ref()
+                .and_then(|e| e.production_per_second_energy),
             maintenance_energy: unit
                 .economy
                 .as_ref()
