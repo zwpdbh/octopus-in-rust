@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dioxus::prelude::*;
 use js_sys::{Array, Function, Object, Reflect};
+use plotters::prelude::RGBColor;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::window;
@@ -18,10 +19,46 @@ use web_sys::window;
 const UPLOT_CSS: &str = "https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.min.css";
 const UPLOT_JS: &str = "https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.iife.min.js";
 
-use crate::components::line_chart_panel::ChartTab;
-use crate::components::ChartMetric;
-
 static CHART_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Wrapper around a function pointer so it can be used as a Dioxus prop
+/// without triggering function-pointer equality warnings.
+pub struct ChartMetric<T>(fn(&T) -> f64);
+
+impl<T> ChartMetric<T> {
+    pub fn new(extractor: fn(&T) -> f64) -> Self {
+        Self(extractor)
+    }
+
+    pub(crate) fn extract(&self, value: &T) -> f64 {
+        (self.0)(value)
+    }
+}
+
+impl<T> Clone for ChartMetric<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for ChartMetric<T> {}
+
+impl<T> PartialEq for ChartMetric<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+/// Configuration for one tab/metric in the chart panel.
+#[derive(Clone, PartialEq)]
+pub struct ChartTab<T> {
+    /// Label shown on the tab and above the chart.
+    pub label: String,
+    /// Color used for the line and the indicator dot.
+    pub color: RGBColor,
+    /// Extracts the y value for a data point.
+    pub y_extractor: ChartMetric<T>,
+}
 
 /// High-performance time-series chart backed by uPlot.
 ///

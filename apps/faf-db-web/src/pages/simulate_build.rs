@@ -2,11 +2,12 @@ use dioxus::prelude::*;
 use faf_sim::Time;
 
 use crate::components::{
-    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationPanel, UnitSelectorModal,
+    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationCommand, SimulationPanel,
+    UnitSelectorModal,
 };
 use crate::route::Route;
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
-use crate::types::{AssignmentTarget, ConstructionItem, UnitSummary};
+use crate::types::{AssignmentTarget, ConstructionItem, SimulationUiState, UnitSummary};
 
 #[component]
 pub fn SimulateBuild() -> Element {
@@ -16,7 +17,8 @@ pub fn SimulateBuild() -> Element {
     let mut draft_builder_count = use_signal(|| 1_u32);
     let mut draft_target = use_signal(|| None::<UnitSummary>);
     let mut draft_target_count = use_signal(|| 1_u32);
-    let mut simulation_requested = use_signal(|| false);
+    let simulation_state = use_signal(|| SimulationUiState::Idle);
+    let simulation_command = use_signal(|| None::<SimulationCommand>);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
 
     use_effect(move || {
@@ -109,28 +111,19 @@ pub fn SimulateBuild() -> Element {
                             }
                         }
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
-                            div { class: "flex items-center justify-center mb-3 shrink-0",
-                                button {
-                                    class: "px-4 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors",
-                                    onclick: move |_| {
-                                        let current = *simulation_requested.read();
-                                        simulation_requested.set(!current);
-                                    },
-                                    if *simulation_requested.read() {
-                                        "Hide Simulation"
-                                    } else {
-                                        "Run Simulation"
-                                    }
-                                }
+                            SimulationControlBar {
+                                state: simulation_state,
+                                command: simulation_command,
                             }
-                            if *simulation_requested.read() {
+                            if *simulation_state.read() != SimulationUiState::Idle {
                                 SimulationPanel {
                                     plan: plan.read().clone(),
-                                    on_close: move |_| simulation_requested.set(false),
+                                    state: simulation_state,
+                                    command: simulation_command,
                                 }
                             } else {
                                 p { class: "text-sm text-neutral-500 text-center mt-4",
-                                    "Click \"Run Simulation\" to see build timings."
+                                    "Click \"Start\" to run the simulation."
                                 }
                             }
                         }
@@ -147,5 +140,88 @@ pub fn SimulateBuild() -> Element {
         },
         Some(None) => rsx! { "Failed to load units" },
         None => rsx! { "Loading..." },
+    }
+}
+
+#[component]
+fn SimulationControlBar(
+    mut state: Signal<SimulationUiState>,
+    mut command: Signal<Option<SimulationCommand>>,
+) -> Element {
+    let current = *state.read();
+    let start_enabled = current == SimulationUiState::Idle;
+    let pause_enabled =
+        current == SimulationUiState::Running || current == SimulationUiState::Paused;
+    let stop_enabled =
+        current == SimulationUiState::Running || current == SimulationUiState::Paused;
+    let reset_enabled = current == SimulationUiState::Running
+        || current == SimulationUiState::Paused
+        || current == SimulationUiState::Finished;
+    let pause_label = if current == SimulationUiState::Paused {
+        "Resume"
+    } else {
+        "Pause"
+    };
+
+    rsx! {
+        div { class: "flex items-center justify-center gap-2 mb-3 shrink-0",
+            ControlButton {
+                label: "Start",
+                enabled: start_enabled,
+                onclick: move |_| {
+                    command.set(Some(SimulationCommand::Start));
+                    state.set(SimulationUiState::Running);
+                },
+            }
+            ControlButton {
+                label: pause_label.to_string(),
+                enabled: pause_enabled,
+                onclick: move |_| {
+                    let cmd = if current == SimulationUiState::Paused {
+                        SimulationCommand::Resume
+                    } else {
+                        SimulationCommand::Pause
+                    };
+                    command.set(Some(cmd));
+                },
+            }
+            ControlButton {
+                label: "Stop",
+                enabled: stop_enabled,
+                onclick: move |_| {
+                    command.set(Some(SimulationCommand::Stop));
+                },
+            }
+            ControlButton {
+                label: "Reset",
+                enabled: reset_enabled,
+                onclick: move |_| {
+                    command.set(Some(SimulationCommand::Reset));
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn ControlButton(label: String, enabled: bool, onclick: EventHandler<()>) -> Element {
+    let base = "px-4 py-1.5 text-sm rounded transition-colors";
+    let active_class = if enabled {
+        "bg-blue-700 hover:bg-blue-600 text-white"
+    } else {
+        "bg-neutral-800 text-neutral-500 cursor-not-allowed"
+    };
+
+    rsx! {
+        button {
+            class: "{base} {active_class}",
+            disabled: !enabled,
+            onclick: move |_| {
+                if enabled {
+                    onclick.call(());
+                }
+            },
+            "{label}"
+        }
     }
 }

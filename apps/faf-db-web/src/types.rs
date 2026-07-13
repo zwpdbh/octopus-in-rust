@@ -187,3 +187,17 @@ impl AssignmentTarget {
         }
     }
 }
+
+/// Runtime state of the simulation UI.
+///
+/// This is intentionally richer than the wire protocol's `SimRuntimeStatus`
+/// because the frontend needs to distinguish "the user never started" (Idle),
+/// "the build queue finished naturally" (Finished), and "the user stopped it"
+/// (Idle) for control and visibility purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimulationUiState {
+    Idle,
+    Running,
+    Paused,
+    Finished,
+}

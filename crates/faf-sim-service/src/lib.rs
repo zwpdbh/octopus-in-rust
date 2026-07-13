@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use faf_sim::protocol::{ControlEvent, SimulationMode, SimulationState};
+use faf_sim::protocol::{ControlEvent, SimRuntimeStatus, SimulationMode};
 use faf_sim::quantities::{StepTime, Time};
 use faf_sim::sim::{BuildQueue, Simulation, SimulationEvent};
 use thiserror::Error;
@@ -247,12 +247,12 @@ enum RunState {
     Stopped,
 }
 
-impl From<RunState> for SimulationState {
+impl From<RunState> for SimRuntimeStatus {
     fn from(state: RunState) -> Self {
         match state {
-            RunState::Running => SimulationState::Running,
-            RunState::Paused => SimulationState::Paused,
-            RunState::Stopped => SimulationState::Stopped,
+            RunState::Running => SimRuntimeStatus::Running,
+            RunState::Paused => SimRuntimeStatus::Paused,
+            RunState::Stopped => SimRuntimeStatus::Stopped,
         }
     }
 }
@@ -504,8 +504,8 @@ mod tests {
         let mut found = false;
         while let Ok(event) = rx.recv() {
             if let SimServiceEvent::Control(ControlEvent::StateChanged { from, to }) = event {
-                assert_eq!(from, SimulationState::Running);
-                assert_eq!(to, SimulationState::Paused);
+                assert_eq!(from, SimRuntimeStatus::Running);
+                assert_eq!(to, SimRuntimeStatus::Paused);
                 found = true;
                 break;
             }
