@@ -158,7 +158,7 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                                 label: "Mass income".to_string(),
                                 series: vec![
                                     ChartSeries::new(
-                                        "Stable",
+                                        "Income",
                                         RGBColor(156, 163, 175),
                                         ChartMetric::new(|s| s.mass_income),
                                     ),
@@ -173,7 +173,7 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                                 label: "Energy income".to_string(),
                                 series: vec![
                                     ChartSeries::new(
-                                        "Stable",
+                                        "Income",
                                         RGBColor(156, 163, 175),
                                         ChartMetric::new(|s| s.energy_income),
                                     ),
@@ -186,19 +186,23 @@ pub fn SimulationPanel(plan: ConstructionPlan, mut state: Signal<SimulationUiSta
                             },
                             ChartTab {
                                 label: "Total mass spent".to_string(),
-                                series: vec![ChartSeries::new(
-                                    "Total mass spent",
-                                    RGBColor(34, 197, 94),
-                                    ChartMetric::new(|s| s.total_mass_spent),
-                                )],
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Total mass spent",
+                                        RGBColor(34, 197, 94),
+                                        ChartMetric::new(|s| s.total_mass_spent),
+                                    ),
+                                ],
                             },
                             ChartTab {
                                 label: "Total energy spent".to_string(),
-                                series: vec![ChartSeries::new(
-                                    "Total energy spent",
-                                    RGBColor(249, 115, 22),
-                                    ChartMetric::new(|s| s.total_energy_spent),
-                                )],
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Total energy spent",
+                                        RGBColor(249, 115, 22),
+                                        ChartMetric::new(|s| s.total_energy_spent),
+                                    ),
+                                ],
                             },
                             ChartTab {
                                 label: "Mass storage".to_string(),
