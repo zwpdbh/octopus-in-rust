@@ -30,7 +30,7 @@ pub(crate) struct StorageContributor {
 /// An active construction site. Build power is applied each tick until the
 /// current target finishes, then the site advances to the next target.
 #[derive(Component)]
-pub(crate) struct ConstructionSite {
+pub(crate) struct ActiveBuildTask {
     pub(crate) task_id: u32,
     pub(crate) targets: Vec<UnitEcoStats>,
     pub(crate) current_target_index: usize,

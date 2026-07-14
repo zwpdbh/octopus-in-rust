@@ -14,7 +14,7 @@ use bevy_ecs::prelude::*;
 
 use crate::economy::apply_tick_graph;
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
-use crate::runtime::components::{ConstructionSite, Producer, StorageContributor};
+use crate::runtime::components::{ActiveBuildTask, Producer, StorageContributor};
 use crate::runtime::resources::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, SimClock,
     TailEndTime, TotalsSpent, POST_QUEUE_TAIL_SECONDS,
@@ -49,7 +49,7 @@ pub(crate) fn spawn_tasks_system(
                 },));
             }
 
-            commands.spawn((ConstructionSite {
+            commands.spawn((ActiveBuildTask {
                 task_id: task.id,
                 targets: task.targets.clone(),
                 current_target_index: 0,
@@ -104,7 +104,7 @@ pub(crate) fn recompute_base_economy_system(
 }
 
 pub(crate) fn eco_system(
-    sites: Query<&ConstructionSite>,
+    sites: Query<&ActiveBuildTask>,
     mut eco: ResMut<EcoState>,
     mut clock: ResMut<SimClock>,
     mut factor: ResMut<EffectiveFactor>,
@@ -166,7 +166,7 @@ pub(crate) fn eco_system(
 }
 
 pub(crate) fn progress_system(
-    mut sites: Query<(Entity, &mut ConstructionSite)>,
+    mut sites: Query<(Entity, &mut ActiveBuildTask)>,
     factor: Res<EffectiveFactor>,
     clock: Res<SimClock>,
     mut completed: ResMut<CompletedTasks>,
@@ -190,7 +190,7 @@ pub(crate) fn progress_system(
 pub(crate) fn completion_system(
     mut commands: Commands,
     mut completed: ResMut<CompletedTasks>,
-    sites: Query<&ConstructionSite>,
+    sites: Query<&ActiveBuildTask>,
     clock: Res<SimClock>,
     mut journal: ResMut<EventJournal>,
     mut pending: ResMut<PendingTasks>,
@@ -226,7 +226,7 @@ pub(crate) fn completion_system(
         if next_index < site.targets.len() {
             // Move on to the next target in the same task.
             let next_work = site.targets[next_index].build_time.max(0.0);
-            commands.entity(entity).insert(ConstructionSite {
+            commands.entity(entity).insert(ActiveBuildTask {
                 task_id: site.task_id,
                 targets: site.targets.clone(),
                 current_target_index: next_index,
@@ -258,7 +258,7 @@ pub(crate) fn completion_system(
 
 pub(crate) fn termination_system(
     pending: Res<PendingTasks>,
-    sites: Query<&ConstructionSite>,
+    sites: Query<&ActiveBuildTask>,
     clock: Res<SimClock>,
     mut finished: ResMut<FinishedFlag>,
     mut journal: ResMut<EventJournal>,
