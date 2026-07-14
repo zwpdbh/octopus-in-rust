@@ -21,6 +21,7 @@ use faf_sim::snapshot::{
     energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
     scaled_mass_income,
 };
+use faf_sim::EconomyRuntimeState;
 use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
 
 #[derive(Parser, Debug)]
@@ -101,9 +102,10 @@ struct PredictArgs {
     #[arg(short, long, default_value = "data/build_prediction_artifacts")]
     model_dir: String,
     /// JSON file with the initial economy snapshot.
+    /// If omitted, the snapshot is derived from the plan's `initial_eco` field.
     #[arg(short, long)]
-    eco: PathBuf,
-    /// JSON file with the build plan (a list of `BuildTask`s).
+    eco: Option<PathBuf>,
+    /// JSON file with the build plan (`BuildQueue`).
     #[arg(short, long)]
     plan: PathBuf,
     /// Plans predicted to take longer than this are considered not practical.
@@ -200,13 +202,16 @@ fn main() {
             train_with_ndarray(&args.output_dir, &args.dataset, config);
         }
         Command::Predict(args) => {
-            let eco = read_json::<faf_sim::EcoSnapshot>(&args.eco);
-            let plan = read_json::<Vec<faf_sim::BuildTask>>(&args.plan);
+            let queue = read_json::<BuildQueue>(&args.plan);
+            let eco = match args.eco {
+                Some(path) => read_json::<faf_sim::EcoSnapshot>(&path),
+                None => eco_snapshot_from_runtime_state(&queue.initial_eco),
+            };
 
             match predict(
                 args.model_dir.as_ref(),
                 &eco,
-                &plan,
+                &queue.tasks,
                 args.practical_threshold_seconds,
             ) {
                 Ok(Prediction {
@@ -216,7 +221,7 @@ fn main() {
                     println!(
                         "{}",
                         serde_json::to_string(&serde_json::json!({
-                            "predicted_time_seconds": predicted_time_seconds,
+                            "predicted_time_seconds": predicted_time_seconds.round() as u64,
                             "is_practical": is_practical,
                         }))
                         .expect("serialize prediction")
@@ -240,6 +245,29 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> T {
         eprintln!("Failed to parse {}: {}", path.display(), e);
         std::process::exit(1);
     })
+}
+
+/// Derive an [`EcoSnapshot`] from the [`EconomyRuntimeState`] embedded in a plan.
+///
+/// Missing fields (drains, accumulated totals, capacities) are filled with
+/// sensible defaults so the predictor can run from a plan file alone.
+fn eco_snapshot_from_runtime_state(state: &EconomyRuntimeState) -> faf_sim::EcoSnapshot {
+    faf_sim::EcoSnapshot {
+        time: 0.0,
+        production_per_second_mass: state.production_per_second_mass.value(),
+        production_per_second_energy: state.production_per_second_energy.value(),
+        maintenance_consumption_per_second_energy: state
+            .maintenance_consumption_per_second_energy
+            .value(),
+        mass_drain: 0.0,
+        energy_drain: 0.0,
+        total_mass_spent: 0.0,
+        total_energy_spent: 0.0,
+        mass_storage: state.mass_storage.current.value(),
+        mass_storage_cap: state.mass_storage.cap.value(),
+        energy_storage: state.energy_storage.current.value(),
+        energy_storage_cap: state.energy_storage.cap.value(),
+    }
 }
 
 /// Parse the build queue and validate the step time from CLI arguments.
