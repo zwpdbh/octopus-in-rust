@@ -1,6 +1,6 @@
 //! Bevy ECS systems that drive the economy simulation.
 //!
-//! Systems run in this order each update (see [`crate::runtime::EcoPlugin`]):
+//! Systems run in this order each update (see [`crate::runtime::BuildQueueSimulationPlugin`]):
 //!
 //! 1. `spawn_tasks_system` — activate tasks whose `ready_at` time has arrived.
 //! 2. `recompute_base_economy_system` — aggregate producer income, maintenance,

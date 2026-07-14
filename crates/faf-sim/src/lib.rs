@@ -21,7 +21,9 @@ pub use economy::{
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Storage, Time};
-pub use runtime::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitEcoStats};
+pub use runtime::{
+    BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
+};
 pub use snapshot::{
     energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
     scaled_mass_income,

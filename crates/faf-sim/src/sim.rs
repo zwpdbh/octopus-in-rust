@@ -1,7 +1,7 @@
 //! Simulation entry point.
 //!
 //! This module provides [`Simulation`], the high-level synchronous driver that
-//! owns a Bevy `App`, wires in [`EcoPlugin`](crate::runtime::EcoPlugin), and
+//! owns a Bevy `App`, wires in [`BuildQueueSimulationPlugin`](crate::runtime::BuildQueueSimulationPlugin), and
 //! lets callers step the simulation one tick at a time.
 //!
 //! The input/output types are defined in [`crate::runtime`] and re-exported at
@@ -16,7 +16,7 @@ use crate::runtime::resources::{
     TailEndTime, TotalsSpent,
 };
 pub use crate::runtime::{
-    BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitEcoStats,
+    BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
 };
 
 /// Steppable economy simulation.
@@ -33,7 +33,7 @@ impl Simulation {
     /// runs until the build queue is empty.
     pub fn new(queue: BuildQueue, dt: StepTime, max_time: Option<Time>) -> Self {
         let mut app = App::new();
-        app.add_plugins(EcoPlugin)
+        app.add_plugins(BuildQueueSimulationPlugin)
             .insert_resource(SimClock {
                 time: Time::from_raw(0.0),
                 dt: dt.as_time(),

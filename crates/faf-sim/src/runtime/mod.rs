@@ -26,9 +26,9 @@ use systems::{
 ///
 /// Add this to an `App` to drive a build-queue simulation. Per-simulation data
 /// (the queue, clock, etc.) is inserted by [`crate::sim::Simulation`].
-pub struct EcoPlugin;
+pub struct BuildQueueSimulationPlugin;
 
-impl Plugin for EcoPlugin {
+impl Plugin for BuildQueueSimulationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
