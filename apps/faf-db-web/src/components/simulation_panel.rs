@@ -2,46 +2,16 @@ use dioxus::prelude::*;
 use faf_dioxus_ui::RGBColor;
 use faf_sim::protocol::{ControlEvent, SimClientMessage, SimRuntimeStatus, SimServerMessage};
 use faf_sim::sim::{EcoSnapshot, SimulationEvent};
+use faf_sim::snapshot::{
+    energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
+    scaled_mass_income,
+};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 
 use crate::components::{ChartMetric, ChartSeries, ChartTab, UplotChart};
 use crate::types::{ConstructionPlan, SimulationUiState};
-
-/// Energy available for construction after paying maintenance.
-fn energy_available(s: &EcoSnapshot) -> f64 {
-    s.production_per_second_energy - s.maintenance_consumption_per_second_energy
-}
-
-/// Net energy change per second (income − maintenance − drain).
-fn energy_net(s: &EcoSnapshot) -> f64 {
-    energy_available(s) - s.energy_drain
-}
-
-/// FAF army-wide energy efficiency ratio used to scale mass income.
-fn energy_efficiency(s: &EcoSnapshot) -> f64 {
-    let requested = s.maintenance_consumption_per_second_energy + s.energy_drain;
-    if requested <= 0.0 {
-        1.0
-    } else {
-        (s.production_per_second_energy / requested).min(1.0)
-    }
-}
-
-/// Mass income after applying FAF energy-stall scaling.
-fn scaled_mass_income(s: &EcoSnapshot) -> f64 {
-    if s.energy_storage < s.maintenance_consumption_per_second_energy {
-        s.production_per_second_mass * energy_efficiency(s)
-    } else {
-        s.production_per_second_mass
-    }
-}
-
-/// Net mass change per second (scaled income − drain).
-fn mass_net(s: &EcoSnapshot) -> f64 {
-    scaled_mass_income(s) - s.mass_drain
-}
 
 /// Constant 1.0 reference line for efficiency charts.
 fn one(_s: &EcoSnapshot) -> f64 {
@@ -113,6 +83,11 @@ pub fn SimulationPanel(
 
     let current_state = *state.read();
     let snaps = snapshots.read();
+    let sidebar = snaps.last().map(|s| {
+        rsx! {
+            SnapshotDetails { snapshot: *s }
+        }
+    });
     let current_time = snaps.last().map_or(0.0, |s| s.time);
     let is_finished = current_state == SimulationUiState::Finished;
 
@@ -191,9 +166,10 @@ pub fn SimulationPanel(
                             }
                         }
                     }
-                    UplotChart {
-                        data: snapshots,
-                        x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
+                        UplotChart {
+                            data: snapshots,
+                            x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
+                            sidebar,
                         tabs: vec![
                             ChartTab {
                                 label: "Energy budget".to_string(),
@@ -231,8 +207,9 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Gross income",
                                         RGBColor(156, 163, 175),
-                                        ChartMetric::new(|s| s.production_per_second_mass),
-                                    ),
+                                        ChartMetric::new(|s: &EcoSnapshot| s.production_per_second_mass),
+                                    )
+                                    .with_dash([4.0, 4.0]),
                                     ChartSeries::new(
                                         "Scaled income",
                                         RGBColor(59, 130, 246),
@@ -262,7 +239,8 @@ pub fn SimulationPanel(
                                         "100%",
                                         RGBColor(156, 163, 175),
                                         ChartMetric::new(one),
-                                    ),
+                                    )
+                                    .with_dash([2.0, 2.0]),
                                 ],
                             },
                             ChartTab {
@@ -293,6 +271,12 @@ pub fn SimulationPanel(
                                         RGBColor(236, 72, 153),
                                         ChartMetric::new(|s| s.energy_storage_cap),
                                     ),
+                                    ChartSeries::new(
+                                        "Maintenance threshold",
+                                        RGBColor(249, 115, 22),
+                                        ChartMetric::new(|s: &EcoSnapshot| s.maintenance_consumption_per_second_energy),
+                                    )
+                                    .with_dash([4.0, 4.0]),
                                 ],
                             },
                             ChartTab {
@@ -318,6 +302,47 @@ pub fn SimulationPanel(
                         ],
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn SnapshotDetails(snapshot: EcoSnapshot) -> Element {
+    let scaled = scaled_mass_income(&snapshot);
+    let energy_avail = energy_available(&snapshot);
+    let energy_net = energy_net(&snapshot);
+    let efficiency = energy_efficiency(&snapshot);
+    let scaling_active = mass_scaling_active(&snapshot);
+    let scaling_label = if scaling_active {
+        " (scaling active)"
+    } else {
+        ""
+    };
+
+    rsx! {
+        div { class: "flex flex-col gap-2 w-56 shrink-0 self-start text-xs text-neutral-300",
+            div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
+                div { class: "font-semibold text-white mb-1", "Snapshot" }
+                div { "Time: {snapshot.time:.1}s" }
+            }
+            div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
+                div { class: "font-semibold text-white mb-1", "Mass" }
+                div { "Production: {snapshot.production_per_second_mass:.2}" }
+                div { "Scaled: {scaled:.2}" }
+                div { "Drain: {snapshot.mass_drain:.2}" }
+                div { "Net: {snapshot.production_per_second_mass - snapshot.mass_drain:.2}" }
+                div { "Storage: {snapshot.mass_storage:.0} / {snapshot.mass_storage_cap:.0}" }
+            }
+            div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
+                div { class: "font-semibold text-white mb-1", "Energy" }
+                div { "Production: {snapshot.production_per_second_energy:.2}" }
+                div { "Maintenance: {snapshot.maintenance_consumption_per_second_energy:.2}" }
+                div { "Available: {energy_avail:.2}" }
+                div { "Drain: {snapshot.energy_drain:.2}" }
+                div { "Net: {energy_net:.2}" }
+                div { "Storage: {snapshot.energy_storage:.0} / {snapshot.energy_storage_cap:.0}" }
+                div { "Efficiency: {efficiency:.2}{scaling_label}" }
             }
         }
     }

@@ -12,6 +12,7 @@ pub mod protocol;
 pub mod quantities;
 pub mod runtime;
 pub mod sim;
+pub mod snapshot;
 pub mod units;
 
 pub use economy::{
@@ -21,6 +22,10 @@ pub use economy::{
 };
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Storage, Time};
 pub use runtime::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitEcoStats};
+pub use snapshot::{
+    energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
+    scaled_mass_income,
+};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,

@@ -9,9 +9,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use faf_sim::quantities::{StepTime, Time};
 use faf_sim::sim::{BuildQueue, SimulationEvent};
+use faf_sim::snapshot::{
+    energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
+    scaled_mass_income,
+};
 use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
 
 #[derive(Parser, Debug)]
@@ -60,6 +64,17 @@ struct BuildShared {
     /// runs until the build queue is empty.
     #[arg(short, long)]
     max_time_seconds: Option<u32>,
+    /// Output format for Ticked events.
+    #[arg(short, long, value_enum, default_value_t = OutputFormat::Raw)]
+    format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    /// Emit raw simulation events (the primitive data source).
+    Raw,
+    /// Emit Ticked events grouped into rates/storage/totals/derived.
+    Grouped,
 }
 
 fn main() {
@@ -128,7 +143,7 @@ fn run_active(queue: PathBuf, shared: BuildShared) {
         }
     });
 
-    consume_events(rx, &is_finished);
+    consume_events(rx, &is_finished, shared.format);
 }
 
 /// Run in passive mode.
@@ -142,19 +157,16 @@ fn run_passive(queue: PathBuf, shared: BuildShared, tick_interval_ms: u64) {
     let rx = subscribe(&service, id);
 
     let is_finished = Arc::new(AtomicBool::new(false));
-    consume_events(rx, &is_finished);
+    consume_events(rx, &is_finished, shared.format);
 }
 
 /// Print simulation events as NDJSON until the stream ends or the simulation
 /// finishes.
-fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>) {
+fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>, format: OutputFormat) {
     while let Ok(event) = rx.recv() {
         match event {
             SimServiceEvent::Simulation(sim_event) => {
-                println!(
-                    "{}",
-                    serde_json::to_string(&sim_event).expect("serialize event")
-                );
+                print_event(&sim_event, format);
                 if matches!(sim_event, SimulationEvent::Finished) {
                     is_finished.store(true, Ordering::SeqCst);
                     break;
@@ -165,4 +177,52 @@ fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>) {
             }
         }
     }
+}
+
+fn print_event(event: &SimulationEvent, format: OutputFormat) {
+    match event {
+        SimulationEvent::Ticked(snapshot) if format == OutputFormat::Grouped => {
+            let grouped = grouped_tick_json(snapshot);
+            println!(
+                "{}",
+                serde_json::to_string(&grouped).expect("serialize grouped tick")
+            );
+        }
+        _ => {
+            println!("{}", serde_json::to_string(event).expect("serialize event"));
+        }
+    }
+}
+
+fn grouped_tick_json(s: &faf_sim::sim::EcoSnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "Ticked": {
+            "time": s.time,
+            "rates": {
+                "production_per_second_mass": s.production_per_second_mass,
+                "production_per_second_energy": s.production_per_second_energy,
+                "maintenance_consumption_per_second_energy": s.maintenance_consumption_per_second_energy,
+                "mass_drain": s.mass_drain,
+                "energy_drain": s.energy_drain,
+            },
+            "storage": {
+                "mass_storage": s.mass_storage,
+                "mass_storage_cap": s.mass_storage_cap,
+                "energy_storage": s.energy_storage,
+                "energy_storage_cap": s.energy_storage_cap,
+            },
+            "totals": {
+                "total_mass_spent": s.total_mass_spent,
+                "total_energy_spent": s.total_energy_spent,
+            },
+            "derived": {
+                "energy_available": energy_available(s),
+                "energy_net": energy_net(s),
+                "scaled_mass_income": scaled_mass_income(s),
+                "mass_net": mass_net(s),
+                "energy_efficiency": energy_efficiency(s),
+                "mass_scaling_active": mass_scaling_active(s),
+            }
+        }
+    })
 }

@@ -54,6 +54,8 @@ pub struct ChartSeries<T> {
     pub color: RGBColor,
     /// Extracts the y value for a data point.
     pub y_extractor: ChartMetric<T>,
+    /// Optional dash pattern for the line, e.g. `vec![4.0, 4.0]` for a dashed line.
+    pub dash: Option<Vec<f64>>,
 }
 
 impl<T> ChartSeries<T> {
@@ -62,7 +64,13 @@ impl<T> ChartSeries<T> {
             label: label.into(),
             color,
             y_extractor,
+            dash: None,
         }
+    }
+
+    pub fn with_dash(mut self, dash: impl Into<Vec<f64>>) -> Self {
+        self.dash = Some(dash.into());
+        self
     }
 }
 
@@ -85,6 +93,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     data: Signal<Vec<T>>,
     x_extractor: ChartMetric<T>,
     tabs: Vec<ChartTab<T>>,
+    #[props(default)] sidebar: Option<Element>,
 ) -> Element {
     let mut selected_index = use_signal(|| 0usize);
     let chart_id = use_hook(|| {
@@ -183,26 +192,35 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 }
             }
             div { class: "flex-1 rounded-lg border border-neutral-800 bg-[#171717] p-2 min-h-0 overflow-hidden flex flex-col",
-                div { class: "flex items-center justify-center gap-4 mb-1 shrink-0",
-                    for s in active_tab.series.iter() {
-                        LegendItem {
-                            color: rgb_to_hex(s.color),
-                            label: s.label.clone(),
+                div { class: "flex-1 min-h-0 flex flex-row gap-3",
+                    div { class: "shrink-0 self-start overflow-y-auto w-56",
+                        if let Some(sidebar) = sidebar.as_ref() {
+                            { sidebar.clone() }
                         }
                     }
-                }
-                div { class: "flex-1 min-h-0 relative",
-                    div {
-                        id: "{chart_id}",
-                        class: "absolute inset-0 uplot-chart-container",
-                    }
-                    if let Some((time, values)) = tooltip.read().as_ref() {
-                        div {
-                            class: "absolute z-10 px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-xs text-white shadow pointer-events-none",
-                            style: "left: {tooltip_pos.read().0}px; top: {tooltip_pos.read().1 - 40.0}px;",
-                            div { "{time}" }
-                            for (label , value) in values.iter() {
-                                div { "{label}: {value}" }
+                    div { class: "flex-1 min-h-0 flex flex-col",
+                        div { class: "flex items-center justify-center gap-4 mb-1 shrink-0",
+                            for s in active_tab.series.iter() {
+                                LegendItem {
+                                    color: rgb_to_hex(s.color),
+                                    label: s.label.clone(),
+                                }
+                            }
+                        }
+                        div { class: "flex-1 min-h-0 relative",
+                            div {
+                                id: "{chart_id}",
+                                class: "absolute inset-0 uplot-chart-container",
+                            }
+                            if let Some((time, values)) = tooltip.read().as_ref() {
+                                div {
+                                    class: "absolute z-10 px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-xs text-white shadow pointer-events-none",
+                                    style: "left: {tooltip_pos.read().0 + 12.0}px; top: {tooltip_pos.read().1 - 64.0}px;",
+                                    div { "{time}" }
+                                    for (label , value) in values.iter() {
+                                        div { "{label}: {value}" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -333,6 +351,13 @@ fn build_opts<T: Clone>(
         Reflect::set(&y_series, &"label".into(), &s.label.as_str().into()).unwrap();
         Reflect::set(&y_series, &"stroke".into(), &rgb_to_hex(s.color).into()).unwrap();
         Reflect::set(&y_series, &"width".into(), &JsValue::from_f64(2.0)).unwrap();
+        if let Some(ref dash) = s.dash {
+            let dash_arr = Array::new();
+            for v in dash {
+                dash_arr.push(&JsValue::from_f64(*v));
+            }
+            Reflect::set(&y_series, &"dash".into(), &dash_arr).unwrap();
+        }
         series_arr.push(&y_series);
     }
     Reflect::set(&opts, &"series".into(), &series_arr).unwrap();
