@@ -2,26 +2,25 @@
 //!
 //! The crate provides:
 //!
-//! - `economy` and `quantities`: pure math for drains, stalls, and resource
-//!   tracking.
+//! - `economy`: pure math for drains, stalls, and resource tracking.
 //! - `units`: strongly-typed unit knowledge (`Units`, `UnitKind`, recipes).
-//! - `eco`: an observable, steppable ECS economy simulation plugin.
+//! - `runtime`: an observable, steppable Bevy ECS economy simulation.
 //! - `sim`: the high-level simulation driver and re-exports.
 
-pub mod eco;
-mod eco_tests;
 pub mod economy;
 pub mod protocol;
 pub mod quantities;
+pub mod runtime;
 pub mod sim;
 pub mod units;
 
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
-    EcoFlow, EconomyState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
+    EcoFlow, EconomyRuntimeState, EffectiveBuildPower, GraphTickResult, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Storage, Time};
+pub use runtime::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitEcoStats};
 pub use units::{
     BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
     UpgradeRecipe,

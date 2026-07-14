@@ -90,7 +90,7 @@ impl Units {
 
         // Synthetic definitions for capped mass extractors. These do not exist
         // as raw blueprints; they represent a T2/T3 mex surrounded by four mass
-        // storages. The base mass income matches the underlying mex; the +50%
+        // storages. The base `ProductionPerSecondMass` matches the underlying mex; the +50%
         // adjacency bonus is applied at runtime by the adjacency tracker.
         defs.insert(
             UnitKind::CapT2Mex,
@@ -104,9 +104,9 @@ impl Units {
                     build_time: 1000.0,
                 },
                 role: UnitRole::CappedMassExtractor {
-                    mass_income: 6.0,
+                    production_per_second_mass: 6.0,
                     mass_storage: 2000.0,
-                    maintenance_energy: 9.0,
+                    maintenance_consumption_per_second_energy: 9.0,
                 },
             },
         );
@@ -122,9 +122,9 @@ impl Units {
                     build_time: 1000.0,
                 },
                 role: UnitRole::CappedMassExtractor {
-                    mass_income: 18.0,
+                    production_per_second_mass: 18.0,
                     mass_storage: 2000.0,
-                    maintenance_energy: 54.0,
+                    maintenance_consumption_per_second_energy: 54.0,
                 },
             },
         );
@@ -581,12 +581,20 @@ mod tests {
         let cap_t2_def = units.def(&UnitKind::CapT2Mex).expect("capped t2 mex def");
         assert_eq!(cap_t2_def.kind, UnitKind::CapT2Mex);
         assert!(cap_t2_def.mass_storage() > 0.0);
-        assert!((cap_t2_def.mass_income() - t2_mex_def.mass_income()).abs() < 1e-9);
+        assert!(
+            (cap_t2_def.production_per_second_mass() - t2_mex_def.production_per_second_mass())
+                .abs()
+                < 1e-9
+        );
 
         let cap_t3_def = units.def(&UnitKind::CapT3Mex).expect("capped t3 mex def");
         assert_eq!(cap_t3_def.kind, UnitKind::CapT3Mex);
         assert!(cap_t3_def.mass_storage() > 0.0);
-        assert!((cap_t3_def.mass_income() - t3_mex_def.mass_income()).abs() < 1e-9);
+        assert!(
+            (cap_t3_def.production_per_second_mass() - t3_mex_def.production_per_second_mass())
+                .abs()
+                < 1e-9
+        );
 
         let energy_storage_def = units
             .def(&UnitKind::EnergyStorage)

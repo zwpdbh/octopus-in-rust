@@ -70,15 +70,18 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
   - whether the economy stalls.
 - When a resource-producing node finishes, its production effect is added to the economy state **immediately** at `finish_time(node)`.
 - The economy state consists of:
-  - mass income per second,
-  - energy income per second,
+  - `ProductionPerSecondMass`,
+  - `ProductionPerSecondEnergy` (net of `MaintenanceConsumptionPerSecondEnergy`),
+  - total `MaintenanceConsumptionPerSecondEnergy`,
   - mass storage and storage cap,
   - energy storage and energy cap.
 
 ### Stall modeling
 
 - If available mass or energy is insufficient to sustain the assigned build power, the effective build rate is **reduced proportionally** to the most-constrained resource.
-- When energy storage is empty and net energy income is zero or negative, mass production is scaled down proportionally to the energy shortfall. At full energy availability, mass production is 100%; at zero available energy, mass production drops to 0%.
+- Following FAF's standard, when energy storage is below the total `MaintenanceConsumptionPerSecondEnergy` of all owned units, mass production is scaled by the army-wide energy efficiency:
+  `ProductionPerSecondEnergy / (MaintenanceConsumptionPerSecondEnergy + construction_energy_drain)`,
+  clamped to a maximum of 1.0. This matches the scaling applied to mass extractors in FAF (`lua/sim/units/MassCollectionUnit.lua`).
 - Because energy stall reduces both construction speed and mass income, the optimizer should avoid energy stall whenever possible.
 - Energy-dependent systems (shields, radar, stealth) are ignored for this model.
 - Reclaim is **not modeled**.
@@ -110,7 +113,7 @@ This keeps the FAF community data format isolated in one place and lets `faf-sim
 - The economy evolves deterministically given a schedule.
 - A builder's build power is indivisible across concurrent targets.
 - There is exactly one goal, represented by its tech level and resource cost.
-- Energy stall reduces mass income linearly with available energy. (This is a working assumption; verify against FAF Lua/source when possible.)
+- Energy stall reduces mass income according to FAF's army-wide energy-efficiency ratio when energy storage is below total `MaintenanceConsumptionPerSecondEnergy`.
 
 ## Notes
 

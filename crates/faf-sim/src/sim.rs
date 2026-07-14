@@ -1,20 +1,23 @@
 //! Simulation entry point.
 //!
 //! This module provides [`Simulation`], the high-level synchronous driver that
-//! owns a Bevy `App`, wires in the [`EcoPlugin`](crate::eco::EcoPlugin), and
+//! owns a Bevy `App`, wires in [`EcoPlugin`](crate::runtime::EcoPlugin), and
 //! lets callers step the simulation one tick at a time.
 //!
-//! The input/output types are defined in [`crate::eco`] and re-exported here
-//! so consumers have a single obvious import path.
+//! The input/output types are defined in [`crate::runtime`] and re-exported at
+//! the crate root so consumers have a single obvious import path.
 
 use bevy_app::prelude::*;
 
-pub use crate::eco::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitDefRef};
-use crate::eco::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, Producer,
-    SimClock, StorageContributor, TailEndTime, TotalsSpent,
-};
 use crate::quantities::{StepTime, Time};
+use crate::runtime::components::{Producer, StorageContributor};
+use crate::runtime::resources::{
+    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, SimClock,
+    TailEndTime, TotalsSpent,
+};
+pub use crate::runtime::{
+    BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitEcoStats,
+};
 
 /// Steppable economy simulation.
 pub struct Simulation {
@@ -53,8 +56,11 @@ impl Simulation {
             let initial = queue.initial_eco;
             let world = app.world_mut();
             world.spawn((Producer {
-                mass_income: initial.mass_income.value(),
-                energy_income: initial.energy_income.value(),
+                production_per_second_mass: initial.production_per_second_mass.value(),
+                production_per_second_energy: initial.production_per_second_energy.value(),
+                maintenance_consumption_per_second_energy: initial
+                    .maintenance_consumption_per_second_energy
+                    .value(),
             },));
             world.spawn((StorageContributor {
                 mass: initial.mass_storage.cap.value(),

@@ -52,8 +52,9 @@ A plan is a JSON object with `initial_eco` and `tasks`:
 ```json
 {
   "initial_eco": {
-    "net_mass_income": 1.0,
-    "net_energy_income": 20.0,
+    "production_per_second_mass": 1.0,
+    "production_per_second_energy": 20.0,
+    "maintenance_consumption_per_second_energy": 0.0,
     "mass_storage": { "current": 650.0, "cap": 650.0 },
     "energy_storage": { "current": 4000.0, "cap": 4000.0 }
   },
@@ -81,9 +82,10 @@ A plan is a JSON object with `initial_eco` and `tasks`:
   - `builders` — units providing build power. Only `build_power` is relevant; other fields may be omitted and default to `0.0`.
   - `target` — unit being built. Only `mass_cost`, `energy_cost`, and `build_time` are relevant; `build_power` may be omitted and defaults to `0.0`.
 
-Optional fields on both `builders` and `target` (`mass_income`,
-`energy_income`, `maintenance_energy`, `mass_storage`, `energy_storage`) are
-used after a unit completes to affect the economy. They default to `0.0`.
+Optional fields on both `builders` and `target`
+(`production_per_second_mass`, `production_per_second_energy`,
+`maintenance_consumption_per_second_energy`, `mass_storage`, `energy_storage`)
+are used after a unit completes to affect the economy. They default to `0.0`.
 
 ## Example plan
 
@@ -109,7 +111,7 @@ The CLI prints one event per line:
 
 ```json
 {"TaskStarted":{"task_id":1,"time":0.0}}
-{"Ticked":{"time":1.0,"mass_income":1.0,"energy_income":20.0,...}}
+{"Ticked":{"time":1.0,"production_per_second_mass":1.0,"production_per_second_energy":20.0,"maintenance_consumption_per_second_energy":0.0,"mass_drain":0.0,"energy_drain":0.0,...}}
 {"TaskCompleted":{"task_id":1,"time":30.0}}
 "Finished"
 ```

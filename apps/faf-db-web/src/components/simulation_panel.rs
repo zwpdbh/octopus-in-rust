@@ -9,6 +9,45 @@ use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
 use crate::components::{ChartMetric, ChartSeries, ChartTab, UplotChart};
 use crate::types::{ConstructionPlan, SimulationUiState};
 
+/// Energy available for construction after paying maintenance.
+fn energy_available(s: &EcoSnapshot) -> f64 {
+    s.production_per_second_energy - s.maintenance_consumption_per_second_energy
+}
+
+/// Net energy change per second (income − maintenance − drain).
+fn energy_net(s: &EcoSnapshot) -> f64 {
+    energy_available(s) - s.energy_drain
+}
+
+/// FAF army-wide energy efficiency ratio used to scale mass income.
+fn energy_efficiency(s: &EcoSnapshot) -> f64 {
+    let requested = s.maintenance_consumption_per_second_energy + s.energy_drain;
+    if requested <= 0.0 {
+        1.0
+    } else {
+        (s.production_per_second_energy / requested).min(1.0)
+    }
+}
+
+/// Mass income after applying FAF energy-stall scaling.
+fn scaled_mass_income(s: &EcoSnapshot) -> f64 {
+    if s.energy_storage < s.maintenance_consumption_per_second_energy {
+        s.production_per_second_mass * energy_efficiency(s)
+    } else {
+        s.production_per_second_mass
+    }
+}
+
+/// Net mass change per second (scaled income − drain).
+fn mass_net(s: &EcoSnapshot) -> f64 {
+    scaled_mass_income(s) - s.mass_drain
+}
+
+/// Constant 1.0 reference line for efficiency charts.
+fn one(_s: &EcoSnapshot) -> f64 {
+    1.0
+}
+
 const SIMULATION_DT_SECONDS: u32 = 1;
 const MAX_SIMULATION_TIME_SECONDS: u32 = 3600;
 const SIMULATION_TICK_INTERVAL_MS: u64 = 50;
@@ -157,52 +196,72 @@ pub fn SimulationPanel(
                         x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
                         tabs: vec![
                             ChartTab {
-                                label: "Mass income".to_string(),
+                                label: "Energy budget".to_string(),
                                 series: vec![
                                     ChartSeries::new(
                                         "Income",
-                                        RGBColor(156, 163, 175),
-                                        ChartMetric::new(|s| s.mass_income),
-                                    ),
-                                    ChartSeries::new(
-                                        "Net",
-                                        RGBColor(59, 130, 246),
-                                        ChartMetric::new(|s| s.net_mass_income),
-                                    ),
-                                ],
-                            },
-                            ChartTab {
-                                label: "Energy income".to_string(),
-                                series: vec![
-                                    ChartSeries::new(
-                                        "Income",
-                                        RGBColor(156, 163, 175),
-                                        ChartMetric::new(|s| s.energy_income),
-                                    ),
-                                    ChartSeries::new(
-                                        "Net",
-                                        RGBColor(234, 179, 8),
-                                        ChartMetric::new(|s| s.net_energy_income),
-                                    ),
-                                ],
-                            },
-                            ChartTab {
-                                label: "Total mass spent".to_string(),
-                                series: vec![
-                                    ChartSeries::new(
-                                        "Total mass spent",
                                         RGBColor(34, 197, 94),
-                                        ChartMetric::new(|s| s.total_mass_spent),
+                                        ChartMetric::new(|s| s.production_per_second_energy),
+                                    ),
+                                    ChartSeries::new(
+                                        "Maintenance",
+                                        RGBColor(234, 179, 8),
+                                        ChartMetric::new(|s| s.maintenance_consumption_per_second_energy),
+                                    ),
+                                    ChartSeries::new(
+                                        "Available",
+                                        RGBColor(59, 130, 246),
+                                        ChartMetric::new(energy_available),
+                                    ),
+                                    ChartSeries::new(
+                                        "Drain",
+                                        RGBColor(239, 68, 68),
+                                        ChartMetric::new(|s| s.energy_drain),
+                                    ),
+                                    ChartSeries::new(
+                                        "Net",
+                                        RGBColor(168, 85, 247),
+                                        ChartMetric::new(energy_net),
                                     ),
                                 ],
                             },
                             ChartTab {
-                                label: "Total energy spent".to_string(),
+                                label: "Mass budget".to_string(),
                                 series: vec![
                                     ChartSeries::new(
-                                        "Total energy spent",
-                                        RGBColor(249, 115, 22),
-                                        ChartMetric::new(|s| s.total_energy_spent),
+                                        "Gross income",
+                                        RGBColor(156, 163, 175),
+                                        ChartMetric::new(|s| s.production_per_second_mass),
+                                    ),
+                                    ChartSeries::new(
+                                        "Scaled income",
+                                        RGBColor(59, 130, 246),
+                                        ChartMetric::new(scaled_mass_income),
+                                    ),
+                                    ChartSeries::new(
+                                        "Drain",
+                                        RGBColor(239, 68, 68),
+                                        ChartMetric::new(|s| s.mass_drain),
+                                    ),
+                                    ChartSeries::new(
+                                        "Net",
+                                        RGBColor(34, 197, 94),
+                                        ChartMetric::new(mass_net),
+                                    ),
+                                ],
+                            },
+                            ChartTab {
+                                label: "Efficiency".to_string(),
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Energy efficiency",
+                                        RGBColor(59, 130, 246),
+                                        ChartMetric::new(energy_efficiency),
+                                    ),
+                                    ChartSeries::new(
+                                        "100%",
+                                        RGBColor(156, 163, 175),
+                                        ChartMetric::new(one),
                                     ),
                                 ],
                             },
@@ -233,6 +292,26 @@ pub fn SimulationPanel(
                                         "Cap",
                                         RGBColor(236, 72, 153),
                                         ChartMetric::new(|s| s.energy_storage_cap),
+                                    ),
+                                ],
+                            },
+                            ChartTab {
+                                label: "Mass spent".to_string(),
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Total mass spent",
+                                        RGBColor(34, 197, 94),
+                                        ChartMetric::new(|s| s.total_mass_spent),
+                                    ),
+                                ],
+                            },
+                            ChartTab {
+                                label: "Energy spent".to_string(),
+                                series: vec![
+                                    ChartSeries::new(
+                                        "Total energy spent",
+                                        RGBColor(249, 115, 22),
+                                        ChartMetric::new(|s| s.total_energy_spent),
                                     ),
                                 ],
                             },

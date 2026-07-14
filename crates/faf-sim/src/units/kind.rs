@@ -73,7 +73,7 @@ pub struct UnitCost {
 /// Functional role of a unit.
 ///
 /// Each variant carries only the stats that are meaningful for that role. This
-/// makes invalid combinations (e.g., a factory with mass income) unrepresentable
+/// makes invalid combinations (e.g., a factory with `ProductionPerSecondMass`) unrepresentable
 /// at the type level.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnitRole {
@@ -81,42 +81,44 @@ pub enum UnitRole {
     /// starting storage.
     Commander {
         build_rate: f64,
-        mass_income: f64,
-        energy_income: f64,
-        maintenance_energy: f64,
+        production_per_second_mass: f64,
+        production_per_second_energy: f64,
+        maintenance_consumption_per_second_energy: f64,
         mass_storage: f64,
         energy_storage: f64,
     },
     /// Land factory: builds units, consumes energy for maintenance.
     Factory {
         build_rate: f64,
-        maintenance_energy: f64,
+        maintenance_consumption_per_second_energy: f64,
     },
     /// Engineer: builds units, consumes energy for maintenance.
     Engineer {
         build_rate: f64,
-        maintenance_energy: f64,
+        maintenance_consumption_per_second_energy: f64,
     },
     /// Mass extractor: produces mass, consumes energy for maintenance.
     MassExtractor {
-        mass_income: f64,
-        maintenance_energy: f64,
+        production_per_second_mass: f64,
+        maintenance_consumption_per_second_energy: f64,
     },
     /// Power generator: produces energy, consumes energy for maintenance.
     PowerGenerator {
-        energy_income: f64,
-        maintenance_energy: f64,
+        production_per_second_energy: f64,
+        maintenance_consumption_per_second_energy: f64,
     },
     /// Energy storage building.
     EnergyStorage { energy_storage: f64 },
     /// T2/T3 mass extractor surrounded by four mass storages.
     CappedMassExtractor {
-        mass_income: f64,
+        production_per_second_mass: f64,
         mass_storage: f64,
-        maintenance_energy: f64,
+        maintenance_consumption_per_second_energy: f64,
     },
     /// Any other unit (typically military/unique) with only maintenance cost.
-    Other { maintenance_energy: f64 },
+    Other {
+        maintenance_consumption_per_second_energy: f64,
+    },
 }
 
 impl UnitRole {
@@ -130,47 +132,70 @@ impl UnitRole {
         }
     }
 
-    /// Mass income produced by this role, if any.
-    pub fn mass_income(&self) -> f64 {
-        match self {
-            UnitRole::Commander { mass_income, .. }
-            | UnitRole::MassExtractor { mass_income, .. }
-            | UnitRole::CappedMassExtractor { mass_income, .. } => *mass_income,
-            _ => 0.0,
-        }
-    }
-
-    /// Energy income produced by this role, if any.
-    pub fn energy_income(&self) -> f64 {
-        match self {
-            UnitRole::Commander { energy_income, .. }
-            | UnitRole::PowerGenerator { energy_income, .. } => *energy_income,
-            _ => 0.0,
-        }
-    }
-
-    /// Energy consumed per second for maintenance, if any.
-    pub fn maintenance_energy(&self) -> f64 {
+    /// FAF `ProductionPerSecondMass` produced by this role, if any.
+    pub fn production_per_second_mass(&self) -> f64 {
         match self {
             UnitRole::Commander {
-                maintenance_energy, ..
-            }
-            | UnitRole::Factory {
-                maintenance_energy, ..
-            }
-            | UnitRole::Engineer {
-                maintenance_energy, ..
+                production_per_second_mass,
+                ..
             }
             | UnitRole::MassExtractor {
-                maintenance_energy, ..
-            }
-            | UnitRole::PowerGenerator {
-                maintenance_energy, ..
+                production_per_second_mass,
+                ..
             }
             | UnitRole::CappedMassExtractor {
-                maintenance_energy, ..
+                production_per_second_mass,
+                ..
+            } => *production_per_second_mass,
+            _ => 0.0,
+        }
+    }
+
+    /// FAF `ProductionPerSecondEnergy` produced by this role, if any.
+    pub fn production_per_second_energy(&self) -> f64 {
+        match self {
+            UnitRole::Commander {
+                production_per_second_energy,
+                ..
             }
-            | UnitRole::Other { maintenance_energy } => *maintenance_energy,
+            | UnitRole::PowerGenerator {
+                production_per_second_energy,
+                ..
+            } => *production_per_second_energy,
+            _ => 0.0,
+        }
+    }
+
+    /// FAF `MaintenanceConsumptionPerSecondEnergy` paid by this role, if any.
+    pub fn maintenance_consumption_per_second_energy(&self) -> f64 {
+        match self {
+            UnitRole::Commander {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::Factory {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::Engineer {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::MassExtractor {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::PowerGenerator {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::CappedMassExtractor {
+                maintenance_consumption_per_second_energy,
+                ..
+            }
+            | UnitRole::Other {
+                maintenance_consumption_per_second_energy,
+            } => *maintenance_consumption_per_second_energy,
             _ => 0.0,
         }
     }
@@ -213,19 +238,19 @@ impl UnitDef {
         self.role.build_rate()
     }
 
-    /// Mass income produced by this unit, if any.
-    pub fn mass_income(&self) -> f64 {
-        self.role.mass_income()
+    /// FAF `ProductionPerSecondMass` produced by this unit, if any.
+    pub fn production_per_second_mass(&self) -> f64 {
+        self.role.production_per_second_mass()
     }
 
-    /// Energy income produced by this unit, if any.
-    pub fn energy_income(&self) -> f64 {
-        self.role.energy_income()
+    /// FAF `ProductionPerSecondEnergy` produced by this unit, if any.
+    pub fn production_per_second_energy(&self) -> f64 {
+        self.role.production_per_second_energy()
     }
 
-    /// Energy consumed per second for maintenance, if any.
-    pub fn maintenance_energy(&self) -> f64 {
-        self.role.maintenance_energy()
+    /// FAF `MaintenanceConsumptionPerSecondEnergy` paid by this unit, if any.
+    pub fn maintenance_consumption_per_second_energy(&self) -> f64 {
+        self.role.maintenance_consumption_per_second_energy()
     }
 
     /// Mass storage capacity provided by this unit, if any.
@@ -275,8 +300,12 @@ impl UnitCost {
 impl EcoProducer for UnitDef {
     fn production(&self) -> EcoFlow {
         EcoFlow {
-            mass_per_second: crate::quantities::MassRate::from_raw(self.mass_income()),
-            energy_per_second: crate::quantities::EnergyRate::from_raw(self.energy_income()),
+            mass_per_second: crate::quantities::MassRate::from_raw(
+                self.production_per_second_mass(),
+            ),
+            energy_per_second: crate::quantities::EnergyRate::from_raw(
+                self.production_per_second_energy(),
+            ),
         }
     }
 }
@@ -285,7 +314,9 @@ impl EcoConsumer for UnitDef {
     fn consumption(&self) -> EcoFlow {
         EcoFlow {
             mass_per_second: crate::quantities::MassRate::zero(),
-            energy_per_second: crate::quantities::EnergyRate::from_raw(self.maintenance_energy()),
+            energy_per_second: crate::quantities::EnergyRate::from_raw(
+                self.maintenance_consumption_per_second_energy(),
+            ),
         }
     }
 }

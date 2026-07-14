@@ -31,9 +31,9 @@ struct UnitSummary {
     build_cost_mass: Option<f64>,
     build_cost_energy: Option<f64>,
     build_time: Option<f64>,
-    mass_income: Option<f64>,
-    energy_income: Option<f64>,
-    maintenance_energy: Option<f64>,
+    production_per_second_mass: Option<f64>,
+    production_per_second_energy: Option<f64>,
+    maintenance_consumption_per_second_energy: Option<f64>,
     mass_storage: Option<f64>,
     energy_storage: Option<f64>,
 }
@@ -110,15 +110,15 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             build_cost_mass: unit.economy.as_ref().and_then(|e| e.build_cost_mass),
             build_cost_energy: unit.economy.as_ref().and_then(|e| e.build_cost_energy),
             build_time: unit.economy.as_ref().and_then(|e| e.build_time),
-            mass_income: unit
+            production_per_second_mass: unit
                 .economy
                 .as_ref()
                 .and_then(|e| e.production_per_second_mass),
-            energy_income: unit
+            production_per_second_energy: unit
                 .economy
                 .as_ref()
                 .and_then(|e| e.production_per_second_energy),
-            maintenance_energy: unit
+            maintenance_consumption_per_second_energy: unit
                 .economy
                 .as_ref()
                 .and_then(|e| e.maintenance_consumption_per_second_energy),

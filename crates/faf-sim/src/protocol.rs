@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::eco::{BuildQueue, SimulationEvent};
+pub use crate::runtime::{BuildQueue, SimulationEvent};
 
 /// Identifier for a running simulation.
 pub type SimulationId = Uuid;

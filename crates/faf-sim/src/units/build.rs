@@ -17,9 +17,9 @@ pub(crate) fn unit_def(unit: &Unit) -> Option<UnitDef> {
     let builder = economy.builder_capability();
 
     let build_rate = builder.map(|b| b.build_rate).unwrap_or(0.0);
-    let mass_income = economy.production_per_second_mass.unwrap_or(0.0);
-    let energy_income = economy.production_per_second_energy.unwrap_or(0.0);
-    let maintenance_energy = economy
+    let production_per_second_mass = economy.production_per_second_mass.unwrap_or(0.0);
+    let production_per_second_energy = economy.production_per_second_energy.unwrap_or(0.0);
+    let maintenance_consumption_per_second_energy = economy
         .maintenance_consumption_per_second_energy
         .unwrap_or(0.0);
     let mass_storage = economy.storage_mass.unwrap_or(0.0);
@@ -28,35 +28,37 @@ pub(crate) fn unit_def(unit: &Unit) -> Option<UnitDef> {
     let role = match kind.clone() {
         UnitKind::Commander => UnitRole::Commander {
             build_rate,
-            mass_income,
-            energy_income,
-            maintenance_energy,
+            production_per_second_mass,
+            production_per_second_energy,
+            maintenance_consumption_per_second_energy,
             mass_storage,
             energy_storage,
         },
         UnitKind::Engineer(_) => UnitRole::Engineer {
             build_rate,
-            maintenance_energy,
+            maintenance_consumption_per_second_energy,
         },
         UnitKind::Factory(_) => UnitRole::Factory {
             build_rate,
-            maintenance_energy,
+            maintenance_consumption_per_second_energy,
         },
         UnitKind::Mex(_) => UnitRole::MassExtractor {
-            mass_income,
-            maintenance_energy,
+            production_per_second_mass,
+            maintenance_consumption_per_second_energy,
         },
         UnitKind::Pgen(_) => UnitRole::PowerGenerator {
-            energy_income,
-            maintenance_energy,
+            production_per_second_energy,
+            maintenance_consumption_per_second_energy,
         },
         UnitKind::EnergyStorage => UnitRole::EnergyStorage { energy_storage },
         UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitRole::CappedMassExtractor {
-            mass_income,
+            production_per_second_mass,
             mass_storage,
-            maintenance_energy,
+            maintenance_consumption_per_second_energy,
         },
-        UnitKind::Unique(_) => UnitRole::Other { maintenance_energy },
+        UnitKind::Unique(_) => UnitRole::Other {
+            maintenance_consumption_per_second_energy,
+        },
     };
 
     Some(UnitDef {

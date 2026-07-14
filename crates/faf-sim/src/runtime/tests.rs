@@ -1,13 +1,14 @@
 #[cfg(test)]
 mod tests {
-    use crate::economy::EconomyState;
+    use crate::economy::EconomyRuntimeState;
     use crate::quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
-    use crate::sim::{BuildQueue, BuildTask, Simulation, SimulationEvent, UnitDefRef};
+    use crate::runtime::{BuildQueue, BuildTask, SimulationEvent, UnitEcoStats};
+    use crate::sim::Simulation;
 
-    fn rich_eco() -> EconomyState {
-        EconomyState {
-            mass_income: MassRate::from_raw(1000.0),
-            energy_income: EnergyRate::from_raw(1000.0),
+    fn rich_eco() -> EconomyRuntimeState {
+        EconomyRuntimeState {
+            production_per_second_mass: MassRate::from_raw(1000.0),
+            production_per_second_energy: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
             energy_storage: Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0)),
             ..Default::default()
@@ -26,14 +27,14 @@ mod tests {
         let queue = make_queue(vec![BuildTask {
             id: 1,
             start_after: Time::from_raw(0.0),
-            builders: vec![UnitDefRef {
+            builders: vec![UnitEcoStats {
                 build_power: 10.0,
                 mass_cost: 0.0,
                 energy_cost: 0.0,
                 build_time: 0.0,
                 ..Default::default()
             }],
-            targets: vec![UnitDefRef {
+            targets: vec![UnitEcoStats {
                 build_power: 0.0,
                 mass_cost: 100.0,
                 energy_cost: 100.0,
@@ -81,11 +82,11 @@ mod tests {
             BuildTask {
                 id: 1,
                 start_after: Time::from_raw(0.0),
-                builders: vec![UnitDefRef {
+                builders: vec![UnitEcoStats {
                     build_power: 10.0,
                     ..Default::default()
                 }],
-                targets: vec![UnitDefRef {
+                targets: vec![UnitEcoStats {
                     build_power: 0.0,
                     mass_cost: 100.0,
                     energy_cost: 100.0,
@@ -96,11 +97,11 @@ mod tests {
             BuildTask {
                 id: 2,
                 start_after: Time::from_raw(0.0),
-                builders: vec![UnitDefRef {
+                builders: vec![UnitEcoStats {
                     build_power: 10.0,
                     ..Default::default()
                 }],
-                targets: vec![UnitDefRef {
+                targets: vec![UnitEcoStats {
                     build_power: 0.0,
                     mass_cost: 50.0,
                     energy_cost: 50.0,
@@ -143,7 +144,7 @@ mod tests {
     #[test]
     fn energy_stall_slows_build() {
         let mut eco = rich_eco();
-        eco.energy_income = EnergyRate::from_raw(0.0);
+        eco.production_per_second_energy = EnergyRate::from_raw(0.0);
         eco.energy_storage = Storage::new(Energy::from_raw(5.0), Energy::from_raw(10000.0));
 
         let queue = BuildQueue {
@@ -151,11 +152,11 @@ mod tests {
             tasks: vec![BuildTask {
                 id: 1,
                 start_after: Time::from_raw(0.0),
-                builders: vec![UnitDefRef {
+                builders: vec![UnitEcoStats {
                     build_power: 10.0,
                     ..Default::default()
                 }],
-                targets: vec![UnitDefRef {
+                targets: vec![UnitEcoStats {
                     build_power: 0.0,
                     mass_cost: 100.0,
                     energy_cost: 100.0,
@@ -170,21 +171,56 @@ mod tests {
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
         );
-        let mut saw_stall = false;
 
+        while !sim.is_finished() {
+            let _ = sim.step();
+        }
+
+        // With only 5 energy available we cannot run at full power.
+        assert!(sim.current_time() > Time::from_raw(10.0));
+    }
+
+    #[test]
+    fn faf_energy_stall_scales_mass_income_through_maintenance() {
+        // A mex-like initial producer: 2 mass/s income, 0 gross energy production,
+        // 2 energy/s maintenance. With empty energy storage, FAF scales mass income
+        // by the army energy efficiency (0 / 2 = 0), so mass income drops to zero
+        // even though there is no construction.
+        let mut eco = rich_eco();
+        eco.production_per_second_mass = MassRate::from_raw(2.0);
+        eco.production_per_second_energy = EnergyRate::from_raw(0.0);
+        eco.maintenance_consumption_per_second_energy = EnergyRate::from_raw(2.0);
+        eco.mass_storage = Storage::new(Mass::from_raw(0.0), Mass::from_raw(10000.0));
+        eco.energy_storage = Storage::new(Energy::from_raw(0.0), Energy::from_raw(10000.0));
+
+        let queue = BuildQueue {
+            initial_eco: eco,
+            tasks: vec![],
+        };
+
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+        );
+
+        let mut saw_scaled_mass_income = false;
         while !sim.is_finished() {
             for event in sim.step() {
                 if let SimulationEvent::Ticked(s) = event {
-                    if s.energy_stalled {
-                        saw_stall = true;
+                    if s.maintenance_consumption_per_second_energy > 1.0
+                        && s.mass_storage.abs() < 1e-9
+                    {
+                        saw_scaled_mass_income = true;
                     }
                 }
             }
         }
 
-        assert!(saw_stall);
-        // With only 5 energy available we cannot run at full power.
-        assert!(sim.current_time() > Time::from_raw(10.0));
+        assert!(
+            saw_scaled_mass_income,
+            "`ProductionPerSecondMass` should be scaled to zero by FAF energy efficiency"
+        );
     }
 
     #[test]
@@ -192,11 +228,11 @@ mod tests {
         let queue = make_queue(vec![BuildTask {
             id: 1,
             start_after: Time::from_raw(0.0),
-            builders: vec![UnitDefRef {
+            builders: vec![UnitEcoStats {
                 build_power: 10.0,
                 ..Default::default()
             }],
-            targets: vec![UnitDefRef {
+            targets: vec![UnitEcoStats {
                 build_power: 0.0,
                 mass_cost: 100.0,
                 energy_cost: 100.0,

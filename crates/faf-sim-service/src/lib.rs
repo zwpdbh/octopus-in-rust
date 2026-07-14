@@ -454,14 +454,14 @@ fn broadcast_events(subscribers: &mut Vec<Sender<SimServiceEvent>>, events: Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faf_sim::economy::EconomyState;
+    use faf_sim::economy::EconomyRuntimeState;
     use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
-    use faf_sim::sim::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitDefRef};
+    use faf_sim::sim::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats};
 
-    fn rich_eco() -> EconomyState {
-        EconomyState {
-            mass_income: MassRate::from_raw(1000.0),
-            energy_income: EnergyRate::from_raw(1000.0),
+    fn rich_eco() -> EconomyRuntimeState {
+        EconomyRuntimeState {
+            production_per_second_mass: MassRate::from_raw(1000.0),
+            production_per_second_energy: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
             energy_storage: Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0)),
             ..Default::default()
@@ -474,11 +474,11 @@ mod tests {
             tasks: vec![BuildTask {
                 id: 1,
                 start_after: Time::from_raw(0.0),
-                builders: vec![UnitDefRef {
+                builders: vec![UnitEcoStats {
                     build_power: 10.0,
                     ..Default::default()
                 }],
-                targets: vec![UnitDefRef {
+                targets: vec![UnitEcoStats {
                     build_power: 0.0,
                     mass_cost: 100.0,
                     energy_cost: 100.0,
