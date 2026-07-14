@@ -34,6 +34,38 @@ cargo run --release -p faf-sim-cli -- predict --plan tmp/faf-sim-examples/engine
 
 Run `cargo run --release -p faf-sim-cli -- --help` for all commands and flags.
 
+## Dataset generation
+
+`dataset generate` samples from real FAF unit definitions by default. It loads
+`plugins/faf-units/data/faf_units.json`, derives builder and target pools from
+units that can build and units that have a build recipe, simulates each sampled
+plan, and stores per-task sequence features plus labels in SQLite.
+
+```bash
+# 10k samples using the default real unit database
+cargo run --release -p faf-sim-cli -- dataset generate --samples 10000
+
+# Use a different units JSON file
+cargo run --release -p faf-sim-cli -- dataset generate \
+  --samples 10000 \
+  --units-file path/to/faf_units.json
+```
+
+The same generator is exposed as a fluent Rust pipeline:
+
+```rust
+// crates/faf-build-prediction/src/data/generator.rs ~line 127 — DatasetGenerator::pipeline
+DatasetGenerator::new(GenerationConfig::default())
+    .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
+    .pipeline(Path::new("data/dataset.db"))?
+    .create_schema()?
+    .generate_samples()?
+    .save_norm()?
+    .finish()?;
+```
+
+See [`docs/02-dataset.md`](docs/02-dataset.md) for more details.
+
 ## `predict` input
 
 `predict` uses the same `BuildQueue` JSON file as `build`. It derives the initial economy snapshot from the file's `initial_eco` field, so no separate `eco.json` is required.

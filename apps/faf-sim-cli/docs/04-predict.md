@@ -1,6 +1,6 @@
 # `predict` command
 
-Run inference with a trained model to estimate how long a plan will take and whether it is practical.
+Run inference with a trained LSTM sequence model to estimate how long a plan will take and whether it is practical.
 
 ## Usage
 
@@ -52,12 +52,12 @@ If you need full control, provide a standalone `--eco` file with this exact shap
 
 ## Output
 
-The result is printed as a single JSON object:
+The result is printed as a single JSON object with whole-second resolution:
 
 ```json
 {
   "is_practical": true,
-  "predicted_time_seconds": 157.3
+  "predicted_time_seconds": 157
 }
 ```
 

@@ -12,7 +12,7 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use faf_build_prediction::model::predictor::EcoPredictorConfig;
 use faf_build_prediction::{
-    generate_dataset, predict, train_with_ndarray, AdamConfig, GenerationConfig, Prediction,
+    predict, train_with_ndarray, AdamConfig, DatasetGenerator, GenerationConfig, Prediction,
     TrainingConfig,
 };
 use faf_sim::quantities::{StepTime, Time};
@@ -71,6 +71,10 @@ enum DatasetMode {
         /// Maximum number of targets inside a single task.
         #[arg(long, default_value = "5")]
         max_targets_per_task: usize,
+        /// Path to the FAF units JSON file. When provided, builders and targets
+        /// are sampled from real unit definitions instead of pure synthetic ranges.
+        #[arg(long, default_value = "plugins/faf-units/data/faf_units.json")]
+        units_file: PathBuf,
     },
 }
 
@@ -94,6 +98,12 @@ struct TrainArgs {
     /// Learning rate.
     #[arg(long, default_value = "0.001")]
     learning_rate: f64,
+    /// Dropout probability on the LSTM output.
+    #[arg(long, default_value = "0.0")]
+    dropout: f64,
+    /// L2 weight decay for the Adam optimizer.
+    #[arg(long, default_value = "0.0")]
+    weight_decay: f64,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -175,25 +185,43 @@ fn main() {
                 max_tasks,
                 max_builders_per_task,
                 max_targets_per_task,
+                units_file,
             } => {
-                if let Err(e) = generate_dataset(
-                    &output,
-                    GenerationConfig {
-                        sample_count: samples,
-                        time_limit_seconds,
-                        max_tasks,
-                        max_builders_per_task,
-                        max_targets_per_task,
-                    },
-                ) {
+                let generator = DatasetGenerator::new(GenerationConfig {
+                    sample_count: samples,
+                    time_limit_seconds,
+                    max_tasks,
+                    max_builders_per_task,
+                    max_targets_per_task,
+                })
+                .with_units_file(&units_file);
+
+                let generator = match generator {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("Failed to load units file: {e}");
+                        std::process::exit(1);
+                    }
+                };
+
+                if let Err(e) = generator.generate(&output) {
                     eprintln!("Dataset generation failed: {e}");
                     std::process::exit(1);
                 }
             }
         },
         Command::Train(args) => {
-            let model_config = EcoPredictorConfig::new().with_hidden_size(args.hidden_size);
+            let model_config = EcoPredictorConfig::new()
+                .with_hidden_size(args.hidden_size)
+                .with_dropout(args.dropout);
             let optimizer_config = AdamConfig::new();
+            let optimizer_config = if args.weight_decay > 0.0 {
+                optimizer_config.with_weight_decay(Some(
+                    faf_build_prediction::WeightDecayConfig::new(args.weight_decay as f32),
+                ))
+            } else {
+                optimizer_config
+            };
             let config = TrainingConfig::new(model_config, optimizer_config)
                 .with_num_epochs(args.epochs)
                 .with_batch_size(args.batch_size)

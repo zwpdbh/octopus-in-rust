@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SEQ_LEN: usize = 10;
 
 /// Number of scalar features describing a single task (including the `is_present` flag).
-pub const TASK_FEATURE_DIM: usize = 19;
+pub const TASK_FEATURE_DIM: usize = 22;
 
 /// A single training example: initial economy + plan, paired with the simulated
 /// completion time.
@@ -116,6 +116,13 @@ pub fn extract_task_features(
 ) -> [f64; TASK_FEATURE_DIM] {
     let t = TaskStats::from_task(task);
 
+    let net_energy_start = initial_eco.production_per_second_energy
+        - initial_eco.maintenance_consumption_per_second_energy
+        - t.builder_maintenance;
+    let first_build_time = t.first_build_time.max(1.0);
+    let first_mass_drain = t.first_mass_cost / first_build_time * t.build_power;
+    let first_energy_drain = t.first_energy_cost / first_build_time * t.build_power;
+
     [
         1.0, // is_present flag
         task.start_after.value(),
@@ -136,6 +143,9 @@ pub fn extract_task_features(
         t.production_mass,
         t.production_energy,
         t.maintenance_energy,
+        net_energy_start,
+        first_mass_drain,
+        first_energy_drain,
     ]
 }
 

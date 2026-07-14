@@ -19,7 +19,9 @@ cargo run --release -p faf-sim-cli -- train \
   --epochs 100 \
   --batch-size 64 \
   --hidden-size 256 \
-  --learning-rate 0.001
+  --learning-rate 0.001 \
+  --dropout 0.2 \
+  --weight-decay 1e-5
 ```
 
 ## Flags
@@ -32,6 +34,8 @@ cargo run --release -p faf-sim-cli -- train \
 | `--batch-size` | `64` | Training batch size. |
 | `--learning-rate` | `0.001` | Adam learning rate. |
 | `--hidden-size` | `128` | LSTM hidden size. |
+| `--dropout` | `0.0` | Dropout probability on the LSTM output. |
+| `--weight-decay` | `0.0` | L2 weight decay for Adam. |
 
 ## Model architecture
 

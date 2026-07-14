@@ -4,9 +4,20 @@ Generate a SQLite dataset of simulated build plans and their completion times fo
 
 ## Usage
 
+By default, builders and targets are sampled from the real FAF unit database:
+
 ```bash
 faf-sim-cli dataset generate --samples 10000 --output dataset.sqlite
 ```
+
+To use a different units file, pass `--units-file`:
+
+```bash
+# Use an alternate FAF unit index
+faf-sim-cli dataset generate --units-file path/to/faf_units.json
+```
+
+The CLI always samples from real units. Pure synthetic sampling is still available through the library API by calling `DatasetGenerator::new(config).generate(db_path)` without `with_units_file`.
 
 ## Flags
 
@@ -18,6 +29,28 @@ faf-sim-cli dataset generate --samples 10000 --output dataset.sqlite
 | `--max-tasks` | `5` | Maximum number of tasks in a generated plan. |
 | `--max-builders-per-task` | `3` | Maximum number of builders assigned to a single task. |
 | `--max-targets-per-task` | `5` | Maximum number of target units inside a single task. |
+| `--units-file` | `plugins/faf-units/data/faf_units.json` | Path to the FAF units JSON file. When valid, builders/targets are sampled from real unit definitions. |
+
+## Sampling pipeline
+
+1. Load `faf-units` and split units into a **builder pool** (units with `build_power > 0`) and a **target pool** (units that have a build recipe).
+2. Sample a realistic starting economy from the ACU plus 1–5 T1 engineers, 1–6 T1 power generators, and 0–4 T1 mass extractors, with storage filled to capacity.
+3. For each task, sample builders from the builder pool and targets from the target pool.
+4. Run the exact `faf-sim` simulator on the plan to get the ground-truth completion time.
+5. Store the per-task feature sequence and label in SQLite.
+
+The same steps are exposed as a fluent Rust pipeline for custom callers:
+
+```rust
+// crates/faf-build-prediction/src/data/generator.rs ~line 127 — DatasetGenerator::pipeline
+DatasetGenerator::new(GenerationConfig::default())
+    .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
+    .pipeline(Path::new("data/dataset.db"))?
+    .create_schema()?
+    .generate_samples()?
+    .save_norm()?
+    .finish()?;
+```
 
 ## Output schema
 

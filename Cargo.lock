@@ -3982,6 +3982,7 @@ dependencies = [
  "anyhow",
  "burn",
  "faf-sim",
+ "faf-units",
  "rand 0.10.1",
  "rusqlite",
  "serde",

@@ -4,7 +4,7 @@
 //! The final hidden state is projected to a single log-time value.
 
 use burn::nn::loss::{MseLoss, Reduction};
-use burn::nn::{Linear, LinearConfig, Lstm, LstmConfig};
+use burn::nn::{Dropout, DropoutConfig, Linear, LinearConfig, Lstm, LstmConfig};
 use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::{InferenceStep, RegressionOutput, TrainOutput, TrainStep};
@@ -18,6 +18,9 @@ pub struct EcoPredictorConfig {
     /// Size of the LSTM hidden state.
     #[config(default = 128)]
     pub hidden_size: usize,
+    /// Dropout probability applied to the final LSTM hidden state.
+    #[config(default = 0.0)]
+    pub dropout: f64,
 }
 
 impl EcoPredictorConfig {
@@ -27,6 +30,7 @@ impl EcoPredictorConfig {
             lstm: LstmConfig::new(TASK_FEATURE_DIM, self.hidden_size, true)
                 .with_batch_first(true)
                 .init(device),
+            dropout: DropoutConfig::new(self.dropout).init(),
             output: LinearConfig::new(self.hidden_size, 1).init(device),
         }
     }
@@ -35,6 +39,7 @@ impl EcoPredictorConfig {
 #[derive(Module, Debug)]
 pub struct EcoPredictor<B: Backend> {
     lstm: Lstm<B>,
+    dropout: Dropout,
     output: Linear<B>,
 }
 
@@ -44,7 +49,8 @@ impl<B: Backend> EcoPredictor<B> {
         // features: [batch, seq, TASK_FEATURE_DIM]
         let (_output, state) = self.lstm.forward(features, None);
         // state.hidden: [batch, hidden_size]
-        self.output.forward(state.hidden)
+        let hidden = self.dropout.forward(state.hidden);
+        self.output.forward(hidden)
     }
 
     /// Forward pass packaged as a regression output for Burn training.

@@ -90,7 +90,7 @@ Events are written as NDJSON lines:
 {"Ticked":{"time":1.0,"production_per_second_mass":50.0,"production_per_second_energy":101.0,"maintenance_consumption_per_second_energy":0.0,"mass_drain":0.0,"energy_drain":0.0,"total_mass_spent":0.0,"total_energy_spent":0.0,"mass_storage":650.0,"mass_storage_cap":650.0,"energy_storage":4000.0,"energy_storage_cap":4000.0}}
 {"TaskStarted":{"task_id":1,"time":1.0}}
 {"TaskCompleted":{"task_id":1,"time":42.0}}
-{"Finished":null}
+"Finished"
 ```
 
 Use `--format grouped` to receive `Ticked` events grouped into `rates`, `storage`, `totals`, and `derived`:
