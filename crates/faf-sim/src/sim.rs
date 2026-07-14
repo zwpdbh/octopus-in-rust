@@ -1,20 +1,23 @@
 //! Simulation entry point.
 //!
 //! This module provides [`Simulation`], the high-level synchronous driver that
-//! owns a Bevy `App`, wires in the [`EcoPlugin`](crate::eco::EcoPlugin), and
+//! owns a Bevy `App`, wires in [`BuildQueueSimulationPlugin`](crate::runtime::BuildQueueSimulationPlugin), and
 //! lets callers step the simulation one tick at a time.
 //!
-//! The input/output types are defined in [`crate::eco`] and re-exported here
-//! so consumers have a single obvious import path.
+//! The input/output types are defined in [`crate::runtime`] and re-exported at
+//! the crate root so consumers have a single obvious import path.
 
 use bevy_app::prelude::*;
 
-pub use crate::eco::{BuildQueue, BuildTask, EcoPlugin, EcoSnapshot, SimulationEvent, UnitDefRef};
-use crate::eco::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, Producer,
-    SimClock, StorageContributor, TotalsSpent,
-};
 use crate::quantities::{StepTime, Time};
+use crate::runtime::components::{Producer, StorageContributor};
+use crate::runtime::resources::{
+    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, SimClock,
+    TailEndTime, TotalsSpent,
+};
+pub use crate::runtime::{
+    BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
+};
 
 /// Steppable economy simulation.
 pub struct Simulation {
@@ -30,13 +33,13 @@ impl Simulation {
     /// runs until the build queue is empty.
     pub fn new(queue: BuildQueue, dt: StepTime, max_time: Option<Time>) -> Self {
         let mut app = App::new();
-        app.add_plugins(EcoPlugin)
+        app.add_plugins(BuildQueueSimulationPlugin)
             .insert_resource(SimClock {
                 time: Time::from_raw(0.0),
                 dt: dt.as_time(),
                 max_time,
             })
-            .insert_resource(PendingTasks(queue.tasks))
+            .insert_resource(PendingTasks::from_tasks(queue.tasks))
             .insert_resource(CompletedTasks(Vec::new()))
             .insert_resource(EffectiveFactor(1.0))
             .insert_resource(EventJournal::default())
@@ -44,7 +47,8 @@ impl Simulation {
             .insert_resource(TotalsSpent {
                 mass: 0.0,
                 energy: 0.0,
-            });
+            })
+            .insert_resource(TailEndTime::default());
 
         // Seed the world with the initial economy so recompute_base_economy_system
         // preserves the caller's starting income and storage capacity.
@@ -52,8 +56,11 @@ impl Simulation {
             let initial = queue.initial_eco;
             let world = app.world_mut();
             world.spawn((Producer {
-                mass_income: initial.net_mass_income.value(),
-                energy_income: initial.net_energy_income.value(),
+                production_per_second_mass: initial.production_per_second_mass.value(),
+                production_per_second_energy: initial.production_per_second_energy.value(),
+                maintenance_consumption_per_second_energy: initial
+                    .maintenance_consumption_per_second_energy
+                    .value(),
             },));
             world.spawn((StorageContributor {
                 mass: initial.mass_storage.cap.value(),

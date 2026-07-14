@@ -1,0 +1,15 @@
+[package]
+name = "faf-dioxus-ui"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Reusable Dioxus UI primitives independent of business logic."
+license = "MIT"
+
+[dependencies]
+dioxus = { workspace = true }
+js-sys = "0.3"
+plotters = { version = "0.3.7", default-features = false, features = ["line_series", "full_palette"] }
+plotters-canvas = "0.3"
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "Window"] }

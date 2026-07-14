@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use faf_sim::sim::BuildQueue;
 use faf_sim::Time;
 
 use crate::components::{
@@ -6,7 +7,9 @@ use crate::components::{
 };
 use crate::route::Route;
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
-use crate::types::{AssignmentTarget, ConstructionItem, UnitSummary};
+use crate::types::{
+    AssignmentTarget, ConstructionItem, ConstructionPlan, SimulationUiState, UnitSummary,
+};
 
 #[component]
 pub fn SimulateBuild() -> Element {
@@ -16,7 +19,8 @@ pub fn SimulateBuild() -> Element {
     let mut draft_builder_count = use_signal(|| 1_u32);
     let mut draft_target = use_signal(|| None::<UnitSummary>);
     let mut draft_target_count = use_signal(|| 1_u32);
-    let mut simulation_requested = use_signal(|| false);
+    let simulation_state = use_signal(|| SimulationUiState::NotStartYet);
+    let mut show_json_editor = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
 
     use_effect(move || {
@@ -58,7 +62,7 @@ pub fn SimulateBuild() -> Element {
                 id: next_id,
                 builders: vec![builder; builder_count as usize],
                 targets: vec![target; target_count as usize],
-                start_after: Time::from_raw(0.0),
+                start_after: Time::from_raw(1.0),
             };
             if item.is_valid() {
                 plan.write().items.push(item);
@@ -85,53 +89,54 @@ pub fn SimulateBuild() -> Element {
                 div { class: "flex flex-1 overflow-hidden",
                     // Left sidebar: Eco Settings + new item creator
                     div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
-                        EcoPanel { plan }
-                        div { class: "my-4 border-t border-neutral-700" }
-                        QueueItemCreator {
-                            draft_builder,
-                            draft_builder_count,
-                            draft_target,
-                            draft_target_count,
-                            on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                            on_save: save_draft,
-                            on_clear: clear_draft,
+                        div {
+                            class: if plan_locked(simulation_state) { "pointer-events-none opacity-60" } else { "" },
+                            EcoPanel {
+                                plan,
+                                disabled: plan_locked(simulation_state),
+                            }
+                            div { class: "my-4 border-t border-neutral-700" }
+                            QueueItemCreator {
+                                draft_builder,
+                                draft_builder_count,
+                                draft_target,
+                                draft_target_count,
+                                disabled: plan_locked(simulation_state),
+                                on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                                on_save: save_draft,
+                                on_clear: clear_draft,
+                            }
                         }
                     }
                     // Right area: created queue (top) + simulation results (bottom)
                     div { class: "flex-1 overflow-hidden flex flex-col",
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
-                            h3 { class: "text-sm font-semibold text-white mb-3 shrink-0",
-                                "Construction Plan"
+                            div { class: "flex items-center gap-2 mb-3 shrink-0",
+                                h3 { class: "text-sm font-semibold text-white", "Construction Plan" }
+                                button {
+                                    class: "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors font-mono shadow-sm",
+                                    title: if *show_json_editor.read() { "Show cards" } else { "Show JSON" },
+                                    onclick: move |_| {
+                                        let current = *show_json_editor.read();
+                                        show_json_editor.set(!current);
+                                    },
+                                    if *show_json_editor.read() { "☰" } else { "{{ }}" }
+                                }
                             }
-                            QueueItemList {
-                                plan,
-                                on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                            if *show_json_editor.read() {
+                                JsonPlanEditor { plan, units: units.clone() }
+                            } else {
+                                QueueItemList {
+                                    plan,
+                                    disabled: plan_locked(simulation_state),
+                                    on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                                }
                             }
                         }
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
-                            div { class: "flex items-center justify-center mb-3 shrink-0",
-                                button {
-                                    class: "px-4 py-1.5 text-sm rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors",
-                                    onclick: move |_| {
-                                        let current = *simulation_requested.read();
-                                        simulation_requested.set(!current);
-                                    },
-                                    if *simulation_requested.read() {
-                                        "Hide Simulation"
-                                    } else {
-                                        "Run Simulation"
-                                    }
-                                }
-                            }
-                            if *simulation_requested.read() {
-                                SimulationPanel {
-                                    plan: plan.read().clone(),
-                                    on_close: move |_| simulation_requested.set(false),
-                                }
-                            } else {
-                                p { class: "text-sm text-neutral-500 text-center mt-4",
-                                    "Click \"Run Simulation\" to see build timings."
-                                }
+                            SimulationPanel {
+                                plan,
+                                state: simulation_state,
                             }
                         }
                     }
@@ -148,4 +153,75 @@ pub fn SimulateBuild() -> Element {
         Some(None) => rsx! { "Failed to load units" },
         None => rsx! { "Loading..." },
     }
+}
+
+#[component]
+fn JsonPlanEditor(mut plan: Signal<ConstructionPlan>, units: Vec<UnitSummary>) -> Element {
+    let units = use_signal(|| units);
+    let mut json_text = use_signal(|| serialize_build_queue(&plan.read()));
+    let mut error = use_signal(|| String::new());
+    let mut copied = use_signal(|| false);
+
+    // Reset the editor text whenever the plan changes from outside the editor
+    // (e.g. adding an item via the cards view).
+    use_effect(move || {
+        json_text.set(serialize_build_queue(&plan.read()));
+    });
+
+    rsx! {
+        div { class: "flex-1 flex flex-col min-h-0 gap-3",
+            div { class: "flex items-center gap-2 shrink-0",
+                span { class: "text-xs text-neutral-400", "Edit the plan JSON below." }
+                button {
+                    class: "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-sm",
+                    onclick: move |_| {
+                        let text = json_text.read().clone();
+                        copy_to_clipboard(&text);
+                        copied.set(true);
+                    },
+                    if *copied.read() { "Copied!" } else { "Copy" }
+                }
+            }
+            textarea {
+                class: "flex-1 min-h-0 w-full p-3 rounded bg-neutral-950 border border-neutral-700 text-xs font-mono text-neutral-300 resize-none focus:outline-none focus:border-blue-500",
+                value: "{json_text}",
+                oninput: move |e| {
+                    copied.set(false);
+                    let text = e.value();
+                    json_text.set(text.clone());
+                    match serde_json::from_str::<BuildQueue>(&text) {
+                        Ok(queue) => {
+                            plan.set(ConstructionPlan::from_build_queue(queue, &units.read()));
+                            error.set(String::new());
+                        }
+                        Err(err) => {
+                            error.set(format!("Invalid JSON: {err}"));
+                        }
+                    }
+                },
+            }
+            if !error.read().is_empty() {
+                p { class: "text-xs text-red-400 shrink-0", "{error}" }
+            }
+        }
+    }
+}
+
+fn serialize_build_queue(plan: &ConstructionPlan) -> String {
+    serde_json::to_string_pretty(&plan.to_build_queue())
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+fn copy_to_clipboard(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let clipboard = window.navigator().clipboard();
+        let _ = clipboard.write_text(text);
+    }
+}
+
+fn plan_locked(state: Signal<SimulationUiState>) -> bool {
+    matches!(
+        *state.read(),
+        SimulationUiState::Running | SimulationUiState::Paused
+    )
 }

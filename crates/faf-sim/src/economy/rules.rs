@@ -1,4 +1,4 @@
-//! Economy formulas for FAF build-order simulation.
+//! Pure numerical rules for FAF build-order simulation.
 //!
 //! Supreme Commander / FAF uses a continuous-drain build model:
 //!
@@ -8,8 +8,8 @@
 //!   effective build power drops.
 //!
 //! This module provides the pure math for computing drain rates and stall
-//! factors. It does not simulate queues, concurrent projects, or economy
-//! growth — that belongs in the simulator layer.
+//! factors for a single project. The global/graph tick that combines multiple
+//! projects lives in [`super::tick`].
 
 use crate::{
     quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time},
@@ -259,12 +259,12 @@ impl<'a> ResourceProducer<'a> {
         self.production() - self.maintenance()
     }
 
-    /// Mass income per mass invested.
+    /// FAF `ProductionPerSecondMass` per mass invested.
     pub fn mass_efficiency(&self) -> f64 {
         self.production().mass_per_second.value() / self.def.cost.mass
     }
 
-    /// Energy income per mass invested.
+    /// FAF `ProductionPerSecondEnergy` per mass invested.
     pub fn energy_efficiency(&self) -> f64 {
         self.production().energy_per_second.value() / self.def.cost.mass
     }
@@ -294,20 +294,37 @@ pub fn summarize_economy(
     production - maintenance - construction
 }
 
-/// Current economy state at a point in time.
+/// Internal, mutable economy state used to drive the simulation.
+///
+/// This is the simulator's working copy of an army's economy. It uses strongly
+/// typed quantities (`MassRate`, `EnergyRate`, `Storage<Mass>`, etc.) and is
+/// updated every tick by the runtime systems.
+///
+/// For the public, point-in-time record that is emitted to consumers (UI,
+/// WebSocket, ML models), see [`EcoSnapshot`](crate::runtime::EcoSnapshot).
+/// `EcoSnapshot` is a flat, primitive view of one tick and includes construction
+/// drain rates; `EconomyRuntimeState` is the typed, evolving state that the
+/// simulator mutates to produce those snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-pub struct EconomyState {
-    /// Mass income per second (can be negative during drains).
-    pub net_mass_income: MassRate,
-    /// Energy income per second (can be negative during drains).
-    pub net_energy_income: EnergyRate,
+pub struct EconomyRuntimeState {
+    /// Gross mass produced per second (FAF `ProductionPerSecondMass`).
+    pub production_per_second_mass: MassRate,
+    /// Gross energy produced per second (FAF `ProductionPerSecondEnergy`).
+    /// Maintenance is tracked separately in [`maintenance_consumption_per_second_energy`]
+    /// and subtracted each tick.
+    pub production_per_second_energy: EnergyRate,
+    /// Total FAF `MaintenanceConsumptionPerSecondEnergy` paid by all owned units.
+    /// Used to compute the FAF-standard energy efficiency ratio that scales
+    /// `ProductionPerSecondMass` during stalls.
+    #[serde(default)]
+    pub maintenance_consumption_per_second_energy: EnergyRate,
     /// Mass storage (current amount + capacity).
     pub mass_storage: Storage<Mass>,
     /// Energy storage (current amount + capacity).
     pub energy_storage: Storage<Energy>,
 }
 
-impl EconomyState {
+impl EconomyRuntimeState {
     /// Estimate how long it would take this economy to finish `cost` work at
     /// `build_power` under a continuous, constant-income approximation.
     ///
@@ -317,7 +334,7 @@ impl EconomyState {
     /// before storage is empty.
     ///
     /// Assumptions:
-    /// - Mass and energy income stay constant.
+    /// - `ProductionPerSecondMass` and `ProductionPerSecondEnergy` stay constant.
     /// - Total build power stays constant.
     /// - Remaining resource costs are distributed proportionally over remaining
     ///   build work (a continuous / fluid approximation).
@@ -339,8 +356,10 @@ impl EconomyState {
         let mut remaining_work = cost.build_time;
         let mut mass_storage = self.mass_storage.current.value();
         let mut energy_storage = self.energy_storage.current.value();
-        let mass_income = self.net_mass_income.value();
-        let energy_income = self.net_energy_income.value();
+        let production_per_second_mass = self.production_per_second_mass.value();
+        // Energy income available for construction after paying maintenance.
+        let production_per_second_energy = self.production_per_second_energy.value()
+            - self.maintenance_consumption_per_second_energy.value();
         let mut elapsed = 0.0;
 
         while remaining_work > 1e-9 {
@@ -350,12 +369,12 @@ impl EconomyState {
 
             // Sustainable build rate for each resource (income == drain).
             let mass_sustainable_bp = if mass_per_work > 0.0 {
-                mass_income / mass_per_work
+                production_per_second_mass / mass_per_work
             } else {
                 f64::INFINITY
             };
             let energy_sustainable_bp = if energy_per_work > 0.0 {
-                energy_income / energy_per_work
+                production_per_second_energy / energy_per_work
             } else {
                 f64::INFINITY
             };
@@ -378,8 +397,8 @@ impl EconomyState {
             // storage depletes?
             let mass_drain_rate = effective_bp * mass_per_work;
             let energy_drain_rate = effective_bp * energy_per_work;
-            let net_mass = mass_income - mass_drain_rate;
-            let net_energy = energy_income - energy_drain_rate;
+            let net_mass = production_per_second_mass - mass_drain_rate;
+            let net_energy = production_per_second_energy - energy_drain_rate;
 
             let time_to_finish = remaining_work / effective_bp;
             let mut dt = time_to_finish;
@@ -432,12 +451,13 @@ pub struct TickResult {
 /// FAF stalls when storage would go negative. The effective build power is
 /// reduced to the largest fraction of the requested power that keeps both
 /// resources non-negative.
-pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> TickResult {
+pub fn apply_tick(requested: &BuildDrain, state: &EconomyRuntimeState, dt: f64) -> TickResult {
     let dt = Time::from_raw(dt);
 
     // Gross income during this tick, ignoring the drain.
-    let mass_income = state.net_mass_income * dt;
-    let energy_income = state.net_energy_income * dt;
+    let production_per_second_mass = state.production_per_second_mass * dt;
+    let production_per_second_energy = state.production_per_second_energy * dt;
+    let maintenance_energy = state.maintenance_consumption_per_second_energy * dt;
 
     // Requested consumption over the tick.
     let requested_mass = Mass::from_raw(requested.mass_per_second * dt.value());
@@ -445,17 +465,20 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
 
     // Maximum sustainable fraction of requested drain before each resource
     // would hit zero. If income already covers drain, the factor is 1.0.
+    // Energy must pay maintenance before it can be spent on construction.
     let mass_factor = if requested_mass.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.mass_storage.current + mass_income).max(Mass::zero());
+        let available = (state.mass_storage.current + production_per_second_mass).max(Mass::zero());
         (available / requested_mass).min(1.0)
     };
 
     let energy_factor = if requested_energy.value() <= 0.0 {
         1.0
     } else {
-        let available = (state.energy_storage.current + energy_income).max(Energy::zero());
+        let available = (state.energy_storage.current + production_per_second_energy
+            - maintenance_energy)
+            .max(Energy::zero());
         (available / requested_energy).min(1.0)
     };
 
@@ -468,10 +491,13 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
     let mass_consumed = requested_mass * effective_factor;
     let energy_consumed = requested_energy * effective_factor;
 
-    let new_mass_current = (state.mass_storage.current + mass_income - mass_consumed)
+    let new_mass_current = (state.mass_storage.current + production_per_second_mass
+        - mass_consumed)
         .min(state.mass_storage.cap)
         .max(Mass::zero());
-    let new_energy_current = (state.energy_storage.current + energy_income - energy_consumed)
+    let new_energy_current = (state.energy_storage.current + production_per_second_energy
+        - maintenance_energy
+        - energy_consumed)
         .min(state.energy_storage.cap)
         .max(Energy::zero());
     let new_mass_storage = Storage::new(new_mass_current, state.mass_storage.cap);
@@ -485,109 +511,6 @@ pub fn apply_tick(requested: &BuildDrain, state: &EconomyState, dt: f64) -> Tick
         new_energy_storage,
         energy_stalled: effective_factor < 1.0 && energy_factor <= mass_factor,
         mass_stalled: effective_factor < 1.0 && mass_factor <= energy_factor,
-    }
-}
-
-/// Result of applying a *global* drain to an economy state for one tick.
-///
-/// Unlike [`TickResult`], this models the combined drain of all active
-/// projects and includes the graph-model assumption that energy stall also
-/// scales mass income.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GraphTickResult {
-    /// Global stall factor applied to every active project.
-    pub effective_factor: f64,
-    /// Mass actually consumed across all projects.
-    pub mass_consumed: Mass,
-    /// Energy actually consumed across all projects.
-    pub energy_consumed: Energy,
-    /// New mass storage after the tick.
-    pub new_mass_storage: Storage<Mass>,
-    /// New energy storage after the tick.
-    pub new_energy_storage: Storage<Energy>,
-    /// True if energy was the limiting resource.
-    pub energy_stalled: bool,
-    /// True if mass was the limiting resource.
-    pub mass_stalled: bool,
-    /// Net mass income after applying the energy-stall scaling.
-    pub scaled_net_mass_income: MassRate,
-}
-
-/// Compute the effective global stall factor for the combined drain of all
-/// active projects in the graph model.
-///
-/// The graph model assumes that when energy is the limiting resource, mass
-/// production is scaled down by the same energy factor. This can in turn make
-/// mass the limiting resource, so the factor is recomputed once after scaling.
-pub fn apply_tick_graph(
-    total_mass_drain: f64,
-    total_energy_drain: f64,
-    state: &EconomyState,
-    dt: f64,
-) -> GraphTickResult {
-    let dt = Time::from_raw(dt);
-
-    let mass_income = state.net_mass_income * dt;
-    let energy_income = state.net_energy_income * dt;
-
-    let requested_mass = Mass::from_raw(total_mass_drain * dt.value());
-    let requested_energy = Energy::from_raw(total_energy_drain * dt.value());
-
-    // Energy factor without mass-income scaling.
-    let energy_factor = if requested_energy.value() <= 0.0 {
-        1.0
-    } else {
-        let available = (state.energy_storage.current + energy_income).max(Energy::zero());
-        (available / requested_energy).min(1.0)
-    };
-
-    // Mass factor before considering energy-driven mass-income reduction.
-    let mass_factor_unscaled = if requested_mass.value() <= 0.0 {
-        1.0
-    } else {
-        let available = (state.mass_storage.current + mass_income).max(Mass::zero());
-        (available / requested_mass).min(1.0)
-    };
-
-    // If energy is the binding constraint, mass income scales with it.
-    let scaled_net_mass_income = if energy_factor <= mass_factor_unscaled {
-        state.net_mass_income * energy_factor
-    } else {
-        state.net_mass_income
-    };
-    let scaled_mass_income = scaled_net_mass_income * dt;
-
-    // Recompute mass factor with the possibly reduced mass income.
-    let mass_factor = if requested_mass.value() <= 0.0 {
-        1.0
-    } else {
-        let available = (state.mass_storage.current + scaled_mass_income).max(Mass::zero());
-        (available / requested_mass).min(1.0)
-    };
-
-    let effective_factor = mass_factor.min(energy_factor);
-
-    let mass_consumed = requested_mass * effective_factor;
-    let energy_consumed = requested_energy * effective_factor;
-
-    let new_mass_current = (state.mass_storage.current + scaled_mass_income - mass_consumed)
-        .min(state.mass_storage.cap)
-        .max(Mass::zero());
-    let new_energy_current = (state.energy_storage.current + energy_income - energy_consumed)
-        .min(state.energy_storage.cap)
-        .max(Energy::zero());
-    let new_mass_storage = Storage::new(new_mass_current, state.mass_storage.cap);
-    let new_energy_storage = Storage::new(new_energy_current, state.energy_storage.cap);
-
-    GraphTickResult {
-        effective_factor,
-        mass_consumed,
-        energy_consumed,
-        new_mass_storage,
-        new_energy_storage,
-        energy_stalled: effective_factor < 1.0 && energy_factor <= mass_factor,
-        mass_stalled: effective_factor < 1.0 && mass_factor <= energy_factor,
-        scaled_net_mass_income,
     }
 }
 
@@ -685,7 +608,7 @@ impl BuildProject {
     }
 
     /// Advance the project by `dt` seconds, consuming resources from `state`.
-    pub fn tick(&mut self, state: &mut EconomyState, dt: f64) -> TickOutcome {
+    pub fn tick(&mut self, state: &mut EconomyRuntimeState, dt: f64) -> TickOutcome {
         let Some(drain) = compute_drain(&self.target.to_target_stats(), self.assigned_build_power)
         else {
             return TickOutcome::InProgress {
@@ -729,7 +652,7 @@ mod tests {
     use crate::units::{TechLevel, UnitId, Units};
 
     fn load_units() -> Units {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
+        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
         Units::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
@@ -798,9 +721,9 @@ mod tests {
         )
         .expect("valid drain");
 
-        let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+        let state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -809,6 +732,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(500000.0),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         let result = apply_tick(&drain, &state, 1.0);
@@ -827,10 +751,10 @@ mod tests {
         )
         .expect("valid drain");
 
-        // Very little energy income and storage, plenty of mass.
-        let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+        // Very little `ProductionPerSecondEnergy` and storage, plenty of mass.
+        let state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -839,6 +763,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(drain.energy_per_second * 0.5),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         let result = apply_tick(&drain, &state, 1.0);
@@ -858,10 +783,10 @@ mod tests {
         )
         .expect("valid drain");
 
-        // Very little mass income and storage, plenty of energy.
-        let state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(0.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(1000.0),
+        // Very little `ProductionPerSecondMass` and storage, plenty of energy.
+        let state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(drain.mass_per_second * 0.5),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -870,6 +795,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(500000.0),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         let result = apply_tick(&drain, &state, 1.0);
@@ -889,9 +815,9 @@ mod tests {
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         project.assigned_build_power = build_power;
 
-        let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+        let mut state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -900,6 +826,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(100000.0),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         let build_time = project.target.build_time;
@@ -920,9 +847,9 @@ mod tests {
         let build_time = project.target.build_time;
         project.assigned_build_power = build_power;
 
-        let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+        let mut state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -931,6 +858,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(100000.0),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         // Tick for half the nominal completion time.
@@ -956,10 +884,10 @@ mod tests {
         let build_time = project.target.build_time;
         project.assigned_build_power = build_power;
 
-        // No energy income and tiny storage: will stall.
-        let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+        // No `ProductionPerSecondEnergy` and tiny storage: will stall.
+        let mut state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -968,6 +896,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(10.0),
                 crate::quantities::Energy::from_raw(1000000.0),
             ),
+            ..Default::default()
         };
 
         // Even after the nominal build time, it should not be complete.
@@ -994,9 +923,9 @@ mod tests {
         )
         .expect("valid drain");
 
-        let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(1000.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(10000.0),
+        let mut state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(100.0),
                 crate::quantities::Mass::from_raw(100.0),
@@ -1005,6 +934,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(1000.0),
                 crate::quantities::Energy::from_raw(1000.0),
             ),
+            ..Default::default()
         };
 
         let result = apply_tick(&drain, &state, 1.0);
@@ -1047,9 +977,9 @@ mod tests {
         project.assigned_build_power = build_power;
 
         // No income, but enough storage to pay the full cost.
-        let mut state = EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(0.0),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(0.0),
+        let mut state = EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(total_mass),
                 crate::quantities::Mass::from_raw(total_mass * 2.0),
@@ -1058,6 +988,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(total_energy),
                 crate::quantities::Energy::from_raw(total_energy * 2.0),
             ),
+            ..Default::default()
         };
 
         let outcome = project.tick(&mut state, build_time);
@@ -1163,12 +1094,16 @@ mod tests {
     fn test_economy(
         mass_storage: f64,
         energy_storage: f64,
-        mass_income: f64,
-        energy_income: f64,
-    ) -> EconomyState {
-        EconomyState {
-            net_mass_income: crate::quantities::MassRate::from_raw(mass_income),
-            net_energy_income: crate::quantities::EnergyRate::from_raw(energy_income),
+        production_per_second_mass: f64,
+        production_per_second_energy: f64,
+    ) -> EconomyRuntimeState {
+        EconomyRuntimeState {
+            production_per_second_mass: crate::quantities::MassRate::from_raw(
+                production_per_second_mass,
+            ),
+            production_per_second_energy: crate::quantities::EnergyRate::from_raw(
+                production_per_second_energy,
+            ),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(mass_storage),
                 crate::quantities::Mass::from_raw(0.0),
@@ -1177,6 +1112,7 @@ mod tests {
                 crate::quantities::Energy::from_raw(energy_storage),
                 crate::quantities::Energy::from_raw(0.0),
             ),
+            ..Default::default()
         }
     }
 

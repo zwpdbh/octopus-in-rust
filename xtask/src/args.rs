@@ -64,6 +64,7 @@ pub fn print_faf_db_help() {
     println!();
     println!("Commands:");
     println!("  backend    Start the Axum backend (cargo run --package faf-db-server)");
+    println!("             Logs are written to data/logs/faf-db-server.log");
     println!("  frontend   Start the Dioxus dev server (dx serve --platform web)");
     println!();
     println!("Examples:");

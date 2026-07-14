@@ -31,6 +31,11 @@ struct UnitSummary {
     build_cost_mass: Option<f64>,
     build_cost_energy: Option<f64>,
     build_time: Option<f64>,
+    production_per_second_mass: Option<f64>,
+    production_per_second_energy: Option<f64>,
+    maintenance_consumption_per_second_energy: Option<f64>,
+    mass_storage: Option<f64>,
+    energy_storage: Option<f64>,
 }
 
 #[tokio::main]
@@ -105,6 +110,20 @@ async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
             build_cost_mass: unit.economy.as_ref().and_then(|e| e.build_cost_mass),
             build_cost_energy: unit.economy.as_ref().and_then(|e| e.build_cost_energy),
             build_time: unit.economy.as_ref().and_then(|e| e.build_time),
+            production_per_second_mass: unit
+                .economy
+                .as_ref()
+                .and_then(|e| e.production_per_second_mass),
+            production_per_second_energy: unit
+                .economy
+                .as_ref()
+                .and_then(|e| e.production_per_second_energy),
+            maintenance_consumption_per_second_energy: unit
+                .economy
+                .as_ref()
+                .and_then(|e| e.maintenance_consumption_per_second_energy),
+            mass_storage: unit.economy.as_ref().and_then(|e| e.storage_mass),
+            energy_storage: unit.economy.as_ref().and_then(|e| e.storage_energy),
         })
         .collect();
     Json(summaries)
@@ -243,7 +262,7 @@ async fn handle_simulation_socket(
     use axum::extract::ws::Message;
     use faf_sim::protocol::{SimClientMessage, SimServerMessage};
     use faf_sim::quantities::{StepTime, Time};
-    use faf_sim_service::{RunConfig, SimServiceEvent};
+    use faf_sim_service::SimServiceEvent;
 
     // Wait for the client to start or subscribe to a simulation.
     let (sim_id, rx) = loop {
@@ -266,8 +285,14 @@ async fn handle_simulation_socket(
                             continue;
                         };
                         let max_time = max_time_seconds.map(|s| Time::from_raw(s as f64));
-                        let config = RunConfig { dt, max_time, mode };
-                        let id = service.start(queue, config);
+                        let id = match mode {
+                            faf_sim::protocol::SimulationMode::Active => {
+                                service.start_active_sim(queue, dt, max_time)
+                            }
+                            faf_sim::protocol::SimulationMode::Passive { tick_interval_ms } => {
+                                service.start_passive_sim(queue, dt, max_time, tick_interval_ms)
+                            }
+                        };
                         let started = SimServerMessage::Started { simulation_id: id };
                         if send_server_message(&mut socket, started).await.is_err() {
                             return;

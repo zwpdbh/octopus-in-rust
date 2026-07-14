@@ -8,7 +8,13 @@ pub fn SliderField(
     max: f64,
     unit: String,
     on_change: EventHandler<f64>,
+    #[props(default = false)] disabled: bool,
 ) -> Element {
+    let cursor = if disabled {
+        "cursor-not-allowed"
+    } else {
+        "cursor-pointer"
+    };
     rsx! {
         div { class: "text-sm",
             div { class: "flex items-center justify-between",
@@ -20,12 +26,15 @@ pub fn SliderField(
                 min: "{min}",
                 max: "{max}",
                 value: "{value}",
+                disabled: disabled,
                 oninput: move |e| {
-                    if let Ok(v) = e.value().parse::<f64>() {
-                        on_change.call(v);
+                    if !disabled {
+                        if let Ok(v) = e.value().parse::<f64>() {
+                            on_change.call(v);
+                        }
                     }
                 },
-                class: "w-full h-2 mt-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500",
+                class: "w-full h-2 mt-1 bg-neutral-700 rounded-lg appearance-none accent-blue-500 {cursor}",
             }
         }
     }
