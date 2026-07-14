@@ -9,7 +9,7 @@ use burn::record::{CompactRecorder, Recorder};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
 
 use crate::data::normalize::NormalizationParams;
-use crate::data::sample::{extract_features, FEATURE_DIM};
+use crate::data::sample::{extract_sequence_features, MAX_SEQ_LEN, TASK_FEATURE_DIM};
 use crate::train::TrainingConfig;
 
 /// Result of predicting a single plan.
@@ -55,11 +55,15 @@ pub fn predict(
 
     let model = config.model.init::<NdArray>(&device).load_record(record);
 
-    let raw_features = extract_features(initial_eco, plan);
-    let normalized = norm.normalize(&raw_features);
+    let raw_sequence = extract_sequence_features(initial_eco, plan);
+    let normalized_sequence: Vec<Vec<f32>> = raw_sequence
+        .iter()
+        .map(|task| norm.normalize(task))
+        .collect();
+    let padded_sequence = pad_sequence(&normalized_sequence);
 
-    let features = Tensor::<NdArray, 2>::from_data(
-        TensorData::new(normalized, [1, FEATURE_DIM]).convert::<f32>(),
+    let features = Tensor::<NdArray, 3>::from_data(
+        TensorData::new(padded_sequence, [1, MAX_SEQ_LEN, TASK_FEATURE_DIM]).convert::<f32>(),
         &device,
     );
 
@@ -71,4 +75,17 @@ pub fn predict(
         predicted_time_seconds: predicted_time,
         is_practical: predicted_time < practical_threshold_seconds,
     })
+}
+
+fn pad_sequence(normalized: &[Vec<f32>]) -> Vec<f32> {
+    let mut sequence: Vec<f32> = normalized
+        .iter()
+        .take(MAX_SEQ_LEN)
+        .flat_map(|task| task.iter().copied())
+        .collect();
+
+    let missing_steps = MAX_SEQ_LEN.saturating_sub(normalized.len());
+    sequence.extend(std::iter::repeat(0.0).take(missing_steps * TASK_FEATURE_DIM));
+
+    sequence
 }

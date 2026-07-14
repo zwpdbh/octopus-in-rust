@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use burn::data::dataloader::DataLoaderBuilder;
+use burn::data::dataset::{Dataset, InMemDataset};
 use burn::optim::AdamConfig;
 use burn::prelude::*;
 use burn::record::CompactRecorder;
@@ -10,7 +11,7 @@ use burn::tensor::backend::AutodiffBackend;
 use burn::train::metric::LossMetric;
 use burn::train::{Learner, SupervisedTraining};
 
-use crate::data::dataset::{EcoPlanBatcher, SqliteDataset};
+use crate::data::dataset::{EcoPlanBatcher, EcoPlanItem, SqliteDataset};
 use crate::model::predictor::EcoPredictorConfig;
 
 #[derive(Config, Debug)]
@@ -45,19 +46,26 @@ pub fn train<B: AutodiffBackend>(
 
     B::seed(&device, config.seed);
 
+    // Load all samples and split 80/20 for train/validation.
+    let dataset = SqliteDataset::from_path(dataset_path, 0, 1);
+    let items: Vec<EcoPlanItem> = dataset.iter().collect();
+    let split = (items.len() * 4) / 5;
+    let train_items = items[..split].to_vec();
+    let valid_items = items[split..].to_vec();
+
     let batcher = EcoPlanBatcher;
 
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(SqliteDataset::from_path(dataset_path, 0, 10));
+        .build(InMemDataset::new(train_items));
 
     let dataloader_valid = DataLoaderBuilder::new(batcher)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(SqliteDataset::from_path(dataset_path, 1, 10));
+        .build(InMemDataset::new(valid_items));
 
     let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_valid)
         .metrics((LossMetric::new(),))

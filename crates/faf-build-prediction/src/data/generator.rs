@@ -1,4 +1,4 @@
-//! Generate a SQLite dataset of simulated build-plan completion times.
+//! Generate a SQLite dataset of simulated build plans and their completion times.
 
 use std::path::Path;
 
@@ -10,7 +10,7 @@ use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
 
 use crate::data::normalize::NormalizationParams;
-use crate::data::sample::{build_queue, extract_features, EcoPlanLabel, EcoPlanSample};
+use crate::data::sample::{build_queue, extract_sequence_features, EcoPlanLabel, EcoPlanSample};
 
 /// Configuration controlling dataset generation.
 #[derive(Debug, Clone, Copy)]
@@ -56,11 +56,13 @@ pub fn generate_dataset(db_path: &Path, config: GenerationConfig) -> Result<()> 
 
     for i in 0..config.sample_count {
         let sample = generate_sample(&mut rng, config);
-        let features = extract_features(&sample.initial_eco, &sample.plan);
-        stats.update(&features);
+        let task_features = extract_sequence_features(&sample.initial_eco, &sample.plan);
+        for task in &task_features {
+            stats.update(task);
+        }
 
         let label = simulate_label(&sample, config.time_limit_seconds);
-        insert_sample(&tx, &features, &label, config.time_limit_seconds)?;
+        insert_sample(&tx, &task_features, &label)?;
 
         if (i + 1) % 1000 == 0 {
             println!("Generated {} / {} samples", i + 1, config.sample_count);
@@ -85,7 +87,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            features TEXT NOT NULL,
+            sequence_features TEXT NOT NULL,
             target_time REAL NOT NULL,
             is_practical INTEGER NOT NULL
         )",
@@ -107,16 +109,16 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
 
 fn insert_sample(
     tx: &Transaction,
-    features: &[f64],
+    task_features: &[[f64; crate::data::sample::TASK_FEATURE_DIM]],
     label: &EcoPlanLabel,
-    time_limit_seconds: f64,
 ) -> Result<()> {
-    let features_json = serde_json::to_string(features).context("Failed to serialize features")?;
-    let target_time = label.regression_target(time_limit_seconds).exp();
+    let features_json =
+        serde_json::to_string(task_features).context("Failed to serialize sequence features")?;
+    let target_time = label.time_seconds();
     let is_practical = label.is_practical() as i32;
 
     tx.execute(
-        "INSERT INTO samples (features, target_time, is_practical) VALUES (?1, ?2, ?3)",
+        "INSERT INTO samples (sequence_features, target_time, is_practical) VALUES (?1, ?2, ?3)",
         [
             &features_json,
             &target_time.to_string(),
@@ -138,16 +140,18 @@ fn generate_sample<R: Rng>(rng: &mut R, config: GenerationConfig) -> EcoPlanSamp
     EcoPlanSample {
         initial_eco,
         plan,
-        label: EcoPlanLabel::NotPractical, // placeholder, replaced by simulation
+        label: EcoPlanLabel::NotPractical { time_seconds: 0.0 }, // placeholder, replaced by simulation
     }
 }
 
 fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLabel {
     let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
-    let max_time = Time::from_raw(time_limit_seconds);
+    // Run the simulator up to 10x the practical threshold so the model can
+    // learn degrees of "not practical" instead of a single clipped value.
+    let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
     let queue = build_queue(&sample.initial_eco, sample.plan.clone());
 
-    let mut sim = Simulation::new(queue, dt, Some(max_time));
+    let mut sim = Simulation::new(queue, dt, Some(max_sim_time));
 
     while !sim.is_finished() {
         sim.step();
@@ -159,7 +163,9 @@ fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLab
             time_seconds: final_time,
         }
     } else {
-        EcoPlanLabel::NotPractical
+        EcoPlanLabel::NotPractical {
+            time_seconds: final_time,
+        }
     }
 }
 
@@ -206,7 +212,7 @@ fn random_builder<R: Rng>(rng: &mut R) -> UnitEcoStats {
         build_time: 0.0,
         production_per_second_mass: 0.0,
         production_per_second_energy: 0.0,
-        maintenance_consumption_per_second_energy: rng.random_range(0.0..20.0),
+        maintenance_consumption_per_second_energy: rng.random_range(0.0..200.0),
         mass_storage: 0.0,
         energy_storage: 0.0,
         unit_id: None,
@@ -220,8 +226,8 @@ fn random_target<R: Rng>(rng: &mut R) -> UnitEcoStats {
         energy_cost: rng.random_range(1.0..100000.0),
         build_time: rng.random_range(1.0..5000.0),
         production_per_second_mass: rng.random_range(0.0..50.0),
-        production_per_second_energy: rng.random_range(0.0..500.0),
-        maintenance_consumption_per_second_energy: rng.random_range(0.0..50.0),
+        production_per_second_energy: rng.random_range(0.0..5000.0),
+        maintenance_consumption_per_second_energy: rng.random_range(0.0..2000.0),
         mass_storage: rng.random_range(0.0..1000.0),
         energy_storage: rng.random_range(0.0..10000.0),
         unit_id: None,

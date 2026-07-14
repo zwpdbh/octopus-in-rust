@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::data::sample::FEATURE_DIM;
+use crate::data::sample::TASK_FEATURE_DIM;
 
 const EPSILON: f64 = 1.0e-8;
 
@@ -19,8 +19,8 @@ pub struct NormalizationParams {
 impl NormalizationParams {
     pub fn new() -> Self {
         Self {
-            mins: vec![f64::INFINITY; FEATURE_DIM],
-            maxs: vec![f64::NEG_INFINITY; FEATURE_DIM],
+            mins: vec![f64::INFINITY; TASK_FEATURE_DIM],
+            maxs: vec![f64::NEG_INFINITY; TASK_FEATURE_DIM],
         }
     }
 

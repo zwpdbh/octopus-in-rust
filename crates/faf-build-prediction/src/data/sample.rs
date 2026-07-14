@@ -1,11 +1,14 @@
 //! Labeled samples used to train the build-time predictor.
 
-use faf_sim::quantities::{Energy, Mass};
-use faf_sim::runtime::{BuildQueue, BuildTask, EcoSnapshot};
+use faf_sim::runtime::{BuildTask, EcoSnapshot};
 use serde::{Deserialize, Serialize};
 
-/// Number of scalar features fed into the model.
-pub const FEATURE_DIM: usize = 17;
+/// Maximum number of tasks the sequence model accepts.
+/// Plans with fewer tasks are zero-padded; longer plans are truncated.
+pub const MAX_SEQ_LEN: usize = 10;
+
+/// Number of scalar features describing a single task (including the `is_present` flag).
+pub const TASK_FEATURE_DIM: usize = 19;
 
 /// A single training example: initial economy + plan, paired with the simulated
 /// completion time.
@@ -21,71 +24,80 @@ pub struct EcoPlanSample {
 pub enum EcoPlanLabel {
     /// Plan finished within the practical time limit.
     Practical { time_seconds: f64 },
-    /// Plan did not finish within the practical time limit.
-    NotPractical,
+    /// Plan did not finish within the practical time limit, but the simulator
+    /// ran until a larger cap so the model can learn how slow it is.
+    NotPractical { time_seconds: f64 },
 }
 
 impl EcoPlanLabel {
-    /// Target value used for regression.
-    ///
-    /// Practical plans use `log(time)`; non-practical plans are clipped to the
-    /// log of the practical time limit so the model learns to assign them the
-    /// worst plausible score.
-    pub fn regression_target(&self, time_limit_seconds: f64) -> f64 {
-        match self {
-            EcoPlanLabel::Practical { time_seconds } => time_seconds.ln(),
-            EcoPlanLabel::NotPractical => time_limit_seconds.ln(),
-        }
+    /// Target value used for regression: `log(completion_time_or_cap)`.
+    pub fn regression_target(&self) -> f64 {
+        let time_seconds = match self {
+            EcoPlanLabel::Practical { time_seconds } => *time_seconds,
+            EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
+        };
+        time_seconds.ln()
     }
 
     pub fn is_practical(&self) -> bool {
         matches!(self, EcoPlanLabel::Practical { .. })
     }
+
+    pub fn time_seconds(&self) -> f64 {
+        match self {
+            EcoPlanLabel::Practical { time_seconds } => *time_seconds,
+            EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
+        }
+    }
 }
 
-/// Aggregate statistics describing a plan, independent of the current economy.
+/// Aggregate statistics describing a task's builders and targets.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PlanStats {
-    pub total_mass_cost: f64,
-    pub total_energy_cost: f64,
-    pub total_build_time: f64,
-    pub num_targets: usize,
-    pub first_mass_cost: f64,
-    pub first_energy_cost: f64,
-    pub first_build_time: f64,
-    pub total_production_mass: f64,
-    pub total_production_energy: f64,
-    pub total_maintenance_energy: f64,
-    pub total_mass_storage: f64,
-    pub total_energy_storage: f64,
-    pub assigned_build_power: f64,
+struct TaskStats {
+    builder_count: usize,
+    target_count: usize,
+    build_power: f64,
+    builder_maintenance: f64,
+    mass_cost: f64,
+    energy_cost: f64,
+    build_time: f64,
+    production_mass: f64,
+    production_energy: f64,
+    maintenance_energy: f64,
+    mass_storage: f64,
+    energy_storage: f64,
+    first_mass_cost: f64,
+    first_energy_cost: f64,
+    first_build_time: f64,
 }
 
-impl PlanStats {
-    pub fn from_plan(plan: &[BuildTask]) -> Self {
-        let mut stats = PlanStats::default();
+impl TaskStats {
+    pub fn from_task(task: &BuildTask) -> Self {
+        let mut stats = TaskStats::default();
+        stats.builder_count = task.builders.len();
+        stats.target_count = task.targets.len();
+
+        for builder in &task.builders {
+            stats.build_power += builder.build_power;
+            stats.builder_maintenance += builder.maintenance_consumption_per_second_energy;
+        }
+
         let mut first_target_seen = false;
+        for target in &task.targets {
+            stats.mass_cost += target.mass_cost;
+            stats.energy_cost += target.energy_cost;
+            stats.build_time += target.build_time;
+            stats.production_mass += target.production_per_second_mass;
+            stats.production_energy += target.production_per_second_energy;
+            stats.maintenance_energy += target.maintenance_consumption_per_second_energy;
+            stats.mass_storage += target.mass_storage;
+            stats.energy_storage += target.energy_storage;
 
-        for task in plan {
-            stats.assigned_build_power += task.builders.iter().map(|b| b.build_power).sum::<f64>();
-
-            for target in &task.targets {
-                stats.total_mass_cost += target.mass_cost;
-                stats.total_energy_cost += target.energy_cost;
-                stats.total_build_time += target.build_time;
-                stats.total_production_mass += target.production_per_second_mass;
-                stats.total_production_energy += target.production_per_second_energy;
-                stats.total_maintenance_energy += target.maintenance_consumption_per_second_energy;
-                stats.total_mass_storage += target.mass_storage;
-                stats.total_energy_storage += target.energy_storage;
-                stats.num_targets += 1;
-
-                if !first_target_seen {
-                    stats.first_mass_cost = target.mass_cost;
-                    stats.first_energy_cost = target.energy_cost;
-                    stats.first_build_time = target.build_time;
-                    first_target_seen = true;
-                }
+            if !first_target_seen {
+                stats.first_mass_cost = target.mass_cost;
+                stats.first_energy_cost = target.energy_cost;
+                stats.first_build_time = target.build_time;
+                first_target_seen = true;
             }
         }
 
@@ -93,11 +105,20 @@ impl PlanStats {
     }
 }
 
-/// Extract a fixed-length feature vector from the initial economy and plan.
-pub fn extract_features(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> [f64; FEATURE_DIM] {
-    let plan = PlanStats::from_plan(plan);
+/// Extract a fixed-length feature vector for a single task.
+///
+/// The vector includes the initial economy snapshot so the model can relate
+/// each task to the economy it starts from, plus task-level aggregates that
+/// encode build power, costs, production, maintenance, and storage.
+pub fn extract_task_features(
+    task: &BuildTask,
+    initial_eco: &EcoSnapshot,
+) -> [f64; TASK_FEATURE_DIM] {
+    let t = TaskStats::from_task(task);
 
     [
+        1.0, // is_present flag
+        task.start_after.value(),
         initial_eco.production_per_second_mass,
         initial_eco.production_per_second_energy,
         initial_eco.maintenance_consumption_per_second_energy,
@@ -105,17 +126,27 @@ pub fn extract_features(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> [f64; 
         initial_eco.energy_storage,
         initial_eco.mass_storage_cap,
         initial_eco.energy_storage_cap,
-        plan.total_mass_cost,
-        plan.total_energy_cost,
-        plan.total_build_time,
-        plan.num_targets as f64,
-        plan.first_mass_cost,
-        plan.first_energy_cost,
-        plan.first_build_time,
-        plan.total_production_mass,
-        plan.total_production_energy,
-        plan.assigned_build_power,
+        t.builder_count as f64,
+        t.target_count as f64,
+        t.build_power,
+        t.builder_maintenance,
+        t.mass_cost,
+        t.energy_cost,
+        t.build_time,
+        t.production_mass,
+        t.production_energy,
+        t.maintenance_energy,
     ]
+}
+
+/// Extract a sequence of per-task feature vectors from a plan.
+pub fn extract_sequence_features(
+    initial_eco: &EcoSnapshot,
+    plan: &[BuildTask],
+) -> Vec<[f64; TASK_FEATURE_DIM]> {
+    plan.iter()
+        .map(|task| extract_task_features(task, initial_eco))
+        .collect()
 }
 
 /// Build an initial economy from an `EcoSnapshot`.
@@ -136,19 +167,19 @@ pub fn eco_snapshot_to_runtime_state(
             snapshot.maintenance_consumption_per_second_energy,
         ),
         mass_storage: Storage {
-            current: Mass::from_raw(snapshot.mass_storage),
-            cap: Mass::from_raw(snapshot.mass_storage_cap),
+            current: faf_sim::quantities::Mass::from_raw(snapshot.mass_storage),
+            cap: faf_sim::quantities::Mass::from_raw(snapshot.mass_storage_cap),
         },
         energy_storage: Storage {
-            current: Energy::from_raw(snapshot.energy_storage),
-            cap: Energy::from_raw(snapshot.energy_storage_cap),
+            current: faf_sim::quantities::Energy::from_raw(snapshot.energy_storage),
+            cap: faf_sim::quantities::Energy::from_raw(snapshot.energy_storage_cap),
         },
     }
 }
 
 /// Convenience helper to build a `BuildQueue` from a snapshot and a plan.
-pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> BuildQueue {
-    BuildQueue {
+pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> faf_sim::runtime::BuildQueue {
+    faf_sim::runtime::BuildQueue {
         initial_eco: eco_snapshot_to_runtime_state(snapshot),
         tasks: plan,
     }
@@ -159,7 +190,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracted_features_have_expected_length() {
+    fn extracted_sequence_features_have_expected_shape() {
         let snapshot = EcoSnapshot {
             time: 0.0,
             production_per_second_mass: 0.0,
@@ -189,7 +220,8 @@ mod tests {
             }],
         };
 
-        let features = extract_features(&snapshot, &[task]);
-        assert_eq!(features.len(), FEATURE_DIM);
+        let features = extract_sequence_features(&snapshot, &[task]);
+        assert_eq!(features.len(), 1);
+        assert_eq!(features[0].len(), TASK_FEATURE_DIM);
     }
 }

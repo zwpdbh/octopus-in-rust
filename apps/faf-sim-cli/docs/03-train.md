@@ -1,6 +1,6 @@
 # `train` command
 
-Train a small neural network to predict build-plan completion time from an initial economy snapshot and a plan.
+Train a small LSTM sequence model to predict build-plan completion time from an initial economy snapshot and a plan.
 
 ## Usage
 
@@ -31,7 +31,17 @@ cargo run --release -p faf-sim-cli -- train \
 | `--epochs` | `10` | Number of training epochs. |
 | `--batch-size` | `64` | Training batch size. |
 | `--learning-rate` | `0.001` | Adam learning rate. |
-| `--hidden-size` | `128` | Hidden layer size of the MLP. |
+| `--hidden-size` | `128` | LSTM hidden size. |
+
+## Model architecture
+
+The predictor is a single-layer LSTM that processes the build queue task-by-task. Each task is encoded as a fixed-size vector containing:
+
+- the initial economy snapshot (production, storage, caps)
+- builder aggregates (count, build power, maintenance)
+- target aggregates (costs, build time, production, maintenance, storage)
+
+The final LSTM hidden state is projected to a single `log(completion_time)` value. Exponentiating gives the predicted wall-clock time.
 
 ## Output artifacts
 
@@ -39,6 +49,6 @@ The command writes three files to `--output-dir`:
 
 - `config.json`: model architecture and training hyperparameters.
 - `model`: trained Burn model weights.
-- `norm.json`: input feature normalization parameters (mean and std).
+- `norm.json`: per-feature min/max normalization params used during training.
 
 These artifacts are consumed by the [`predict`](04-predict.md) command.

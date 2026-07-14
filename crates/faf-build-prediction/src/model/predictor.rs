@@ -1,59 +1,56 @@
-//! Regression model predicting `log(completion_time)` from economy + plan features.
+//! Sequence regression model predicting `log(completion_time)` from a plan.
+//!
+//! The model processes each `BuildTask` as a step in a sequence using an LSTM.
+//! The final hidden state is projected to a single log-time value.
 
 use burn::nn::loss::{MseLoss, Reduction};
-use burn::nn::{Linear, LinearConfig, Relu};
+use burn::nn::{Linear, LinearConfig, Lstm, LstmConfig};
 use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::{InferenceStep, RegressionOutput, TrainOutput, TrainStep};
 
 use crate::data::dataset::EcoPlanBatch;
-use crate::data::sample::FEATURE_DIM;
+use crate::data::sample::TASK_FEATURE_DIM;
 
 /// Configuration for the predictor network.
 #[derive(Config, Debug)]
 pub struct EcoPredictorConfig {
-    /// Size of the first hidden layer.
+    /// Size of the LSTM hidden state.
     #[config(default = 128)]
     pub hidden_size: usize,
-    /// Dropout probability (currently unused, kept for future regularization).
-    #[config(default = 0.0)]
-    pub dropout: f64,
 }
 
 impl EcoPredictorConfig {
     /// Initialize the model on the given device.
     pub fn init<B: Backend>(&self, device: &B::Device) -> EcoPredictor<B> {
         EcoPredictor {
-            input: LinearConfig::new(FEATURE_DIM, self.hidden_size).init(device),
-            hidden: LinearConfig::new(self.hidden_size, self.hidden_size).init(device),
+            lstm: LstmConfig::new(TASK_FEATURE_DIM, self.hidden_size, true)
+                .with_batch_first(true)
+                .init(device),
             output: LinearConfig::new(self.hidden_size, 1).init(device),
-            activation: Relu::new(),
         }
     }
 }
 
 #[derive(Module, Debug)]
 pub struct EcoPredictor<B: Backend> {
-    input: Linear<B>,
-    hidden: Linear<B>,
+    lstm: Lstm<B>,
     output: Linear<B>,
-    activation: Relu,
 }
 
 impl<B: Backend> EcoPredictor<B> {
     /// Forward pass returning raw predictions.
-    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
-        let x = self.input.forward(features);
-        let x = self.activation.forward(x);
-        let x = self.hidden.forward(x);
-        let x = self.activation.forward(x);
-        self.output.forward(x)
+    pub fn forward(&self, features: Tensor<B, 3>) -> Tensor<B, 2> {
+        // features: [batch, seq, TASK_FEATURE_DIM]
+        let (_output, state) = self.lstm.forward(features, None);
+        // state.hidden: [batch, hidden_size]
+        self.output.forward(state.hidden)
     }
 
     /// Forward pass packaged as a regression output for Burn training.
     pub fn forward_regression(
         &self,
-        features: Tensor<B, 2>,
+        features: Tensor<B, 3>,
         targets: Tensor<B, 2>,
     ) -> RegressionOutput<B> {
         let predictions = self.forward(features);

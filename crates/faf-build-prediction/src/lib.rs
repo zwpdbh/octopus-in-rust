@@ -15,7 +15,10 @@ pub mod train;
 pub use burn::optim::AdamConfig;
 pub use data::generator::{generate_dataset, GenerationConfig};
 pub use data::normalize::NormalizationParams;
-pub use data::sample::{extract_features, EcoPlanLabel, EcoPlanSample, PlanStats, FEATURE_DIM};
+pub use data::sample::{
+    build_queue, extract_sequence_features, EcoPlanLabel, EcoPlanSample, MAX_SEQ_LEN,
+    TASK_FEATURE_DIM,
+};
 pub use model::predictor::{EcoPredictor, EcoPredictorConfig};
 pub use predict::{predict, Prediction};
 pub use train::{train, train_with_ndarray, TrainingConfig};
