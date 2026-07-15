@@ -28,6 +28,20 @@ pub struct TrainingConfig {
     pub seed: u64,
     #[config(default = 1.0e-3)]
     pub learning_rate: f64,
+    /// Power used for time-based loss weighting.
+    ///
+    /// The training loss is MSE on `log(completion_time)`, but each sample is
+    /// multiplied by `raw_time^{-time_weight_power}` before averaging. Because
+    /// randomly generated plans are overwhelmingly slow, the default value of
+    /// `0.0` (standard unweighted MSE) lets the optimizer mostly ignore the rare
+    /// fast plans and overpredict their completion times.
+    ///
+    /// Positive values make fast plans contribute more to the gradient, which
+    /// usually improves estimates for practical plans. Values that are too high
+    /// can bias the model toward underpredicting slow plans. A good starting
+    /// point for a heavily imbalanced dataset is `0.2`–`0.5`.
+    #[config(default = 0.0)]
+    pub time_weight_power: f64,
 }
 
 /// Train a model and save artifacts to `artifact_dir`.
@@ -73,7 +87,9 @@ pub fn train<B: AutodiffBackend>(
         .num_epochs(config.num_epochs)
         .summary();
 
-    let model = config.model.init::<B>(&device);
+    let model = config
+        .model
+        .init_with_weight::<B>(&device, config.time_weight_power);
     let result = training.launch(Learner::new(
         model,
         config.optimizer.init(),

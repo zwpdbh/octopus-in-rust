@@ -104,6 +104,15 @@ struct TrainArgs {
     /// L2 weight decay for the Adam optimizer.
     #[arg(long, default_value = "0.0")]
     weight_decay: f64,
+    /// Time-based loss weighting power.
+    ///
+    /// The training loss multiplies each sample by `raw_time^{-power}` before
+    /// averaging. Positive values up-weight fast plans, which prevents the
+    /// optimizer from ignoring the rare practical region in an imbalanced
+    /// dataset. Too high a value can bias the model toward underpredicting.
+    /// 0.0 disables weighting (standard MSE). Try 0.2–0.5 as a starting point.
+    #[arg(long, default_value = "0.0")]
+    time_weight_power: f64,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -225,7 +234,8 @@ fn main() {
             let config = TrainingConfig::new(model_config, optimizer_config)
                 .with_num_epochs(args.epochs)
                 .with_batch_size(args.batch_size)
-                .with_learning_rate(args.learning_rate);
+                .with_learning_rate(args.learning_rate)
+                .with_time_weight_power(args.time_weight_power);
 
             train_with_ndarray(&args.output_dir, &args.dataset, config);
         }
