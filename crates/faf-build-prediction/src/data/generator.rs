@@ -10,10 +10,11 @@ use faf_sim::units::{BlueprintLibrary, TechLevel, UnitKind};
 use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
 
-use crate::data::normalize::NormalizationParams;
+use crate::data::normalize::{Collecting, NormalizationParams, Ready};
 use crate::data::sample::{
     extract_sequence_features, EcoPlanSample, Simulated, Unsimulated, TASK_FEATURE_DIM,
 };
+use std::marker::PhantomData;
 
 /// Configuration controlling dataset generation.
 #[derive(Debug, Clone, Copy)]
@@ -110,7 +111,7 @@ impl DatasetGenerator {
     /// .save_norm()?
     /// .finish()?;
     /// ```
-    pub fn pipeline(self, db_path: &Path) -> Result<DatasetPipeline> {
+    pub fn pipeline(self, db_path: &Path) -> Result<DatasetPipeline<PipelineNew>> {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open SQLite database at {}", db_path.display()))?;
 
@@ -121,6 +122,7 @@ impl DatasetGenerator {
             stats: NormalizationParams::new(),
             practical_count: 0,
             not_practical_count: 0,
+            _stage: PhantomData,
         })
     }
 
@@ -188,9 +190,37 @@ fn sample_from_set<R: Rng>(set: &HashSet<UnitKind>, rng: &mut R) -> UnitKind {
     set.iter().nth(idx).expect("non-empty set").clone()
 }
 
-/// A fluent, step-by-step pipeline for generating a dataset.
+/// Stage markers for [`DatasetPipeline`].
+pub struct PipelineNew;
+pub struct SchemaCreated;
+pub struct SamplesGenerated;
+pub struct NormSaved;
+
+/// Internal trait linking each pipeline stage to the normalization state it
+/// carries (`Collecting` before samples are generated, `Ready` after).
+pub trait PipelineStage {
+    type NormState;
+}
+
+impl PipelineStage for PipelineNew {
+    type NormState = Collecting;
+}
+
+impl PipelineStage for SchemaCreated {
+    type NormState = Collecting;
+}
+
+impl PipelineStage for SamplesGenerated {
+    type NormState = Ready;
+}
+
+impl PipelineStage for NormSaved {
+    type NormState = Ready;
+}
+
+/// A type-state pipeline for generating a dataset.
 ///
-/// Each method consumes `self` and returns `Self`, so the stages can be chained:
+/// The compiler enforces the legal order:
 ///
 /// ```rust,ignore
 /// generator
@@ -200,31 +230,42 @@ fn sample_from_set<R: Rng>(set: &HashSet<UnitKind>, rng: &mut R) -> UnitKind {
 ///     .save_norm()?
 ///     .finish()?;
 /// ```
-pub struct DatasetPipeline {
+pub struct DatasetPipeline<Stage: PipelineStage> {
     generator: DatasetGenerator,
     db_path: PathBuf,
     conn: Connection,
-    stats: NormalizationParams,
+    stats: NormalizationParams<Stage::NormState>,
     practical_count: usize,
     not_practical_count: usize,
+    _stage: PhantomData<Stage>,
 }
 
-impl DatasetPipeline {
+impl DatasetPipeline<PipelineNew> {
     /// Drop and recreate the `samples` and `metadata` tables.
     ///
     /// This ensures each dataset generation starts with a clean database so
     /// training always uses only the most recently generated samples.
-    pub fn create_schema(mut self) -> Result<Self> {
+    pub fn create_schema(mut self) -> Result<DatasetPipeline<SchemaCreated>> {
         println!(
             "Preparing fresh dataset at {} (existing tables will be dropped)...",
             self.db_path.display()
         );
         create_schema(&mut self.conn)?;
-        Ok(self)
+        Ok(DatasetPipeline {
+            generator: self.generator,
+            db_path: self.db_path,
+            conn: self.conn,
+            stats: self.stats,
+            practical_count: self.practical_count,
+            not_practical_count: self.not_practical_count,
+            _stage: PhantomData,
+        })
     }
+}
 
+impl DatasetPipeline<SchemaCreated> {
     /// Generate all configured samples, simulate them, and insert the rows.
-    pub fn generate_samples(mut self) -> Result<Self> {
+    pub fn generate_samples(mut self) -> Result<DatasetPipeline<SamplesGenerated>> {
         let config = self.generator.config;
         println!("Generating dataset:");
         println!("  samples: {}", config.sample_count);
@@ -268,16 +309,37 @@ impl DatasetPipeline {
         }
 
         tx.commit().context("Failed to commit SQLite transaction")?;
-        Ok(self)
+        let stats = self.stats.finalize();
+        Ok(DatasetPipeline {
+            generator: self.generator,
+            db_path: self.db_path,
+            conn: self.conn,
+            stats,
+            practical_count: self.practical_count,
+            not_practical_count: self.not_practical_count,
+            _stage: PhantomData,
+        })
     }
+}
 
+impl DatasetPipeline<SamplesGenerated> {
     /// Persist the normalization parameters computed while sampling.
-    pub fn save_norm(self) -> Result<Self> {
+    pub fn save_norm(self) -> Result<DatasetPipeline<NormSaved>> {
         let norm_path = self.db_path.with_extension("norm.json");
         self.stats.save(&norm_path)?;
-        Ok(self)
+        Ok(DatasetPipeline {
+            generator: self.generator,
+            db_path: self.db_path,
+            conn: self.conn,
+            stats: self.stats,
+            practical_count: self.practical_count,
+            not_practical_count: self.not_practical_count,
+            _stage: PhantomData,
+        })
     }
+}
 
+impl DatasetPipeline<NormSaved> {
     /// Complete the pipeline and print a summary.
     pub fn finish(self) -> Result<()> {
         let total = self.generator.config.sample_count;
@@ -303,7 +365,7 @@ struct SamplePipeline<'a, 'conn, R: Rng> {
     generator: &'a DatasetGenerator,
     rng: &'a mut R,
     tx: &'a Transaction<'conn>,
-    stats: &'a mut NormalizationParams,
+    stats: &'a mut NormalizationParams<Collecting>,
     practical_count: &'a mut usize,
     not_practical_count: &'a mut usize,
 }

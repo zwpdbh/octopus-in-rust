@@ -1,12 +1,12 @@
 //! Burn `Dataset` implementation backed by a SQLite database of samples.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use burn::data::dataset::{Dataset, InMemDataset};
 use burn::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 
-use crate::data::normalize::NormalizationParams;
+use crate::data::normalize::{NormalizationParams, Ready};
 use crate::data::sample::{MAX_SEQ_LEN, TASK_FEATURE_DIM};
 
 /// A single item loaded from the SQLite dataset.
@@ -24,7 +24,7 @@ pub struct SqliteDataset {
     path: PathBuf,
     offset: usize,
     len: usize,
-    norm: NormalizationParams,
+    norm: NormalizationParams<Ready>,
 }
 
 impl SqliteDataset {
@@ -79,12 +79,16 @@ fn count_samples(path: &PathBuf) -> anyhow::Result<usize> {
     Ok(count as usize)
 }
 
-fn load_normalization(path: &PathBuf) -> anyhow::Result<NormalizationParams> {
+fn load_normalization(path: &Path) -> anyhow::Result<NormalizationParams<Ready>> {
     let norm_path = path.with_extension("norm.json");
     NormalizationParams::load(&norm_path)
 }
 
-fn load_sample(path: &PathBuf, norm: &NormalizationParams, index: usize) -> Option<EcoPlanItem> {
+fn load_sample(
+    path: &PathBuf,
+    norm: &NormalizationParams<Ready>,
+    index: usize,
+) -> Option<EcoPlanItem> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     let mut stmt = conn
         .prepare("SELECT sequence_features, target_time FROM samples LIMIT 1 OFFSET ?")
@@ -127,7 +131,7 @@ fn load_all(path: &PathBuf) -> anyhow::Result<Vec<EcoPlanItem>> {
 }
 
 fn normalize_and_pad(
-    norm: &NormalizationParams,
+    norm: &NormalizationParams<Ready>,
     raw_features: &[[f64; TASK_FEATURE_DIM]],
 ) -> Vec<Vec<f32>> {
     let mut normalized: Vec<Vec<f32>> = raw_features

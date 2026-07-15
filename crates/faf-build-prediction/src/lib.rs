@@ -14,12 +14,18 @@ pub mod train;
 
 pub use burn::optim::decay::WeightDecayConfig;
 pub use burn::optim::AdamConfig;
-pub use data::generator::{generate_dataset, DatasetGenerator, GenerationConfig};
-pub use data::normalize::NormalizationParams;
+pub use data::generator::{
+    generate_dataset, DatasetGenerator, DatasetPipeline, GenerationConfig, NormSaved, PipelineNew,
+    PipelineStage, SamplesGenerated, SchemaCreated,
+};
+pub use data::normalize::{Collecting, NormalizationParams, Ready};
 pub use data::sample::{
     build_queue, extract_sequence_features, EcoPlanLabel, EcoPlanSample, Simulated, Unsimulated,
     MAX_SEQ_LEN, TASK_FEATURE_DIM,
 };
 pub use model::predictor::{EcoPredictor, EcoPredictorConfig};
-pub use predict::{predict, Prediction};
+pub use predict::{
+    predict, ConfigLoaded, ModelLoaded, NormLoaded, Prediction, PredictorConfigLoaded,
+    PredictorModelLoaded, PredictorNormLoaded,
+};
 pub use train::{train, train_with_ndarray, TrainingConfig};

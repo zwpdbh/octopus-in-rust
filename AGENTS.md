@@ -341,7 +341,7 @@ fn process(s: &mut SampleStage) {
 #### Good
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 302 — SamplePipeline (abbreviated)
+// crates/faf-build-prediction/src/data/generator.rs ~line 364 — SamplePipeline (abbreviated)
 struct SamplePipeline<'a, 'conn, R: Rng> {
     generator: &'a DatasetGenerator,
     rng: &'a mut R,
@@ -374,7 +374,7 @@ impl<'a, 'conn, R: Rng> FeaturedSample<'a, 'conn, R> {
 Usage:
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 250 — DatasetPipeline::generate_samples (abbreviated)
+// crates/faf-build-prediction/src/data/generator.rs ~line 292 — DatasetPipeline::generate_samples (abbreviated)
 SamplePipeline { generator, rng: &mut rng, tx: &tx, stats, ... }
     .generate_sample()
     .simulate(time_limit)
