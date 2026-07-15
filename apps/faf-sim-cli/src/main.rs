@@ -166,9 +166,8 @@ struct BuildShared {
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Raw)]
     format: OutputFormat,
     /// How many seconds the simulation keeps ticking after the build queue is
-    /// empty. A value of `0` means the simulation stops immediately at
-    /// completion and only the final result is printed. The default `30`
-    /// seconds keeps ticking so you can observe the post-queue economy.
+    /// empty. A value of `0` stops immediately at completion and prints only
+    /// the final result, suppressing intermediate events.
     #[arg(long, default_value_t = 30.0)]
     tail_seconds: f64,
 }
@@ -391,8 +390,8 @@ fn run_passive(queue: PathBuf, shared: BuildShared, tick_interval_ms: u64) {
 /// Print simulation events as NDJSON until the stream ends or the simulation
 /// finishes.
 ///
-/// When `final_only` is `true`, intermediate `Ticked` events are suppressed.
-/// The last `Ticked` snapshot is printed when `Finished` arrives, giving a
+/// When `final_only` is `true`, all intermediate events are suppressed. The
+/// last `Ticked` snapshot is printed when `Finished` arrives, giving a
 /// single-line summary of the final simulation state.
 fn consume_events(
     rx: SimulationReceiver,
@@ -404,16 +403,14 @@ fn consume_events(
     while let Ok(event) = rx.recv() {
         match event {
             SimServiceEvent::Simulation(sim_event) => {
-                match &sim_event {
-                    SimulationEvent::Ticked(snapshot) if final_only => {
+                if final_only {
+                    if let SimulationEvent::Ticked(snapshot) = &sim_event {
                         // Keep updating the buffered snapshot; print it once at
                         // the end instead of emitting every tick.
                         last_tick = Some(*snapshot);
                     }
-                    _ if !final_only => {
-                        print_event(&sim_event, format);
-                    }
-                    _ => {}
+                } else {
+                    print_event(&sim_event, format);
                 }
 
                 if matches!(sim_event, SimulationEvent::Finished) {

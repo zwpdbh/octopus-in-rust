@@ -111,7 +111,7 @@ faf-sim-cli build passive --tail-seconds 10 tmp/faf-sim-examples/engineer-builds
 faf-sim-cli build passive --tail-seconds 0 tmp/faf-sim-examples/engineer-builds-factory.json
 ```
 
-When `--tail-seconds 0` is used, intermediate `Ticked` events are suppressed and a single final `Ticked` event is printed containing the final economy snapshot and the exact completion time:
+When `--tail-seconds 0` is used, all intermediate events are suppressed and a single final `Ticked` event is printed containing the final economy snapshot and the exact completion time:
 
 ```json
 {"Ticked":{"time":42.0,"production_per_second_mass":50.0,...}}
