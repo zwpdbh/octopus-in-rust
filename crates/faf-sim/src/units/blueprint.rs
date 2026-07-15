@@ -261,10 +261,15 @@ impl BlueprintLibrary {
 
     /// Return every unit kind that `builder` is allowed to build.
     pub fn buildable_by(&self, builder: &UnitKind) -> Vec<UnitKind> {
-        self.buildable_targets()
-            .into_iter()
-            .filter(|(_, rule)| rule.builders.contains(builder))
-            .map(|(kind, _)| kind)
+        self.kind_to_entity
+            .iter()
+            .filter_map(|(kind, &entity)| {
+                self.world
+                    .entity(entity)
+                    .get::<BuiltBy>()
+                    .filter(|rule| rule.builders.contains(builder))
+                    .map(|_| kind.clone())
+            })
             .collect()
     }
 
@@ -281,20 +286,18 @@ impl BlueprintLibrary {
         self.world.entity(entity).get::<BuiltBy>()
     }
 
-    /// Return all buildable target kinds with their rules.
-    pub fn buildable_targets(&self) -> Vec<(UnitKind, &BuiltBy)> {
-        let mut targets: Vec<(UnitKind, &BuiltBy)> = self
-            .kind_to_entity
+    /// All unit kinds that can be built, optionally filtered to a tech tier.
+    pub fn target_blueprints(&self, tech: Option<TechLevel>) -> HashSet<UnitKind> {
+        self.kind_to_entity
             .iter()
+            .filter(|(kind, _)| tech.map_or(true, |t| matches_tech_level(kind, t)))
             .filter_map(|(kind, &entity)| {
                 self.world
                     .entity(entity)
                     .get::<BuiltBy>()
-                    .map(|rule| (kind.clone(), rule))
+                    .map(|_| kind.clone())
             })
-            .collect();
-        targets.sort_by(|a, b| a.0.cmp(&b.0));
-        targets
+            .collect()
     }
 
     /// Return the upgrade paths available from a source unit kind.
@@ -315,21 +318,15 @@ impl BlueprintLibrary {
         !self.upgrade_paths(kind).is_empty()
     }
 
-    /// All blueprint entities that have positive build power.
-    pub fn builders(&self) -> Vec<(UnitKind, f64)> {
-        let mut builders: Vec<(UnitKind, f64)> = self
-            .eco_table
+    /// All unit kinds that can act as builders, optionally filtered to a tech tier.
+    pub fn builder_blueprints(&self, tech: Option<TechLevel>) -> HashSet<UnitKind> {
+        self.eco_table
             .iter()
-            .filter_map(|(kind, stats)| {
-                if stats.build_power > 0.0 {
-                    Some((kind.clone(), stats.build_power))
-                } else {
-                    None
-                }
+            .filter(|(kind, stats)| {
+                stats.build_power > 0.0 && tech.map_or(true, |t| matches_tech_level(kind, t))
             })
-            .collect();
-        builders.sort_by(|a, b| a.0.cmp(&b.0));
-        builders
+            .map(|(kind, _)| kind.clone())
+            .collect()
     }
 
     /// Build power for a unit kind.

@@ -1,5 +1,6 @@
 //! Generate a SQLite dataset of simulated build plans and their completion times.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -40,14 +41,6 @@ impl Default for GenerationConfig {
     }
 }
 
-/// Source of real FAF units used to sample builders and targets.
-#[derive(Debug)]
-struct UnitSource {
-    library: BlueprintLibrary,
-    builders: Vec<UnitKind>,
-    targets: Vec<UnitKind>,
-}
-
 /// Builder-pattern generator for a `faf-build-prediction` training dataset.
 ///
 /// # Example
@@ -61,7 +54,11 @@ struct UnitSource {
 /// ```
 pub struct DatasetGenerator {
     config: GenerationConfig,
-    source: UnitSource,
+    library: BlueprintLibrary,
+    /// Blueprint kinds that can act as builders.
+    builders: HashSet<UnitKind>,
+    /// Blueprint kinds that can be built as targets.
+    targets: HashSet<UnitKind>,
 }
 
 impl DatasetGenerator {
@@ -73,17 +70,8 @@ impl DatasetGenerator {
             .with_context(|| format!("Failed to parse units file {}", units_file.display()))?;
         let library = BlueprintLibrary::new(index);
 
-        let builders: Vec<UnitKind> = library
-            .builders()
-            .into_iter()
-            .map(|(kind, _)| kind)
-            .collect();
-
-        let targets: Vec<UnitKind> = library
-            .buildable_targets()
-            .into_iter()
-            .map(|(kind, _)| kind)
-            .collect();
+        let builders = library.builder_blueprints(None);
+        let targets = library.target_blueprints(None);
 
         if builders.is_empty() {
             anyhow::bail!("No builder units found in {}", units_file.display());
@@ -97,11 +85,9 @@ impl DatasetGenerator {
 
         Ok(Self {
             config,
-            source: UnitSource {
-                library,
-                builders,
-                targets,
-            },
+            library,
+            builders,
+            targets,
         })
     }
 
@@ -132,6 +118,8 @@ impl DatasetGenerator {
             db_path: db_path.to_path_buf(),
             conn,
             stats: NormalizationParams::new(),
+            practical_count: 0,
+            not_practical_count: 0,
         })
     }
 
@@ -179,29 +167,28 @@ impl DatasetGenerator {
     }
 
     fn sample_builder<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
-        let UnitSource {
-            library, builders, ..
-        } = &self.source;
-        let kind = builders[rng.random_range(0..builders.len())].clone();
-        library
+        let kind = sample_from_set(&self.builders, rng);
+        self.library
             .to_unit_eco_stats(&kind, true)
             .expect("builder kind missing from library")
     }
 
     fn sample_target<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
-        let UnitSource {
-            library, targets, ..
-        } = &self.source;
-        let kind = targets[rng.random_range(0..targets.len())].clone();
-        library
+        let kind = sample_from_set(&self.targets, rng);
+        self.library
             .to_unit_eco_stats(&kind, false)
             .expect("target kind missing from library")
     }
 
     fn sample_initial_eco<R: Rng>(&self, rng: &mut R) -> EcoSnapshot {
-        let UnitSource { library, .. } = &self.source;
-        sample_real_initial_eco(rng, library)
+        sample_real_initial_eco(rng, &self.library)
     }
+}
+
+/// Sample a random element from a non-empty `HashSet`.
+fn sample_from_set<R: Rng>(set: &HashSet<UnitKind>, rng: &mut R) -> UnitKind {
+    let idx = rng.random_range(0..set.len());
+    set.iter().nth(idx).expect("non-empty set").clone()
 }
 
 /// A fluent, step-by-step pipeline for generating a dataset.
@@ -221,6 +208,8 @@ pub struct DatasetPipeline {
     db_path: PathBuf,
     conn: Connection,
     stats: NormalizationParams,
+    practical_count: usize,
+    not_practical_count: usize,
 }
 
 impl DatasetPipeline {
@@ -229,19 +218,33 @@ impl DatasetPipeline {
     /// This ensures each dataset generation starts with a clean database so
     /// training always uses only the most recently generated samples.
     pub fn create_schema(mut self) -> Result<Self> {
+        println!(
+            "Preparing fresh dataset at {} (existing tables will be dropped)...",
+            self.db_path.display()
+        );
         create_schema(&mut self.conn)?;
         Ok(self)
     }
 
     /// Generate all configured samples, simulate them, and insert the rows.
     pub fn generate_samples(mut self) -> Result<Self> {
+        let config = self.generator.config;
+        println!("Generating dataset:");
+        println!("  samples: {}", config.sample_count);
+        println!("  time_limit_seconds: {}", config.time_limit_seconds);
+        println!("  max_tasks: {}", config.max_tasks);
+        println!("  max_builders_per_task: {}", config.max_builders_per_task);
+        println!("  max_targets_per_task: {}", config.max_targets_per_task);
+        println!("  builder blueprints: {}", self.generator.builders.len());
+        println!("  target blueprints: {}", self.generator.targets.len());
+
         let tx = self
             .conn
             .transaction()
             .context("Failed to start SQLite transaction")?;
         let mut rng = rand::rng();
-        let sample_count = self.generator.config.sample_count;
-        let time_limit = self.generator.config.time_limit_seconds;
+        let sample_count = config.sample_count;
+        let time_limit = config.time_limit_seconds;
         let generator = &self.generator;
         let stats = &mut self.stats;
 
@@ -252,6 +255,11 @@ impl DatasetPipeline {
                 task_features.iter().for_each(|task| stats.update(task));
 
                 let label = simulate_label(&sample, time_limit);
+                if label.is_practical() {
+                    self.practical_count += 1;
+                } else {
+                    self.not_practical_count += 1;
+                }
                 insert_sample(&tx, &task_features, &label)
                     .with_context(|| format!("Failed to insert sample {}", i + 1))?;
 
@@ -275,11 +283,16 @@ impl DatasetPipeline {
 
     /// Complete the pipeline and print a summary.
     pub fn finish(self) -> Result<()> {
+        let total = self.generator.config.sample_count;
+        let norm_path = self.db_path.with_extension("norm.json");
         println!(
-            "Dataset complete: {} samples in {}",
-            self.generator.config.sample_count,
+            "Dataset complete: {} samples written to {}",
+            total,
             self.db_path.display()
         );
+        println!("  practical: {}", self.practical_count);
+        println!("  not_practical: {}", self.not_practical_count);
+        println!("  normalization saved to {}", norm_path.display());
         Ok(())
     }
 }

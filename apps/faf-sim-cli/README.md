@@ -23,7 +23,7 @@ cargo run --release -p faf-sim-cli -- train --dataset data/build_prediction_data
 # Train with more expressive parameters for a larger dataset
 cargo run --release -p faf-sim-cli -- train \
   --dataset data/build_prediction_dataset.db \
-  --epochs 100 \
+  --epochs 50 \
   --batch-size 64 \
   --hidden-size 256 \
   --learning-rate 0.001
