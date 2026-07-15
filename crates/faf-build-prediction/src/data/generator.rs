@@ -4,15 +4,16 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use faf_sim::quantities::{StepTime, Time};
+use faf_sim::quantities::Time;
 use faf_sim::runtime::{BuildTask, EcoSnapshot, UnitEcoStats};
-use faf_sim::sim::Simulation;
 use faf_sim::units::{BlueprintLibrary, TechLevel, UnitKind};
 use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
 
 use crate::data::normalize::NormalizationParams;
-use crate::data::sample::{build_queue, extract_sequence_features, EcoPlanLabel, EcoPlanSample};
+use crate::data::sample::{
+    extract_sequence_features, EcoPlanSample, Simulated, Unsimulated, TASK_FEATURE_DIM,
+};
 
 /// Configuration controlling dataset generation.
 #[derive(Debug, Clone, Copy)]
@@ -134,18 +135,14 @@ impl DatasetGenerator {
             .finish()
     }
 
-    fn generate_sample<R: Rng>(&self, rng: &mut R) -> EcoPlanSample {
+    fn generate_sample<R: Rng>(&self, rng: &mut R) -> EcoPlanSample<Unsimulated> {
         let initial_eco = self.sample_initial_eco(rng);
         let task_count = rng.random_range(1..=self.config.max_tasks.max(1));
         let plan: Vec<BuildTask> = (0..task_count)
             .map(|id| self.sample_build_task(rng, id as u32))
             .collect();
 
-        EcoPlanSample {
-            initial_eco,
-            plan,
-            label: EcoPlanLabel::NotSimulatedYet,
-        }
+        EcoPlanSample::new(initial_eco, plan)
     }
 
     fn sample_build_task<R: Rng>(&self, rng: &mut R, id: u32) -> BuildTask {
@@ -247,28 +244,28 @@ impl DatasetPipeline {
         let time_limit = config.time_limit_seconds;
         let generator = &self.generator;
         let stats = &mut self.stats;
+        let practical_count = &mut self.practical_count;
+        let not_practical_count = &mut self.not_practical_count;
 
-        (0..sample_count)
-            .try_for_each(|i| -> Result<()> {
-                let sample = generator.generate_sample(&mut rng);
-                let task_features = extract_sequence_features(&sample.initial_eco, &sample.plan);
-                task_features.iter().for_each(|task| stats.update(task));
+        for i in 0..sample_count {
+            SamplePipeline {
+                generator,
+                rng: &mut rng,
+                tx: &tx,
+                stats,
+                practical_count,
+                not_practical_count,
+            }
+            .generate_sample()
+            .simulate(time_limit)
+            .extract_sequence_features()
+            .insert_sample()
+            .with_context(|| format!("Failed to insert sample {}", i + 1))?;
 
-                let label = simulate_label(&sample, time_limit);
-                if label.is_practical() {
-                    self.practical_count += 1;
-                } else {
-                    self.not_practical_count += 1;
-                }
-                insert_sample(&tx, &task_features, &label)
-                    .with_context(|| format!("Failed to insert sample {}", i + 1))?;
-
-                if (i + 1) % 1000 == 0 {
-                    println!("Generated {} / {} samples", i + 1, sample_count);
-                }
-                Ok(())
-            })
-            .context("Failed to generate samples")?;
+            if (i + 1) % 1000 == 0 {
+                println!("Generated {} / {} samples", i + 1, sample_count);
+            }
+        }
 
         tx.commit().context("Failed to commit SQLite transaction")?;
         Ok(self)
@@ -294,6 +291,76 @@ impl DatasetPipeline {
         println!("  not_practical: {}", self.not_practical_count);
         println!("  normalization saved to {}", norm_path.display());
         Ok(())
+    }
+}
+
+/// Per-sample type-state pipeline that enforces the legal transition order:
+///
+/// `generate_sample -> simulate -> extract_sequence_features -> insert_sample`.
+///
+/// Each stage returns a distinct type so the compiler rejects out-of-order calls.
+struct SamplePipeline<'a, 'conn, R: Rng> {
+    generator: &'a DatasetGenerator,
+    rng: &'a mut R,
+    tx: &'a Transaction<'conn>,
+    stats: &'a mut NormalizationParams,
+    practical_count: &'a mut usize,
+    not_practical_count: &'a mut usize,
+}
+
+impl<'a, 'conn, R: Rng> SamplePipeline<'a, 'conn, R> {
+    fn generate_sample(&'a mut self) -> UnsimulatedSample<'a, 'conn, R> {
+        let sample = self.generator.generate_sample(self.rng);
+        UnsimulatedSample { sample, ctx: self }
+    }
+}
+
+struct UnsimulatedSample<'a, 'conn, R: Rng> {
+    sample: EcoPlanSample<Unsimulated>,
+    ctx: &'a mut SamplePipeline<'a, 'conn, R>,
+}
+
+impl<'a, 'conn, R: Rng> UnsimulatedSample<'a, 'conn, R> {
+    fn simulate(self, time_limit_seconds: f64) -> SimulatedSample<'a, 'conn, R> {
+        let sample = self.sample.simulate(time_limit_seconds);
+        SimulatedSample {
+            sample,
+            ctx: self.ctx,
+        }
+    }
+}
+
+struct SimulatedSample<'a, 'conn, R: Rng> {
+    sample: EcoPlanSample<Simulated>,
+    ctx: &'a mut SamplePipeline<'a, 'conn, R>,
+}
+
+impl<'a, 'conn, R: Rng> SimulatedSample<'a, 'conn, R> {
+    fn extract_sequence_features(self) -> FeaturedSample<'a, 'conn, R> {
+        let features = extract_sequence_features(&self.sample.initial_eco, &self.sample.plan);
+        features.iter().for_each(|task| self.ctx.stats.update(task));
+        FeaturedSample {
+            sample: self.sample,
+            features,
+            ctx: self.ctx,
+        }
+    }
+}
+
+struct FeaturedSample<'a, 'conn, R: Rng> {
+    sample: EcoPlanSample<Simulated>,
+    features: Vec<[f64; TASK_FEATURE_DIM]>,
+    ctx: &'a mut SamplePipeline<'a, 'conn, R>,
+}
+
+impl<'a, 'conn, R: Rng> FeaturedSample<'a, 'conn, R> {
+    fn insert_sample(self) -> Result<()> {
+        if self.sample.is_practical() {
+            *self.ctx.practical_count += 1;
+        } else {
+            *self.ctx.not_practical_count += 1;
+        }
+        insert_sample(self.ctx.tx, &self.features, &self.sample)
     }
 }
 
@@ -331,15 +398,20 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Insert a simulated sample into the database.
+///
+/// The `EcoPlanSample<Simulated>` type guarantees at compile time that the
+/// sample has been simulated and carries a real label; un-simulated samples
+/// cannot be passed here.
 fn insert_sample(
     tx: &Transaction,
     task_features: &[[f64; crate::data::sample::TASK_FEATURE_DIM]],
-    label: &EcoPlanLabel,
+    sample: &EcoPlanSample,
 ) -> Result<()> {
     let features_json =
         serde_json::to_string(task_features).context("Failed to serialize sequence features")?;
-    let target_time = label.time_seconds();
-    let is_practical = label.is_practical() as i32;
+    let target_time = sample.time_seconds();
+    let is_practical = sample.is_practical() as i32;
 
     tx.execute(
         "INSERT INTO samples (sequence_features, target_time, is_practical) VALUES (?1, ?2, ?3)",
@@ -352,31 +424,6 @@ fn insert_sample(
     .context("Failed to insert sample")?;
 
     Ok(())
-}
-
-fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLabel {
-    let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
-    // Run the simulator up to 10x the practical threshold so the model can
-    // learn degrees of "not practical" instead of a single clipped value.
-    let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
-    let queue = build_queue(&sample.initial_eco, sample.plan.clone());
-
-    let mut sim = Simulation::new(queue, dt, Some(max_sim_time), None);
-
-    while !sim.is_finished() {
-        sim.step();
-    }
-
-    let final_time = sim.current_time().value();
-    if final_time < time_limit_seconds - dt.as_time().value() {
-        EcoPlanLabel::Practical {
-            time_seconds: final_time,
-        }
-    } else {
-        EcoPlanLabel::NotPractical {
-            time_seconds: final_time,
-        }
-    }
 }
 
 // -----------------------------------------------------------------------------

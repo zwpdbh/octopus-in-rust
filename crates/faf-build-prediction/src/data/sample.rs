@@ -1,6 +1,10 @@
 //! Labeled samples used to train the build-time predictor.
 
-use faf_sim::runtime::{BuildTask, EcoSnapshot};
+use std::marker::PhantomData;
+
+use faf_sim::quantities::{StepTime, Time};
+use faf_sim::runtime::{BuildQueue, BuildTask, EcoSnapshot};
+use faf_sim::sim::Simulation;
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of tasks the sequence model accepts.
@@ -10,13 +14,91 @@ pub const MAX_SEQ_LEN: usize = 10;
 /// Number of scalar features describing a single task (including the `is_present` flag).
 pub const TASK_FEATURE_DIM: usize = 22;
 
+/// State marker for a sample that has not been simulated yet.
+#[derive(Debug, Clone, Copy)]
+pub struct Unsimulated;
+
+/// State marker for a sample that has been simulated and carries a real label.
+#[derive(Debug, Clone, Copy)]
+pub struct Simulated;
+
+/// Trait describing the label type associated with each sample state.
+pub trait SampleState {
+    type Label: serde::Serialize + for<'de> serde::Deserialize<'de>;
+}
+
+impl SampleState for Unsimulated {
+    type Label = ();
+}
+
+impl SampleState for Simulated {
+    type Label = EcoPlanLabel;
+}
+
 /// A single training example: initial economy + plan, paired with the simulated
 /// completion time.
+///
+/// The `State` type parameter enforces, at compile time, whether the sample has
+/// been simulated:
+///
+/// - `EcoPlanSample<Unsimulated>` is produced by the generator. It has no label
+///   and cannot be inserted into the training database.
+/// - `EcoPlanSample<Simulated>` has a real [`EcoPlanLabel`] and is the only form
+///   that can be serialized and inserted into the training database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EcoPlanSample {
+#[serde(bound(
+    serialize = "S::Label: serde::Serialize",
+    deserialize = "S::Label: serde::Deserialize<'de>"
+))]
+pub struct EcoPlanSample<S: SampleState = Simulated> {
     pub initial_eco: EcoSnapshot,
     pub plan: Vec<BuildTask>,
-    pub label: EcoPlanLabel,
+    pub label: S::Label,
+    #[serde(skip)]
+    _state: PhantomData<S>,
+}
+
+impl EcoPlanSample<Unsimulated> {
+    /// Create a new, un-simulated sample.
+    pub fn new(initial_eco: EcoSnapshot, plan: Vec<BuildTask>) -> Self {
+        Self {
+            initial_eco,
+            plan,
+            label: (),
+            _state: PhantomData,
+        }
+    }
+
+    /// Run the simulator to produce a real label and transition to [`Simulated`].
+    pub fn simulate(self, time_limit_seconds: f64) -> EcoPlanSample<Simulated> {
+        let label = simulate_label(&self.initial_eco, &self.plan, time_limit_seconds);
+        EcoPlanSample {
+            initial_eco: self.initial_eco,
+            plan: self.plan,
+            label,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl EcoPlanSample<Simulated> {
+    // Only `EcoPlanSample<Simulated>` exposes label-derived getters because
+    // only simulated samples are allowed to be persisted or used for training.
+
+    /// True if the simulated plan finished within the practical time limit.
+    pub fn is_practical(&self) -> bool {
+        self.label.is_practical()
+    }
+
+    /// Simulated completion time (or cap, if not practical).
+    pub fn time_seconds(&self) -> f64 {
+        self.label.time_seconds()
+    }
+
+    /// Target value used for regression: `log(completion_time_or_cap)`.
+    pub fn regression_target(&self) -> f64 {
+        self.label.regression_target()
+    }
 }
 
 /// The supervised target for a sample.
@@ -27,17 +109,10 @@ pub enum EcoPlanLabel {
     /// Plan did not finish within the practical time limit, but the simulator
     /// ran until a larger cap so the model can learn how slow it is.
     NotPractical { time_seconds: f64 },
-    /// Placeholder used before the sample has been simulated.
-    NotSimulatedYet,
 }
 
 impl EcoPlanLabel {
     /// Target value used for regression: `log(completion_time_or_cap)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on [`EcoPlanLabel::NotSimulatedYet`], which must be
-    /// replaced with a real label before training.
     pub fn regression_target(&self) -> f64 {
         self.time_seconds().ln()
     }
@@ -47,23 +122,11 @@ impl EcoPlanLabel {
     }
 
     /// Completion time (or cap) associated with the label.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on [`EcoPlanLabel::NotSimulatedYet`].
     pub fn time_seconds(&self) -> f64 {
         match self {
             EcoPlanLabel::Practical { time_seconds } => *time_seconds,
             EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
-            EcoPlanLabel::NotSimulatedYet => {
-                panic!("cannot read time_seconds from an un-simulated label")
-            }
         }
-    }
-
-    /// True if the label is the placeholder that has not been simulated yet.
-    pub fn is_simulated(&self) -> bool {
-        !matches!(self, EcoPlanLabel::NotSimulatedYet)
     }
 }
 
@@ -204,10 +267,40 @@ pub fn eco_snapshot_to_runtime_state(
 }
 
 /// Convenience helper to build a `BuildQueue` from a snapshot and a plan.
-pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> faf_sim::runtime::BuildQueue {
-    faf_sim::runtime::BuildQueue {
+pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> BuildQueue {
+    BuildQueue {
         initial_eco: eco_snapshot_to_runtime_state(snapshot),
         tasks: plan,
+    }
+}
+
+/// Run the simulator on a plan and produce a real label.
+fn simulate_label(
+    initial_eco: &EcoSnapshot,
+    plan: &[BuildTask],
+    time_limit_seconds: f64,
+) -> EcoPlanLabel {
+    let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
+    // Run the simulator up to 10x the practical threshold so the model can
+    // learn degrees of "not practical" instead of a single clipped value.
+    let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
+    let queue = build_queue(initial_eco, plan.to_vec());
+
+    let mut sim = Simulation::new(queue, dt, Some(max_sim_time), None);
+
+    while !sim.is_finished() {
+        sim.step();
+    }
+
+    let final_time = sim.current_time().value();
+    if final_time < time_limit_seconds - dt.as_time().value() {
+        EcoPlanLabel::Practical {
+            time_seconds: final_time,
+        }
+    } else {
+        EcoPlanLabel::NotPractical {
+            time_seconds: final_time,
+        }
     }
 }
 
@@ -233,7 +326,7 @@ mod tests {
         };
         let task = BuildTask {
             id: 0,
-            start_after: faf_sim::quantities::Time::from_raw(1.0),
+            start_after: Time::from_raw(1.0),
             builders: vec![faf_sim::runtime::UnitEcoStats {
                 build_power: 10.0,
                 ..Default::default()
