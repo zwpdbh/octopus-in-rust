@@ -12,8 +12,8 @@ use bevy_app::prelude::*;
 use crate::quantities::{StepTime, Time};
 use crate::runtime::components::{Producer, StorageContributor};
 use crate::runtime::resources::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, SimClock,
-    TailEndTime, TotalsSpent,
+    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
+    PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 pub use crate::runtime::{
     BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
@@ -31,7 +31,16 @@ impl Simulation {
     /// `dt` is the validated simulation step size (integer seconds, at least 1).
     /// `max_time` is an optional hard cap in seconds; when `None` the simulation
     /// runs until the build queue is empty.
-    pub fn new(queue: BuildQueue, dt: StepTime, max_time: Option<Time>) -> Self {
+    /// `tail_seconds` is an optional post-queue tail: when `Some(seconds)` the
+    /// simulation keeps ticking for that long after the queue empties so the
+    /// final economy state remains visible in charts. Pass `None` to finish
+    /// immediately when the queue is empty.
+    pub fn new(
+        queue: BuildQueue,
+        dt: StepTime,
+        max_time: Option<Time>,
+        tail_seconds: Option<f64>,
+    ) -> Self {
         let mut app = App::new();
         app.add_plugins(BuildQueueSimulationPlugin)
             .insert_resource(SimClock {
@@ -48,7 +57,8 @@ impl Simulation {
                 mass: 0.0,
                 energy: 0.0,
             })
-            .insert_resource(TailEndTime::default());
+            .insert_resource(TailEndTime::default())
+            .insert_resource(PostQueueTailSeconds(tail_seconds));
 
         // Seed the world with the initial economy so recompute_base_economy_system
         // preserves the caller's starting income and storage capacity.

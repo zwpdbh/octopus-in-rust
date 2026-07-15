@@ -27,27 +27,43 @@ pub enum EcoPlanLabel {
     /// Plan did not finish within the practical time limit, but the simulator
     /// ran until a larger cap so the model can learn how slow it is.
     NotPractical { time_seconds: f64 },
+    /// Placeholder used before the sample has been simulated.
+    NotSimulatedYet,
 }
 
 impl EcoPlanLabel {
     /// Target value used for regression: `log(completion_time_or_cap)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on [`EcoPlanLabel::NotSimulatedYet`], which must be
+    /// replaced with a real label before training.
     pub fn regression_target(&self) -> f64 {
-        let time_seconds = match self {
-            EcoPlanLabel::Practical { time_seconds } => *time_seconds,
-            EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
-        };
-        time_seconds.ln()
+        self.time_seconds().ln()
     }
 
     pub fn is_practical(&self) -> bool {
         matches!(self, EcoPlanLabel::Practical { .. })
     }
 
+    /// Completion time (or cap) associated with the label.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on [`EcoPlanLabel::NotSimulatedYet`].
     pub fn time_seconds(&self) -> f64 {
         match self {
             EcoPlanLabel::Practical { time_seconds } => *time_seconds,
             EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
+            EcoPlanLabel::NotSimulatedYet => {
+                panic!("cannot read time_seconds from an un-simulated label")
+            }
         }
+    }
+
+    /// True if the label is the placeholder that has not been simulated yet.
+    pub fn is_simulated(&self) -> bool {
+        !matches!(self, EcoPlanLabel::NotSimulatedYet)
     }
 }
 

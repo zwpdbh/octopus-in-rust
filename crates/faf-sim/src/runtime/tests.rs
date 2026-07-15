@@ -47,6 +47,7 @@ mod tests {
             queue,
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
+            Some(30.0),
         );
         let mut started = false;
         let mut completed = false;
@@ -115,6 +116,7 @@ mod tests {
             queue,
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
+            Some(30.0),
         );
 
         let mut task1_complete: Option<f64> = None;
@@ -170,6 +172,7 @@ mod tests {
             queue,
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
+            Some(30.0),
         );
 
         while !sim.is_finished() {
@@ -202,6 +205,7 @@ mod tests {
             queue,
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
+            Some(30.0),
         );
 
         let mut saw_scaled_mass_income = false;
@@ -245,6 +249,7 @@ mod tests {
             queue,
             StepTime::from_seconds(1).unwrap(),
             Some(Time::from_raw(1000.0)),
+            Some(30.0),
         );
 
         // Take one manual step of 2.0 seconds.

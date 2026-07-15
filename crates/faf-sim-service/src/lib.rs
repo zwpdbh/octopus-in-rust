@@ -264,7 +264,7 @@ fn run_simulation_thread(
     initial_subscribers: Vec<Sender<SimServiceEvent>>,
     subscriber_count: Arc<AtomicUsize>,
 ) {
-    let mut sim = Simulation::new(queue, config.dt, config.max_time);
+    let mut sim = Simulation::new(queue, config.dt, config.max_time, Some(30.0));
     let mut subscribers = initial_subscribers;
 
     match config.mode {

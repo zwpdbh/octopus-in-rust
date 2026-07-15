@@ -144,7 +144,7 @@ impl DatasetGenerator {
         EcoPlanSample {
             initial_eco,
             plan,
-            label: EcoPlanLabel::NotPractical { time_seconds: 0.0 }, // replaced by simulation
+            label: EcoPlanLabel::NotSimulatedYet,
         }
     }
 
@@ -361,7 +361,7 @@ fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLab
     let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
     let queue = build_queue(&sample.initial_eco, sample.plan.clone());
 
-    let mut sim = Simulation::new(queue, dt, Some(max_sim_time));
+    let mut sim = Simulation::new(queue, dt, Some(max_sim_time), None);
 
     while !sim.is_finished() {
         sim.step();
