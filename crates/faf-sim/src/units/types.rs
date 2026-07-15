@@ -6,8 +6,10 @@
 //! `faf-units` index so that the optimizer can reason about "a T1 engineer"
 //! without caring about faction-specific blueprint ids.
 //!
-//! Static unit attributes (cost, build power, economy, storage) live as
-//! components on blueprint entities in [`BlueprintLibrary`](super::BlueprintLibrary).
+//! Numeric unit attributes (cost, build power, economy, storage) live in the
+//! runtime boundary table owned by [`BlueprintLibrary`](super::BlueprintLibrary).
+//! The blueprint ECS world stores only symbolic identity and build/upgrade
+//! relationships.
 
 use faf_units::BuildTargetStats;
 use serde::{Deserialize, Serialize};
@@ -206,24 +208,23 @@ impl UnitCost {
     }
 }
 
-/// Recipe for constructing a brand-new unit.
+/// Symbolic rule for constructing a brand-new unit.
+///
+/// The target is implicit from where the rule is stored. `prereq` is the unit
+/// that must already be completed before construction can start; `builders`
+/// lists the legal builder kinds.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BuildRecipe {
-    pub target: UnitKind,
-    /// The unit that must already be completed before this action is legal.
-    /// `None` means no prerequisite (e.g., the commander or a T1 factory built
-    /// straight from the ACU).
+pub struct BuildRule {
     pub prereq: Option<UnitKind>,
-    /// Any of these builder kinds is a legal choice for the action.
-    pub builder_options: Vec<UnitKind>,
+    pub builders: Vec<UnitKind>,
 }
 
-/// Recipe for upgrading an existing unit in-place.
+/// One upgrade edge in the tech tree.
+///
+/// The source unit is implicit from where the path is stored. `target` is the
+/// unit the source can become, and `builders` lists the legal upgrade assisters.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UpgradeRecipe {
-    pub from: UnitKind,
-    pub to: UnitKind,
-    pub cost: UnitCost,
-    /// Any of these builder kinds can assist the upgrade.
-    pub builder_options: Vec<UnitKind>,
+pub struct UpgradePath {
+    pub target: UnitKind,
+    pub builders: Vec<UnitKind>,
 }

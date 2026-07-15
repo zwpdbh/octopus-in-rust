@@ -93,13 +93,14 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
 
 ## Unit knowledge repository
 
-All static unit knowledge is accessed through the `BlueprintLibrary` abstraction in `crates/faf-sim/src/units/mod.rs`. `BlueprintLibrary` owns a dedicated Bevy ECS `World` where each unit definition is a blueprint entity with components such as `UnitKindComp`, `FactionComp`, `UnitCostComp`, `BuildPower`, `EconomyProfile`, `StorageProfile`, `BuildRecipeComp`, and `UpgradeRecipesComp`. It is built once from the raw `faf-units` index. The rest of `faf-sim` does not import `faf-units` directly.
+All static unit knowledge is accessed through the `BlueprintLibrary` abstraction in `crates/faf-sim/src/units/mod.rs`. `BlueprintLibrary` owns a dedicated Bevy ECS `World` where each unit definition is a blueprint entity with symbolic components such as `UnitKindComp`, `FactionComp`, `BuiltBy`, and `UpgradesInto`. Numeric economic attributes (cost, build power, production, storage) live in a separate runtime boundary table so that the blueprint world expresses rules while the simulation runtime owns numbers. It is built once from the raw `faf-units` index. The rest of `faf-sim` does not import `faf-units` directly.
 
 ```rust
-// crates/faf-sim/src/units/mod.rs ~line 37 — BlueprintLibrary (abbreviated)
+// crates/faf-sim/src/units/blueprint.rs ~line 35 — BlueprintLibrary (abbreviated)
 pub struct BlueprintLibrary {
     world: World,
     kind_to_entity: HashMap<UnitKind, Entity>,
+    eco_table: HashMap<UnitKind, UnitEcoStats>,
 }
 ```
 

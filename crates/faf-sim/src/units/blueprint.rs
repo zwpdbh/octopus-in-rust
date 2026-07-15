@@ -18,12 +18,15 @@ use crate::runtime::UnitEcoStats;
 
 use super::build;
 use super::components::{
-    BlueprintBundle, BlueprintId, BuildPower, BuildRecipeComp, DisplayName, EconomyProfile,
-    FactionComp, StorageProfile, UnitCostComp, UnitKindComp, UnitRoleComp, UpgradeRecipesComp,
+    attributes::{
+        BlueprintBundle, BlueprintId, DisplayName, FactionComp, UnitKindComp, UnitRoleComp,
+    },
+    relationships::{BuiltBy, UpgradesInto},
 };
+use super::graph::{BlueprintGraph, BuildEdge, UpgradeEdge};
 use super::types::{
-    category_of, matches_tech_level, role_of, BuildRecipe, Faction, TechLevel, UnitCategory,
-    UnitCost, UnitKind, UnitRole, UpgradeRecipe,
+    category_of, matches_tech_level, role_of, BuildRule, Faction, TechLevel, UnitCategory,
+    UnitCost, UnitKind, UnitRole, UpgradePath,
 };
 
 /// Unified repository of unit knowledge backed by a Bevy ECS blueprint world.
@@ -35,6 +38,12 @@ use super::types::{
 pub struct BlueprintLibrary {
     world: World,
     kind_to_entity: HashMap<UnitKind, Entity>,
+    /// Runtime economic stats for every known blueprint, keyed by abstract kind.
+    ///
+    /// This table is the boundary between the symbolic blueprint world and the
+    /// numeric simulation runtime. It is populated once during construction and
+    /// then treated as read-only.
+    eco_table: HashMap<UnitKind, UnitEcoStats>,
 }
 
 impl BlueprintLibrary {
@@ -51,6 +60,7 @@ impl BlueprintLibrary {
     fn from_index(index: DataIndex) -> Self {
         let mut world = World::new();
         let mut kind_to_entity: HashMap<UnitKind, Entity> = HashMap::new();
+        let mut eco_table: HashMap<UnitKind, UnitEcoStats> = HashMap::new();
         let builds = Self::hardcoded_builds();
         let upgrades = Self::hardcoded_upgrades();
 
@@ -83,7 +93,14 @@ impl BlueprintLibrary {
             }
 
             let entity = world.spawn(bundle).id();
-            kind_to_entity.insert(kind, entity);
+            if let Some(tech) = super::types::tech_level_of(&kind) {
+                world
+                    .entity_mut(entity)
+                    .insert(super::components::attributes::TechLevelComp(tech));
+            }
+            let stats = build::unit_eco_stats(unit, &kind);
+            kind_to_entity.insert(kind.clone(), entity);
+            eco_table.insert(kind, stats);
         }
 
         // Synthetic definitions for capped mass extractors. These do not exist
@@ -91,6 +108,18 @@ impl BlueprintLibrary {
         // storages. The base `ProductionPerSecondMass` matches the underlying
         // mex; the +50% adjacency bonus is applied at runtime by the adjacency
         // tracker.
+        let cap_t2_stats = UnitEcoStats {
+            build_power: 0.0,
+            mass_cost: 800.0,
+            energy_cost: 6000.0,
+            build_time: 1000.0,
+            production_per_second_mass: 6.0,
+            production_per_second_energy: 0.0,
+            maintenance_consumption_per_second_energy: 9.0,
+            mass_storage: 2000.0,
+            energy_storage: 0.0,
+            unit_id: Some("Capped T2 Mass Extractor".to_string()),
+        };
         let cap_t2_entity = world
             .spawn(BlueprintBundle {
                 blueprint_id: BlueprintId("UEB1202+CAPPED".to_string()),
@@ -98,25 +127,23 @@ impl BlueprintLibrary {
                 role: UnitRoleComp(UnitRole::CappedMassExtractor),
                 faction: FactionComp(Faction::Common),
                 display_name: DisplayName("Capped T2 Mass Extractor".to_string()),
-                cost: UnitCostComp(UnitCost {
-                    mass: 800.0,
-                    energy: 6000.0,
-                    build_time: 1000.0,
-                }),
-                build_power: BuildPower(0.0),
-                economy: EconomyProfile {
-                    production_per_second_mass: 6.0,
-                    production_per_second_energy: 0.0,
-                    maintenance_consumption_per_second_energy: 9.0,
-                },
-                storage: StorageProfile {
-                    mass: 2000.0,
-                    energy: 0.0,
-                },
             })
             .id();
         kind_to_entity.insert(UnitKind::CapT2Mex, cap_t2_entity);
+        eco_table.insert(UnitKind::CapT2Mex, cap_t2_stats);
 
+        let cap_t3_stats = UnitEcoStats {
+            build_power: 0.0,
+            mass_cost: 800.0,
+            energy_cost: 6000.0,
+            build_time: 1000.0,
+            production_per_second_mass: 18.0,
+            production_per_second_energy: 0.0,
+            maintenance_consumption_per_second_energy: 54.0,
+            mass_storage: 2000.0,
+            energy_storage: 0.0,
+            unit_id: Some("Capped T3 Mass Extractor".to_string()),
+        };
         let cap_t3_entity = world
             .spawn(BlueprintBundle {
                 blueprint_id: BlueprintId("UEB1302+CAPPED".to_string()),
@@ -124,57 +151,40 @@ impl BlueprintLibrary {
                 role: UnitRoleComp(UnitRole::CappedMassExtractor),
                 faction: FactionComp(Faction::Common),
                 display_name: DisplayName("Capped T3 Mass Extractor".to_string()),
-                cost: UnitCostComp(UnitCost {
-                    mass: 800.0,
-                    energy: 6000.0,
-                    build_time: 1000.0,
-                }),
-                build_power: BuildPower(0.0),
-                economy: EconomyProfile {
-                    production_per_second_mass: 18.0,
-                    production_per_second_energy: 0.0,
-                    maintenance_consumption_per_second_energy: 54.0,
-                },
-                storage: StorageProfile {
-                    mass: 2000.0,
-                    energy: 0.0,
-                },
             })
             .id();
         kind_to_entity.insert(UnitKind::CapT3Mex, cap_t3_entity);
+        eco_table.insert(UnitKind::CapT3Mex, cap_t3_stats);
 
-        // Attach build and upgrade recipes to their target/source entities.
-        for (target, recipe) in &builds {
+        // Attach build and upgrade rules to their target/source entities.
+        for (target, rule) in &builds {
             if let Some(&entity) = kind_to_entity.get(target) {
-                world.entity_mut(entity).insert(BuildRecipeComp {
-                    prereq: recipe.prereq.clone(),
-                    builder_options: recipe.builder_options.clone(),
+                world.entity_mut(entity).insert(BuiltBy {
+                    prereq: rule.prereq.clone(),
+                    builders: rule.builders.clone(),
                 });
             }
         }
-        for (from, recipes) in &upgrades {
+        for (from, paths) in &upgrades {
             if let Some(&entity) = kind_to_entity.get(from) {
-                world
-                    .entity_mut(entity)
-                    .insert(UpgradeRecipesComp(recipes.clone()));
+                world.entity_mut(entity).insert(UpgradesInto(paths.clone()));
             }
         }
 
         // Faction-unique units (experimentals, game-enders, strategic weapons)
-        // are built by T3 engineers. Derive their build recipes from the loaded
-        // blueprint entities.
+        // are built by T3 engineers.
         for (kind, &entity) in &kind_to_entity {
             if matches!(kind, UnitKind::Unique(_)) {
-                world.entity_mut(entity).insert(BuildRecipeComp {
-                    prereq: None,
-                    builder_options: vec![UnitKind::Engineer(TechLevel::T3)],
-                });
+                world
+                    .entity_mut(entity)
+                    .insert(build::unique_unit_build_rule());
             }
         }
 
         Self {
             world,
             kind_to_entity,
+            eco_table,
         }
     }
 
@@ -235,15 +245,17 @@ impl BlueprintLibrary {
 
     /// Build cost for a unit kind, if it can be built at all.
     pub fn build_cost(&self, kind: &UnitKind) -> Option<UnitCost> {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<UnitCostComp>())
-            .map(|c| (*c).into())
+        self.eco_table.get(kind).map(|stats| UnitCost {
+            mass: stats.mass_cost,
+            energy: stats.energy_cost,
+            build_time: stats.build_time,
+        })
     }
 
     /// True if `builder` is one of the legal builders for `target`.
     pub fn can_build(&self, builder: &UnitKind, target: &UnitKind) -> bool {
-        self.build_recipe(target)
-            .map(|r| r.builder_options.contains(builder))
+        self.build_rule(target)
+            .map(|r| r.builders.contains(builder))
             .unwrap_or(false)
     }
 
@@ -251,69 +263,69 @@ impl BlueprintLibrary {
     pub fn buildable_by(&self, builder: &UnitKind) -> Vec<UnitKind> {
         self.buildable_targets()
             .into_iter()
-            .filter(|(_, recipe)| recipe.builder_options.contains(builder))
+            .filter(|(_, rule)| rule.builders.contains(builder))
             .map(|(kind, _)| kind)
             .collect()
     }
 
     /// Return the legal builder kinds for a target.
     pub fn builders_for(&self, target: &UnitKind) -> Vec<UnitKind> {
-        self.build_recipe(target)
-            .map(|r| r.builder_options.clone())
+        self.build_rule(target)
+            .map(|r| r.builders.clone())
             .unwrap_or_default()
     }
 
-    /// Return the build recipe for a target, if any.
-    pub fn build_recipe(&self, target: &UnitKind) -> Option<&BuildRecipeComp> {
+    /// Return the build rule for a target, if any.
+    pub fn build_rule(&self, target: &UnitKind) -> Option<&BuiltBy> {
         let entity = self.entity_for_kind(target)?;
-        self.world.entity(entity).get::<BuildRecipeComp>()
+        self.world.entity(entity).get::<BuiltBy>()
     }
 
-    /// Return all buildable target kinds with their recipes.
-    pub fn buildable_targets(&self) -> Vec<(UnitKind, &BuildRecipeComp)> {
-        let mut targets: Vec<(UnitKind, &BuildRecipeComp)> = self
+    /// Return all buildable target kinds with their rules.
+    pub fn buildable_targets(&self) -> Vec<(UnitKind, &BuiltBy)> {
+        let mut targets: Vec<(UnitKind, &BuiltBy)> = self
             .kind_to_entity
             .iter()
             .filter_map(|(kind, &entity)| {
                 self.world
                     .entity(entity)
-                    .get::<BuildRecipeComp>()
-                    .map(|recipe| (kind.clone(), recipe))
+                    .get::<BuiltBy>()
+                    .map(|rule| (kind.clone(), rule))
             })
             .collect();
         targets.sort_by(|a, b| a.0.cmp(&b.0));
         targets
     }
 
-    /// Return the upgrade recipes available from a source unit kind.
-    pub fn upgrade_recipes(&self, from: &UnitKind) -> &[UpgradeRecipe] {
+    /// Return the upgrade paths available from a source unit kind.
+    pub fn upgrade_paths(&self, from: &UnitKind) -> &[UpgradePath] {
         self.entity_for_kind(from)
-            .and_then(|e| self.world.entity(e).get::<UpgradeRecipesComp>())
+            .and_then(|e| self.world.entity(e).get::<UpgradesInto>())
             .map(|r| r.0.as_slice())
             .unwrap_or(&[])
     }
 
     /// Return the first upgrade target for a unit kind, if any.
     pub fn upgrade_target(&self, from: &UnitKind) -> Option<UnitKind> {
-        self.upgrade_recipes(from).first().map(|r| r.to.clone())
+        self.upgrade_paths(from).first().map(|r| r.target.clone())
     }
 
     /// True if the unit has at least one registered upgrade target.
     pub fn is_upgradeable(&self, kind: &UnitKind) -> bool {
-        !self.upgrade_recipes(kind).is_empty()
+        !self.upgrade_paths(kind).is_empty()
     }
 
     /// All blueprint entities that have positive build power.
-    pub fn builders(&self) -> Vec<(UnitKind, BuildPower)> {
-        let mut builders: Vec<(UnitKind, BuildPower)> = self
-            .kind_to_entity
+    pub fn builders(&self) -> Vec<(UnitKind, f64)> {
+        let mut builders: Vec<(UnitKind, f64)> = self
+            .eco_table
             .iter()
-            .filter_map(|(kind, &entity)| {
-                self.world
-                    .entity(entity)
-                    .get::<BuildPower>()
-                    .filter(|bp| bp.0 > 0.0)
-                    .map(|bp| (kind.clone(), *bp))
+            .filter_map(|(kind, stats)| {
+                if stats.build_power > 0.0 {
+                    Some((kind.clone(), stats.build_power))
+                } else {
+                    None
+                }
             })
             .collect();
         builders.sort_by(|a, b| a.0.cmp(&b.0));
@@ -322,49 +334,49 @@ impl BlueprintLibrary {
 
     /// Build power for a unit kind.
     pub fn build_power(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<BuildPower>())
-            .map(|bp| bp.0)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.build_power)
             .unwrap_or(0.0)
     }
 
     /// Mass production per second for a unit kind.
     pub fn production_per_second_mass(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<EconomyProfile>())
-            .map(|ep| ep.production_per_second_mass)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.production_per_second_mass)
             .unwrap_or(0.0)
     }
 
     /// Energy production per second for a unit kind.
     pub fn production_per_second_energy(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<EconomyProfile>())
-            .map(|ep| ep.production_per_second_energy)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.production_per_second_energy)
             .unwrap_or(0.0)
     }
 
     /// Energy maintenance consumption per second for a unit kind.
     pub fn maintenance_consumption_per_second_energy(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<EconomyProfile>())
-            .map(|ep| ep.maintenance_consumption_per_second_energy)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.maintenance_consumption_per_second_energy)
             .unwrap_or(0.0)
     }
 
     /// Mass storage capacity for a unit kind.
     pub fn mass_storage(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<StorageProfile>())
-            .map(|sp| sp.mass)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.mass_storage)
             .unwrap_or(0.0)
     }
 
     /// Energy storage capacity for a unit kind.
     pub fn energy_storage(&self, kind: &UnitKind) -> f64 {
-        self.entity_for_kind(kind)
-            .and_then(|e| self.world.entity(e).get::<StorageProfile>())
-            .map(|sp| sp.energy)
+        self.eco_table
+            .get(kind)
+            .map(|s| s.energy_storage)
             .unwrap_or(0.0)
     }
 
@@ -373,59 +385,83 @@ impl BlueprintLibrary {
     /// `as_builder` controls whether cost/storage fields are zeroed out, matching
     /// the old `unit_as_builder` / `unit_as_target` split.
     pub fn to_unit_eco_stats(&self, kind: &UnitKind, as_builder: bool) -> Option<UnitEcoStats> {
-        let entity = self.entity_for_kind(kind)?;
-        let entity_ref = self.world.entity(entity);
-        let display_name = entity_ref
-            .get::<DisplayName>()
-            .map(|d| d.0.clone())
-            .unwrap_or_else(|| format!("{:?}", kind));
-        let economy = entity_ref
-            .get::<EconomyProfile>()
-            .copied()
-            .unwrap_or_default();
-        let storage = entity_ref
-            .get::<StorageProfile>()
-            .copied()
-            .unwrap_or_default();
-        let build_power = entity_ref.get::<BuildPower>().copied().unwrap_or_default();
+        let mut stats = self.eco_table.get(kind).cloned()?;
 
         if as_builder {
-            Some(UnitEcoStats {
-                build_power: build_power.0,
-                maintenance_consumption_per_second_energy: economy
-                    .maintenance_consumption_per_second_energy,
-                unit_id: Some(display_name),
-                ..Default::default()
-            })
+            stats.mass_cost = 0.0;
+            stats.energy_cost = 0.0;
+            stats.build_time = 0.0;
+            stats.production_per_second_mass = 0.0;
+            stats.production_per_second_energy = 0.0;
+            stats.mass_storage = 0.0;
+            stats.energy_storage = 0.0;
         } else {
-            let cost = entity_ref.get::<UnitCostComp>().copied()?;
-            Some(UnitEcoStats {
-                build_power: 0.0,
-                mass_cost: cost.0.mass,
-                energy_cost: cost.0.energy,
-                build_time: cost.0.build_time,
-                production_per_second_mass: economy.production_per_second_mass,
-                production_per_second_energy: economy.production_per_second_energy,
-                maintenance_consumption_per_second_energy: economy
-                    .maintenance_consumption_per_second_energy,
-                mass_storage: storage.mass,
-                energy_storage: storage.energy,
-                unit_id: Some(display_name),
-            })
+            stats.build_power = 0.0;
+        }
+
+        Some(stats)
+    }
+
+    /// Build the symbolic build/upgrade graph for visualization and planning.
+    pub fn build_graph(&self) -> BlueprintGraph {
+        let mut nodes = Vec::new();
+        let mut build_edges = Vec::new();
+        let mut upgrade_edges = Vec::new();
+
+        for (kind, &entity) in &self.kind_to_entity {
+            let entity_ref = self.world.entity(entity);
+            let display_name = entity_ref
+                .get::<DisplayName>()
+                .map(|d| d.0.clone())
+                .unwrap_or_else(|| format!("{:?}", kind));
+
+            nodes.push(super::graph::BlueprintNode {
+                kind: kind.clone(),
+                display_name,
+                role: role_of(kind),
+                category: category_of(kind),
+            });
+
+            if let Some(rule) = entity_ref.get::<BuiltBy>() {
+                build_edges.push(BuildEdge {
+                    target: kind.clone(),
+                    prereq: rule.prereq.clone(),
+                    builders: rule.builders.clone(),
+                });
+            }
+
+            if let Some(upgrades) = entity_ref.get::<UpgradesInto>() {
+                for path in &upgrades.0 {
+                    upgrade_edges.push(UpgradeEdge {
+                        from: kind.clone(),
+                        to: path.target.clone(),
+                        builders: path.builders.clone(),
+                    });
+                }
+            }
+        }
+
+        nodes.sort_by(|a, b| a.kind.cmp(&b.kind));
+        build_edges.sort_by(|a, b| a.target.cmp(&b.target));
+        upgrade_edges.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
+
+        BlueprintGraph {
+            nodes,
+            build_edges,
+            upgrade_edges,
         }
     }
 
-    /// Hardcoded build recipes for the common economic/builder units.
-    fn hardcoded_builds() -> HashMap<UnitKind, BuildRecipe> {
-        let mut m: HashMap<UnitKind, BuildRecipe> = HashMap::new();
+    /// Hardcoded build rules for the common economic/builder units.
+    fn hardcoded_builds() -> HashMap<UnitKind, BuildRule> {
+        let mut m: HashMap<UnitKind, BuildRule> = HashMap::new();
 
         // Commander is given at game start; it is not built.
         m.insert(
             UnitKind::Commander,
-            BuildRecipe {
-                target: UnitKind::Commander,
+            BuildRule {
                 prereq: None,
-                builder_options: vec![],
+                builders: vec![],
             },
         );
 
@@ -451,24 +487,16 @@ impl BlueprintLibrary {
                 vec![UnitKind::Commander, UnitKind::Engineer(TechLevel::T3)],
             ),
         ] {
-            m.insert(
-                UnitKind::Factory(tech),
-                BuildRecipe {
-                    target: UnitKind::Factory(tech),
-                    prereq,
-                    builder_options: builders,
-                },
-            );
+            m.insert(UnitKind::Factory(tech), BuildRule { prereq, builders });
         }
 
         // Engineers are built by factories of the same tier.
         for tech in [TechLevel::T1, TechLevel::T2, TechLevel::T3] {
             m.insert(
                 UnitKind::Engineer(tech),
-                BuildRecipe {
-                    target: UnitKind::Engineer(tech),
+                BuildRule {
                     prereq: Some(UnitKind::Factory(tech)),
-                    builder_options: vec![UnitKind::Factory(tech)],
+                    builders: vec![UnitKind::Factory(tech)],
                 },
             );
         }
@@ -477,10 +505,9 @@ impl BlueprintLibrary {
         for kind in [UnitKind::Mex(TechLevel::T1), UnitKind::Pgen(TechLevel::T1)] {
             m.insert(
                 kind.clone(),
-                BuildRecipe {
-                    target: kind,
+                BuildRule {
                     prereq: None,
-                    builder_options: vec![UnitKind::Commander, UnitKind::Engineer(TechLevel::T1)],
+                    builders: vec![UnitKind::Commander, UnitKind::Engineer(TechLevel::T1)],
                 },
             );
         }
@@ -491,10 +518,9 @@ impl BlueprintLibrary {
             for kind in [UnitKind::Mex(tech), UnitKind::Pgen(tech)] {
                 m.insert(
                     kind.clone(),
-                    BuildRecipe {
-                        target: kind.clone(),
+                    BuildRule {
                         prereq: Some(UnitKind::Factory(tech)),
-                        builder_options: vec![UnitKind::Engineer(tech)],
+                        builders: vec![UnitKind::Engineer(tech)],
                     },
                 );
             }
@@ -503,10 +529,9 @@ impl BlueprintLibrary {
         // Energy storage can be built by any engineer tier once an engineer exists.
         m.insert(
             UnitKind::EnergyStorage,
-            BuildRecipe {
-                target: UnitKind::EnergyStorage,
+            BuildRule {
                 prereq: None,
-                builder_options: vec![
+                builders: vec![
                     UnitKind::Engineer(TechLevel::T1),
                     UnitKind::Engineer(TechLevel::T2),
                     UnitKind::Engineer(TechLevel::T3),
@@ -517,9 +542,9 @@ impl BlueprintLibrary {
         m
     }
 
-    /// Hardcoded upgrade recipes for the common economic units.
-    fn hardcoded_upgrades() -> HashMap<UnitKind, Vec<UpgradeRecipe>> {
-        let mut m: HashMap<UnitKind, Vec<UpgradeRecipe>> = HashMap::new();
+    /// Hardcoded upgrade paths for the common economic units.
+    fn hardcoded_upgrades() -> HashMap<UnitKind, Vec<UpgradePath>> {
+        let mut m: HashMap<UnitKind, Vec<UpgradePath>> = HashMap::new();
 
         let any_engineer = vec![
             UnitKind::Commander,
@@ -536,126 +561,72 @@ impl BlueprintLibrary {
         // Mass extractors: T1 -> T2 -> T3, plus capped variants.
         m.insert(
             UnitKind::Mex(TechLevel::T1),
-            vec![UpgradeRecipe {
-                from: UnitKind::Mex(TechLevel::T1),
-                to: UnitKind::Mex(TechLevel::T2),
-                cost: UnitCost {
-                    mass: 900.0,
-                    energy: 5400.0,
-                    build_time: 900.0,
-                },
-                builder_options: any_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::Mex(TechLevel::T2),
+                builders: any_engineer.clone(),
             }],
         );
         m.insert(
             UnitKind::Mex(TechLevel::T2),
             vec![
-                UpgradeRecipe {
-                    from: UnitKind::Mex(TechLevel::T2),
-                    to: UnitKind::Mex(TechLevel::T3),
-                    cost: UnitCost {
-                        mass: 4600.0,
-                        energy: 31625.0,
-                        build_time: 6000.0,
-                    },
-                    builder_options: t2_plus_engineer.clone(),
+                UpgradePath {
+                    target: UnitKind::Mex(TechLevel::T3),
+                    builders: t2_plus_engineer.clone(),
                 },
                 // Cap a T2 mex with four mass storages.
-                UpgradeRecipe {
-                    from: UnitKind::Mex(TechLevel::T2),
-                    to: UnitKind::CapT2Mex,
-                    cost: UnitCost {
-                        mass: 800.0,
-                        energy: 6000.0,
-                        build_time: 1000.0,
-                    },
-                    builder_options: any_engineer.clone(),
+                UpgradePath {
+                    target: UnitKind::CapT2Mex,
+                    builders: any_engineer.clone(),
                 },
             ],
         );
         m.insert(
             UnitKind::Mex(TechLevel::T3),
-            vec![UpgradeRecipe {
-                from: UnitKind::Mex(TechLevel::T3),
-                to: UnitKind::CapT3Mex,
-                cost: UnitCost {
-                    mass: 800.0,
-                    energy: 6000.0,
-                    build_time: 1000.0,
-                },
-                builder_options: t2_plus_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::CapT3Mex,
+                builders: t2_plus_engineer.clone(),
             }],
         );
         m.insert(
             UnitKind::CapT2Mex,
-            vec![UpgradeRecipe {
-                from: UnitKind::CapT2Mex,
-                to: UnitKind::CapT3Mex,
-                cost: UnitCost {
-                    mass: 4600.0,
-                    energy: 31625.0,
-                    build_time: 6000.0,
-                },
-                builder_options: t2_plus_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::CapT3Mex,
+                builders: t2_plus_engineer.clone(),
             }],
         );
 
         // Power generators: T1 -> T2 -> T3.
         m.insert(
             UnitKind::Pgen(TechLevel::T1),
-            vec![UpgradeRecipe {
-                from: UnitKind::Pgen(TechLevel::T1),
-                to: UnitKind::Pgen(TechLevel::T2),
-                cost: UnitCost {
-                    mass: 1200.0,
-                    energy: 8000.0,
-                    build_time: 1500.0,
-                },
-                builder_options: any_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::Pgen(TechLevel::T2),
+                builders: any_engineer.clone(),
             }],
         );
         m.insert(
             UnitKind::Pgen(TechLevel::T2),
-            vec![UpgradeRecipe {
-                from: UnitKind::Pgen(TechLevel::T2),
-                to: UnitKind::Pgen(TechLevel::T3),
-                cost: UnitCost {
-                    mass: 3240.0,
-                    energy: 40000.0,
-                    build_time: 3000.0,
-                },
-                builder_options: t2_plus_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::Pgen(TechLevel::T3),
+                builders: t2_plus_engineer.clone(),
             }],
         );
 
         // Factories: T1 -> T2 -> T3.
         m.insert(
             UnitKind::Factory(TechLevel::T1),
-            vec![UpgradeRecipe {
-                from: UnitKind::Factory(TechLevel::T1),
-                to: UnitKind::Factory(TechLevel::T2),
-                cost: UnitCost {
-                    mass: 800.0,
-                    energy: 4800.0,
-                    build_time: 800.0,
-                },
-                builder_options: any_engineer.clone(),
+            vec![UpgradePath {
+                target: UnitKind::Factory(TechLevel::T2),
+                builders: any_engineer.clone(),
             }],
         );
         m.insert(
             UnitKind::Factory(TechLevel::T2),
-            vec![UpgradeRecipe {
-                from: UnitKind::Factory(TechLevel::T2),
-                to: UnitKind::Factory(TechLevel::T3),
-                cost: UnitCost {
-                    mass: 2400.0,
-                    energy: 22000.0,
-                    build_time: 2400.0,
-                },
+            vec![UpgradePath {
+                target: UnitKind::Factory(TechLevel::T3),
                 // Engineer(T2) is allowed so the search can reach T3 without
                 // already owning a T3 engineer (the engineering-suite
                 // prerequisite is abstracted away in this model).
-                builder_options: t2_plus_engineer.clone(),
+                builders: t2_plus_engineer.clone(),
             }],
         );
 
@@ -769,12 +740,63 @@ mod tests {
         assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::EnergyStorage));
         assert!(units.is_upgradeable(&UnitKind::Mex(TechLevel::T2)));
         assert!(units
-            .upgrade_recipes(&UnitKind::Mex(TechLevel::T2))
+            .upgrade_paths(&UnitKind::Mex(TechLevel::T2))
             .iter()
-            .any(|r| r.to == UnitKind::CapT2Mex));
+            .any(|r| r.target == UnitKind::CapT2Mex));
         assert!(units
-            .upgrade_recipes(&UnitKind::CapT2Mex)
+            .upgrade_paths(&UnitKind::CapT2Mex)
             .iter()
-            .any(|r| r.to == UnitKind::CapT3Mex));
+            .any(|r| r.target == UnitKind::CapT3Mex));
+    }
+
+    #[test]
+    fn build_graph_contains_mex_upgrade_chain() {
+        let units = load_library();
+        let graph = units.build_graph();
+
+        assert!(graph.node(&UnitKind::Mex(TechLevel::T1)).is_some());
+        assert!(graph.node(&UnitKind::Mex(TechLevel::T2)).is_some());
+        assert!(graph.node(&UnitKind::Mex(TechLevel::T3)).is_some());
+        assert!(graph.node(&UnitKind::CapT3Mex).is_some());
+
+        assert!(graph
+            .upgrades_from(&UnitKind::Mex(TechLevel::T1))
+            .any(|e| e.to == UnitKind::Mex(TechLevel::T2)));
+        assert!(graph
+            .upgrades_from(&UnitKind::Mex(TechLevel::T2))
+            .any(|e| e.to == UnitKind::Mex(TechLevel::T3)));
+        assert!(graph
+            .upgrades_from(&UnitKind::Mex(TechLevel::T3))
+            .any(|e| e.to == UnitKind::CapT3Mex));
+        assert!(graph
+            .upgrades_from(&UnitKind::CapT2Mex)
+            .any(|e| e.to == UnitKind::CapT3Mex));
+
+        // Every node should carry role/category metadata.
+        for node in &graph.nodes {
+            assert!(!node.display_name.is_empty());
+        }
+    }
+
+    #[test]
+    fn build_graph_includes_factory_and_engineer_build_edges() {
+        let units = load_library();
+        let graph = units.build_graph();
+
+        let t1_factory = graph
+            .builds_for(&UnitKind::Factory(TechLevel::T1))
+            .next()
+            .expect("T1 factory should have a build edge");
+        assert!(t1_factory.builders.contains(&UnitKind::Commander));
+        assert!(t1_factory
+            .builders
+            .contains(&UnitKind::Engineer(TechLevel::T1)));
+
+        let t1_eng = graph
+            .builds_for(&UnitKind::Engineer(TechLevel::T1))
+            .next()
+            .expect("T1 engineer should have a build edge");
+        assert_eq!(t1_eng.builders, vec![UnitKind::Factory(TechLevel::T1)]);
+        assert_eq!(t1_eng.prereq, Some(UnitKind::Factory(TechLevel::T1)));
     }
 }

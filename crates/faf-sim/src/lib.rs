@@ -29,10 +29,10 @@ pub use snapshot::{
     scaled_mass_income,
 };
 pub use units::{
-    category_of, category_of_role, role_of, tech_level_of, BlueprintId, BlueprintLibrary,
-    BuildRecipe, BuildRecipeComp, DisplayName, EconomyProfile, Faction, FactionComp,
-    StorageProfile, TechLevel, TechLevelComp, UnitCategory, UnitCost, UnitCostComp, UnitId,
-    UnitKind, UnitKindComp, UnitRole, UnitRoleComp, UpgradeRecipe, UpgradeRecipesComp,
+    category_of, category_of_role, role_of, tech_level_of, BlueprintGraph, BlueprintLibrary,
+    BlueprintNode, BuildEdge, BuildRule, BuiltBy, DisplayName, Faction, FactionComp, TechLevel,
+    TechLevelComp, UnitCategory, UnitCost, UnitId, UnitKind, UnitKindComp, UnitRole, UnitRoleComp,
+    UpgradeEdge, UpgradePath, UpgradesInto,
 };
 
 #[cfg(test)]

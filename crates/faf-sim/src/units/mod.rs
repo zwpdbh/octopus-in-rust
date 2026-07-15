@@ -6,8 +6,9 @@
 //! planners.
 //!
 //! Each unit definition is represented as a blueprint entity in a dedicated
-//! Bevy `World`. Static attributes are stored as components; see the
-//! `components` module for the full list.
+//! Bevy `World`. The world stores **symbolic** components only: identity,
+//! classification, and build/upgrade rules. Numeric economic attributes live in
+//! the runtime boundary table owned by `BlueprintLibrary`.
 //!
 //! The model deliberately abstracts away faction-specific names for common
 //! economic and builder units. A T1 engineer is just `UnitKind::Engineer(T1)`,
@@ -15,26 +16,31 @@
 //! `UAL0105`. Faction-unique units (e.g., the Monkeylord) are represented as
 //! `UnitKind::Unique(UnitId)`.
 //!
-//! Module layout:
+//! Module layout (mirrors `crate::runtime`):
 //!
-//! - `types` — typed unit kinds, factions, tech levels, roles, categories, costs, and recipes.
+//! - `types` — typed unit kinds, factions, tech levels, roles, categories, costs, and rules.
 //! - `components` — Bevy ECS components for blueprint entities.
-//! - `build` — helpers that classify raw blueprints and build recipes.
+//! - `graph` — symbolic build/upgrade graph derived from blueprint rules.
+//! - `build` — helpers that classify raw blueprints.
 //! - `blueprint` — the `BlueprintLibrary` implementation.
 //! - `mod` — re-exports only.
 
 pub use blueprint::BlueprintLibrary;
 pub use components::{
-    BlueprintBundle, BlueprintId, BuildPower, BuildRecipeComp, DisplayName, EconomyProfile,
-    FactionComp, StorageProfile, TechLevelComp, UnitCostComp, UnitKindComp, UnitRoleComp,
-    UpgradeRecipesComp,
+    attributes::{
+        BlueprintBundle, BlueprintId, DisplayName, FactionComp, TechLevelComp, UnitKindComp,
+        UnitRoleComp,
+    },
+    relationships::{BuiltBy, UpgradesInto},
 };
+pub use graph::{BlueprintGraph, BlueprintNode, BuildEdge, UpgradeEdge};
 pub use types::{
-    category_of, category_of_role, matches_tech_level, role_of, tech_level_of, BuildRecipe,
-    Faction, TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole, UpgradeRecipe,
+    category_of, category_of_role, matches_tech_level, role_of, tech_level_of, BuildRule, Faction,
+    TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole, UpgradePath,
 };
 
 mod blueprint;
 mod build;
 mod components;
+mod graph;
 mod types;
