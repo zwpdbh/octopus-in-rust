@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use faf_sim::quantities::{StepTime, Time};
 use faf_sim::runtime::{BuildTask, EcoSnapshot, UnitEcoStats};
 use faf_sim::sim::Simulation;
-use faf_sim::units::{TechLevel, UnitDef, UnitKind, Units};
+use faf_sim::units::{BlueprintLibrary, TechLevel, UnitKind};
 use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
 
@@ -41,9 +41,9 @@ impl Default for GenerationConfig {
 }
 
 /// Source of real FAF units used to sample builders and targets.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct UnitSource {
-    units: Units,
+    library: BlueprintLibrary,
     builders: Vec<UnitKind>,
     targets: Vec<UnitKind>,
 }
@@ -71,16 +71,19 @@ impl DatasetGenerator {
             .with_context(|| format!("Failed to read units file {}", units_file.display()))?;
         let index: faf_units::DataIndex = serde_json::from_str(&text)
             .with_context(|| format!("Failed to parse units file {}", units_file.display()))?;
-        let units = Units::new(index);
+        let library = BlueprintLibrary::new(index);
 
-        let builders: Vec<UnitKind> = units
-            .defs()
-            .iter()
-            .filter(|(_, def)| def.build_rate() > 0.0)
-            .map(|(kind, _)| kind.clone())
+        let builders: Vec<UnitKind> = library
+            .builders()
+            .into_iter()
+            .map(|(kind, _)| kind)
             .collect();
 
-        let targets: Vec<UnitKind> = units.all_build_recipes().keys().cloned().collect();
+        let targets: Vec<UnitKind> = library
+            .buildable_targets()
+            .into_iter()
+            .map(|(kind, _)| kind)
+            .collect();
 
         if builders.is_empty() {
             anyhow::bail!("No builder units found in {}", units_file.display());
@@ -95,7 +98,7 @@ impl DatasetGenerator {
         Ok(Self {
             config,
             source: UnitSource {
-                units,
+                library,
                 builders,
                 targets,
             },
@@ -177,25 +180,27 @@ impl DatasetGenerator {
 
     fn sample_builder<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
         let UnitSource {
-            units,
-            builders,
-            ..
+            library, builders, ..
         } = &self.source;
         let kind = builders[rng.random_range(0..builders.len())].clone();
-        let def = units.def(&kind).expect("builder kind missing from units");
-        unit_as_builder(def)
+        library
+            .to_unit_eco_stats(&kind, true)
+            .expect("builder kind missing from library")
     }
 
     fn sample_target<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
-        let UnitSource { units, targets, .. } = &self.source;
+        let UnitSource {
+            library, targets, ..
+        } = &self.source;
         let kind = targets[rng.random_range(0..targets.len())].clone();
-        let def = units.def(&kind).expect("target kind missing from units");
-        unit_as_target(def)
+        library
+            .to_unit_eco_stats(&kind, false)
+            .expect("target kind missing from library")
     }
 
     fn sample_initial_eco<R: Rng>(&self, rng: &mut R) -> EcoSnapshot {
-        let UnitSource { units, .. } = &self.source;
-        sample_real_initial_eco(rng, units)
+        let UnitSource { library, .. } = &self.source;
+        sample_real_initial_eco(rng, library)
     }
 }
 
@@ -365,70 +370,42 @@ fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLab
 // Real FAF-unit sampling
 // -----------------------------------------------------------------------------
 
-fn unit_as_builder(def: &UnitDef) -> UnitEcoStats {
-    UnitEcoStats {
-        build_power: def.build_rate(),
-        maintenance_consumption_per_second_energy: def.maintenance_consumption_per_second_energy(),
-        unit_id: Some(def.display_name.clone()),
-        ..Default::default()
-    }
-}
-
-fn unit_as_target(def: &UnitDef) -> UnitEcoStats {
-    UnitEcoStats {
-        build_power: 0.0,
-        mass_cost: def.cost.mass,
-        energy_cost: def.cost.energy,
-        build_time: def.cost.build_time,
-        production_per_second_mass: def.production_per_second_mass(),
-        production_per_second_energy: def.production_per_second_energy(),
-        maintenance_consumption_per_second_energy: def.maintenance_consumption_per_second_energy(),
-        mass_storage: def.mass_storage(),
-        energy_storage: def.energy_storage(),
-        unit_id: Some(def.display_name.clone()),
-    }
-}
-
-fn sample_real_initial_eco<R: Rng>(rng: &mut R, units: &Units) -> EcoSnapshot {
-    let commander = units
-        .def(&UnitKind::Commander)
-        .expect("Commander unit must be defined");
-
-    let mut production_mass = commander.production_per_second_mass();
-    let mut production_energy = commander.production_per_second_energy();
-    let mut maintenance = commander.maintenance_consumption_per_second_energy();
-    let mut mass_storage_cap = commander.mass_storage();
-    let mut energy_storage_cap = commander.energy_storage();
+fn sample_real_initial_eco<R: Rng>(rng: &mut R, library: &BlueprintLibrary) -> EcoSnapshot {
+    let mut production_mass = library.production_per_second_mass(&UnitKind::Commander);
+    let mut production_energy = library.production_per_second_energy(&UnitKind::Commander);
+    let mut maintenance = library.maintenance_consumption_per_second_energy(&UnitKind::Commander);
+    let mut mass_storage_cap = library.mass_storage(&UnitKind::Commander);
+    let mut energy_storage_cap = library.energy_storage(&UnitKind::Commander);
 
     let t1_engineer = UnitKind::Engineer(TechLevel::T1);
-    if let Some(eng) = units.def(&t1_engineer) {
+    if library.entity_for_kind(&t1_engineer).is_some() {
         let engineer_count = rng.random_range(1..=5);
         for _ in 0..engineer_count {
-            production_mass += eng.production_per_second_mass();
-            production_energy += eng.production_per_second_energy();
-            maintenance += eng.maintenance_consumption_per_second_energy();
-            mass_storage_cap += eng.mass_storage();
-            energy_storage_cap += eng.energy_storage();
+            production_mass += library.production_per_second_mass(&t1_engineer);
+            production_energy += library.production_per_second_energy(&t1_engineer);
+            maintenance += library.maintenance_consumption_per_second_energy(&t1_engineer);
+            mass_storage_cap += library.mass_storage(&t1_engineer);
+            energy_storage_cap += library.energy_storage(&t1_engineer);
         }
     }
 
     let t1_pgen = UnitKind::Pgen(TechLevel::T1);
-    if let Some(pgen) = units.def(&t1_pgen) {
+    if library.entity_for_kind(&t1_pgen).is_some() {
         let pgen_count = rng.random_range(1..=6);
         for _ in 0..pgen_count {
-            production_energy += pgen.production_per_second_energy();
-            maintenance += pgen.maintenance_consumption_per_second_energy();
-            energy_storage_cap += pgen.energy_storage();
+            production_energy += library.production_per_second_energy(&t1_pgen);
+            maintenance += library.maintenance_consumption_per_second_energy(&t1_pgen);
+            energy_storage_cap += library.energy_storage(&t1_pgen);
         }
     }
 
     let t1_mex = UnitKind::Mex(TechLevel::T1);
-    if let Some(mex) = units.def(&t1_mex) {
+    if library.entity_for_kind(&t1_mex).is_some() {
         let mex_count = rng.random_range(0..=4);
         for _ in 0..mex_count {
-            production_mass += mex.production_per_second_mass();
-            maintenance += mex.maintenance_consumption_per_second_energy();
-            mass_storage_cap += mex.mass_storage();
+            production_mass += library.production_per_second_mass(&t1_mex);
+            maintenance += library.maintenance_consumption_per_second_energy(&t1_mex);
+            mass_storage_cap += library.mass_storage(&t1_mex);
         }
     }
 

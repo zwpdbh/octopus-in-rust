@@ -93,18 +93,17 @@ Upgrade costs and target mappings are stored in the `UpgradeTable`, which is par
 
 ## Unit knowledge repository
 
-All static unit knowledge is accessed through the `Units` abstraction in `crates/faf-sim/src/units/mod.rs`. `Units` owns a copy of the raw `faf-units` index and builds derived structures (`TechGraph`, `UpgradeTable`) from it. The rest of `faf-sim` does not import `faf-units` directly.
+All static unit knowledge is accessed through the `BlueprintLibrary` abstraction in `crates/faf-sim/src/units/mod.rs`. `BlueprintLibrary` owns a dedicated Bevy ECS `World` where each unit definition is a blueprint entity with components such as `UnitKindComp`, `FactionComp`, `UnitCostComp`, `BuildPower`, `EconomyProfile`, `StorageProfile`, `BuildRecipeComp`, and `UpgradeRecipesComp`. It is built once from the raw `faf-units` index. The rest of `faf-sim` does not import `faf-units` directly.
 
 ```rust
-// crates/faf-sim/src/units/mod.rs ~line 41 — Units (abbreviated)
-pub struct Units {
-    defs: HashMap<UnitKind, UnitDef>,
-    builds: HashMap<UnitKind, BuildRecipe>,
-    upgrades: HashMap<UnitKind, Vec<UpgradeRecipe>>,
+// crates/faf-sim/src/units/mod.rs ~line 37 — BlueprintLibrary (abbreviated)
+pub struct BlueprintLibrary {
+    world: World,
+    kind_to_entity: HashMap<UnitKind, Entity>,
 }
 ```
 
-This keeps the FAF community data format isolated in one place and lets `faf-sim` add game-specific interpretations (upgrade chains, capability graph) without polluting the raw data crate.
+This keeps the FAF community data format isolated in one place and lets `faf-sim` add game-specific interpretations (upgrade chains, capability graph) without polluting the raw data crate, while still allowing ECS-style queries over blueprint attributes.
 
 ## Assumptions
 
