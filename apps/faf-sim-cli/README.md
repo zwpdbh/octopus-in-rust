@@ -11,8 +11,11 @@ See the [`docs/`](docs/index.md) directory for detailed guides on each command.
 All examples below run from the project root (`/home/zw/code/rust_programming/octopus`) using a release build for best performance.
 
 ```bash
-# Simulate a plan from JSON
+# Simulate a plan from JSON (prints every tick, 30 s post-queue tail)
 cargo run --release -p faf-sim-cli -- build passive tmp/faf-sim-examples/engineer-builds-factory.json
+
+# Simulate a plan and print only the final result (no tail)
+cargo run --release -p faf-sim-cli -- build passive --tail-seconds 0 tmp/faf-sim-examples/engineer-builds-factory.json
 
 # Generate training data
 cargo run --release -p faf-sim-cli -- dataset generate --samples 10000

@@ -40,11 +40,24 @@ pub(crate) struct RunConfig {
     /// How the simulation is driven: manual `Advance` commands or real-time
     /// auto-play.
     pub(crate) mode: SimulationMode,
+    /// How long the simulation keeps ticking after the build queue is empty.
+    /// `None` means stop immediately when the queue is empty.
+    pub(crate) tail_seconds: Option<f64>,
 }
 
 impl RunConfig {
-    pub(crate) fn new(dt: StepTime, max_time: Option<Time>, mode: SimulationMode) -> Self {
-        Self { dt, max_time, mode }
+    pub(crate) fn new(
+        dt: StepTime,
+        max_time: Option<Time>,
+        mode: SimulationMode,
+        tail_seconds: Option<f64>,
+    ) -> Self {
+        Self {
+            dt,
+            max_time,
+            mode,
+            tail_seconds,
+        }
     }
 }
 
@@ -53,6 +66,7 @@ impl Default for RunConfig {
         Self {
             dt: StepTime::from_seconds(1).expect("1 second is a valid step time"),
             max_time: None,
+            tail_seconds: Some(30.0),
             mode: SimulationMode::Passive {
                 tick_interval_ms: 50,
             },
@@ -165,7 +179,26 @@ impl SimulationService {
         dt: StepTime,
         max_time: Option<Time>,
     ) -> SimulationId {
-        self.start(queue, RunConfig::new(dt, max_time, SimulationMode::Active))
+        self.start_active_sim_with_tail(queue, dt, max_time, Some(30.0))
+    }
+
+    /// Start a new simulation in active (manual-advance) mode with a custom
+    /// post-queue tail duration.
+    ///
+    /// `tail_seconds` controls how long the simulation keeps ticking after the
+    /// build queue is empty. Use `Some(0.0)` to stop immediately when the queue
+    /// is empty.
+    pub fn start_active_sim_with_tail(
+        &self,
+        queue: BuildQueue,
+        dt: StepTime,
+        max_time: Option<Time>,
+        tail_seconds: Option<f64>,
+    ) -> SimulationId {
+        self.start(
+            queue,
+            RunConfig::new(dt, max_time, SimulationMode::Active, tail_seconds),
+        )
     }
 
     /// Start a new simulation in passive (auto-play) mode.
@@ -180,9 +213,31 @@ impl SimulationService {
         max_time: Option<Time>,
         tick_interval_ms: u64,
     ) -> SimulationId {
+        self.start_passive_sim_with_tail(queue, dt, max_time, Some(30.0), tick_interval_ms)
+    }
+
+    /// Start a new simulation in passive (auto-play) mode with a custom
+    /// post-queue tail duration.
+    ///
+    /// `tail_seconds` controls how long the simulation keeps ticking after the
+    /// build queue is empty. Use `Some(0.0)` to stop immediately when the queue
+    /// is empty.
+    pub fn start_passive_sim_with_tail(
+        &self,
+        queue: BuildQueue,
+        dt: StepTime,
+        max_time: Option<Time>,
+        tail_seconds: Option<f64>,
+        tick_interval_ms: u64,
+    ) -> SimulationId {
         self.start(
             queue,
-            RunConfig::new(dt, max_time, SimulationMode::Passive { tick_interval_ms }),
+            RunConfig::new(
+                dt,
+                max_time,
+                SimulationMode::Passive { tick_interval_ms },
+                tail_seconds,
+            ),
         )
     }
 
@@ -264,7 +319,7 @@ fn run_simulation_thread(
     initial_subscribers: Vec<Sender<SimServiceEvent>>,
     subscriber_count: Arc<AtomicUsize>,
 ) {
-    let mut sim = Simulation::new(queue, config.dt, config.max_time, Some(30.0));
+    let mut sim = Simulation::new(queue, config.dt, config.max_time, config.tail_seconds);
     let mut subscribers = initial_subscribers;
 
     match config.mode {

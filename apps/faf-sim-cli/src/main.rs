@@ -165,6 +165,12 @@ struct BuildShared {
     /// Output format for Ticked events.
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Raw)]
     format: OutputFormat,
+    /// How many seconds the simulation keeps ticking after the build queue is
+    /// empty. A value of `0` means the simulation stops immediately at
+    /// completion and only the final result is printed. The default `30`
+    /// seconds keeps ticking so you can observe the post-queue economy.
+    #[arg(long, default_value_t = 30.0)]
+    tail_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -344,8 +350,10 @@ fn subscribe(service: &SimulationService, id: SimulationId) -> SimulationReceive
 fn run_active(queue: PathBuf, shared: BuildShared) {
     let (queue, dt, max_time) = parse_queue_and_dt(queue, shared);
 
+    let tail_seconds = Some(shared.tail_seconds);
+    let final_only = shared.tail_seconds == 0.0;
     let service = SimulationService::new();
-    let id = service.start_active_sim(queue, dt, max_time);
+    let id = service.start_active_sim_with_tail(queue, dt, max_time, tail_seconds);
     let rx = subscribe(&service, id);
 
     let is_finished = Arc::new(AtomicBool::new(false));
@@ -360,7 +368,7 @@ fn run_active(queue: PathBuf, shared: BuildShared) {
         }
     });
 
-    consume_events(rx, &is_finished, shared.format);
+    consume_events(rx, &is_finished, shared.format, final_only);
 }
 
 /// Run in passive mode.
@@ -369,23 +377,50 @@ fn run_active(queue: PathBuf, shared: BuildShared) {
 fn run_passive(queue: PathBuf, shared: BuildShared, tick_interval_ms: u64) {
     let (queue, dt, max_time) = parse_queue_and_dt(queue, shared);
 
+    let tail_seconds = Some(shared.tail_seconds);
+    let final_only = shared.tail_seconds == 0.0;
     let service = SimulationService::new();
-    let id = service.start_passive_sim(queue, dt, max_time, tick_interval_ms);
+    let id =
+        service.start_passive_sim_with_tail(queue, dt, max_time, tail_seconds, tick_interval_ms);
     let rx = subscribe(&service, id);
 
     let is_finished = Arc::new(AtomicBool::new(false));
-    consume_events(rx, &is_finished, shared.format);
+    consume_events(rx, &is_finished, shared.format, final_only);
 }
 
 /// Print simulation events as NDJSON until the stream ends or the simulation
 /// finishes.
-fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>, format: OutputFormat) {
+///
+/// When `final_only` is `true`, intermediate `Ticked` events are suppressed.
+/// The last `Ticked` snapshot is printed when `Finished` arrives, giving a
+/// single-line summary of the final simulation state.
+fn consume_events(
+    rx: SimulationReceiver,
+    is_finished: &Arc<AtomicBool>,
+    format: OutputFormat,
+    final_only: bool,
+) {
+    let mut last_tick: Option<faf_sim::sim::EcoSnapshot> = None;
     while let Ok(event) = rx.recv() {
         match event {
             SimServiceEvent::Simulation(sim_event) => {
-                print_event(&sim_event, format);
+                match &sim_event {
+                    SimulationEvent::Ticked(snapshot) if final_only => {
+                        // Keep updating the buffered snapshot; print it once at
+                        // the end instead of emitting every tick.
+                        last_tick = Some(*snapshot);
+                    }
+                    _ if !final_only => {
+                        print_event(&sim_event, format);
+                    }
+                    _ => {}
+                }
+
                 if matches!(sim_event, SimulationEvent::Finished) {
                     is_finished.store(true, Ordering::SeqCst);
+                    if let Some(snapshot) = last_tick {
+                        print_event(&SimulationEvent::Ticked(snapshot), format);
+                    }
                     break;
                 }
             }

@@ -99,6 +99,24 @@ Use `--format grouped` to receive `Ticked` events grouped into `rates`, `storage
 faf-sim-cli build passive --format grouped tmp/faf-sim-examples/engineer-builds-factory.json
 ```
 
+## Post-queue tail and final result
+
+By default the simulation keeps ticking for 30 seconds after the build queue is empty so you can observe the post-queue economy. Use `--tail-seconds` to change this:
+
+```bash
+# Keep ticking for 10 seconds after the queue is empty (default still prints every tick)
+faf-sim-cli build passive --tail-seconds 10 tmp/faf-sim-examples/engineer-builds-factory.json
+
+# Stop immediately when the queue is empty and print only the final result
+faf-sim-cli build passive --tail-seconds 0 tmp/faf-sim-examples/engineer-builds-factory.json
+```
+
+When `--tail-seconds 0` is used, intermediate `Ticked` events are suppressed and a single final `Ticked` event is printed containing the final economy snapshot and the exact completion time:
+
+```json
+{"Ticked":{"time":42.0,"production_per_second_mass":50.0,...}}
+```
+
 ## Pipe to file
 
 ```bash
