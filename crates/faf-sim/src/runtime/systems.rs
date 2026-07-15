@@ -16,8 +16,8 @@ use crate::economy::apply_tick_graph;
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 use crate::runtime::components::{ActiveBuildTask, Producer, StorageContributor};
 use crate::runtime::resources::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, SimClock,
-    TailEndTime, TotalsSpent, POST_QUEUE_TAIL_SECONDS,
+    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
+    PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 use crate::runtime::types::{EcoSnapshot, SimulationEvent};
 
@@ -263,6 +263,7 @@ pub(crate) fn termination_system(
     mut finished: ResMut<FinishedFlag>,
     mut journal: ResMut<EventJournal>,
     mut tail_end: ResMut<TailEndTime>,
+    tail_seconds: Res<PostQueueTailSeconds>,
 ) {
     if finished.0 {
         return;
@@ -278,13 +279,19 @@ pub(crate) fn termination_system(
     }
 
     if queue_empty {
-        if let Some(end) = tail_end.0 {
-            if clock.time >= end {
+        match (tail_seconds.0, tail_end.0) {
+            (None, _) => {
                 finished.0 = true;
                 journal.0.push(SimulationEvent::Finished);
             }
-        } else {
-            tail_end.0 = Some(clock.time + Time::from_raw(POST_QUEUE_TAIL_SECONDS));
+            (Some(_), Some(end)) if clock.time >= end => {
+                finished.0 = true;
+                journal.0.push(SimulationEvent::Finished);
+            }
+            (Some(seconds), None) => {
+                tail_end.0 = Some(clock.time + Time::from_raw(seconds));
+            }
+            _ => {}
         }
     }
 }

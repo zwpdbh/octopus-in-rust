@@ -8,11 +8,11 @@ license = "MIT"
 
 [features]
 default = ["headless"]
-headless = ["dep:bevy_app", "dep:bevy_ecs", "dep:bevy_time"]
+headless = ["dep:bevy_app", "dep:bevy_time"]
 
 [dependencies]
 bevy_app = { version = "0.19", optional = true }
-bevy_ecs = { version = "0.19", optional = true }
+bevy_ecs = { version = "0.19" }
 bevy_time = { version = "0.19", optional = true }
 faf-units = { workspace = true }
 serde = { workspace = true }

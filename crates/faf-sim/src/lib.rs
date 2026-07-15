@@ -3,7 +3,7 @@
 //! The crate provides:
 //!
 //! - `economy`: pure math for drains, stalls, and resource tracking.
-//! - `units`: strongly-typed unit knowledge (`Units`, `UnitKind`, recipes).
+//! - `units`: ECS-backed blueprint library (`BlueprintLibrary`) and unit kinds.
 //! - `runtime`: an observable, steppable Bevy ECS economy simulation.
 //! - `sim`: the high-level simulation driver and re-exports.
 
@@ -29,22 +29,24 @@ pub use snapshot::{
     scaled_mass_income,
 };
 pub use units::{
-    BuildRecipe, Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole, Units,
-    UpgradeRecipe,
+    category_of, category_of_role, role_of, tech_level_of, BlueprintGraph, BlueprintLibrary,
+    BlueprintNode, BuildEdge, BuildRule, BuiltBy, DisplayName, Faction, FactionComp, TechLevel,
+    TechLevelComp, UnitCategory, UnitCost, UnitId, UnitKind, UnitKindComp, UnitRole, UnitRoleComp,
+    UpgradeEdge, UpgradePath, UpgradesInto,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn load_units() -> Units {
+    fn load_library() -> BlueprintLibrary {
         let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
+        BlueprintLibrary::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn monkeylord_requires_t3_engineer() {
-        let units = load_units();
+        let units = load_library();
 
         let builders = units.builders_for(&UnitKind::Unique(UnitId("URL0402".to_string())));
 
@@ -60,7 +62,7 @@ mod tests {
 
     #[test]
     fn t1_factory_is_built_by_commander_and_t1_engineer() {
-        let units = load_units();
+        let units = load_library();
 
         let builders = units.builders_for(&UnitKind::Factory(TechLevel::T1));
         assert!(builders.contains(&UnitKind::Commander));
@@ -69,9 +71,9 @@ mod tests {
 
     #[test]
     fn unknown_unit_has_no_definition() {
-        let units = load_units();
+        let units = load_library();
         assert!(units
-            .def(&UnitKind::Unique(UnitId("NOT_A_UNIT".to_string())))
+            .entity_for_kind(&UnitKind::Unique(UnitId("NOT_A_UNIT".to_string())))
             .is_none());
     }
 }

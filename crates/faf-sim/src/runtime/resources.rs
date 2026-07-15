@@ -6,10 +6,6 @@ use crate::economy::EconomyRuntimeState;
 use crate::quantities::Time;
 use crate::runtime::types::{BuildTask, ScheduledTask, SimulationEvent};
 
-/// Number of seconds the simulation keeps ticking after the build queue is
-/// empty so the final economy state is visible on the chart.
-pub(crate) const POST_QUEUE_TAIL_SECONDS: f64 = 30.0;
-
 /// Current simulation time and step size.
 #[derive(Resource)]
 pub(crate) struct SimClock {
@@ -75,3 +71,11 @@ pub(crate) struct TotalsSpent {
 /// When the queue becomes empty, the simulation keeps ticking until this time.
 #[derive(Resource, Default)]
 pub(crate) struct TailEndTime(pub(crate) Option<Time>);
+
+/// Optional post-queue tail duration.
+///
+/// `None` means the simulation finishes immediately when the queue is empty.
+/// `Some(seconds)` keeps the clock running for that many seconds after the
+/// queue empties so the final economy state remains visible in charts.
+#[derive(Resource)]
+pub(crate) struct PostQueueTailSeconds(pub(crate) Option<f64>);

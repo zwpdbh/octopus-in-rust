@@ -1,77 +1,124 @@
-//! Construction helpers for building `Units` from the raw `faf-units` index.
+//! Construction helpers for building [`BlueprintLibrary`] from the raw
+//! `faf-units` index.
 //!
-//! These functions run once during `Units::new` to classify raw blueprints into
-//! abstract `UnitKind`s and derive build recipes for faction-unique units. After
-//! construction the optimizer no longer needs the raw index.
+//! These functions run once during [`BlueprintLibrary::new`](super::BlueprintLibrary::new)
+//! to classify raw blueprints into abstract [`UnitKind`]s and derive build
+//! rules for faction-unique units. After construction the optimizer no longer
+//! needs the raw index.
 
 use faf_units::Unit;
 
-use crate::units::kind::{Faction, TechLevel, UnitCost, UnitDef, UnitId, UnitKind, UnitRole};
+use crate::runtime::UnitEcoStats;
 
-/// Build a `UnitDef` from a raw `Unit`, if the unit is relevant to the
-/// optimizer.
-pub(crate) fn unit_def(unit: &Unit) -> Option<UnitDef> {
+use super::components::{
+    attributes::{
+        BlueprintBundle, BlueprintId, DisplayName, FactionComp, UnitKindComp, UnitRoleComp,
+    },
+    relationships::BuiltBy,
+};
+use super::types::{role_of, Faction, TechLevel, UnitId, UnitKind};
+
+/// Build a symbolic blueprint component bundle from a raw `Unit`, if the unit is
+/// relevant to the optimizer.
+pub(crate) fn blueprint_bundle(unit: &Unit) -> Option<BlueprintBundle> {
     let kind = classify_unit(unit)?;
-    let economy = unit.economy.as_ref()?;
-    let target_stats = economy.target_stats()?;
-    let builder = economy.builder_capability();
 
-    let build_rate = builder.map(|b| b.build_rate).unwrap_or(0.0);
-    let production_per_second_mass = economy.production_per_second_mass.unwrap_or(0.0);
-    let production_per_second_energy = economy.production_per_second_energy.unwrap_or(0.0);
-    let maintenance_consumption_per_second_energy = economy
-        .maintenance_consumption_per_second_energy
+    Some(BlueprintBundle {
+        blueprint_id: BlueprintId(unit.id.to_ascii_uppercase()),
+        kind: UnitKindComp(kind.clone()),
+        role: UnitRoleComp(role_of(&kind)),
+        faction: FactionComp(faction_from_unit(unit)),
+        display_name: DisplayName(unit.display_name()),
+    })
+}
+
+/// Compute the flat runtime economic descriptor for a raw `Unit`.
+///
+/// This is intentionally kept separate from [`blueprint_bundle`]: the blueprint
+/// entity carries only symbolic components, while numeric stats live in the
+/// runtime boundary table owned by `BlueprintLibrary`.
+pub(crate) fn unit_eco_stats(unit: &Unit, kind: &UnitKind) -> UnitEcoStats {
+    let economy = unit.economy.as_ref();
+    let target_stats = economy.and_then(|e| e.target_stats());
+    let builder = economy.and_then(|e| e.builder_capability());
+
+    let build_power = builder.map(|b| b.build_rate).unwrap_or(0.0);
+    let production_per_second_mass = economy
+        .and_then(|e| e.production_per_second_mass)
         .unwrap_or(0.0);
-    let mass_storage = economy.storage_mass.unwrap_or(0.0);
-    let energy_storage = economy.storage_energy.unwrap_or(0.0);
+    let production_per_second_energy = economy
+        .and_then(|e| e.production_per_second_energy)
+        .unwrap_or(0.0);
+    let maintenance_consumption_per_second_energy = economy
+        .and_then(|e| e.maintenance_consumption_per_second_energy)
+        .unwrap_or(0.0);
+    let raw_mass_storage = economy.and_then(|e| e.storage_mass).unwrap_or(0.0);
+    let raw_energy_storage = economy.and_then(|e| e.storage_energy).unwrap_or(0.0);
 
-    let role = match kind.clone() {
-        UnitKind::Commander => UnitRole::Commander {
-            build_rate,
+    let (production_mass, production_energy, maintenance, mass_storage, energy_storage) = match kind
+    {
+        UnitKind::Commander => (
             production_per_second_mass,
             production_per_second_energy,
             maintenance_consumption_per_second_energy,
-            mass_storage,
-            energy_storage,
-        },
-        UnitKind::Engineer(_) => UnitRole::Engineer {
-            build_rate,
+            raw_mass_storage,
+            raw_energy_storage,
+        ),
+        UnitKind::Engineer(_) | UnitKind::Factory(_) => (
+            0.0,
+            0.0,
             maintenance_consumption_per_second_energy,
-        },
-        UnitKind::Factory(_) => UnitRole::Factory {
-            build_rate,
-            maintenance_consumption_per_second_energy,
-        },
-        UnitKind::Mex(_) => UnitRole::MassExtractor {
+            0.0,
+            0.0,
+        ),
+        UnitKind::Mex(_) => (
             production_per_second_mass,
+            0.0,
             maintenance_consumption_per_second_energy,
-        },
-        UnitKind::Pgen(_) => UnitRole::PowerGenerator {
+            0.0,
+            0.0,
+        ),
+        UnitKind::Pgen(_) => (
+            0.0,
             production_per_second_energy,
             maintenance_consumption_per_second_energy,
-        },
-        UnitKind::EnergyStorage => UnitRole::EnergyStorage { energy_storage },
-        UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitRole::CappedMassExtractor {
-            production_per_second_mass,
-            mass_storage,
+            0.0,
+            0.0,
+        ),
+        UnitKind::EnergyStorage => (0.0, 0.0, 0.0, 0.0, raw_energy_storage),
+        UnitKind::CapT2Mex | UnitKind::CapT3Mex => {
+            // These are inserted manually in BlueprintLibrary::new, not from raw units.
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+        UnitKind::Unique(_) => (
+            0.0,
+            0.0,
             maintenance_consumption_per_second_energy,
-        },
-        UnitKind::Unique(_) => UnitRole::Other {
-            maintenance_consumption_per_second_energy,
-        },
+            0.0,
+            0.0,
+        ),
     };
 
-    Some(UnitDef {
-        kind: kind.clone(),
-        faction: faction_from_unit(unit),
-        display_name: unit.display_name(),
-        cost: UnitCost {
-            mass: target_stats.build_cost_mass,
-            energy: target_stats.build_cost_energy,
-            build_time: target_stats.build_time,
-        },
-        role,
-    })
+    UnitEcoStats {
+        build_power,
+        mass_cost: target_stats.map(|s| s.build_cost_mass).unwrap_or(0.0),
+        energy_cost: target_stats.map(|s| s.build_cost_energy).unwrap_or(0.0),
+        build_time: target_stats.map(|s| s.build_time).unwrap_or(0.0),
+        production_per_second_mass: production_mass,
+        production_per_second_energy: production_energy,
+        maintenance_consumption_per_second_energy: maintenance,
+        mass_storage,
+        energy_storage,
+        unit_id: Some(unit.display_name()),
+    }
+}
+
+/// The default build rule for faction-unique units.
+pub(crate) fn unique_unit_build_rule() -> BuiltBy {
+    BuiltBy {
+        prereq: None,
+        builders: vec![UnitKind::Engineer(TechLevel::T3)],
+    }
 }
 
 /// Map a raw unit to its abstract `UnitKind`, if any.

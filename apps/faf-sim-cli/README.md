@@ -1,130 +1,102 @@
 # faf-sim-cli
 
-CLI for the FAF build-queue simulator.
+Command-line interface for the FAF build-queue simulator.
 
-It reads a construction plan as JSON, runs the simulation locally through
-`faf-sim-service`, and emits events as NDJSON. These events can be consumed by
-other tools, plotted, or piped into a file.
+## Documentation
 
-## Simulate a construction plan
+See the [`docs/`](docs/index.md) directory for detailed guides on each command.
 
-The `build` command has two subcommands that select the simulation mode:
+## Quick start
 
-- `build active` — manual advance mode. The simulation starts and waits for
-  external `Advance` commands (useful when driven by the WebSocket server or the
-  service API). The CLI itself does not auto-step.
-- `build passive` — auto-play mode. The simulation steps automatically using the
-  configured tick interval.
+All examples below run from the project root (`/home/zw/code/rust_programming/octopus`) using a release build for best performance.
 
-### Passive mode
+```bash
+# Simulate a plan from JSON (prints every tick, 30 s post-queue tail)
+cargo run --release -p faf-sim-cli -- build passive tmp/faf-sim-examples/engineer-builds-factory.json
 
-```sh
-cargo run --bin faf-sim -- build passive \
-  tmp/faf-sim-examples/engineer-builds-factory.json \
-  --dt-seconds 1 \
-  --max-time-seconds 1000 \
-  --tick-interval-ms 50
+# Simulate a plan and print only the final result (no tail)
+cargo run --release -p faf-sim-cli -- build passive --tail-seconds 0 tmp/faf-sim-examples/engineer-builds-factory.json
+
+# Generate training data
+cargo run --release -p faf-sim-cli -- dataset generate --samples 10000
+
+# Train a predictor with default parameters
+cargo run --release -p faf-sim-cli -- train --dataset data/build_prediction_dataset.db
+
+# Train with time-based loss weighting to up-weight fast/practical plans
+cargo run --release -p faf-sim-cli -- train \
+  --dataset data/build_prediction_dataset.db \
+  --epochs 50 \
+  --batch-size 64 \
+  --hidden-size 256 \
+  --learning-rate 0.001 \
+  --time-weight-power 0.3
+
+# Predict completion time for a plan (eco snapshot is derived from the plan file)
+cargo run --release -p faf-sim-cli -- predict --plan tmp/faf-sim-examples/engineer-builds-factory.json
 ```
 
-- `<QUEUE>` — a `BuildQueue` JSON object describing initial economy and build tasks.
-- `--dt-seconds` (`-d`) — simulation step size in seconds. Must be an integer `>= 1` (default `1`).
-- `--max-time-seconds` (`-m`) — optional hard cap in seconds. When omitted the simulation runs until the build queue is empty.
-- `--tick-interval-ms` — real-world delay between simulation steps in milliseconds (default `50`). Only available in passive mode.
+Run `cargo run --release -p faf-sim-cli -- --help` for all commands and flags.
 
-### Active mode
+## Dataset generation
 
-```sh
-cargo run --bin faf-sim -- build active \
-  tmp/faf-sim-examples/engineer-builds-factory.json \
-  --dt-seconds 1 \
-  --max-time-seconds 1000
+`dataset generate` samples from real FAF unit definitions by default. It loads
+`plugins/faf-units/data/faf_units.json`, derives builder and target pools from
+units that can build and units that have a build recipe, simulates each sampled
+plan, and stores per-task sequence features plus labels in SQLite.
+
+```bash
+# 10k samples using the default real unit database
+cargo run --release -p faf-sim-cli -- dataset generate --samples 10000
+
+# Use a different units JSON file
+cargo run --release -p faf-sim-cli -- dataset generate \
+  --samples 10000 \
+  --units-file path/to/faf_units.json
 ```
 
-Active mode accepts the same `--dt-seconds` and `--max-time-seconds` options as
-passive mode, but it does **not** accept `--tick-interval-ms`. For convenience,
-the CLI drives active mode itself by sending `Advance` commands in a tight loop
-until the simulation finishes.
+The same generator is exposed as a fluent Rust pipeline:
 
-## Construction plan format
-
-A plan is a JSON object with `initial_eco` and `tasks`:
-
-```json
-{
-  "initial_eco": {
-    "production_per_second_mass": 1.0,
-    "production_per_second_energy": 20.0,
-    "maintenance_consumption_per_second_energy": 0.0,
-    "mass_storage": { "current": 650.0, "cap": 650.0 },
-    "energy_storage": { "current": 4000.0, "cap": 4000.0 }
-  },
-  "tasks": [
-    {
-      "id": 1,
-      "start_after": 0.0,
-      "builders": [
-        { "build_power": 10.0 }
-      ],
-      "target": {
-        "mass_cost": 240.0,
-        "energy_cost": 2100.0,
-        "build_time": 300.0
-      }
-    }
-  ]
-}
+```rust
+// crates/faf-build-prediction/src/data/generator.rs ~line 114 — DatasetGenerator::pipeline
+DatasetGenerator::new(
+    GenerationConfig::default(),
+    Path::new("plugins/faf-units/data/faf_units.json"),
+)?
+.pipeline(Path::new("data/dataset.db"))?
+.create_schema()?
+.generate_samples()?
+.save_norm()?
+.finish()?;
 ```
 
-- `initial_eco` — starting mass/energy income and storage.
-- `tasks` — list of build tasks.
-  - `id` — caller-defined identifier, echoed in events.
-  - `start_after` — delay after the previous task finishes before this task may begin. For the first task this is a delay relative to simulation start (time 0).
-  - `builders` — units providing build power. Only `build_power` is relevant; other fields may be omitted and default to `0.0`.
-  - `target` — unit being built. Only `mass_cost`, `energy_cost`, and `build_time` are relevant; `build_power` may be omitted and defaults to `0.0`.
+See [`docs/02-dataset.md`](docs/02-dataset.md) for more details.
 
-Optional fields on both `builders` and `target`
-(`production_per_second_mass`, `production_per_second_energy`,
-`maintenance_consumption_per_second_energy`, `mass_storage`, `energy_storage`)
-are used after a unit completes to affect the economy. They default to `0.0`.
+## Feature vector
 
-## Example plan
+Each task is encoded as a 27-dimensional feature vector:
 
-A ready-to-run example lives at:
+- the initial economy snapshot the plan starts from,
+- task-level aggregates (build power, costs, production, maintenance, storage),
+- cumulative economy contributions from all earlier tasks in the plan.
 
-```
-tmp/faf-sim-examples/engineer-builds-factory.json
-```
+The cumulative deltas let the model see how the economy evolves as earlier tasks
+complete, e.g. a mass extractor built in Task 0 increases mass income available
+to Task 1.
 
-Run it with:
+## Time-weighted training loss
 
-```sh
-cargo run --bin faf-sim -- build passive \
-  tmp/faf-sim-examples/engineer-builds-factory.json \
-  --dt-seconds 1 \
-  --max-time-seconds 1000 \
-  --tick-interval-ms 50
-```
+Randomly generated plans are mostly slow / "not practical", which can bias the
+predictor toward overestimating completion times for fast plans. The `train`
+command supports `--time-weight-power` to weight each sample by
+`raw_time^{-power}`:
 
-## Output
+- `0.0` (default) — standard unweighted MSE.
+- `0.5` — moderate up-weighting of fast plans.
+- `1.0` — strong up-weighting; fast plans have much more influence on gradients.
 
-The CLI prints one event per line:
+Start with `0.5` and increase if predictions for fast plans are still too high.
 
-```json
-{"TaskStarted":{"task_id":1,"time":0.0}}
-{"Ticked":{"time":1.0,"production_per_second_mass":1.0,"production_per_second_energy":20.0,"maintenance_consumption_per_second_energy":0.0,"mass_drain":0.0,"energy_drain":0.0,...}}
-{"TaskCompleted":{"task_id":1,"time":30.0}}
-"Finished"
-```
+## `predict` input
 
-Event types:
-
-- `TaskStarted { task_id, time }`
-- `Ticked(EcoSnapshot)` — economy state at this tick
-- `TaskCompleted { task_id, time }`
-- `Finished`
-
-## Pipe to a file
-
-```sh
-cargo run --bin faf-sim -- build passive plan.json > events.ndjson
-```
+`predict` uses the same `BuildQueue` JSON file as `build`. It derives the initial economy snapshot from the file's `initial_eco` field, so no separate `eco.json` is required.

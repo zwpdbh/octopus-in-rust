@@ -13,7 +13,7 @@
 
 use crate::{
     quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time},
-    units::{UnitCost, UnitDef, UnitKind, Units},
+    units::{BlueprintLibrary, UnitCost, UnitKind},
 };
 use faf_units::BuildTargetStats;
 use serde::{Deserialize, Serialize};
@@ -125,13 +125,12 @@ pub fn compute_drain(
 /// Only units with a positive `build_rate` contribute. In the strongly-typed
 /// model the only such kinds are commanders, engineers, and factories, so no
 /// additional category filter is needed.
-pub fn total_build_power(units: &Units, builders: &[UnitKind]) -> RequestedBuildPower {
+pub fn total_build_power(library: &BlueprintLibrary, builders: &[UnitKind]) -> RequestedBuildPower {
     RequestedBuildPower(
         builders
             .iter()
-            .filter_map(|kind| units.def(kind))
-            .filter(|def| def.build_rate() > 0.0)
-            .map(|def| def.build_rate())
+            .map(|kind| library.build_power(kind))
+            .filter(|&power| power > 0.0)
             .sum(),
     )
 }
@@ -217,9 +216,11 @@ impl EcoConsumer for BuildProject {
 /// economic metrics (build cost, build time, production, maintenance). This
 /// view lets the planner treat them uniformly when making efficiency-aware
 /// decisions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ResourceProducer<'a> {
-    def: &'a UnitDef,
+    library: &'a BlueprintLibrary,
+    kind: UnitKind,
+    cost: UnitCost,
 }
 
 impl<'a> ResourceProducer<'a> {
@@ -227,31 +228,49 @@ impl<'a> ResourceProducer<'a> {
     ///
     /// Returns `None` if the unit has no definition, zero mass cost, or no
     /// resource production.
-    pub fn new(units: &'a Units, kind: &'a UnitKind) -> Option<Self> {
-        let def = units.def(kind)?;
-        if def.cost.mass <= 0.0 {
+    pub fn new(library: &'a BlueprintLibrary, kind: &'a UnitKind) -> Option<Self> {
+        let cost = library.build_cost(kind)?;
+        if cost.mass <= 0.0 {
             return None;
         }
-        let prod = def.production();
-        if prod.mass_per_second.value() <= 0.0 && prod.energy_per_second.value() <= 0.0 {
+        let mass_prod = library.production_per_second_mass(kind);
+        let energy_prod = library.production_per_second_energy(kind);
+        if mass_prod <= 0.0 && energy_prod <= 0.0 {
             return None;
         }
-        Some(Self { def })
+        Some(Self {
+            library,
+            kind: kind.clone(),
+            cost,
+        })
     }
 
     /// Build stats of this producer.
     pub fn stats(&self) -> UnitCost {
-        self.def.cost
+        self.cost
     }
 
     /// Gross production flow.
     pub fn production(&self) -> EcoFlow {
-        self.def.production()
+        EcoFlow {
+            mass_per_second: MassRate::from_raw(
+                self.library.production_per_second_mass(&self.kind),
+            ),
+            energy_per_second: EnergyRate::from_raw(
+                self.library.production_per_second_energy(&self.kind),
+            ),
+        }
     }
 
     /// Maintenance consumption flow.
     pub fn maintenance(&self) -> EcoFlow {
-        self.def.consumption()
+        EcoFlow {
+            mass_per_second: MassRate::zero(),
+            energy_per_second: EnergyRate::from_raw(
+                self.library
+                    .maintenance_consumption_per_second_energy(&self.kind),
+            ),
+        }
     }
 
     /// Net production after maintenance.
@@ -261,12 +280,12 @@ impl<'a> ResourceProducer<'a> {
 
     /// FAF `ProductionPerSecondMass` per mass invested.
     pub fn mass_efficiency(&self) -> f64 {
-        self.production().mass_per_second.value() / self.def.cost.mass
+        self.production().mass_per_second.value() / self.cost.mass
     }
 
     /// FAF `ProductionPerSecondEnergy` per mass invested.
     pub fn energy_efficiency(&self) -> f64 {
-        self.production().energy_per_second.value() / self.def.cost.mass
+        self.production().energy_per_second.value() / self.cost.mass
     }
 }
 
@@ -276,19 +295,25 @@ impl<'a> ResourceProducer<'a> {
 /// The returned flow can be negative when consumption exceeds production, just
 /// like the in-game economy display during heavy construction.
 pub fn summarize_economy(
-    units: &Units,
+    library: &BlueprintLibrary,
     owned: &[UnitKind],
     active_projects: &[&BuildProject],
 ) -> EcoFlow {
     let production: EcoFlow = owned
         .iter()
-        .filter_map(|kind| units.def(kind))
-        .map(|def| def.production())
+        .map(|kind| EcoFlow {
+            mass_per_second: MassRate::from_raw(library.production_per_second_mass(kind)),
+            energy_per_second: EnergyRate::from_raw(library.production_per_second_energy(kind)),
+        })
         .sum();
     let maintenance: EcoFlow = owned
         .iter()
-        .filter_map(|kind| units.def(kind))
-        .map(|def| def.consumption())
+        .map(|kind| EcoFlow {
+            mass_per_second: MassRate::zero(),
+            energy_per_second: EnergyRate::from_raw(
+                library.maintenance_consumption_per_second_energy(kind),
+            ),
+        })
         .sum();
     let construction: EcoFlow = active_projects.iter().map(|p| p.consumption()).sum();
     production - maintenance - construction
@@ -322,108 +347,6 @@ pub struct EconomyRuntimeState {
     pub mass_storage: Storage<Mass>,
     /// Energy storage (current amount + capacity).
     pub energy_storage: Storage<Energy>,
-}
-
-impl EconomyRuntimeState {
-    /// Estimate how long it would take this economy to finish `cost` work at
-    /// `build_power` under a continuous, constant-income approximation.
-    ///
-    /// Unlike taking the max of independent mass/energy/build estimates, this
-    /// models the interaction between them: resources drain continuously while
-    /// building, so a resource shortage can force build power to throttle even
-    /// before storage is empty.
-    ///
-    /// Assumptions:
-    /// - `ProductionPerSecondMass` and `ProductionPerSecondEnergy` stay constant.
-    /// - Total build power stays constant.
-    /// - Remaining resource costs are distributed proportionally over remaining
-    ///   build work (a continuous / fluid approximation).
-    /// - Resources already in storage can be spent immediately.
-    ///
-    /// The result is exact under those assumptions. In the real planner, income
-    /// and build power change as new units are built, and projects are discrete,
-    /// so this remains a heuristic estimate.
-    pub fn estimate_remaining_time(&self, cost: BuildTargetStats, build_power: f64) -> f64 {
-        if cost.build_time <= 0.0 {
-            return 0.0;
-        }
-        if build_power <= 0.0 {
-            return f64::INFINITY;
-        }
-
-        let mut remaining_mass = cost.build_cost_mass;
-        let mut remaining_energy = cost.build_cost_energy;
-        let mut remaining_work = cost.build_time;
-        let mut mass_storage = self.mass_storage.current.value();
-        let mut energy_storage = self.energy_storage.current.value();
-        let production_per_second_mass = self.production_per_second_mass.value();
-        // Energy income available for construction after paying maintenance.
-        let production_per_second_energy = self.production_per_second_energy.value()
-            - self.maintenance_consumption_per_second_energy.value();
-        let mut elapsed = 0.0;
-
-        while remaining_work > 1e-9 {
-            // Cost intensity of the remaining work (fluid approximation).
-            let mass_per_work = remaining_mass / remaining_work;
-            let energy_per_work = remaining_energy / remaining_work;
-
-            // Sustainable build rate for each resource (income == drain).
-            let mass_sustainable_bp = if mass_per_work > 0.0 {
-                production_per_second_mass / mass_per_work
-            } else {
-                f64::INFINITY
-            };
-            let energy_sustainable_bp = if energy_per_work > 0.0 {
-                production_per_second_energy / energy_per_work
-            } else {
-                f64::INFINITY
-            };
-
-            // Effective BP is limited by resources whose storage is already empty:
-            // we cannot drain them faster than income allows.
-            let mut effective_bp = build_power;
-            if mass_storage <= 1e-9 {
-                effective_bp = effective_bp.min(mass_sustainable_bp);
-            }
-            if energy_storage <= 1e-9 {
-                effective_bp = effective_bp.min(energy_sustainable_bp);
-            }
-
-            if effective_bp <= 1e-9 {
-                return f64::INFINITY;
-            }
-
-            // Build at effective_bp. How long until a resource with positive
-            // storage depletes?
-            let mass_drain_rate = effective_bp * mass_per_work;
-            let energy_drain_rate = effective_bp * energy_per_work;
-            let net_mass = production_per_second_mass - mass_drain_rate;
-            let net_energy = production_per_second_energy - energy_drain_rate;
-
-            let time_to_finish = remaining_work / effective_bp;
-            let mut dt = time_to_finish;
-            if mass_storage > 1e-9 && net_mass < -1e-9 {
-                dt = dt.min(-mass_storage / net_mass);
-            }
-            if energy_storage > 1e-9 && net_energy < -1e-9 {
-                dt = dt.min(-energy_storage / net_energy);
-            }
-
-            if dt <= 1e-9 {
-                // Cannot make progress; prevent an infinite loop.
-                return f64::INFINITY;
-            }
-
-            elapsed += dt;
-            mass_storage += net_mass * dt;
-            energy_storage += net_energy * dt;
-            remaining_work -= effective_bp * dt;
-            remaining_mass -= mass_drain_rate * dt;
-            remaining_energy -= energy_drain_rate * dt;
-        }
-
-        elapsed
-    }
 }
 
 /// Result of applying a drain to an economy state for one second.
@@ -582,16 +505,16 @@ impl BuildProject {
     /// Create a new project for the given unit kind.
     ///
     /// Returns `None` if the unit has no definition or zero build time.
-    pub fn new(target: UnitKind, units: &Units) -> Option<Self> {
-        let def = units.def(&target)?;
-        if def.cost.build_time <= 0.0 {
+    pub fn new(target: UnitKind, library: &BlueprintLibrary) -> Option<Self> {
+        let cost = library.build_cost(&target)?;
+        if cost.build_time <= 0.0 {
             return None;
         }
         Some(Self {
             target_kind: target,
-            target: def.cost,
+            target: cost,
             assigned_build_power: RequestedBuildPower(0.0),
-            remaining_work: def.cost.build_time,
+            remaining_work: cost.build_time,
         })
     }
 
@@ -649,16 +572,16 @@ impl BuildProject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{TechLevel, UnitId, Units};
+    use crate::units::{BlueprintLibrary, TechLevel, UnitId};
 
-    fn load_units() -> Units {
+    fn load_library() -> BlueprintLibrary {
         let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        Units::new(serde_json::from_str(json).expect("embedded index should parse"))
+        BlueprintLibrary::new(serde_json::from_str(json).expect("embedded index should parse"))
     }
 
     #[test]
     fn monkeylord_drain_at_base_build_power() {
-        let units = load_units();
+        let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let cost = units.build_cost(&monkeylord).expect("Monkeylord exists");
 
@@ -677,10 +600,10 @@ mod tests {
 
     #[test]
     fn monkeylord_drain_at_t3_engineer_power() {
-        let units = load_units();
+        let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let t3_eng = UnitKind::Engineer(TechLevel::T3);
-        let build_power = RequestedBuildPower(units.def(&t3_eng).unwrap().build_rate());
+        let build_power = RequestedBuildPower(units.build_power(&t3_eng));
 
         let drain = compute_drain(
             &units.build_cost(&monkeylord).unwrap().to_target_stats(),
@@ -697,23 +620,22 @@ mod tests {
 
     #[test]
     fn total_build_power_sums_builders() {
-        let units = load_units();
+        let units = load_library();
         let acu = UnitKind::Commander;
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
         let t3_eng = UnitKind::Engineer(TechLevel::T3);
 
         let total = total_build_power(&units, &[acu.clone(), t1_eng.clone(), t3_eng.clone()]);
 
-        let expected = units.def(&acu).unwrap().build_rate()
-            + units.def(&t1_eng).unwrap().build_rate()
-            + units.def(&t3_eng).unwrap().build_rate();
+        let expected =
+            units.build_power(&acu) + units.build_power(&t1_eng) + units.build_power(&t3_eng);
 
         assert!((total.0 - expected).abs() < 1e-9);
     }
 
     #[test]
     fn tick_with_plenty_resources_runs_full_power() {
-        let units = load_units();
+        let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
             &units.build_cost(&monkeylord).unwrap().to_target_stats(),
@@ -743,7 +665,7 @@ mod tests {
 
     #[test]
     fn tick_stalls_when_energy_insufficient() {
-        let units = load_units();
+        let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
             &units.build_cost(&monkeylord).unwrap().to_target_stats(),
@@ -775,7 +697,7 @@ mod tests {
 
     #[test]
     fn tick_stalls_when_mass_insufficient() {
-        let units = load_units();
+        let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
             &units.build_cost(&monkeylord).unwrap().to_target_stats(),
@@ -807,9 +729,9 @@ mod tests {
 
     #[test]
     fn build_project_completes_with_constant_power() {
-        let units = load_units();
+        let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
+        let build_power = RequestedBuildPower(units.build_power(&t1_eng));
 
         // Build a T1 engineer with another T1 engineer.
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
@@ -839,9 +761,9 @@ mod tests {
 
     #[test]
     fn build_project_progress_tracks_remaining_work() {
-        let units = load_units();
+        let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
+        let build_power = RequestedBuildPower(units.build_power(&t1_eng));
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let build_time = project.target.build_time;
@@ -876,9 +798,9 @@ mod tests {
 
     #[test]
     fn build_project_stalls_and_takes_longer() {
-        let units = load_units();
+        let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
+        let build_power = RequestedBuildPower(units.build_power(&t1_eng));
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let build_time = project.target.build_time;
@@ -915,7 +837,7 @@ mod tests {
 
     #[test]
     fn storage_overflow_wastes_income() {
-        let units = load_units();
+        let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
         let drain = compute_drain(
             &units.build_cost(&t1_eng).unwrap().to_target_stats(),
@@ -966,9 +888,9 @@ mod tests {
 
     #[test]
     fn storage_buffers_during_zero_income() {
-        let units = load_units();
+        let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
-        let build_power = RequestedBuildPower(units.def(&t1_eng).unwrap().build_rate());
+        let build_power = RequestedBuildPower(units.build_power(&t1_eng));
 
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         let total_mass = project.target.mass;
@@ -1000,7 +922,7 @@ mod tests {
 
     #[test]
     fn summarize_economy_computes_net_flow() {
-        let units = load_units();
+        let units = load_library();
 
         // ACU alone: produces 1 mass/s and 20 energy/s, no maintenance.
         let net = summarize_economy(&units, &[UnitKind::Commander], &[]);
@@ -1025,8 +947,7 @@ mod tests {
         let mut project =
             BuildProject::new(UnitKind::Unique(UnitId("URL0402".to_string())), &units)
                 .expect("valid target");
-        project.assigned_build_power =
-            RequestedBuildPower(units.def(&UnitKind::Commander).unwrap().build_rate());
+        project.assigned_build_power = RequestedBuildPower(units.build_power(&UnitKind::Commander));
         let net = summarize_economy(&units, &[UnitKind::Commander], &[&project]);
         assert!(
             net.energy_per_second < 0.0,
@@ -1036,12 +957,12 @@ mod tests {
 
     #[test]
     fn resource_producers_share_uniform_metrics() {
-        let units = load_units();
+        let units = load_library();
         let mut checked = 0;
 
-        for def in units.defs().values() {
-            let is_mex = matches!(def.kind, UnitKind::Mex(_));
-            let is_pgen = matches!(def.kind, UnitKind::Pgen(_));
+        for kind in units.all_kinds() {
+            let is_mex = matches!(kind, UnitKind::Mex(_));
+            let is_pgen = matches!(kind, UnitKind::Pgen(_));
             if !is_mex && !is_pgen {
                 continue;
             }
@@ -1049,130 +970,39 @@ mod tests {
             // Special units such as the Aeon Paragon carry the production
             // categories but have no fixed production values. Only enforce the
             // common metric shape on units that actually produce something.
-            let prod = def.production();
-            let produces_mass = prod.mass_per_second > 0.0;
-            let produces_energy = prod.energy_per_second > 0.0;
+            let mass_prod = units.production_per_second_mass(&kind);
+            let energy_prod = units.production_per_second_energy(&kind);
+            let produces_mass = mass_prod > 0.0;
+            let produces_energy = energy_prod > 0.0;
             if !produces_mass && !produces_energy {
                 continue;
             }
 
+            let cost = units.build_cost(&kind).expect("producer has a cost");
             checked += 1;
-            assert!(def.cost.mass > 0.0, "{:?} has no mass cost", def.kind);
-            assert!(def.cost.energy > 0.0, "{:?} has no energy cost", def.kind);
-            assert!(
-                def.cost.build_time > 0.0,
-                "{:?} has no build time",
-                def.kind
-            );
+            assert!(cost.mass > 0.0, "{:?} has no mass cost", kind);
+            assert!(cost.energy > 0.0, "{:?} has no energy cost", kind);
+            assert!(cost.build_time > 0.0, "{:?} has no build time", kind);
 
             if is_mex {
-                assert!(
-                    produces_mass,
-                    "{:?} is a mex with no mass production",
-                    def.kind
-                );
+                assert!(produces_mass, "{:?} is a mex with no mass production", kind);
             }
             if is_pgen {
                 assert!(
                     produces_energy,
                     "{:?} is a pgen with no energy production",
-                    def.kind
+                    kind
                 );
             }
 
             // All resource producers should be representable as a ResourceProducer.
             assert!(
-                ResourceProducer::new(&units, &def.kind).is_some(),
+                ResourceProducer::new(&units, &kind).is_some(),
                 "{:?} should be a valid ResourceProducer",
-                def.kind
+                kind
             );
         }
 
         assert!(checked > 0, "no resource producers found in index");
-    }
-
-    fn test_economy(
-        mass_storage: f64,
-        energy_storage: f64,
-        production_per_second_mass: f64,
-        production_per_second_energy: f64,
-    ) -> EconomyRuntimeState {
-        EconomyRuntimeState {
-            production_per_second_mass: crate::quantities::MassRate::from_raw(
-                production_per_second_mass,
-            ),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(
-                production_per_second_energy,
-            ),
-            mass_storage: Storage::new(
-                crate::quantities::Mass::from_raw(mass_storage),
-                crate::quantities::Mass::from_raw(0.0),
-            ),
-            energy_storage: Storage::new(
-                crate::quantities::Energy::from_raw(energy_storage),
-                crate::quantities::Energy::from_raw(0.0),
-            ),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn estimate_build_power_bottleneck() {
-        // Resources and income are abundant; only build power limits progress.
-        let economy = test_economy(1000.0, 1000.0, 100.0, 100.0);
-        let cost = BuildTargetStats {
-            build_cost_mass: 100.0,
-            build_cost_energy: 100.0,
-            build_time: 100.0,
-        };
-        let t = economy.estimate_remaining_time(cost, 10.0);
-        assert!((t - 10.0).abs() < 1e-9, "expected 10s, got {t}");
-    }
-
-    #[test]
-    fn estimate_resource_bottleneck_with_storage_burn() {
-        // BP is high, income is low, and storage covers some initial work.
-        // Total cost: 200 mass + 200 energy, work: 200, BP: 10.
-        // Storage: 100 mass + 100 energy.
-        // Income: 1 mass/s + 1 energy/s.
-        // Cost intensity: 1 mass/work, 1 energy/work.
-        // Sustainable BP = min(10, 1/1, 1/1) = 1.
-        // Burn at BP 10: drain excess = 9 each. Storage lasts 100/9 ≈ 11.11s.
-        // Work done in burn: 111.11. Remaining work: 88.89.
-        // Sustainable phase: 88.89 / 1 = 88.89s.
-        // Total: 100s.
-        let economy = test_economy(100.0, 100.0, 1.0, 1.0);
-        let cost = BuildTargetStats {
-            build_cost_mass: 200.0,
-            build_cost_energy: 200.0,
-            build_time: 200.0,
-        };
-        let t = economy.estimate_remaining_time(cost, 10.0);
-        assert!((t - 100.0).abs() < 1e-6, "expected ~100s, got {t}");
-    }
-
-    #[test]
-    fn estimate_no_progress_when_unaffordable() {
-        // No income and no storage means we cannot finish any work.
-        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
-        let cost = BuildTargetStats {
-            build_cost_mass: 100.0,
-            build_cost_energy: 100.0,
-            build_time: 100.0,
-        };
-        let t = economy.estimate_remaining_time(cost, 10.0);
-        assert!(t.is_infinite(), "expected infinity, got {t}");
-    }
-
-    #[test]
-    fn estimate_zero_work_is_instant() {
-        let economy = test_economy(0.0, 0.0, 0.0, 0.0);
-        let cost = BuildTargetStats {
-            build_cost_mass: 100.0,
-            build_cost_energy: 100.0,
-            build_time: 0.0,
-        };
-        let t = economy.estimate_remaining_time(cost, 10.0);
-        assert!((t - 0.0).abs() < 1e-9, "expected 0s, got {t}");
     }
 }
