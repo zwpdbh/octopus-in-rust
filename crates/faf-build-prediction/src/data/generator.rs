@@ -34,23 +34,18 @@ impl Default for GenerationConfig {
             sample_count: 10_000,
             time_limit_seconds: 600.0,
             max_tasks: 5,
-            max_builders_per_task: 3,
+            max_builders_per_task: 20,
             max_targets_per_task: 5,
         }
     }
 }
 
-/// Source of units used to sample builders and targets.
+/// Source of real FAF units used to sample builders and targets.
 #[derive(Debug, Clone)]
-enum UnitSource {
-    /// Pure synthetic units drawn from fixed uniform ranges.
-    Synthetic,
-    /// Real FAF units loaded from `faf-units`.
-    Real {
-        units: Units,
-        builders: Vec<UnitKind>,
-        targets: Vec<UnitKind>,
-    },
+struct UnitSource {
+    units: Units,
+    builders: Vec<UnitKind>,
+    targets: Vec<UnitKind>,
 }
 
 /// Builder-pattern generator for a `faf-build-prediction` training dataset.
@@ -58,9 +53,11 @@ enum UnitSource {
 /// # Example
 ///
 /// ```rust,ignore
-/// DatasetGenerator::new(GenerationConfig::default())
-///     .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
-///     .generate(Path::new("data/dataset.db"))?;
+/// DatasetGenerator::new(
+///     GenerationConfig::default(),
+///     Path::new("plugins/faf-units/data/faf_units.json"),
+/// )?
+/// .generate(Path::new("data/dataset.db"))?;
 /// ```
 pub struct DatasetGenerator {
     config: GenerationConfig,
@@ -68,20 +65,12 @@ pub struct DatasetGenerator {
 }
 
 impl DatasetGenerator {
-    /// Create a generator that uses synthetic units.
-    pub fn new(config: GenerationConfig) -> Self {
-        Self {
-            config,
-            source: UnitSource::Synthetic,
-        }
-    }
-
-    /// Configure the generator to sample from a real FAF unit database.
-    pub fn with_units_file(mut self, path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read units file {}", path.display()))?;
+    /// Create a generator that samples from the real FAF unit database at `units_file`.
+    pub fn new(config: GenerationConfig, units_file: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(units_file)
+            .with_context(|| format!("Failed to read units file {}", units_file.display()))?;
         let index: faf_units::DataIndex = serde_json::from_str(&text)
-            .with_context(|| format!("Failed to parse units file {}", path.display()))?;
+            .with_context(|| format!("Failed to parse units file {}", units_file.display()))?;
         let units = Units::new(index);
 
         let builders: Vec<UnitKind> = units
@@ -94,18 +83,23 @@ impl DatasetGenerator {
         let targets: Vec<UnitKind> = units.all_build_recipes().keys().cloned().collect();
 
         if builders.is_empty() {
-            anyhow::bail!("No builder units found in {}", path.display());
+            anyhow::bail!("No builder units found in {}", units_file.display());
         }
         if targets.is_empty() {
-            anyhow::bail!("No buildable target units found in {}", path.display());
+            anyhow::bail!(
+                "No buildable target units found in {}",
+                units_file.display()
+            );
         }
 
-        self.source = UnitSource::Real {
-            units,
-            builders,
-            targets,
-        };
-        Ok(self)
+        Ok(Self {
+            config,
+            source: UnitSource {
+                units,
+                builders,
+                targets,
+            },
+        })
     }
 
     /// Start a fluent pipeline that will write to `db_path`.
@@ -116,13 +110,15 @@ impl DatasetGenerator {
     /// # Example
     ///
     /// ```rust,ignore
-    /// DatasetGenerator::new(GenerationConfig::default())
-    ///     .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
-    ///     .pipeline(Path::new("data/dataset.db"))?
-    ///     .create_schema()?
-    ///     .generate_samples()?
-    ///     .save_norm()?
-    ///     .finish()?;
+    /// DatasetGenerator::new(
+    ///     GenerationConfig::default(),
+    ///     Path::new("plugins/faf-units/data/faf_units.json"),
+    /// )?
+    /// .pipeline(Path::new("data/dataset.db"))?
+    /// .create_schema()?
+    /// .generate_samples()?
+    /// .save_norm()?
+    /// .finish()?;
     /// ```
     pub fn pipeline(self, db_path: &Path) -> Result<DatasetPipeline> {
         let conn = Connection::open(db_path)
@@ -180,34 +176,26 @@ impl DatasetGenerator {
     }
 
     fn sample_builder<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
-        match &self.source {
-            UnitSource::Synthetic => random_synthetic_builder(rng),
-            UnitSource::Real {
-                units, builders, ..
-            } => {
-                let kind = builders[rng.random_range(0..builders.len())].clone();
-                let def = units.def(&kind).expect("builder kind missing from units");
-                unit_as_builder(def)
-            }
-        }
+        let UnitSource {
+            units,
+            builders,
+            ..
+        } = &self.source;
+        let kind = builders[rng.random_range(0..builders.len())].clone();
+        let def = units.def(&kind).expect("builder kind missing from units");
+        unit_as_builder(def)
     }
 
     fn sample_target<R: Rng>(&self, rng: &mut R) -> UnitEcoStats {
-        match &self.source {
-            UnitSource::Synthetic => random_synthetic_target(rng),
-            UnitSource::Real { units, targets, .. } => {
-                let kind = targets[rng.random_range(0..targets.len())].clone();
-                let def = units.def(&kind).expect("target kind missing from units");
-                unit_as_target(def)
-            }
-        }
+        let UnitSource { units, targets, .. } = &self.source;
+        let kind = targets[rng.random_range(0..targets.len())].clone();
+        let def = units.def(&kind).expect("target kind missing from units");
+        unit_as_target(def)
     }
 
     fn sample_initial_eco<R: Rng>(&self, rng: &mut R) -> EcoSnapshot {
-        match &self.source {
-            UnitSource::Synthetic => random_synthetic_eco_snapshot(rng),
-            UnitSource::Real { units, .. } => sample_real_initial_eco(rng, units),
-        }
+        let UnitSource { units, .. } = &self.source;
+        sample_real_initial_eco(rng, units)
     }
 }
 
@@ -231,7 +219,10 @@ pub struct DatasetPipeline {
 }
 
 impl DatasetPipeline {
-    /// Create the `samples` and `metadata` tables if they do not exist.
+    /// Drop and recreate the `samples` and `metadata` tables.
+    ///
+    /// This ensures each dataset generation starts with a clean database so
+    /// training always uses only the most recently generated samples.
     pub fn create_schema(mut self) -> Result<Self> {
         create_schema(&mut self.conn)?;
         Ok(self)
@@ -244,25 +235,27 @@ impl DatasetPipeline {
             .transaction()
             .context("Failed to start SQLite transaction")?;
         let mut rng = rand::rng();
+        let sample_count = self.generator.config.sample_count;
+        let time_limit = self.generator.config.time_limit_seconds;
+        let generator = &self.generator;
+        let stats = &mut self.stats;
 
-        for i in 0..self.generator.config.sample_count {
-            let sample = self.generator.generate_sample(&mut rng);
-            let task_features = extract_sequence_features(&sample.initial_eco, &sample.plan);
-            for task in &task_features {
-                self.stats.update(task);
-            }
+        (0..sample_count)
+            .try_for_each(|i| -> Result<()> {
+                let sample = generator.generate_sample(&mut rng);
+                let task_features = extract_sequence_features(&sample.initial_eco, &sample.plan);
+                task_features.iter().for_each(|task| stats.update(task));
 
-            let label = simulate_label(&sample, self.generator.config.time_limit_seconds);
-            insert_sample(&tx, &task_features, &label)?;
+                let label = simulate_label(&sample, time_limit);
+                insert_sample(&tx, &task_features, &label)
+                    .with_context(|| format!("Failed to insert sample {}", i + 1))?;
 
-            if (i + 1) % 1000 == 0 {
-                println!(
-                    "Generated {} / {} samples",
-                    i + 1,
-                    self.generator.config.sample_count
-                );
-            }
-        }
+                if (i + 1) % 1000 == 0 {
+                    println!("Generated {} / {} samples", i + 1, sample_count);
+                }
+                Ok(())
+            })
+            .context("Failed to generate samples")?;
 
         tx.commit().context("Failed to commit SQLite transaction")?;
         Ok(self)
@@ -286,14 +279,19 @@ impl DatasetPipeline {
     }
 }
 
-/// Convenience function that generates a synthetic dataset.
-pub fn generate_dataset(db_path: &Path, config: GenerationConfig) -> Result<()> {
-    DatasetGenerator::new(config).generate(db_path)
+/// Convenience function that generates a dataset from real FAF units.
+pub fn generate_dataset(db_path: &Path, config: GenerationConfig, units_file: &Path) -> Result<()> {
+    DatasetGenerator::new(config, units_file)?.generate(db_path)
 }
 
 fn create_schema(conn: &mut Connection) -> Result<()> {
+    conn.execute("DROP TABLE IF EXISTS samples", [])
+        .context("Failed to drop existing samples table")?;
+    conn.execute("DROP TABLE IF EXISTS metadata", [])
+        .context("Failed to drop existing metadata table")?;
+
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS samples (
+        "CREATE TABLE samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sequence_features TEXT NOT NULL,
             target_time REAL NOT NULL,
@@ -304,7 +302,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
     .context("Failed to create samples table")?;
 
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS metadata (
+        "CREATE TABLE metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )",
@@ -360,60 +358,6 @@ fn simulate_label(sample: &EcoPlanSample, time_limit_seconds: f64) -> EcoPlanLab
         EcoPlanLabel::NotPractical {
             time_seconds: final_time,
         }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Synthetic sampling
-// -----------------------------------------------------------------------------
-
-fn random_synthetic_eco_snapshot<R: Rng>(rng: &mut R) -> EcoSnapshot {
-    let mass_cap = rng.random_range(100.0..3000.0);
-    let energy_cap = rng.random_range(1000.0..30000.0);
-
-    EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: rng.random_range(0.0..200.0),
-        production_per_second_energy: rng.random_range(0.0..5000.0),
-        maintenance_consumption_per_second_energy: rng.random_range(0.0..500.0),
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage: rng.random_range(0.0..mass_cap),
-        mass_storage_cap: mass_cap,
-        energy_storage: rng.random_range(0.0..energy_cap),
-        energy_storage_cap: energy_cap,
-    }
-}
-
-fn random_synthetic_builder<R: Rng>(rng: &mut R) -> UnitEcoStats {
-    UnitEcoStats {
-        build_power: rng.random_range(1.0..50.0),
-        mass_cost: 0.0,
-        energy_cost: 0.0,
-        build_time: 0.0,
-        production_per_second_mass: 0.0,
-        production_per_second_energy: 0.0,
-        maintenance_consumption_per_second_energy: rng.random_range(0.0..200.0),
-        mass_storage: 0.0,
-        energy_storage: 0.0,
-        unit_id: None,
-    }
-}
-
-fn random_synthetic_target<R: Rng>(rng: &mut R) -> UnitEcoStats {
-    UnitEcoStats {
-        build_power: 0.0,
-        mass_cost: rng.random_range(1.0..20000.0),
-        energy_cost: rng.random_range(1.0..100000.0),
-        build_time: rng.random_range(1.0..5000.0),
-        production_per_second_mass: rng.random_range(0.0..50.0),
-        production_per_second_energy: rng.random_range(0.0..5000.0),
-        maintenance_consumption_per_second_energy: rng.random_range(0.0..2000.0),
-        mass_storage: rng.random_range(0.0..1000.0),
-        energy_storage: rng.random_range(0.0..10000.0),
-        unit_id: None,
     }
 }
 

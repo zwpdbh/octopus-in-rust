@@ -187,16 +187,16 @@ fn main() {
                 max_targets_per_task,
                 units_file,
             } => {
-                let generator = DatasetGenerator::new(GenerationConfig {
-                    sample_count: samples,
-                    time_limit_seconds,
-                    max_tasks,
-                    max_builders_per_task,
-                    max_targets_per_task,
-                })
-                .with_units_file(&units_file);
-
-                let generator = match generator {
+                let generator = match DatasetGenerator::new(
+                    GenerationConfig {
+                        sample_count: samples,
+                        time_limit_seconds,
+                        max_tasks,
+                        max_builders_per_task,
+                        max_targets_per_task,
+                    },
+                    &units_file,
+                ) {
                     Ok(g) => g,
                     Err(e) => {
                         eprintln!("Failed to load units file: {e}");

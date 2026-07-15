@@ -17,7 +17,7 @@ To use a different units file, pass `--units-file`:
 faf-sim-cli dataset generate --units-file path/to/faf_units.json
 ```
 
-The CLI always samples from real units. Pure synthetic sampling is still available through the library API by calling `DatasetGenerator::new(config).generate(db_path)` without `with_units_file`.
+The CLI always samples from real units.
 
 ## Flags
 
@@ -42,14 +42,16 @@ The CLI always samples from real units. Pure synthetic sampling is still availab
 The same steps are exposed as a fluent Rust pipeline for custom callers:
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 127 — DatasetGenerator::pipeline
-DatasetGenerator::new(GenerationConfig::default())
-    .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
-    .pipeline(Path::new("data/dataset.db"))?
-    .create_schema()?
-    .generate_samples()?
-    .save_norm()?
-    .finish()?;
+// crates/faf-build-prediction/src/data/generator.rs ~line 120 — DatasetGenerator::pipeline
+DatasetGenerator::new(
+    GenerationConfig::default(),
+    Path::new("plugins/faf-units/data/faf_units.json"),
+)?
+.pipeline(Path::new("data/dataset.db"))?
+.create_schema()?
+.generate_samples()?
+.save_norm()?
+.finish()?;
 ```
 
 ## Output schema

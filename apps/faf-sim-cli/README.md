@@ -54,14 +54,16 @@ cargo run --release -p faf-sim-cli -- dataset generate \
 The same generator is exposed as a fluent Rust pipeline:
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 127 — DatasetGenerator::pipeline
-DatasetGenerator::new(GenerationConfig::default())
-    .with_units_file(Path::new("plugins/faf-units/data/faf_units.json"))?
-    .pipeline(Path::new("data/dataset.db"))?
-    .create_schema()?
-    .generate_samples()?
-    .save_norm()?
-    .finish()?;
+// crates/faf-build-prediction/src/data/generator.rs ~line 120 — DatasetGenerator::pipeline
+DatasetGenerator::new(
+    GenerationConfig::default(),
+    Path::new("plugins/faf-units/data/faf_units.json"),
+)?
+.pipeline(Path::new("data/dataset.db"))?
+.create_schema()?
+.generate_samples()?
+.save_norm()?
+.finish()?;
 ```
 
 See [`docs/02-dataset.md`](docs/02-dataset.md) for more details.
