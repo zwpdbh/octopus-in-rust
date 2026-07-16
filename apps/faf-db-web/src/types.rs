@@ -66,6 +66,25 @@ impl EcoInitialSettings {
         }
     }
 
+    pub fn to_snapshot(&self) -> faf_sim::EcoSnapshot {
+        faf_sim::EcoSnapshot {
+            time: 0.0,
+            production_per_second_mass: self.production_per_second_mass.value(),
+            production_per_second_energy: self.production_per_second_energy.value(),
+            maintenance_consumption_per_second_energy: self
+                .maintenance_consumption_per_second_energy
+                .value(),
+            mass_drain: 0.0,
+            energy_drain: 0.0,
+            total_mass_spent: 0.0,
+            total_energy_spent: 0.0,
+            mass_storage: self.mass_storage.current.value(),
+            mass_storage_cap: self.mass_storage.cap.value(),
+            energy_storage: self.energy_storage.current.value(),
+            energy_storage_cap: self.energy_storage.cap.value(),
+        }
+    }
+
     pub fn from_runtime_state(state: &faf_sim::EconomyRuntimeState) -> Self {
         Self {
             production_per_second_mass: state.production_per_second_mass,

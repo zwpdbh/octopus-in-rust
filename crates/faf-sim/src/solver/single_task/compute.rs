@@ -6,7 +6,7 @@ use crate::solver::single_task::state::{SolverState, EPS};
 
 /// Result of solving a plan: when it finishes and what the economy looks like at
 /// that point.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompletionResult {
     pub time_seconds: f64,
     pub economy: EcoSnapshot,
