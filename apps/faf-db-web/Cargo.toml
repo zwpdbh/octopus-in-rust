@@ -8,6 +8,7 @@ console_error_panic_hook = { workspace = true }
 dioxus = { workspace = true }
 dioxus-router = "0.7.3"
 faf-dioxus-ui = { workspace = true }
+faf-sim-shared = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 gloo-net = { workspace = true }
 serde = { workspace = true }

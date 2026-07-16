@@ -65,3 +65,41 @@ pub struct UnitScheduleRequest {
     pub target: UnitKind,
     pub options: SearchOptions,
 }
+
+/// CLI-friendly input file format for `schedule eco`.
+///
+/// The target is intentionally simple: just target income thresholds for mass
+/// and/or energy production.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EcoScheduleInput {
+    pub initial_eco: EcoSnapshot,
+    #[serde(default = "default_inventory")]
+    pub initial_inventory: Vec<String>,
+    #[serde(default)]
+    pub target_mass_production: Option<f64>,
+    #[serde(default)]
+    pub target_energy_production: Option<f64>,
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    #[serde(default)]
+    pub options: SearchOptions,
+}
+
+fn default_tolerance() -> f64 {
+    1.0
+}
+
+/// CLI-friendly input file format for `schedule unit`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitScheduleInput {
+    pub initial_eco: EcoSnapshot,
+    #[serde(default = "default_inventory")]
+    pub initial_inventory: Vec<String>,
+    pub target: String,
+    #[serde(default)]
+    pub options: SearchOptions,
+}
+
+fn default_inventory() -> Vec<String> {
+    vec!["Commander".to_string()]
+}

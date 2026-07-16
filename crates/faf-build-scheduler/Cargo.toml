@@ -10,8 +10,10 @@ license = "MIT"
 anyhow = { workspace = true }
 clap = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+faf-sim-shared = { workspace = true }
 faf-units = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

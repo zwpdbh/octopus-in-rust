@@ -3996,6 +3996,7 @@ dependencies = [
  "anyhow",
  "clap",
  "faf-sim",
+ "faf-sim-shared",
  "faf-units",
  "serde",
  "serde_json",
@@ -4028,6 +4029,7 @@ dependencies = [
  "dioxus-router",
  "faf-dioxus-ui",
  "faf-sim",
+ "faf-sim-shared",
  "gloo-net",
  "serde",
  "serde_json",
@@ -4098,7 +4100,6 @@ dependencies = [
  "faf-build-scheduler",
  "faf-sim",
  "faf-sim-service",
- "faf-units",
  "serde",
  "serde_json",
 ]
@@ -4112,6 +4113,14 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "faf-sim-shared"
+version = "0.1.0"
+dependencies = [
+ "faf-sim",
+ "serde",
 ]
 
 [[package]]

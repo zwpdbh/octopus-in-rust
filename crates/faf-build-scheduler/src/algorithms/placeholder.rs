@@ -327,7 +327,7 @@ fn finalize_schedule(
         return Err(ScheduleError::SimulationStalled);
     }
     Ok(Schedule {
-        build_queue: queue,
+        plan: faf_sim_shared::ConstructionPlan::from_build_queue(queue),
         total_time_seconds: result.total.time_seconds,
         final_eco: result.total.economy,
         steps: step_results,

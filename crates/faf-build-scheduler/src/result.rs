@@ -2,6 +2,7 @@
 
 use faf_sim::runtime::{BuildQueue, EcoSnapshot};
 use faf_sim::units::UnitKind;
+use faf_sim_shared::ConstructionPlan;
 
 use crate::algorithms::AlgorithmKind;
 
@@ -30,10 +31,18 @@ pub enum Action {
 /// The full planned schedule returned by a scheduling algorithm.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Schedule {
-    pub build_queue: BuildQueue,
+    /// The solved plan in the shared, human-editable format.
+    pub plan: ConstructionPlan,
     pub total_time_seconds: f64,
     pub final_eco: EcoSnapshot,
     pub steps: Vec<StepResult>,
+}
+
+impl Schedule {
+    /// Convert the solved plan into the simulator's runtime queue format.
+    pub fn to_build_queue(&self) -> BuildQueue {
+        self.plan.to_build_queue()
+    }
 }
 
 /// Errors that can occur during scheduling.

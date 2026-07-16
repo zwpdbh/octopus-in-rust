@@ -55,29 +55,12 @@ pub struct ScheduleEcoArgs {
     #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
     pub algorithm: AlgorithmKind,
 
-    /// JSON file containing the initial EcoSnapshot.
-    #[arg(short, long)]
-    pub eco: PathBuf,
-
-    /// JSON file containing the initial inventory as a list of UnitKind strings.
-    #[arg(short, long)]
-    pub inventory: Option<PathBuf>,
-
-    /// JSON file containing the EcoTarget.
-    #[arg(short, long)]
-    pub target: PathBuf,
-
-    /// Path to the FAF units JSON file used to build the BlueprintLibrary.
-    #[arg(long, default_value = "plugins/faf-units/data/faf_units.json")]
-    pub units_file: PathBuf,
-
-    /// Maximum search time in seconds.
-    #[arg(long, default_value = "2.0")]
-    pub max_search_seconds: f64,
-
-    /// Solver cap when validating each candidate plan.
-    #[arg(long, default_value = "6000.0")]
-    pub simulation_max_time_seconds: f64,
+    /// JSON file describing the scheduling request.
+    ///
+    /// The file must contain `initial_eco`, optional `initial_inventory`, and
+    /// target production thresholds (`target_mass_production`,
+    /// `target_energy_production`).
+    pub input: PathBuf,
 
     /// Output path for the generated BuildQueue JSON.
     #[arg(short, long, default_value = "schedule_queue.json")]
@@ -86,28 +69,17 @@ pub struct ScheduleEcoArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ScheduleUnitArgs {
+    /// Scheduling algorithm to use.
     #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
     pub algorithm: AlgorithmKind,
 
-    #[arg(short, long)]
-    pub eco: PathBuf,
+    /// JSON file describing the scheduling request.
+    ///
+    /// The file must contain `initial_eco`, optional `initial_inventory`, and
+    /// a `target` UnitKind string such as `Engineer(T1)`.
+    pub input: PathBuf,
 
-    #[arg(short, long)]
-    pub inventory: Option<PathBuf>,
-
-    /// Target UnitKind or blueprint id.
-    #[arg(short, long)]
-    pub target: String,
-
-    #[arg(long, default_value = "plugins/faf-units/data/faf_units.json")]
-    pub units_file: PathBuf,
-
-    #[arg(long, default_value = "2.0")]
-    pub max_search_seconds: f64,
-
-    #[arg(long, default_value = "6000.0")]
-    pub simulation_max_time_seconds: f64,
-
+    /// Output path for the generated BuildQueue JSON.
     #[arg(short, long, default_value = "schedule_queue.json")]
     pub output: PathBuf,
 }

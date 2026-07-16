@@ -213,7 +213,7 @@ fn JsonPlanEditor(mut plan: Signal<ConstructionPlan>, units: Vec<UnitSummary>) -
                     json_text.set(text.clone());
                     match serde_json::from_str::<BuildQueue>(&text) {
                         Ok(queue) => {
-                            plan.set(ConstructionPlan::from_build_queue(queue, &units.read()));
+                            plan.set(ConstructionPlan::from_build_queue_with_units(queue, &units.read()));
                             error.set(String::new());
                         }
                         Err(err) => {

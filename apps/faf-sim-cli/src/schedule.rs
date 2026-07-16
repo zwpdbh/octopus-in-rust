@@ -4,10 +4,10 @@ use std::fs;
 use std::path::Path;
 
 use faf_build_scheduler::{
-    AlgorithmKind, EcoScheduleRequest, EcoTarget, Scheduler, SearchOptions, UnitScheduleRequest,
+    EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, UnitScheduleInput,
+    UnitScheduleRequest,
 };
-use faf_sim::runtime::EcoSnapshot;
-use faf_sim::units::{BlueprintLibrary, TechLevel, UnitId, UnitKind};
+use faf_sim::units::{TechLevel, UnitId, UnitKind};
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};
 
@@ -20,22 +20,35 @@ pub fn run(mode: ScheduleMode) {
 }
 
 fn run_eco(args: ScheduleEcoArgs) {
-    let (scheduler, initial_eco, inventory) =
-        load_shared(&args.units_file, &args.eco, args.inventory.as_deref());
-
-    let target: EcoTarget = read_json(&args.target).unwrap_or_else(|e| {
-        eprintln!("Failed to read target file: {e}");
+    let scheduler = Scheduler::from_default_units(args.algorithm).unwrap_or_else(|e| {
+        eprintln!("Failed to load blueprint library: {e}");
         std::process::exit(1);
     });
 
+    let input: EcoScheduleInput = read_json(&args.input).unwrap_or_else(|e| {
+        eprintln!("Failed to read input file: {e}");
+        std::process::exit(1);
+    });
+
+    let inventory = parse_inventory(&input.initial_inventory);
+    let target = EcoTarget {
+        mass_production: input.target_mass_production,
+        energy_production: input.target_energy_production,
+        mass_storage_cap: None,
+        energy_storage_cap: None,
+        tolerance: input.tolerance,
+    };
+
+    if target.mass_production.is_none() && target.energy_production.is_none() {
+        eprintln!("At least one of target_mass_production or target_energy_production must be set");
+        std::process::exit(1);
+    }
+
     let request = EcoScheduleRequest {
-        initial_eco,
+        initial_eco: input.initial_eco,
         initial_inventory: inventory,
         target,
-        options: SearchOptions {
-            max_search_seconds: args.max_search_seconds,
-            simulation_max_time_seconds: args.simulation_max_time_seconds,
-        },
+        options: input.options,
     };
 
     let schedule = scheduler.schedule_eco(&request).unwrap_or_else(|e| {
@@ -43,7 +56,7 @@ fn run_eco(args: ScheduleEcoArgs) {
         std::process::exit(1);
     });
 
-    write_output(&args.output, &schedule.build_queue);
+    write_output(&args.output, &schedule.plan);
     eprintln!(
         "Scheduled eco target in {:.2}s ({} steps). Output written to {}",
         schedule.total_time_seconds,
@@ -53,22 +66,27 @@ fn run_eco(args: ScheduleEcoArgs) {
 }
 
 fn run_unit(args: ScheduleUnitArgs) {
-    let (scheduler, initial_eco, inventory) =
-        load_shared(&args.units_file, &args.eco, args.inventory.as_deref());
+    let scheduler = Scheduler::from_default_units(args.algorithm).unwrap_or_else(|e| {
+        eprintln!("Failed to load blueprint library: {e}");
+        std::process::exit(1);
+    });
 
-    let target = parse_unit_kind(&args.target).unwrap_or_else(|e| {
-        eprintln!("Invalid target unit: {e}");
+    let input: UnitScheduleInput = read_json(&args.input).unwrap_or_else(|e| {
+        eprintln!("Failed to read input file: {e}");
+        std::process::exit(1);
+    });
+
+    let inventory = parse_inventory(&input.initial_inventory);
+    let target = parse_unit_kind(&input.target).unwrap_or_else(|e| {
+        eprintln!("Invalid target unit '{}': {e}", input.target);
         std::process::exit(1);
     });
 
     let request = UnitScheduleRequest {
-        initial_eco,
+        initial_eco: input.initial_eco,
         initial_inventory: inventory,
         target,
-        options: SearchOptions {
-            max_search_seconds: args.max_search_seconds,
-            simulation_max_time_seconds: args.simulation_max_time_seconds,
-        },
+        options: input.options,
     };
 
     let schedule = scheduler.schedule_unit(&request).unwrap_or_else(|e| {
@@ -76,7 +94,7 @@ fn run_unit(args: ScheduleUnitArgs) {
         std::process::exit(1);
     });
 
-    write_output(&args.output, &schedule.build_queue);
+    write_output(&args.output, &schedule.plan);
     eprintln!(
         "Scheduled unit target in {:.2}s ({} steps). Output written to {}",
         schedule.total_time_seconds,
@@ -85,59 +103,25 @@ fn run_unit(args: ScheduleUnitArgs) {
     );
 }
 
-fn load_shared(
-    units_file: &Path,
-    eco_path: &Path,
-    inventory_path: Option<&Path>,
-) -> (Scheduler, EcoSnapshot, Vec<UnitKind>) {
-    let index = load_units(units_file);
-    let library = BlueprintLibrary::new(index);
-    let scheduler = Scheduler::with_algorithm(library, AlgorithmKind::Placeholder);
-
-    let initial_eco: EcoSnapshot = read_json(eco_path).unwrap_or_else(|e| {
-        eprintln!("Failed to read economy file: {e}");
-        std::process::exit(1);
-    });
-
-    let inventory: Vec<UnitKind> = if let Some(path) = inventory_path {
-        let strings: Vec<String> = read_json(path).unwrap_or_else(|e| {
-            eprintln!("Failed to read inventory file: {e}");
-            std::process::exit(1);
-        });
-        strings
-            .into_iter()
-            .map(|s| {
-                parse_unit_kind(&s).unwrap_or_else(|e| {
-                    eprintln!("Invalid inventory entry '{s}': {e}");
-                    std::process::exit(1);
-                })
-            })
-            .collect()
-    } else {
-        vec![UnitKind::Commander]
-    };
-
-    (scheduler, initial_eco, inventory)
-}
-
-fn load_units(path: &Path) -> faf_units::DataIndex {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Failed to read units file {}: {e}", path.display());
-        std::process::exit(1);
-    });
-    serde_json::from_str::<faf_units::DataIndex>(&text).unwrap_or_else(|e| {
-        eprintln!("Failed to parse units file {}: {e}", path.display());
-        std::process::exit(1);
-    })
-}
-
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
 }
 
-fn write_output(path: &Path, queue: &faf_sim::runtime::BuildQueue) {
-    let json = serde_json::to_string_pretty(queue).unwrap_or_else(|e| {
+fn parse_inventory(strings: &[String]) -> Vec<UnitKind> {
+    strings
+        .iter()
+        .map(|s| {
+            parse_unit_kind(s).unwrap_or_else(|e| {
+                eprintln!("Invalid inventory entry '{s}': {e}");
+                std::process::exit(1);
+            })
+        })
+        .collect()
+}
+
+fn write_output<T: serde::Serialize>(path: &Path, value: &T) {
+    let json = serde_json::to_string_pretty(value).unwrap_or_else(|e| {
         eprintln!("Failed to serialize output: {e}");
         std::process::exit(1);
     });
