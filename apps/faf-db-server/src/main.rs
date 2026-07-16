@@ -1,3 +1,5 @@
+mod blueprint_graph;
+
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
@@ -61,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index_handler))
         .route("/api/units", get(list_units))
         .route("/api/units/:id", get(get_unit))
+        .route("/api/blueprint-graph", get(blueprint_graph_json))
         .route("/api/portraits/:id", get(get_portrait))
         .route("/ws/simulate", get(simulate_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))
@@ -91,6 +94,12 @@ async fn index_handler() -> impl IntoResponse {
 </html>"#
             .to_string(),
     )
+}
+
+async fn blueprint_graph_json(
+    State(state): State<AppState>,
+) -> Json<blueprint_graph::BlueprintGraphJson> {
+    Json(blueprint_graph::economic_graph_json(&state.index))
 }
 
 async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {

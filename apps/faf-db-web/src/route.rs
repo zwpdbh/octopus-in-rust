@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_router::Routable;
 
-use crate::pages::{Home, SimulateBuild};
+use crate::pages::{Home, Scheduler, SimulateBuild};
 
 #[derive(Clone, Routable, PartialEq)]
 pub enum Route {
@@ -9,4 +9,6 @@ pub enum Route {
     Home {},
     #[route("/simulate")]
     SimulateBuild {},
+    #[route("/scheduler")]
+    Scheduler {},
 }

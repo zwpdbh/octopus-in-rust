@@ -4031,6 +4031,7 @@ dependencies = [
  "faf-sim",
  "faf-sim-shared",
  "gloo-net",
+ "petgraph 0.8.3",
  "serde",
  "serde_json",
  "wasm-bindgen",
@@ -4044,8 +4045,10 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "js-sys",
+ "petgraph 0.8.3",
  "plotters",
  "plotters-canvas",
+ "serde",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -6995,13 +6998,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "serde",
-]
-
-[[package]]
-name = "petgraph-svg"
-version = "0.1.0"
-dependencies = [
- "petgraph 0.8.3",
 ]
 
 [[package]]

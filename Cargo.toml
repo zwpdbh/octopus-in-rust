@@ -10,7 +10,6 @@ members = [
     "crates/faf-build-prediction",
     "crates/faf-build-scheduler",
     "crates/faf-sim-shared",
-    "crates/petgraph-svg",
     "crates/faf-downloader",
     "crates/train-tui",
     "plugins/example-http",
@@ -38,7 +37,6 @@ faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }
 qqbot-config = { path = "crates/qqbot-config" }
-petgraph-svg = { path = "crates/petgraph-svg" }
 train-tui = { path = "crates/train-tui" }
 
 # Common external crates
