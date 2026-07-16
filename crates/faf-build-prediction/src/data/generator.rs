@@ -139,7 +139,9 @@ impl DatasetGenerator {
 
     fn generate_sample<R: Rng>(&self, rng: &mut R) -> EcoPlanSample<Unsimulated> {
         let initial_eco = self.sample_initial_eco(rng);
-        let task_count = rng.random_range(1..=self.config.max_tasks.max(1));
+
+        // The prediction of finish time only apply to only one task in the plan.
+        let task_count = 1;
         let plan: Vec<BuildTask> = (0..task_count)
             .map(|id| self.sample_build_task(rng, id as u32))
             .collect();

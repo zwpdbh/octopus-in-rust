@@ -10,7 +10,7 @@ use burn::record::{CompactRecorder, Recorder};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
 
 use crate::data::normalize::{NormalizationParams, Ready};
-use crate::data::sample::{extract_sequence_features, MAX_SEQ_LEN, TASK_FEATURE_DIM};
+use crate::data::sample::{extract_sequence_features, TASK_FEATURE_DIM};
 use crate::model::predictor::EcoPredictor;
 use crate::train::TrainingConfig;
 
@@ -111,6 +111,8 @@ impl PredictorNormLoaded {
 
 impl PredictorModelLoaded {
     /// Run inference on a build plan.
+    ///
+    /// This single-task predictor only uses the first task in `plan`.
     pub fn predict(
         &self,
         initial_eco: &EcoSnapshot,
@@ -118,14 +120,13 @@ impl PredictorModelLoaded {
         practical_threshold_seconds: f64,
     ) -> Prediction {
         let raw_sequence = extract_sequence_features(initial_eco, plan);
-        let normalized_sequence: Vec<Vec<f32>> = raw_sequence
-            .iter()
-            .map(|task| self.norm.normalize(task))
-            .collect();
-        let padded_sequence = pad_sequence(&normalized_sequence);
+        let raw_features = raw_sequence
+            .first()
+            .expect("predict called with an empty plan");
+        let normalized = self.norm.normalize(raw_features);
 
-        let features = Tensor::<NdArray, 3>::from_data(
-            TensorData::new(padded_sequence, [1, MAX_SEQ_LEN, TASK_FEATURE_DIM]).convert::<f32>(),
+        let features = Tensor::<NdArray, 2>::from_data(
+            TensorData::new(normalized, [1, TASK_FEATURE_DIM]).convert::<f32>(),
             &self.device,
         );
 
@@ -155,17 +156,4 @@ pub fn predict(
         .load_model(&artifact_dir.join("model"))?
         .predict(initial_eco, plan, practical_threshold_seconds);
     Ok(prediction)
-}
-
-fn pad_sequence(normalized: &[Vec<f32>]) -> Vec<f32> {
-    let mut sequence: Vec<f32> = normalized
-        .iter()
-        .take(MAX_SEQ_LEN)
-        .flat_map(|task| task.iter().copied())
-        .collect();
-
-    let missing_steps = MAX_SEQ_LEN.saturating_sub(normalized.len());
-    sequence.extend(std::iter::repeat_n(0.0, missing_steps * TASK_FEATURE_DIM));
-
-    sequence
 }

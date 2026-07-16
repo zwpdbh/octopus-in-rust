@@ -2,18 +2,18 @@
 
 use std::path::{Path, PathBuf};
 
-use burn::data::dataset::{Dataset, InMemDataset};
+use burn::data::dataset::Dataset;
 use burn::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::data::normalize::{NormalizationParams, Ready};
-use crate::data::sample::{MAX_SEQ_LEN, TASK_FEATURE_DIM};
+use crate::data::sample::TASK_FEATURE_DIM;
 
 /// A single item loaded from the SQLite dataset.
 #[derive(Debug, Clone)]
 pub struct EcoPlanItem {
-    /// Normalized sequence of per-task feature vectors, padded to [`MAX_SEQ_LEN`].
-    pub sequence_features: Vec<Vec<f32>>,
+    /// Normalized feature vector for the single task in this sample.
+    pub features: Vec<f32>,
     /// Target `log(time)` value.
     pub target: f64,
 }
@@ -50,13 +50,6 @@ impl SqliteDataset {
             len,
             norm,
         }
-    }
-
-    /// Load all items into an in-memory dataset.
-    pub fn in_memory(path: impl Into<PathBuf>) -> InMemDataset<EcoPlanItem> {
-        let path = path.into();
-        let items = load_all(&path).expect("Failed to load dataset");
-        InMemDataset::new(items)
     }
 }
 
@@ -104,54 +97,26 @@ fn load_sample(
 
     let raw_features: Vec<[f64; TASK_FEATURE_DIM]> = serde_json::from_str(&row.0).ok()?;
     Some(EcoPlanItem {
-        sequence_features: normalize_and_pad(norm, &raw_features),
+        features: normalize(norm, &raw_features),
         target: row.1.ln(),
     })
 }
 
-fn load_all(path: &PathBuf) -> anyhow::Result<Vec<EcoPlanItem>> {
-    let norm = load_normalization(path)?;
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut stmt = conn.prepare("SELECT sequence_features, target_time FROM samples")?;
-    let rows = stmt.query_map([], |row| {
-        let features_json: String = row.get(0)?;
-        let target: f64 = row.get(1)?;
-        let raw_features: Vec<[f64; TASK_FEATURE_DIM]> = serde_json::from_str(&features_json)
-            .map_err(|e| {
-                rusqlite::Error::InvalidColumnType(0, e.to_string(), rusqlite::types::Type::Text)
-            })?;
-        Ok(EcoPlanItem {
-            sequence_features: normalize_and_pad(&norm, &raw_features),
-            target: target.ln(),
-        })
-    })?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("Failed to load rows: {e}"))
-}
-
-fn normalize_and_pad(
+fn normalize(
     norm: &NormalizationParams<Ready>,
     raw_features: &[[f64; TASK_FEATURE_DIM]],
-) -> Vec<Vec<f32>> {
-    let mut normalized: Vec<Vec<f32>> = raw_features
-        .iter()
+) -> Vec<f32> {
+    // The single-task predictor only uses the first task in the plan.
+    raw_features
+        .first()
         .map(|task| norm.normalize(task))
-        .collect();
-
-    // Truncate or pad to the fixed sequence length.
-    normalized.truncate(MAX_SEQ_LEN);
-    while normalized.len() < MAX_SEQ_LEN {
-        normalized.push(vec![0.0; TASK_FEATURE_DIM]);
-    }
-
-    normalized
+        .unwrap_or_else(|| vec![0.0; TASK_FEATURE_DIM])
 }
 
 /// A Burn batch containing batched feature and target tensors.
 #[derive(Clone, Debug)]
 pub struct EcoPlanBatch<B: Backend> {
-    pub features: Tensor<B, 3>,
+    pub features: Tensor<B, 2>,
     pub targets: Tensor<B, 2>,
 }
 
@@ -166,13 +131,12 @@ impl<B: Backend> burn::data::dataloader::batcher::Batcher<B, EcoPlanItem, EcoPla
         let batch_size = items.len();
         let features: Vec<f32> = items
             .iter()
-            .flat_map(|item| item.sequence_features.iter().flatten().copied())
+            .flat_map(|item| item.features.iter().copied())
             .collect();
         let targets: Vec<f32> = items.iter().map(|item| item.target as f32).collect();
 
-        let features = Tensor::<B, 3>::from_data(
-            TensorData::new(features, [batch_size, MAX_SEQ_LEN, TASK_FEATURE_DIM])
-                .convert::<B::FloatElem>(),
+        let features = Tensor::<B, 2>::from_data(
+            TensorData::new(features, [batch_size, TASK_FEATURE_DIM]).convert::<B::FloatElem>(),
             device,
         );
         let targets = Tensor::<B, 2>::from_data(
