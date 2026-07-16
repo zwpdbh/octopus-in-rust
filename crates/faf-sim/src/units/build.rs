@@ -86,6 +86,13 @@ pub(crate) fn unit_eco_stats(unit: &Unit, kind: &UnitKind) -> UnitEcoStats {
             0.0,
         ),
         UnitKind::EnergyStorage => (0.0, 0.0, 0.0, 0.0, raw_energy_storage),
+        UnitKind::Experimental => (
+            0.0,
+            0.0,
+            maintenance_consumption_per_second_energy,
+            0.0,
+            0.0,
+        ),
         UnitKind::CapT2Mex | UnitKind::CapT3Mex => {
             // These are inserted manually in BlueprintLibrary::new, not from raw units.
             (0.0, 0.0, 0.0, 0.0, 0.0)
@@ -208,6 +215,7 @@ pub(crate) fn canonical_blueprint_id(kind: &UnitKind) -> Option<&'static str> {
         Pgen(T2) => Some("UEB1201"),
         Pgen(T3) => Some("UEB1301"),
         EnergyStorage => Some("UEB1105"),
+        Experimental => Some("UEL0401"),
         _ => None,
     }
 }

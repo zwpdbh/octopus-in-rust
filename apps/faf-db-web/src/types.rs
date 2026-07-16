@@ -17,6 +17,7 @@ pub struct G6NodeData {
     pub label: String,
     #[serde(default)]
     pub color: Option<String>,
+    pub layer: i32,
     pub summary: UnitSummary,
 }
 

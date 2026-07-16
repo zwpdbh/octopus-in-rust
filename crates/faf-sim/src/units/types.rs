@@ -66,6 +66,8 @@ pub enum UnitKind {
     /// T3 mass extractor surrounded by four mass storages.
     CapT3Mex,
     EnergyStorage,
+    /// T4 experimental unit (canonical UEF Fatboy representative).
+    Experimental,
     Unique(UnitId),
 }
 
@@ -83,6 +85,7 @@ pub enum UnitRole {
     PowerGenerator,
     EnergyStorage,
     CappedMassExtractor,
+    Experimental,
     Other,
 }
 
@@ -92,6 +95,7 @@ pub fn tech_level_of(kind: &UnitKind) -> Option<TechLevel> {
         UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => {
             Some(*t)
         }
+        UnitKind::Experimental => Some(TechLevel::T4),
         _ => None,
     }
 }
@@ -105,7 +109,7 @@ pub fn matches_tech_level(kind: &UnitKind, tech: TechLevel) -> bool {
             | UnitKind::Mex(t)
             | UnitKind::Pgen(t)
             if *t == tech
-    )
+    ) || matches!(kind, UnitKind::Experimental if tech == TechLevel::T4)
 }
 
 /// Derive the functional role for a unit kind.
@@ -118,6 +122,7 @@ pub fn role_of(kind: &UnitKind) -> UnitRole {
         UnitKind::Pgen(_) => UnitRole::PowerGenerator,
         UnitKind::EnergyStorage => UnitRole::EnergyStorage,
         UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitRole::CappedMassExtractor,
+        UnitKind::Experimental => UnitRole::Experimental,
         UnitKind::Unique(_) => UnitRole::Other,
     }
 }
@@ -157,6 +162,7 @@ pub fn category_of_role(role: UnitRole) -> UnitCategory {
         | UnitRole::PowerGenerator
         | UnitRole::EnergyStorage
         | UnitRole::CappedMassExtractor => UnitCategory::Economic,
+        UnitRole::Experimental => UnitCategory::Military,
         UnitRole::Other => UnitCategory::Other,
     }
 }

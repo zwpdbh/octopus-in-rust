@@ -145,6 +145,9 @@ fn parse_unit_kind(s: &str) -> Result<UnitKind, String> {
     if s.eq_ignore_ascii_case("EnergyStorage") {
         return Ok(UnitKind::EnergyStorage);
     }
+    if s.eq_ignore_ascii_case("Experimental") {
+        return Ok(UnitKind::Experimental);
+    }
 
     if let Some(inner) = s.strip_prefix("Engineer(") {
         if let Some(rest) = inner.strip_suffix(")") {

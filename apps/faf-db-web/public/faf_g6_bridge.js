@@ -10,6 +10,7 @@
         id: n.id,
         label: n.label,
         color: n.color || "#f8f9fa",
+        layer: n.layer,
         summary: n.summary,
       };
     });
@@ -65,10 +66,11 @@
           data: data,
           layout: {
             type: "antv-dagre",
-            rankdir: "TB",
-            ranksep: 80,
-            nodesep: 40,
+            rankdir: "LR",
+            ranksep: 120,
+            nodesep: 50,
             edgesep: 20,
+            align: "UL",
           },
           node: {
             type: "rect",
@@ -88,7 +90,7 @@
             },
           },
           edge: {
-            type: "cubic-vertical",
+            type: "cubic-horizontal",
             style: function (d) {
               return {
                 stroke: d.color,

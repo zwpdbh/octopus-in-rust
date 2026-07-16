@@ -156,6 +156,23 @@ impl BlueprintLibrary {
         kind_to_entity.insert(UnitKind::CapT3Mex, cap_t3_entity);
         eco_table.insert(UnitKind::CapT3Mex, cap_t3_stats);
 
+        // Synthetic definition for the T4 experimental tier.
+        // The UEF Fatboy is used as the canonical representative.
+        if let Some(unit) = index.find_unit("UEL0401") {
+            let experimental_stats = build::unit_eco_stats(unit, &UnitKind::Experimental);
+            let experimental_entity = world
+                .spawn(BlueprintBundle {
+                    blueprint_id: BlueprintId("UEL0401".to_string()),
+                    kind: UnitKindComp(UnitKind::Experimental),
+                    role: UnitRoleComp(UnitRole::Experimental),
+                    faction: FactionComp(Faction::Common),
+                    display_name: DisplayName("Experimental Unit".to_string()),
+                })
+                .id();
+            kind_to_entity.insert(UnitKind::Experimental, experimental_entity);
+            eco_table.insert(UnitKind::Experimental, experimental_stats);
+        }
+
         // Attach build and upgrade rules to their target/source entities.
         for (target, rule) in &builds {
             if let Some(&entity) = kind_to_entity.get(target) {
@@ -536,6 +553,15 @@ impl BlueprintLibrary {
             },
         );
 
+        // T4 experimental units require a T3 factory and are built by T3 engineers.
+        m.insert(
+            UnitKind::Experimental,
+            BuildRule {
+                prereq: Some(UnitKind::Factory(TechLevel::T3)),
+                builders: vec![UnitKind::Engineer(TechLevel::T3)],
+            },
+        );
+
         m
     }
 
@@ -592,21 +618,7 @@ impl BlueprintLibrary {
             }],
         );
 
-        // Power generators: T1 -> T2 -> T3.
-        m.insert(
-            UnitKind::Pgen(TechLevel::T1),
-            vec![UpgradePath {
-                target: UnitKind::Pgen(TechLevel::T2),
-                builders: any_engineer.clone(),
-            }],
-        );
-        m.insert(
-            UnitKind::Pgen(TechLevel::T2),
-            vec![UpgradePath {
-                target: UnitKind::Pgen(TechLevel::T3),
-                builders: t2_plus_engineer.clone(),
-            }],
-        );
+        // Power generators are rebuilt at each tier, not upgraded.
 
         // Factories: T1 -> T2 -> T3.
         m.insert(

@@ -8,7 +8,7 @@
 //! Edges point from prerequisite/builder to the dependent unit so that the
 //! ACU (which builds everything and requires nothing) is the root source.
 
-use faf_sim::units::{role_of, BlueprintLibrary, TechLevel, UnitKind, UnitRole};
+use faf_sim::units::{role_of, tech_level_of, BlueprintLibrary, TechLevel, UnitKind, UnitRole};
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 
@@ -20,6 +20,7 @@ const ROLES_TO_SHOW: &[UnitRole] = &[
     UnitRole::PowerGenerator,
     UnitRole::EnergyStorage,
     UnitRole::CappedMassExtractor,
+    UnitRole::Experimental,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +52,7 @@ pub struct G6NodeJson {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    pub layer: i32,
     pub summary: crate::UnitSummary,
 }
 
@@ -78,6 +80,7 @@ fn role_color(role: UnitRole) -> &'static str {
         UnitRole::PowerGenerator => "#f87171",
         UnitRole::EnergyStorage => "#f472b6",
         UnitRole::CappedMassExtractor => "#2dd4bf",
+        UnitRole::Experimental => "#f97316",
         UnitRole::Other => "#9ca3af",
     }
 }
@@ -92,7 +95,29 @@ fn node_label(kind: &UnitKind) -> String {
         UnitKind::CapT2Mex => "Cap T2 Mex".to_string(),
         UnitKind::CapT3Mex => "Cap T3 Mex".to_string(),
         UnitKind::EnergyStorage => "Energy Storage".to_string(),
+        UnitKind::Experimental => "Experimental".to_string(),
         UnitKind::Unique(id) => id.0.clone(),
+    }
+}
+
+/// Dagre layer used to group nodes into tech-level columns.
+///
+/// Columns: ACU (0), T1 (1), T2 (2), T3 (3), T4 (4).
+fn node_layer(kind: &UnitKind) -> i32 {
+    match kind {
+        UnitKind::Commander => 0,
+        UnitKind::EnergyStorage => 1,
+        UnitKind::CapT2Mex => 2,
+        UnitKind::CapT3Mex => 3,
+        UnitKind::Experimental => 4,
+        kind => tech_level_of(kind)
+            .map(|tech| match tech {
+                TechLevel::T1 => 1,
+                TechLevel::T2 => 2,
+                TechLevel::T3 => 3,
+                TechLevel::T4 => 4,
+            })
+            .unwrap_or(0),
     }
 }
 
@@ -241,7 +266,6 @@ pub fn economic_graph_g6_json(index: &DataIndex) -> G6GraphJson {
     let graph = library.build_graph();
 
     let mut nodes = Vec::new();
-    let mut edges = Vec::new();
     let mut indices = std::collections::HashMap::new();
     let mut ids = std::collections::HashMap::new();
 
@@ -280,25 +304,56 @@ pub fn economic_graph_g6_json(index: &DataIndex) -> G6GraphJson {
             id,
             label: node_label(&node.kind),
             color: Some(role_color(node.role).to_string()),
+            layer: node_layer(&node.kind),
             summary,
         });
     }
+
+    // Deduplicate edges between the same pair of nodes. When a build rule and
+    // an upgrade rule describe the same dependency (e.g. T1 factory -> T2
+    // factory), keep the single most informative edge.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum EdgePriority {
+        Prereq,
+        Builder,
+        Upgrade,
+    }
+
+    let mut edge_map: std::collections::HashMap<(String, String), (EdgePriority, G6EdgeJson)> =
+        std::collections::HashMap::new();
+
+    let mut add_edge =
+        |source: String, target: String, priority: EdgePriority, edge: G6EdgeJson| {
+            let key = (source, target);
+            if let Some((existing_priority, _)) = edge_map.get(&key) {
+                if priority <= *existing_priority {
+                    return;
+                }
+            }
+            edge_map.insert(key, (priority, edge));
+        };
 
     for edge in &graph.build_edges {
         if !should_show(&edge.target) {
             continue;
         }
         let target_id = ids.get(&edge.target).expect("target node inserted").clone();
+        let target_layer = node_layer(&edge.target);
 
         if let Some(prereq) = &edge.prereq {
-            if should_show(prereq) {
+            if should_show(prereq) && node_layer(prereq) <= target_layer {
                 if let Some(prereq_id) = ids.get(prereq) {
-                    edges.push(G6EdgeJson {
-                        source: prereq_id.clone(),
-                        target: target_id.clone(),
-                        color: Some("#94a3b8".to_string()),
-                        dashed: true,
-                    });
+                    add_edge(
+                        prereq_id.clone(),
+                        target_id.clone(),
+                        EdgePriority::Prereq,
+                        G6EdgeJson {
+                            source: prereq_id.clone(),
+                            target: target_id.clone(),
+                            color: Some("#94a3b8".to_string()),
+                            dashed: true,
+                        },
+                    );
                 }
             }
         }
@@ -307,13 +362,23 @@ pub fn economic_graph_g6_json(index: &DataIndex) -> G6GraphJson {
             if !should_show(builder) {
                 continue;
             }
+            if node_layer(builder) > target_layer {
+                // Skip cross-tier builder edges (e.g. T3 engineer -> T2 factory)
+                // so that the dagre layout can keep clean tech-level columns.
+                continue;
+            }
             if let Some(builder_id) = ids.get(builder) {
-                edges.push(G6EdgeJson {
-                    source: builder_id.clone(),
-                    target: target_id.clone(),
-                    color: Some("#38bdf8".to_string()),
-                    dashed: false,
-                });
+                add_edge(
+                    builder_id.clone(),
+                    target_id.clone(),
+                    EdgePriority::Builder,
+                    G6EdgeJson {
+                        source: builder_id.clone(),
+                        target: target_id.clone(),
+                        color: Some("#38bdf8".to_string()),
+                        dashed: false,
+                    },
+                );
             }
         }
     }
@@ -322,15 +387,25 @@ pub fn economic_graph_g6_json(index: &DataIndex) -> G6GraphJson {
         if !should_show(&edge.from) || !should_show(&edge.to) {
             continue;
         }
+        if node_layer(&edge.from) > node_layer(&edge.to) {
+            continue;
+        }
         let from_id = ids.get(&edge.from).expect("from node inserted").clone();
         let to_id = ids.get(&edge.to).expect("to node inserted").clone();
-        edges.push(G6EdgeJson {
-            source: from_id,
-            target: to_id,
-            color: Some("#fbbf24".to_string()),
-            dashed: true,
-        });
+        add_edge(
+            from_id.clone(),
+            to_id.clone(),
+            EdgePriority::Upgrade,
+            G6EdgeJson {
+                source: from_id,
+                target: to_id,
+                color: Some("#fbbf24".to_string()),
+                dashed: true,
+            },
+        );
     }
+
+    let edges: Vec<G6EdgeJson> = edge_map.into_values().map(|(_, e)| e).collect();
 
     G6GraphJson { nodes, edges }
 }
