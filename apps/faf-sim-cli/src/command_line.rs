@@ -52,7 +52,7 @@ pub enum ScheduleMode {
 #[derive(Args, Debug, Clone)]
 pub struct ScheduleEcoArgs {
     /// Scheduling algorithm to use.
-    #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
+    #[arg(long, value_enum, default_value_t = AlgorithmKind::Greedy)]
     pub algorithm: AlgorithmKind,
 
     /// JSON file describing the scheduling request.
@@ -70,7 +70,7 @@ pub struct ScheduleEcoArgs {
 #[derive(Args, Debug, Clone)]
 pub struct ScheduleUnitArgs {
     /// Scheduling algorithm to use.
-    #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
+    #[arg(long, value_enum, default_value_t = AlgorithmKind::Greedy)]
     pub algorithm: AlgorithmKind,
 
     /// JSON file describing the scheduling request.

@@ -25,9 +25,9 @@ impl Scheduler {
         }
     }
 
-    /// Create a scheduler using the default placeholder algorithm.
+    /// Create a scheduler using the default greedy algorithm.
     pub fn new(library: BlueprintLibrary) -> Self {
-        Self::with_algorithm(library, AlgorithmKind::Placeholder)
+        Self::with_algorithm(library, AlgorithmKind::Greedy)
     }
 
     /// Create a scheduler using the default FAF units database shipped with the

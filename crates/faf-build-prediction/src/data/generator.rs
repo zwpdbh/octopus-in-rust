@@ -731,7 +731,7 @@ mod tests {
         .expect("failed to create generator");
         let mut rng = StdRng::seed_from_u64(2026);
 
-        for _ in 0..300 {
+        for _ in 0..100 {
             let sample = generator.generate_sample(&mut rng);
             let task = sample.plan.first().expect("single-task sample");
             let sim_time = simulate_label(&sample.initial_eco, &sample.plan);

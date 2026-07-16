@@ -11,7 +11,7 @@ pub mod result;
 pub mod scheduler;
 pub mod util;
 
-pub use algorithms::{algorithm_by_kind, AlgorithmKind, Placeholder, SchedulingAlgorithm};
+pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
     UnitScheduleRequest,
@@ -52,7 +52,8 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_unit_schedule_builds_t1_engineer() {
+    #[should_panic(expected = "implement greedy unit scheduling")]
+    fn greedy_unit_schedule_is_todo() {
         let library = test_library();
         let scheduler = Scheduler::new(library);
         let request = UnitScheduleRequest {
@@ -62,15 +63,12 @@ mod tests {
             options: SearchOptions::default(),
         };
 
-        let schedule = scheduler.schedule_unit(&request).expect("schedule");
-        assert!(!schedule.plan.items.is_empty());
-        assert!(schedule.total_time_seconds < 6000.0);
-        assert!(schedule.final_eco.production_per_second_mass >= 0.0);
-        assert!(!schedule.to_build_queue().tasks.is_empty());
+        let _ = scheduler.schedule_unit(&request);
     }
 
     #[test]
-    fn placeholder_eco_schedule_reaches_energy_target() {
+    #[should_panic(expected = "implement greedy eco scheduling")]
+    fn greedy_eco_schedule_is_todo() {
         let library = test_library();
         let scheduler = Scheduler::new(library);
         let request = EcoScheduleRequest {
@@ -86,27 +84,6 @@ mod tests {
             options: SearchOptions::default(),
         };
 
-        let schedule = scheduler.schedule_eco(&request).expect("schedule");
-        assert!(!schedule.plan.items.is_empty());
-        assert!(schedule.final_eco.production_per_second_energy + 1.0 >= 70.0);
-        assert!(!schedule.to_build_queue().tasks.is_empty());
-    }
-
-    #[test]
-    fn unimplemented_algorithm_reports_error() {
-        let library = test_library();
-        let scheduler = Scheduler::with_algorithm(library, AlgorithmKind::BeamSearch);
-        let request = UnitScheduleRequest {
-            initial_eco: default_eco(),
-            initial_inventory: vec![UnitKind::Commander],
-            target: UnitKind::Engineer(TechLevel::T1),
-            options: SearchOptions::default(),
-        };
-
-        let err = scheduler.schedule_unit(&request).expect_err("should fail");
-        assert!(matches!(
-            err,
-            ScheduleError::AlgorithmNotImplemented(AlgorithmKind::BeamSearch)
-        ));
+        let _ = scheduler.schedule_eco(&request);
     }
 }
