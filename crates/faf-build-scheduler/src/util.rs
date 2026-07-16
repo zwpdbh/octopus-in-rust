@@ -1,0 +1,44 @@
+//! Shared helpers for the scheduler.
+
+use faf_sim::economy::EconomyRuntimeState;
+use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
+use faf_sim::runtime::EcoSnapshot;
+
+/// Convert a flat snapshot into the simulator's typed runtime state.
+pub fn eco_snapshot_to_runtime_state(snapshot: &EcoSnapshot) -> EconomyRuntimeState {
+    EconomyRuntimeState {
+        production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
+        production_per_second_energy: EnergyRate::from_raw(snapshot.production_per_second_energy),
+        maintenance_consumption_per_second_energy: EnergyRate::from_raw(
+            snapshot.maintenance_consumption_per_second_energy,
+        ),
+        mass_storage: Storage {
+            current: Mass::from_raw(snapshot.mass_storage),
+            cap: Mass::from_raw(snapshot.mass_storage_cap),
+        },
+        energy_storage: Storage {
+            current: Energy::from_raw(snapshot.energy_storage),
+            cap: Energy::from_raw(snapshot.energy_storage_cap),
+        },
+    }
+}
+
+/// Convert a typed runtime state back into a flat snapshot.
+pub fn eco_runtime_state_to_snapshot(state: &EconomyRuntimeState) -> EcoSnapshot {
+    EcoSnapshot {
+        time: 0.0,
+        production_per_second_mass: state.production_per_second_mass.value(),
+        production_per_second_energy: state.production_per_second_energy.value(),
+        maintenance_consumption_per_second_energy: state
+            .maintenance_consumption_per_second_energy
+            .value(),
+        mass_drain: 0.0,
+        energy_drain: 0.0,
+        total_mass_spent: 0.0,
+        total_energy_spent: 0.0,
+        mass_storage: state.mass_storage.current.value(),
+        mass_storage_cap: state.mass_storage.cap.value(),
+        energy_storage: state.energy_storage.current.value(),
+        energy_storage_cap: state.energy_storage.cap.value(),
+    }
+}

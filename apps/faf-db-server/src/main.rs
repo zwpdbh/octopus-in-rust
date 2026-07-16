@@ -1,3 +1,5 @@
+mod blueprint_graph;
+
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
@@ -19,7 +21,7 @@ struct AppState {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct UnitSummary {
+pub(crate) struct UnitSummary {
     id: String,
     display_name: String,
     faction: String,
@@ -61,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index_handler))
         .route("/api/units", get(list_units))
         .route("/api/units/:id", get(get_unit))
+        .route("/api/blueprint-graph", get(blueprint_graph_json))
+        .route("/api/blueprint-graph-g6", get(blueprint_graph_g6))
         .route("/api/portraits/:id", get(get_portrait))
         .route("/ws/simulate", get(simulate_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))
@@ -75,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 async fn index_handler() -> impl IntoResponse {
     // Production fallback shell. In development `dx serve` provides its own index.html.
     axum::response::Html(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -83,14 +87,91 @@ async fn index_handler() -> impl IntoResponse {
   </head>
   <body>
     <div id="main"></div>
+    <script src="/assets/g6.min.js"></script>
+    <script>
+(function () {
+  "use strict";
+  function toG6Data(input) {
+    const nodes = input.nodes.map(function (n) {
+      return { id: n.id, label: n.label, color: n.color || "#f8f9fa", summary: n.summary };
+    });
+    const edges = input.edges.map(function (e, i) {
+      return { id: "e" + i, source: e.source, target: e.target, color: e.color || "#9ca3af", dashed: !!e.dashed };
+    });
+    return { nodes, edges };
+  }
+  window.fafG6 = {
+    graph: null,
+    init: async function (containerId, jsonString) {
+      this.destroy();
+      const container = document.getElementById(containerId);
+      if (!container) { console.error("[fafG6] container not found:", containerId); return; }
+      await new Promise(requestAnimationFrame);
+      console.log("[fafG6] init in container", containerId, "size", container.clientWidth, container.clientHeight);
+      let input;
+      try { input = JSON.parse(jsonString); }
+      catch (err) { console.error("[fafG6] failed to parse JSON:", err); return; }
+      const data = toG6Data(input);
+      console.log("[fafG6] data nodes:", data.nodes.length, "edges:", data.edges.length);
+      try {
+        const graph = new G6.Graph({
+          container: container,
+          autoFit: "view",
+          autoResize: true,
+          data: data,
+          layout: { type: "antv-dagre", rankdir: "TB", ranksep: 80, nodesep: 40, edgesep: 20 },
+          node: {
+            type: "rect",
+            style: function (d) {
+              return {
+                size: [140, 40], fill: d.color, stroke: "#333333", lineWidth: 1.5, radius: 6,
+                labelText: d.label, labelFill: "#212529", labelFontSize: 12, labelPlacement: "center", labelMaxWidth: 130
+              };
+            }
+          },
+          edge: {
+            type: "cubic-vertical",
+            style: function (d) {
+              return { stroke: d.color, lineWidth: 1.5, lineDash: d.dashed ? [4, 4] : [], endArrow: true, endArrowFill: d.color, endArrowSize: 10 };
+            }
+          },
+          behaviors: ["drag-canvas", "zoom-canvas"]
+        });
+        graph.on("node:click", function (e) {
+          const id = e.item && e.item.id;
+          if (id) { document.dispatchEvent(new CustomEvent("faf:g6-node-click", { detail: id })); }
+        });
+        await graph.render();
+        console.log("[fafG6] render complete");
+        this.graph = graph;
+      } catch (err) {
+        console.error("[fafG6] failed to create/render graph:", err);
+      }
+    },
+    destroy: function () {
+      if (this.graph) { try { this.graph.destroy(); } catch (err) { console.error("[fafG6] destroy failed:", err); } this.graph = null; }
+    }
+  };
+})();
+    </script>
     <script type="module">
       import init from "/assets/dioxus/faf_db_web.js";
       init();
     </script>
   </body>
-</html>"#
+</html>"##
             .to_string(),
     )
+}
+
+async fn blueprint_graph_json(
+    State(state): State<AppState>,
+) -> Json<blueprint_graph::BlueprintGraphJson> {
+    Json(blueprint_graph::economic_graph_json(&state.index))
+}
+
+async fn blueprint_graph_g6(State(state): State<AppState>) -> Json<blueprint_graph::G6GraphJson> {
+    Json(blueprint_graph::economic_graph_g6_json(&state.index))
 }
 
 async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {
@@ -158,7 +239,7 @@ async fn get_portrait(Path(id): Path<String>) -> Result<impl IntoResponse, Statu
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum BrowserCategory {
+pub(crate) enum BrowserCategory {
     Land,
     Air,
     Naval,
@@ -172,7 +253,7 @@ enum BrowserCategory {
 }
 
 impl BrowserCategory {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             BrowserCategory::Land => "Land",
             BrowserCategory::Air => "Air",
@@ -188,7 +269,7 @@ impl BrowserCategory {
     }
 }
 
-fn unit_kind(unit: &Unit) -> &'static str {
+pub(crate) fn unit_kind(unit: &Unit) -> &'static str {
     if unit.has_category("MOBILE") {
         if unit.has_category("AIR") {
             return "Air";
@@ -204,7 +285,7 @@ fn unit_kind(unit: &Unit) -> &'static str {
     "Unknown"
 }
 
-fn browser_category(unit: &Unit) -> BrowserCategory {
+pub(crate) fn browser_category(unit: &Unit) -> BrowserCategory {
     if unit.has_category("ENGINEER") {
         return BrowserCategory::ConstructionBuildpower;
     }

@@ -5,7 +5,11 @@ name = "faf-db-web"
 title = "FAF Unit DB"
 
 [web.resource]
-script = ["/uplot.iife.min.js"]
+script = [
+    "/uplot.iife.min.js",
+    "/g6.min.js",
+    "/faf_g6_bridge.js",
+]
 style = ["/uplot.min.css"]
 
 [web.resource.dev]

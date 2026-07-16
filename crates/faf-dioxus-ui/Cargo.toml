@@ -9,7 +9,9 @@ license = "MIT"
 [dependencies]
 dioxus = { workspace = true }
 js-sys = "0.3"
+petgraph = { workspace = true }
+serde = { workspace = true }
 plotters = { version = "0.3.7", default-features = false, features = ["line_series", "full_palette"] }
 plotters-canvas = "0.3"
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "Window"] }
+web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "Window", "Location"] }

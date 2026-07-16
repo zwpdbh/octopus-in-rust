@@ -9,6 +9,11 @@ use burn::prelude::*;
 use burn::record::CompactRecorder;
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::metric::LossMetric;
+
+use crate::model::metrics::{
+    MeanAbsoluteErrorMetric, MeanRelativeErrorMetric, MedianAbsoluteErrorMetric,
+    WithinThresholdMetric,
+};
 use burn::train::{Learner, SupervisedTraining};
 
 use crate::data::dataset::{EcoPlanBatcher, EcoPlanItem, SqliteDataset};
@@ -82,7 +87,16 @@ pub fn train<B: AutodiffBackend>(
         .build(InMemDataset::new(valid_items));
 
     let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_valid)
-        .metrics((LossMetric::new(),))
+        .metrics((
+            LossMetric::new(),
+            MeanAbsoluteErrorMetric::new(),
+            MedianAbsoluteErrorMetric::new(),
+            MeanRelativeErrorMetric::new(),
+            WithinThresholdMetric::new(0.10),
+            WithinThresholdMetric::new(0.25),
+        ))
+        .metric_train_numeric(WithinThresholdMetric::new(0.50))
+        .metric_valid_numeric(WithinThresholdMetric::new(0.50))
         .with_file_checkpointer(CompactRecorder::new())
         .num_epochs(config.num_epochs)
         .summary();

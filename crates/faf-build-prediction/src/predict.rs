@@ -10,7 +10,7 @@ use burn::record::{CompactRecorder, Recorder};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
 
 use crate::data::normalize::{NormalizationParams, Ready};
-use crate::data::sample::{extract_sequence_features, MAX_SEQ_LEN, TASK_FEATURE_DIM};
+use crate::data::sample::{extract_sequence_features, TASK_FEATURE_DIM};
 use crate::model::predictor::EcoPredictor;
 use crate::train::TrainingConfig;
 
@@ -19,8 +19,6 @@ use crate::train::TrainingConfig;
 pub struct Prediction {
     /// Predicted completion time in seconds.
     pub predicted_time_seconds: f64,
-    /// True if the predicted time is below the practical threshold.
-    pub is_practical: bool,
 }
 
 /// Stage marker: training config has been loaded but normalization params have
@@ -91,6 +89,13 @@ impl PredictorConfigLoaded {
 impl PredictorNormLoaded {
     /// Load the trained model and advance to the ready-for-inference stage.
     pub fn load_model(self, path: &Path) -> Result<PredictorModelLoaded> {
+        if !path.exists() {
+            anyhow::bail!(
+                "No trained model found at {}. Run `faf-sim train --dataset <db> --output-dir <dir>` first.",
+                path.display()
+            );
+        }
+
         let record = CompactRecorder::new()
             .load(path.into(), &self.device)
             .with_context(|| format!("Failed to load model from {}", path.display()))?;
@@ -111,21 +116,17 @@ impl PredictorNormLoaded {
 
 impl PredictorModelLoaded {
     /// Run inference on a build plan.
-    pub fn predict(
-        &self,
-        initial_eco: &EcoSnapshot,
-        plan: &[BuildTask],
-        practical_threshold_seconds: f64,
-    ) -> Prediction {
+    ///
+    /// This single-task predictor only uses the first task in `plan`.
+    pub fn predict(&self, initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> Prediction {
         let raw_sequence = extract_sequence_features(initial_eco, plan);
-        let normalized_sequence: Vec<Vec<f32>> = raw_sequence
-            .iter()
-            .map(|task| self.norm.normalize(task))
-            .collect();
-        let padded_sequence = pad_sequence(&normalized_sequence);
+        let raw_features = raw_sequence
+            .first()
+            .expect("predict called with an empty plan");
+        let normalized = self.norm.normalize(raw_features);
 
-        let features = Tensor::<NdArray, 3>::from_data(
-            TensorData::new(padded_sequence, [1, MAX_SEQ_LEN, TASK_FEATURE_DIM]).convert::<f32>(),
+        let features = Tensor::<NdArray, 2>::from_data(
+            TensorData::new(normalized, [1, TASK_FEATURE_DIM]).convert::<f32>(),
             &self.device,
         );
 
@@ -135,7 +136,6 @@ impl PredictorModelLoaded {
 
         Prediction {
             predicted_time_seconds: predicted_time,
-            is_practical: predicted_time < practical_threshold_seconds,
         }
     }
 }
@@ -148,24 +148,10 @@ pub fn predict(
     artifact_dir: &Path,
     initial_eco: &EcoSnapshot,
     plan: &[BuildTask],
-    practical_threshold_seconds: f64,
 ) -> Result<Prediction> {
     let prediction = PredictorConfigLoaded::load_config(&artifact_dir.join("config.json"))?
         .load_norm(&artifact_dir.join("norm.json"))?
-        .load_model(&artifact_dir.join("model"))?
-        .predict(initial_eco, plan, practical_threshold_seconds);
+        .load_model(&artifact_dir.join("model.mpk"))?
+        .predict(initial_eco, plan);
     Ok(prediction)
-}
-
-fn pad_sequence(normalized: &[Vec<f32>]) -> Vec<f32> {
-    let mut sequence: Vec<f32> = normalized
-        .iter()
-        .take(MAX_SEQ_LEN)
-        .flat_map(|task| task.iter().copied())
-        .collect();
-
-    let missing_steps = MAX_SEQ_LEN.saturating_sub(normalized.len());
-    sequence.extend(std::iter::repeat_n(0.0, missing_steps * TASK_FEATURE_DIM));
-
-    sequence
 }

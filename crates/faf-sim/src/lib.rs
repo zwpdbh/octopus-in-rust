@@ -13,6 +13,11 @@ pub mod quantities;
 pub mod runtime;
 pub mod sim;
 pub mod snapshot;
+pub mod solver;
+pub use solver::{
+    plan_completion_result, plan_completion_time, plan_completion_with_tasks,
+    single_task_completion_result, single_task_completion_time, CompletionResult, PlanResult,
+};
 pub mod units;
 
 pub use economy::{

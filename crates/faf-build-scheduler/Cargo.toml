@@ -1,0 +1,20 @@
+[package]
+name = "faf-build-scheduler"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Build-order scheduler for FAF build-queue simulation."
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+faf-sim-shared = { workspace = true }
+faf-units = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

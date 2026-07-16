@@ -1,10 +1,9 @@
-//! Sequence regression model predicting `log(completion_time)` from a plan.
-//!
-//! The model processes each `BuildTask` as a step in a sequence using an LSTM.
-//! The final hidden state is projected to a single log-time value.
+//! Single-task regression model predicting `log(completion_time)` from one
+//! `BuildTask` and the initial economy.
 
-use burn::nn::{Dropout, DropoutConfig, Linear, LinearConfig, Lstm, LstmConfig};
+use burn::nn::{Dropout, DropoutConfig, Linear, LinearConfig};
 use burn::prelude::*;
+use burn::tensor::activation::relu;
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::{InferenceStep, RegressionOutput, TrainOutput, TrainStep};
 
@@ -14,10 +13,10 @@ use crate::data::sample::TASK_FEATURE_DIM;
 /// Configuration for the predictor network.
 #[derive(Config, Debug)]
 pub struct EcoPredictorConfig {
-    /// Size of the LSTM hidden state.
+    /// Size of the hidden layer.
     #[config(default = 128)]
     pub hidden_size: usize,
-    /// Dropout probability applied to the final LSTM hidden state.
+    /// Dropout probability applied to the hidden layer.
     #[config(default = 0.0)]
     pub dropout: f64,
 }
@@ -51,9 +50,7 @@ impl EcoPredictorConfig {
         time_weight_power: f64,
     ) -> EcoPredictor<B> {
         EcoPredictor {
-            lstm: LstmConfig::new(TASK_FEATURE_DIM, self.hidden_size, true)
-                .with_batch_first(true)
-                .init(device),
+            linear1: LinearConfig::new(TASK_FEATURE_DIM, self.hidden_size).init(device),
             dropout: DropoutConfig::new(self.dropout).init(),
             output: LinearConfig::new(self.hidden_size, 1).init(device),
             time_weight_power,
@@ -63,7 +60,7 @@ impl EcoPredictorConfig {
 
 #[derive(Module, Debug)]
 pub struct EcoPredictor<B: Backend> {
-    lstm: Lstm<B>,
+    linear1: Linear<B>,
     dropout: Dropout,
     output: Linear<B>,
     /// Per-sample loss weighting power. Marked `#[module(skip)]` because it is a
@@ -75,12 +72,13 @@ pub struct EcoPredictor<B: Backend> {
 
 impl<B: Backend> EcoPredictor<B> {
     /// Forward pass returning raw predictions.
-    pub fn forward(&self, features: Tensor<B, 3>) -> Tensor<B, 2> {
-        // features: [batch, seq, TASK_FEATURE_DIM]
-        let (_output, state) = self.lstm.forward(features, None);
-        // state.hidden: [batch, hidden_size]
-        let hidden = self.dropout.forward(state.hidden);
-        self.output.forward(hidden)
+    ///
+    /// `features` has shape `[batch, TASK_FEATURE_DIM]`.
+    pub fn forward(&self, features: Tensor<B, 2>) -> Tensor<B, 2> {
+        let x = self.linear1.forward(features);
+        let x = relu(x);
+        let x = self.dropout.forward(x);
+        self.output.forward(x)
     }
 
     /// Forward pass packaged as a regression output for Burn training.
@@ -99,7 +97,7 @@ impl<B: Backend> EcoPredictor<B> {
     /// standard unweighted MSE because every weight becomes `1.0`.
     pub fn forward_regression(
         &self,
-        features: Tensor<B, 3>,
+        features: Tensor<B, 2>,
         targets: Tensor<B, 2>,
     ) -> RegressionOutput<B> {
         let predictions = self.forward(features);

@@ -6,6 +6,7 @@ use crate::types::{AssignmentTarget, ConstructionPlan};
 #[component]
 pub fn QueueItemList(
     plan: Signal<ConstructionPlan>,
+    plan_estimate: Signal<Option<faf_sim::PlanResult>>,
     on_assign_slot: EventHandler<AssignmentTarget>,
     #[props(default = false)] disabled: bool,
 ) -> Element {
@@ -17,7 +18,7 @@ pub fn QueueItemList(
             }
             div { class: "grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3 content-start",
                 for item in items {
-                    ConstructionItemCard { item, plan, disabled, on_assign_slot }
+                    ConstructionItemCard { item, plan, plan_estimate, disabled, on_assign_slot }
                 }
             }
         }

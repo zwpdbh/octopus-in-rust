@@ -14,6 +14,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 faf-build-prediction = { workspace = true }
+faf-build-scheduler = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 faf-sim-service = { workspace = true }
 serde = { workspace = true }

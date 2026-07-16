@@ -3990,6 +3990,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-build-scheduler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "faf-sim",
+ "faf-sim-shared",
+ "faf-units",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "faf-db-server"
 version = "0.1.0"
 dependencies = [
@@ -4015,7 +4029,10 @@ dependencies = [
  "dioxus-router",
  "faf-dioxus-ui",
  "faf-sim",
+ "faf-sim-shared",
  "gloo-net",
+ "js-sys",
+ "petgraph 0.8.3",
  "serde",
  "serde_json",
  "wasm-bindgen",
@@ -4029,8 +4046,10 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "js-sys",
+ "petgraph 0.8.3",
  "plotters",
  "plotters-canvas",
+ "serde",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -4082,6 +4101,7 @@ dependencies = [
  "anyhow",
  "clap",
  "faf-build-prediction",
+ "faf-build-scheduler",
  "faf-sim",
  "faf-sim-service",
  "serde",
@@ -4097,6 +4117,14 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "faf-sim-shared"
+version = "0.1.0"
+dependencies = [
+ "faf-sim",
+ "serde",
 ]
 
 [[package]]
@@ -6971,13 +6999,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "serde",
-]
-
-[[package]]
-name = "petgraph-svg"
-version = "0.1.0"
-dependencies = [
- "petgraph 0.8.3",
 ]
 
 [[package]]

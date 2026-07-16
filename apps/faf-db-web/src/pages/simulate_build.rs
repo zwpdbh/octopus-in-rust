@@ -22,9 +22,16 @@ pub fn SimulateBuild() -> Element {
     let simulation_state = use_signal(|| SimulationUiState::NotStartYet);
     let mut show_json_editor = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
+    let mut plan_estimate = use_signal(|| None::<faf_sim::PlanResult>);
 
     use_effect(move || {
         save_plan_to_storage(&plan.read());
+    });
+
+    // Clear stale solver results whenever the user edits the plan.
+    use_effect(move || {
+        let _ = plan.read();
+        plan_estimate.set(None);
     });
 
     let assign_unit = move |unit: UnitSummary| {
@@ -114,6 +121,20 @@ pub fn SimulateBuild() -> Element {
                             div { class: "flex items-center gap-2 mb-3 shrink-0",
                                 h3 { class: "text-sm font-semibold text-white", "Construction Plan" }
                                 button {
+                                    class: "px-2 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 text-white transition-colors font-mono shadow-sm",
+                                    title: "Estimate plan impact",
+                                    onclick: move |_| {
+                                        let snapshot = plan.read().eco.to_snapshot();
+                                        let queue = plan.read().to_build_queue();
+                                        plan_estimate.set(Some(faf_sim::plan_completion_with_tasks(
+                                            &snapshot,
+                                            &queue.tasks,
+                                            6000.0,
+                                        )));
+                                    },
+                                    "⚡"
+                                }
+                                button {
                                     class: "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors font-mono shadow-sm",
                                     title: if *show_json_editor.read() { "Show cards" } else { "Show JSON" },
                                     onclick: move |_| {
@@ -128,6 +149,7 @@ pub fn SimulateBuild() -> Element {
                             } else {
                                 QueueItemList {
                                     plan,
+                                    plan_estimate,
                                     disabled: plan_locked(simulation_state),
                                     on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
                                 }
@@ -191,7 +213,7 @@ fn JsonPlanEditor(mut plan: Signal<ConstructionPlan>, units: Vec<UnitSummary>) -
                     json_text.set(text.clone());
                     match serde_json::from_str::<BuildQueue>(&text) {
                         Ok(queue) => {
-                            plan.set(ConstructionPlan::from_build_queue(queue, &units.read()));
+                            plan.set(ConstructionPlan::from_build_queue_with_units(queue, &units.read()));
                             error.set(String::new());
                         }
                         Err(err) => {

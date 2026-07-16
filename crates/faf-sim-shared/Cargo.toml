@@ -1,0 +1,11 @@
+[package]
+name = "faf-sim-shared"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Shared plan and unit types for FAF simulator consumers."
+license = "MIT"
+
+[dependencies]
+faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+serde = { workspace = true }

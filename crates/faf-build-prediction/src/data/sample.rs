@@ -13,9 +13,10 @@ pub const MAX_SEQ_LEN: usize = 10;
 
 /// Number of scalar features describing a single task (including the `is_present` flag).
 ///
-/// The vector contains the initial economy snapshot, task-level aggregates, and
-/// cumulative economy contributions from all tasks before this one.
-pub const TASK_FEATURE_DIM: usize = 27;
+/// The vector contains the initial economy snapshot and task-level aggregates.
+/// Cumulative contributions from earlier tasks are omitted because this version
+/// of the predictor is trained on single-task plans only.
+pub const TASK_FEATURE_DIM: usize = 22;
 
 /// State marker for a sample that has not been simulated yet.
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +36,7 @@ impl SampleState for Unsimulated {
 }
 
 impl SampleState for Simulated {
-    type Label = EcoPlanLabel;
+    type Label = f64;
 }
 
 /// A single training example: initial economy + plan, paired with the simulated
@@ -46,7 +47,7 @@ impl SampleState for Simulated {
 ///
 /// - `EcoPlanSample<Unsimulated>` is produced by the generator. It has no label
 ///   and cannot be inserted into the training database.
-/// - `EcoPlanSample<Simulated>` has a real [`EcoPlanLabel`] and is the only form
+/// - `EcoPlanSample<Simulated>` has a real completion time and is the only form
 ///   that can be serialized and inserted into the training database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
@@ -56,7 +57,7 @@ impl SampleState for Simulated {
 pub struct EcoPlanSample<S: SampleState = Simulated> {
     pub initial_eco: EcoSnapshot,
     pub plan: Vec<BuildTask>,
-    pub label: S::Label,
+    pub time_seconds: S::Label,
     #[serde(skip)]
     _state: PhantomData<S>,
 }
@@ -67,69 +68,44 @@ impl EcoPlanSample<Unsimulated> {
         Self {
             initial_eco,
             plan,
-            label: (),
+            time_seconds: (),
             _state: PhantomData,
         }
     }
 
-    /// Run the simulator to produce a real label and transition to [`Simulated`].
-    pub fn simulate(self, time_limit_seconds: f64) -> EcoPlanSample<Simulated> {
-        let label = simulate_label(&self.initial_eco, &self.plan, time_limit_seconds);
+    /// Produce a real completion time and transition to [`Simulated`].
+    ///
+    /// Single-task plans use the analytical solver, which is exact and much
+    /// faster than the full ECS simulator. Multi-task plans still fall back to
+    /// the simulator.
+    pub fn simulate(self) -> EcoPlanSample<Simulated> {
+        let time_seconds = if self.plan.len() == 1 {
+            faf_sim::single_task_completion_time(
+                &self.initial_eco,
+                &self.plan[0],
+                MAX_SIM_TIME_SECONDS,
+            )
+        } else {
+            simulate_label(&self.initial_eco, &self.plan)
+        };
         EcoPlanSample {
             initial_eco: self.initial_eco,
             plan: self.plan,
-            label,
+            time_seconds,
             _state: PhantomData,
         }
     }
 }
 
 impl EcoPlanSample<Simulated> {
-    // Only `EcoPlanSample<Simulated>` exposes label-derived getters because
-    // only simulated samples are allowed to be persisted or used for training.
-
-    /// True if the simulated plan finished within the practical time limit.
-    pub fn is_practical(&self) -> bool {
-        self.label.is_practical()
-    }
-
-    /// Simulated completion time (or cap, if not practical).
+    /// Simulated completion time.
     pub fn time_seconds(&self) -> f64 {
-        self.label.time_seconds()
+        self.time_seconds
     }
 
-    /// Target value used for regression: `log(completion_time_or_cap)`.
+    /// Target value used for regression: `log(completion_time)`.
     pub fn regression_target(&self) -> f64 {
-        self.label.regression_target()
-    }
-}
-
-/// The supervised target for a sample.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum EcoPlanLabel {
-    /// Plan finished within the practical time limit.
-    Practical { time_seconds: f64 },
-    /// Plan did not finish within the practical time limit, but the simulator
-    /// ran until a larger cap so the model can learn how slow it is.
-    NotPractical { time_seconds: f64 },
-}
-
-impl EcoPlanLabel {
-    /// Target value used for regression: `log(completion_time_or_cap)`.
-    pub fn regression_target(&self) -> f64 {
-        self.time_seconds().ln()
-    }
-
-    pub fn is_practical(&self) -> bool {
-        matches!(self, EcoPlanLabel::Practical { .. })
-    }
-
-    /// Completion time (or cap) associated with the label.
-    pub fn time_seconds(&self) -> f64 {
-        match self {
-            EcoPlanLabel::Practical { time_seconds } => *time_seconds,
-            EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
-        }
+        self.time_seconds.ln()
     }
 }
 
@@ -187,48 +163,14 @@ impl TaskStats {
     }
 }
 
-/// Running totals of economy contributions from tasks that have already
-/// completed (or, for builder maintenance, already started) before the current
-/// task. These are added to each task's feature vector so the model sees how
-/// the economy evolves across the plan.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct CumulativeEco {
-    production_per_second_mass: f64,
-    production_per_second_energy: f64,
-    maintenance_consumption_per_second_energy: f64,
-    mass_storage: f64,
-    energy_storage: f64,
-}
-
-impl CumulativeEco {
-    fn add_task(&mut self, task: &BuildTask) {
-        // Builders persist and pay maintenance for the rest of the plan.
-        for builder in &task.builders {
-            self.maintenance_consumption_per_second_energy +=
-                builder.maintenance_consumption_per_second_energy;
-        }
-        // Completed targets start producing and contributing storage capacity.
-        for target in &task.targets {
-            self.production_per_second_mass += target.production_per_second_mass;
-            self.production_per_second_energy += target.production_per_second_energy;
-            self.maintenance_consumption_per_second_energy +=
-                target.maintenance_consumption_per_second_energy;
-            self.mass_storage += target.mass_storage;
-            self.energy_storage += target.energy_storage;
-        }
-    }
-}
-
 /// Extract a fixed-length feature vector for a single task.
 ///
 /// The vector includes:
 /// - the initial economy snapshot the plan starts from,
-/// - task-level aggregates (build power, costs, production, maintenance, storage),
-/// - cumulative economy contributions from all earlier tasks.
+/// - task-level aggregates (build power, costs, production, maintenance, storage).
 pub(crate) fn extract_task_features(
     task: &BuildTask,
     initial_eco: &EcoSnapshot,
-    cumulative: &CumulativeEco,
 ) -> [f64; TASK_FEATURE_DIM] {
     let t = TaskStats::from_task(task);
 
@@ -262,26 +204,19 @@ pub(crate) fn extract_task_features(
         net_energy_start,
         first_mass_drain,
         first_energy_drain,
-        cumulative.production_per_second_mass,
-        cumulative.production_per_second_energy,
-        cumulative.maintenance_consumption_per_second_energy,
-        cumulative.mass_storage,
-        cumulative.energy_storage,
     ]
 }
 
 /// Extract a sequence of per-task feature vectors from a plan.
+///
+/// For the single-task model each task is featurized independently; cumulative
+/// contributions from earlier tasks are not included.
 pub fn extract_sequence_features(
     initial_eco: &EcoSnapshot,
     plan: &[BuildTask],
 ) -> Vec<[f64; TASK_FEATURE_DIM]> {
-    let mut cumulative = CumulativeEco::default();
     plan.iter()
-        .map(|task| {
-            let features = extract_task_features(task, initial_eco, &cumulative);
-            cumulative.add_task(task);
-            features
-        })
+        .map(|task| extract_task_features(task, initial_eco))
         .collect()
 }
 
@@ -321,16 +256,16 @@ pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> BuildQueue {
     }
 }
 
-/// Run the simulator on a plan and produce a real label.
-fn simulate_label(
-    initial_eco: &EcoSnapshot,
-    plan: &[BuildTask],
-    time_limit_seconds: f64,
-) -> EcoPlanLabel {
+/// Hard upper bound on how long the simulator may run for a single sample.
+///
+/// This is a safety guard against pathological inputs; it is not a
+/// practical/not-practical threshold.
+const MAX_SIM_TIME_SECONDS: f64 = 6_000.0;
+
+/// Run the simulator on a plan and return the completion time in seconds.
+pub(crate) fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f64 {
     let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
-    // Run the simulator up to 10x the practical threshold so the model can
-    // learn degrees of "not practical" instead of a single clipped value.
-    let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
+    let max_sim_time = Time::from_raw(MAX_SIM_TIME_SECONDS);
     let queue = build_queue(initial_eco, plan.to_vec());
 
     let mut sim = Simulation::new(queue, dt, Some(max_sim_time), None);
@@ -339,16 +274,7 @@ fn simulate_label(
         sim.step();
     }
 
-    let final_time = sim.current_time().value();
-    if final_time < time_limit_seconds - dt.as_time().value() {
-        EcoPlanLabel::Practical {
-            time_seconds: final_time,
-        }
-    } else {
-        EcoPlanLabel::NotPractical {
-            time_seconds: final_time,
-        }
-    }
+    sim.current_time().value()
 }
 
 #[cfg(test)]
