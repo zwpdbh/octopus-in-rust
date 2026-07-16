@@ -8,6 +8,7 @@ members = [
     "crates/faf-sim",
     "crates/faf-sim-service",
     "crates/faf-build-prediction",
+    "crates/faf-build-scheduler",
     "crates/petgraph-svg",
     "crates/faf-downloader",
     "crates/train-tui",
@@ -30,6 +31,7 @@ faf-dioxus-ui = { path = "crates/faf-dioxus-ui" }
 faf-sim = { path = "crates/faf-sim", default-features = false }
 faf-sim-service = { path = "crates/faf-sim-service" }
 faf-build-prediction = { path = "crates/faf-build-prediction" }
+faf-build-scheduler = { path = "crates/faf-build-scheduler" }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }

@@ -1,22 +1,18 @@
 [package]
-name = "faf-sim-cli"
+name = "faf-build-scheduler"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "CLI for the FAF build-queue simulator."
+description = "Build-order scheduler for FAF build-queue simulation."
 license = "MIT"
-
-[[bin]]
-name = "faf-sim"
-path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-faf-build-prediction = { workspace = true }
-faf-build-scheduler = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 faf-units = { workspace = true }
-faf-sim-service = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
 serde_json = { workspace = true }

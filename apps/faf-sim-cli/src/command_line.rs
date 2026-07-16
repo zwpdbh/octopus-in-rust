@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use faf_build_scheduler::AlgorithmKind;
 
 #[derive(Parser, Debug)]
 #[command(name = "faf-sim", about = "Headless FAF build-queue simulator")]
@@ -33,6 +34,82 @@ pub enum Command {
         #[command(subcommand)]
         mode: PredictMode,
     },
+    /// Compute a build order that reaches an eco or unit target.
+    Schedule {
+        #[command(subcommand)]
+        mode: ScheduleMode,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ScheduleMode {
+    /// Find the fastest way to reach an eco target.
+    Eco(ScheduleEcoArgs),
+    /// Find the fastest way to build a target unit.
+    Unit(ScheduleUnitArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ScheduleEcoArgs {
+    /// Scheduling algorithm to use.
+    #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
+    pub algorithm: AlgorithmKind,
+
+    /// JSON file containing the initial EcoSnapshot.
+    #[arg(short, long)]
+    pub eco: PathBuf,
+
+    /// JSON file containing the initial inventory as a list of UnitKind strings.
+    #[arg(short, long)]
+    pub inventory: Option<PathBuf>,
+
+    /// JSON file containing the EcoTarget.
+    #[arg(short, long)]
+    pub target: PathBuf,
+
+    /// Path to the FAF units JSON file used to build the BlueprintLibrary.
+    #[arg(long, default_value = "plugins/faf-units/data/faf_units.json")]
+    pub units_file: PathBuf,
+
+    /// Maximum search time in seconds.
+    #[arg(long, default_value = "2.0")]
+    pub max_search_seconds: f64,
+
+    /// Solver cap when validating each candidate plan.
+    #[arg(long, default_value = "6000.0")]
+    pub simulation_max_time_seconds: f64,
+
+    /// Output path for the generated BuildQueue JSON.
+    #[arg(short, long, default_value = "schedule_queue.json")]
+    pub output: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ScheduleUnitArgs {
+    #[arg(long, value_enum, default_value_t = AlgorithmKind::Placeholder)]
+    pub algorithm: AlgorithmKind,
+
+    #[arg(short, long)]
+    pub eco: PathBuf,
+
+    #[arg(short, long)]
+    pub inventory: Option<PathBuf>,
+
+    /// Target UnitKind or blueprint id.
+    #[arg(short, long)]
+    pub target: String,
+
+    #[arg(long, default_value = "plugins/faf-units/data/faf_units.json")]
+    pub units_file: PathBuf,
+
+    #[arg(long, default_value = "2.0")]
+    pub max_search_seconds: f64,
+
+    #[arg(long, default_value = "6000.0")]
+    pub simulation_max_time_seconds: f64,
+
+    #[arg(short, long, default_value = "schedule_queue.json")]
+    pub output: PathBuf,
 }
 
 #[derive(Subcommand, Debug)]

@@ -8,6 +8,7 @@ mod build;
 mod command_line;
 mod dataset;
 mod predict;
+mod schedule;
 mod train;
 mod util;
 
@@ -21,5 +22,6 @@ fn main() {
         Command::Dataset { mode } => dataset::run(mode),
         Command::Train(args) => train::run(args),
         Command::Predict { mode } => predict::run(mode),
+        Command::Schedule { mode } => schedule::run(mode),
     }
 }
