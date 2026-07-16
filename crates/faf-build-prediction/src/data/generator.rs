@@ -651,15 +651,20 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    fn test_library() -> BlueprintLibrary {
+    fn test_units_path() -> PathBuf {
         let candidates = [
             Path::new("plugins/faf-units/data/faf_units.json").to_path_buf(),
             Path::new("../../plugins/faf-units/data/faf_units.json").to_path_buf(),
         ];
-        let path = candidates
+        candidates
             .iter()
             .find(|p| p.exists())
-            .expect("units file not found in expected locations");
+            .expect("units file not found in expected locations")
+            .clone()
+    }
+
+    fn test_library() -> BlueprintLibrary {
+        let path = test_units_path();
         let text = std::fs::read_to_string(path).expect("failed to read units file");
         let index: faf_units::DataIndex =
             serde_json::from_str(&text).expect("failed to parse units");
@@ -706,6 +711,38 @@ mod tests {
             assert!(
                 net_mass >= 0.0,
                 "net mass must be non-negative, got {net_mass}"
+            );
+        }
+    }
+
+    #[test]
+    fn solver_matches_simulator_on_random_single_task_samples() {
+        use crate::data::sample::simulate_label;
+        use faf_sim::solver::single_task_completion_time;
+
+        let generator = DatasetGenerator::new(
+            GenerationConfig {
+                sample_count: 1,
+                max_builders_per_task: 3,
+                max_targets_per_task: 5,
+            },
+            &test_units_path(),
+        )
+        .expect("failed to create generator");
+        let mut rng = StdRng::seed_from_u64(2026);
+
+        for _ in 0..300 {
+            let sample = generator.generate_sample(&mut rng);
+            let task = sample.plan.first().expect("single-task sample");
+            let sim_time = simulate_label(&sample.initial_eco, &sample.plan);
+            let solver_time = single_task_completion_time(&sample.initial_eco, task, 6000.0);
+            assert!(
+                (solver_time - sim_time).abs() < 1e-6,
+                "solver {} != sim {} for eco {:?} and task {:?}",
+                solver_time,
+                sim_time,
+                sample.initial_eco,
+                task
             );
         }
     }

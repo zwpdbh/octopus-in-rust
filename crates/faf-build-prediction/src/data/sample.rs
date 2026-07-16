@@ -73,9 +73,21 @@ impl EcoPlanSample<Unsimulated> {
         }
     }
 
-    /// Run the simulator to produce a real completion time and transition to [`Simulated`].
+    /// Produce a real completion time and transition to [`Simulated`].
+    ///
+    /// Single-task plans use the analytical solver, which is exact and much
+    /// faster than the full ECS simulator. Multi-task plans still fall back to
+    /// the simulator.
     pub fn simulate(self) -> EcoPlanSample<Simulated> {
-        let time_seconds = simulate_label(&self.initial_eco, &self.plan);
+        let time_seconds = if self.plan.len() == 1 {
+            faf_sim::single_task_completion_time(
+                &self.initial_eco,
+                &self.plan[0],
+                MAX_SIM_TIME_SECONDS,
+            )
+        } else {
+            simulate_label(&self.initial_eco, &self.plan)
+        };
         EcoPlanSample {
             initial_eco: self.initial_eco,
             plan: self.plan,
@@ -251,7 +263,7 @@ pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> BuildQueue {
 const MAX_SIM_TIME_SECONDS: f64 = 6_000.0;
 
 /// Run the simulator on a plan and return the completion time in seconds.
-fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f64 {
+pub(crate) fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f64 {
     let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
     let max_sim_time = Time::from_raw(MAX_SIM_TIME_SECONDS);
     let queue = build_queue(initial_eco, plan.to_vec());

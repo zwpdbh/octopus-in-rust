@@ -20,6 +20,6 @@ fn main() {
         Command::Build { mode } => build::run(mode),
         Command::Dataset { mode } => dataset::run(mode),
         Command::Train(args) => train::run(args),
-        Command::Predict(args) => predict::run(args),
+        Command::Predict { mode } => predict::run(mode),
     }
 }

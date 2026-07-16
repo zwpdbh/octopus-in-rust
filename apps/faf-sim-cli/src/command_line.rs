@@ -28,8 +28,11 @@ pub enum Command {
     },
     /// Train a build-time prediction model.
     Train(TrainArgs),
-    /// Predict the completion time of a build plan using a trained model.
-    Predict(PredictArgs),
+    /// Predict the completion time of a build plan.
+    Predict {
+        #[command(subcommand)]
+        mode: PredictMode,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -98,11 +101,34 @@ pub struct TrainArgs {
     pub time_weight_power: f64,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum PredictMode {
+    /// Predict using a trained neural network.
+    Nn(PredictNnArgs),
+    /// Predict using the analytical solver.
+    Solver(PredictSolverArgs),
+}
+
 #[derive(Args, Debug, Clone)]
-pub struct PredictArgs {
+pub struct PredictNnArgs {
+    #[command(flatten)]
+    pub shared: PredictShared,
     /// Directory containing the trained model artifacts.
     #[arg(short, long, default_value = "data/build_prediction_artifacts")]
     pub model_dir: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PredictSolverArgs {
+    #[command(flatten)]
+    pub shared: PredictShared,
+    /// Safety cap on how many seconds the solver may run.
+    #[arg(short, long, default_value = "6000")]
+    pub max_time_seconds: f64,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PredictShared {
     /// JSON file with the initial economy snapshot.
     /// If omitted, the snapshot is derived from the plan's `initial_eco` field.
     #[arg(short, long)]
