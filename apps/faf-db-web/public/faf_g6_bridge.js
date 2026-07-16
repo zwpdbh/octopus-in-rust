@@ -42,6 +42,9 @@
         console.error("[fafG6] container not found:", containerId);
         return;
       }
+
+      // Wait one frame so the container has its final flex layout size.
+      await new Promise(requestAnimationFrame);
       console.log("[fafG6] init in container", containerId, "size", container.clientWidth, container.clientHeight);
 
       let input;
@@ -58,6 +61,7 @@
         const graph = new G6.Graph({
           container: container,
           autoFit: "view",
+          autoResize: true,
           data: data,
           layout: {
             type: "antv-dagre",

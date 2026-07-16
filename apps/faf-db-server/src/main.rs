@@ -106,6 +106,7 @@ async fn index_handler() -> impl IntoResponse {
       this.destroy();
       const container = document.getElementById(containerId);
       if (!container) { console.error("[fafG6] container not found:", containerId); return; }
+      await new Promise(requestAnimationFrame);
       console.log("[fafG6] init in container", containerId, "size", container.clientWidth, container.clientHeight);
       let input;
       try { input = JSON.parse(jsonString); }
@@ -116,6 +117,7 @@ async fn index_handler() -> impl IntoResponse {
         const graph = new G6.Graph({
           container: container,
           autoFit: "view",
+          autoResize: true,
           data: data,
           layout: { type: "antv-dagre", rankdir: "TB", ranksep: 80, nodesep: 40, edgesep: 20 },
           node: {

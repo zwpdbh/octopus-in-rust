@@ -22,15 +22,15 @@ pub fn Scheduler() -> Element {
         div { class: "flex flex-col h-screen bg-neutral-950 text-neutral-100",
             AppHeader { active: Route::Scheduler {} }
 
-            main { class: "flex-1 overflow-hidden p-6",
-                h2 { class: "text-xl font-semibold mb-4", "Scheduler — Blueprint Dependency Graph" }
+            main { class: "flex-1 overflow-hidden p-6 flex flex-col",
+                h2 { class: "text-xl font-semibold mb-4 flex-shrink-0", "Scheduler — Blueprint Dependency Graph" }
 
                 match graph.read().as_ref() {
                     Some(Some(data)) => rsx! {
-                        div { class: "flex gap-4", style: "height: calc(100% - 2rem);",
+                        div { class: "flex gap-4 flex-1 min-h-0",
                             div { class: "flex-1 min-w-0 flex flex-col border border-neutral-800 rounded bg-neutral-900 p-4 overflow-hidden",
                                 GraphLegend {}
-                                div { class: "mt-3",
+                                div { class: "flex-1 min-h-0 mt-3",
                                     BlueprintGraphG6 {
                                         data: data.clone(),
                                         on_node_click: move |summary: UnitSummary| {

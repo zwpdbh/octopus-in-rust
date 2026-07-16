@@ -69,8 +69,7 @@ pub fn BlueprintGraphG6(data: G6GraphData, on_node_click: EventHandler<UnitSumma
     rsx! {
         div {
             id: "g6-container",
-            class: "w-full",
-            style: "height: 600px;",
+            class: "w-full h-full",
         }
     }
 }
