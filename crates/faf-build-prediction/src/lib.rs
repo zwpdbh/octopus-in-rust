@@ -14,6 +14,7 @@ pub mod train;
 
 pub use burn::optim::decay::WeightDecayConfig;
 pub use burn::optim::AdamConfig;
+pub use data::distribution::print_time_distribution;
 pub use data::generator::{
     generate_dataset, DatasetGenerator, DatasetPipeline, GenerationConfig, NormSaved, PipelineNew,
     PipelineStage, SamplesGenerated, SchemaCreated,

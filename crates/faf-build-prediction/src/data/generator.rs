@@ -1,6 +1,7 @@
 //! Generate a SQLite dataset of simulated build plans and their completion times.
 
 use std::collections::HashSet;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -21,11 +22,6 @@ use std::marker::PhantomData;
 pub struct GenerationConfig {
     /// Number of labeled samples to generate.
     pub sample_count: usize,
-    /// Maximum number of tasks in a generated plan.
-    ///
-    /// The current predictor is trained on single-task plans, so this is kept for
-    /// API compatibility but the generator always produces exactly one task.
-    pub max_tasks: usize,
     /// Maximum number of builders assigned to a single task.
     pub max_builders_per_task: usize,
     /// Maximum number of targets inside a single task.
@@ -36,7 +32,6 @@ impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
             sample_count: 10_000,
-            max_tasks: 5,
             max_builders_per_task: 20,
             max_targets_per_task: 5,
         }
@@ -136,15 +131,11 @@ impl DatasetGenerator {
     }
 
     fn generate_sample<R: Rng>(&self, rng: &mut R) -> EcoPlanSample<Unsimulated> {
-        let initial_eco = self.sample_initial_eco(rng);
-
+        // Sample the task first so the initial economy can be matched to it.
         // This predictor is trained on single-task plans only.
-        let task_count = 1;
-        let plan: Vec<BuildTask> = (0..task_count)
-            .map(|id| self.sample_build_task(rng, id as u32))
-            .collect();
-
-        EcoPlanSample::new(initial_eco, plan)
+        let task = self.sample_build_task(rng, 0);
+        let initial_eco = self.sample_initial_eco(rng, &task);
+        EcoPlanSample::new(initial_eco, vec![task])
     }
 
     fn sample_build_task<R: Rng>(&self, rng: &mut R, id: u32) -> BuildTask {
@@ -179,8 +170,8 @@ impl DatasetGenerator {
             .expect("target kind missing from library")
     }
 
-    fn sample_initial_eco<R: Rng>(&self, rng: &mut R) -> EcoSnapshot {
-        sample_real_initial_eco(rng, &self.library)
+    fn sample_initial_eco<R: Rng>(&self, rng: &mut R, task: &BuildTask) -> EcoSnapshot {
+        sample_real_initial_eco(rng, &self.library, task)
     }
 }
 
@@ -265,7 +256,7 @@ impl DatasetPipeline<SchemaCreated> {
         let config = self.generator.config;
         println!("Generating dataset:");
         println!("  samples: {}", config.sample_count);
-        println!("  max_tasks: {}", config.max_tasks);
+        println!("  tasks per plan: 1 (single-task predictor)");
         println!("  max_builders_per_task: {}", config.max_builders_per_task);
         println!("  max_targets_per_task: {}", config.max_targets_per_task);
         println!("  builder blueprints: {}", self.generator.builders.len());
@@ -463,57 +454,259 @@ fn insert_sample(
 // Real FAF-unit sampling
 // -----------------------------------------------------------------------------
 
-fn sample_real_initial_eco<R: Rng>(rng: &mut R, library: &BlueprintLibrary) -> EcoSnapshot {
-    let mut production_mass = library.production_per_second_mass(&UnitKind::Commander);
-    let mut production_energy = library.production_per_second_energy(&UnitKind::Commander);
-    let mut maintenance = library.maintenance_consumption_per_second_energy(&UnitKind::Commander);
-    let mut mass_storage_cap = library.mass_storage(&UnitKind::Commander);
-    let mut energy_storage_cap = library.energy_storage(&UnitKind::Commander);
-
+fn sample_real_initial_eco<R: Rng>(
+    rng: &mut R,
+    library: &BlueprintLibrary,
+    task: &BuildTask,
+) -> EcoSnapshot {
     let t1_engineer = UnitKind::Engineer(TechLevel::T1);
-    if library.entity_for_kind(&t1_engineer).is_some() {
-        let engineer_count = rng.random_range(1..=5);
-        for _ in 0..engineer_count {
-            production_mass += library.production_per_second_mass(&t1_engineer);
-            production_energy += library.production_per_second_energy(&t1_engineer);
-            maintenance += library.maintenance_consumption_per_second_energy(&t1_engineer);
-            mass_storage_cap += library.mass_storage(&t1_engineer);
-            energy_storage_cap += library.energy_storage(&t1_engineer);
-        }
-    }
-
     let t1_pgen = UnitKind::Pgen(TechLevel::T1);
-    if library.entity_for_kind(&t1_pgen).is_some() {
-        let pgen_count = rng.random_range(1..=6);
-        for _ in 0..pgen_count {
-            production_energy += library.production_per_second_energy(&t1_pgen);
-            maintenance += library.maintenance_consumption_per_second_energy(&t1_pgen);
-            energy_storage_cap += library.energy_storage(&t1_pgen);
-        }
-    }
-
     let t1_mex = UnitKind::Mex(TechLevel::T1);
-    if library.entity_for_kind(&t1_mex).is_some() {
-        let mex_count = rng.random_range(0..=4);
-        for _ in 0..mex_count {
-            production_mass += library.production_per_second_mass(&t1_mex);
-            maintenance += library.maintenance_consumption_per_second_energy(&t1_mex);
-            mass_storage_cap += library.mass_storage(&t1_mex);
+
+    // If any required T1 unit is missing, fall back to ACU-only.
+    if library.entity_for_kind(&t1_engineer).is_none()
+        || library.entity_for_kind(&t1_pgen).is_none()
+        || library.entity_for_kind(&t1_mex).is_none()
+    {
+        return EcoSnapshotBuilder::new(library, rng).add_acu().build();
+    }
+
+    EcoSnapshotBuilder::new(library, rng)
+        .add_acu()
+        .add_engineers(0..=3)
+        .add_power_for(task, 0..=3)
+        .add_mass_for(task, 0..=2)
+        .build()
+}
+
+/// Fluent builder for constructing a feasible starting economy.
+///
+/// The builder accumulates production, maintenance, and storage from discrete
+/// FAF units. It is intentionally not type-state: the ordering is enforced by
+/// convention, which keeps the code concise for this linear, single-output
+/// workflow.
+struct EcoSnapshotBuilder<'a, R: Rng> {
+    library: &'a BlueprintLibrary,
+    rng: &'a mut R,
+    production_mass: f64,
+    production_energy: f64,
+    maintenance: f64,
+    mass_storage_cap: f64,
+    energy_storage_cap: f64,
+}
+
+impl<'a, R: Rng> EcoSnapshotBuilder<'a, R> {
+    fn new(library: &'a BlueprintLibrary, rng: &'a mut R) -> Self {
+        Self {
+            library,
+            rng,
+            production_mass: 0.0,
+            production_energy: 0.0,
+            maintenance: 0.0,
+            mass_storage_cap: 0.0,
+            energy_storage_cap: 0.0,
         }
     }
 
-    EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: production_mass,
-        production_per_second_energy: production_energy,
-        maintenance_consumption_per_second_energy: maintenance,
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage: mass_storage_cap,
-        mass_storage_cap,
-        energy_storage: energy_storage_cap,
-        energy_storage_cap,
+    fn add_acu(mut self) -> Self {
+        self.production_mass += self
+            .library
+            .production_per_second_mass(&UnitKind::Commander);
+        self.production_energy += self
+            .library
+            .production_per_second_energy(&UnitKind::Commander);
+        self.maintenance += self
+            .library
+            .maintenance_consumption_per_second_energy(&UnitKind::Commander);
+        self.mass_storage_cap += self.library.mass_storage(&UnitKind::Commander);
+        self.energy_storage_cap += self.library.energy_storage(&UnitKind::Commander);
+        self
+    }
+
+    fn add_engineers(mut self, count_range: RangeInclusive<usize>) -> Self {
+        let kind = UnitKind::Engineer(TechLevel::T1);
+        if self.library.entity_for_kind(&kind).is_none() {
+            return self;
+        }
+        let count = self.rng.random_range(count_range);
+        for _ in 0..count {
+            self.production_mass += self.library.production_per_second_mass(&kind);
+            self.production_energy += self.library.production_per_second_energy(&kind);
+            self.maintenance += self
+                .library
+                .maintenance_consumption_per_second_energy(&kind);
+            self.mass_storage_cap += self.library.mass_storage(&kind);
+            self.energy_storage_cap += self.library.energy_storage(&kind);
+        }
+        self
+    }
+
+    fn add_power_for(mut self, task: &BuildTask, surplus_range: RangeInclusive<usize>) -> Self {
+        let kind = UnitKind::Pgen(TechLevel::T1);
+        if self.library.entity_for_kind(&kind).is_none() {
+            return self;
+        }
+
+        let (_, energy_drain, builder_maintenance) = task_drain_rates(task);
+        let energy_prod = self.library.production_per_second_energy(&kind);
+        let unit_maintenance = self
+            .library
+            .maintenance_consumption_per_second_energy(&kind);
+        let storage = self.library.energy_storage(&kind);
+
+        let mut required = 0;
+        while self.production_energy - self.maintenance - builder_maintenance - energy_drain < 0.0 {
+            self.production_energy += energy_prod;
+            self.maintenance += unit_maintenance;
+            self.energy_storage_cap += storage;
+            required += 1;
+            if required > 100 {
+                break; // safety guard
+            }
+        }
+
+        let surplus = self.rng.random_range(surplus_range);
+        for _ in 0..surplus {
+            self.production_energy += energy_prod;
+            self.maintenance += unit_maintenance;
+            self.energy_storage_cap += storage;
+        }
+        self
+    }
+
+    fn add_mass_for(mut self, task: &BuildTask, surplus_range: RangeInclusive<usize>) -> Self {
+        let kind = UnitKind::Mex(TechLevel::T1);
+        if self.library.entity_for_kind(&kind).is_none() {
+            return self;
+        }
+
+        let (mass_drain, _, _) = task_drain_rates(task);
+        let mass_prod = self.library.production_per_second_mass(&kind);
+        let unit_maintenance = self
+            .library
+            .maintenance_consumption_per_second_energy(&kind);
+        let storage = self.library.mass_storage(&kind);
+
+        let mut required = 0;
+        while self.production_mass - mass_drain < 0.0 {
+            self.production_mass += mass_prod;
+            self.maintenance += unit_maintenance;
+            self.mass_storage_cap += storage;
+            required += 1;
+            if required > 100 {
+                break; // safety guard
+            }
+        }
+
+        let surplus = self.rng.random_range(surplus_range);
+        for _ in 0..surplus {
+            self.production_mass += mass_prod;
+            self.maintenance += unit_maintenance;
+            self.mass_storage_cap += storage;
+        }
+        self
+    }
+
+    fn build(self) -> EcoSnapshot {
+        EcoSnapshot {
+            time: 0.0,
+            production_per_second_mass: self.production_mass,
+            production_per_second_energy: self.production_energy,
+            maintenance_consumption_per_second_energy: self.maintenance,
+            mass_drain: 0.0,
+            energy_drain: 0.0,
+            total_mass_spent: 0.0,
+            total_energy_spent: 0.0,
+            mass_storage: self.mass_storage_cap,
+            mass_storage_cap: self.mass_storage_cap,
+            energy_storage: self.energy_storage_cap,
+            energy_storage_cap: self.energy_storage_cap,
+        }
+    }
+}
+
+fn task_drain_rates(task: &BuildTask) -> (f64, f64, f64) {
+    let build_power: f64 = task.builders.iter().map(|b| b.build_power).sum();
+    let builder_maintenance: f64 = task
+        .builders
+        .iter()
+        .map(|b| b.maintenance_consumption_per_second_energy)
+        .sum();
+    let first_target = task.targets.first();
+    let first_mass_cost = first_target.map(|t| t.mass_cost).unwrap_or(0.0);
+    let first_energy_cost = first_target.map(|t| t.energy_cost).unwrap_or(0.0);
+    let first_build_time = first_target.map(|t| t.build_time).unwrap_or(1.0).max(1.0);
+
+    let mass_drain = first_mass_cost / first_build_time * build_power;
+    let energy_drain = first_energy_cost / first_build_time * build_power;
+
+    (mass_drain, energy_drain, builder_maintenance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use faf_sim::quantities::Time;
+    use faf_sim::runtime::UnitEcoStats;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    fn test_library() -> BlueprintLibrary {
+        let candidates = [
+            Path::new("plugins/faf-units/data/faf_units.json").to_path_buf(),
+            Path::new("../../plugins/faf-units/data/faf_units.json").to_path_buf(),
+        ];
+        let path = candidates
+            .iter()
+            .find(|p| p.exists())
+            .expect("units file not found in expected locations");
+        let text = std::fs::read_to_string(path).expect("failed to read units file");
+        let index: faf_units::DataIndex =
+            serde_json::from_str(&text).expect("failed to parse units");
+        BlueprintLibrary::new(index)
+    }
+
+    fn test_task() -> BuildTask {
+        BuildTask {
+            id: 0,
+            start_after: Time::from_raw(1.0),
+            builders: vec![UnitEcoStats {
+                build_power: 10.0,
+                maintenance_consumption_per_second_energy: 0.0,
+                ..Default::default()
+            }],
+            targets: vec![UnitEcoStats {
+                mass_cost: 200.0,
+                energy_cost: 1000.0,
+                build_time: 200.0,
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn initial_eco_supports_task() {
+        let library = test_library();
+        let task = test_task();
+        let mut rng = StdRng::seed_from_u64(42);
+
+        for _ in 0..20 {
+            let eco = sample_real_initial_eco(&mut rng, &library, &task);
+            let net_energy = eco.production_per_second_energy
+                - eco.maintenance_consumption_per_second_energy
+                - 0.0; // builder maintenance is zero in this task
+            let first_target = task.targets.first().unwrap();
+            let mass_drain = first_target.mass_cost / first_target.build_time * 10.0;
+            let net_mass = eco.production_per_second_mass - mass_drain;
+
+            assert!(
+                net_energy > 0.0,
+                "net energy must be positive, got {net_energy}"
+            );
+            assert!(
+                net_mass >= 0.0,
+                "net mass must be non-negative, got {net_mass}"
+            );
+        }
     }
 }

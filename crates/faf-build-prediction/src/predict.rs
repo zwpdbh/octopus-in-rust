@@ -89,6 +89,13 @@ impl PredictorConfigLoaded {
 impl PredictorNormLoaded {
     /// Load the trained model and advance to the ready-for-inference stage.
     pub fn load_model(self, path: &Path) -> Result<PredictorModelLoaded> {
+        if !path.exists() {
+            anyhow::bail!(
+                "No trained model found at {}. Run `faf-sim train --dataset <db> --output-dir <dir>` first.",
+                path.display()
+            );
+        }
+
         let record = CompactRecorder::new()
             .load(path.into(), &self.device)
             .with_context(|| format!("Failed to load model from {}", path.display()))?;
@@ -144,7 +151,7 @@ pub fn predict(
 ) -> Result<Prediction> {
     let prediction = PredictorConfigLoaded::load_config(&artifact_dir.join("config.json"))?
         .load_norm(&artifact_dir.join("norm.json"))?
-        .load_model(&artifact_dir.join("model"))?
+        .load_model(&artifact_dir.join("model.mpk"))?
         .predict(initial_eco, plan);
     Ok(prediction)
 }
