@@ -4,9 +4,9 @@
 //! input shape is restricted enough to make closed-form or stage-based
 //! computation practical.
 
-mod single_task;
+mod sequential;
 
-pub use single_task::{
+pub use sequential::{
     plan_completion_result, plan_completion_time, plan_completion_with_tasks,
     single_task_completion_result, single_task_completion_time, CompletionResult, PlanResult,
 };

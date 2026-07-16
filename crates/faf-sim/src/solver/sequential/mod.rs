@@ -1,4 +1,4 @@
-//! Fast, exact single-task completion-time solver.
+//! Fast, exact sequential-task completion-time solver.
 //!
 //! This module applies the same one-second economy map that the ECS simulator
 //! uses, but without the Bevy runtime, event emission, or service overhead. It

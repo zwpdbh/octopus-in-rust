@@ -1,8 +1,8 @@
 //! Top-level completion-time computation for single-task and sequential plans.
 
 use crate::runtime::{BuildTask, EcoSnapshot};
-use crate::solver::single_task::factor::effective_factor;
-use crate::solver::single_task::state::{SolverState, EPS};
+use crate::solver::sequential::factor::effective_factor;
+use crate::solver::sequential::state::{SolverState, EPS};
 
 /// Result of solving a plan: when it finishes and what the economy looks like at
 /// that point.
