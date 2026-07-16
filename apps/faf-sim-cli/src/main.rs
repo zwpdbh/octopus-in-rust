@@ -59,10 +59,10 @@ enum DatasetMode {
         /// Number of samples to generate.
         #[arg(short, long, default_value = "10000")]
         samples: usize,
-        /// Practical time limit in seconds; slower plans are labeled NotPractical.
-        #[arg(long, default_value = "600")]
-        time_limit_seconds: f64,
         /// Maximum number of tasks in a generated plan.
+        ///
+        /// The predictor is trained on single-task plans, so this is accepted for
+        /// compatibility but ignored by the generator.
         #[arg(long, default_value = "5")]
         max_tasks: usize,
         /// Maximum number of builders assigned to a single task.
@@ -98,7 +98,7 @@ struct TrainArgs {
     /// Learning rate.
     #[arg(long, default_value = "0.001")]
     learning_rate: f64,
-    /// Dropout probability on the LSTM output.
+    /// Dropout probability on the hidden layer.
     #[arg(long, default_value = "0.0")]
     dropout: f64,
     /// L2 weight decay for the Adam optimizer.
@@ -127,9 +127,6 @@ struct PredictArgs {
     /// JSON file with the build plan (`BuildQueue`).
     #[arg(short, long)]
     plan: PathBuf,
-    /// Plans predicted to take longer than this are considered not practical.
-    #[arg(long, default_value = "600")]
-    practical_threshold_seconds: f64,
 }
 
 #[derive(Subcommand, Debug)]
@@ -195,7 +192,6 @@ fn main() {
             DatasetMode::Generate {
                 output,
                 samples,
-                time_limit_seconds,
                 max_tasks,
                 max_builders_per_task,
                 max_targets_per_task,
@@ -204,7 +200,6 @@ fn main() {
                 let generator = match DatasetGenerator::new(
                     GenerationConfig {
                         sample_count: samples,
-                        time_limit_seconds,
                         max_tasks,
                         max_builders_per_task,
                         max_targets_per_task,
@@ -251,21 +246,14 @@ fn main() {
                 None => eco_snapshot_from_runtime_state(&queue.initial_eco),
             };
 
-            match predict(
-                args.model_dir.as_ref(),
-                &eco,
-                &queue.tasks,
-                args.practical_threshold_seconds,
-            ) {
+            match predict(args.model_dir.as_ref(), &eco, &queue.tasks) {
                 Ok(Prediction {
                     predicted_time_seconds,
-                    is_practical,
                 }) => {
                     println!(
                         "{}",
                         serde_json::to_string(&serde_json::json!({
                             "predicted_time_seconds": predicted_time_seconds.round() as u64,
-                            "is_practical": is_practical,
                         }))
                         .expect("serialize prediction")
                     );

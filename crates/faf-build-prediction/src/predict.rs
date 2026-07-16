@@ -19,8 +19,6 @@ use crate::train::TrainingConfig;
 pub struct Prediction {
     /// Predicted completion time in seconds.
     pub predicted_time_seconds: f64,
-    /// True if the predicted time is below the practical threshold.
-    pub is_practical: bool,
 }
 
 /// Stage marker: training config has been loaded but normalization params have
@@ -113,12 +111,7 @@ impl PredictorModelLoaded {
     /// Run inference on a build plan.
     ///
     /// This single-task predictor only uses the first task in `plan`.
-    pub fn predict(
-        &self,
-        initial_eco: &EcoSnapshot,
-        plan: &[BuildTask],
-        practical_threshold_seconds: f64,
-    ) -> Prediction {
+    pub fn predict(&self, initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> Prediction {
         let raw_sequence = extract_sequence_features(initial_eco, plan);
         let raw_features = raw_sequence
             .first()
@@ -136,7 +129,6 @@ impl PredictorModelLoaded {
 
         Prediction {
             predicted_time_seconds: predicted_time,
-            is_practical: predicted_time < practical_threshold_seconds,
         }
     }
 }
@@ -149,11 +141,10 @@ pub fn predict(
     artifact_dir: &Path,
     initial_eco: &EcoSnapshot,
     plan: &[BuildTask],
-    practical_threshold_seconds: f64,
 ) -> Result<Prediction> {
     let prediction = PredictorConfigLoaded::load_config(&artifact_dir.join("config.json"))?
         .load_norm(&artifact_dir.join("norm.json"))?
         .load_model(&artifact_dir.join("model"))?
-        .predict(initial_eco, plan, practical_threshold_seconds);
+        .predict(initial_eco, plan);
     Ok(prediction)
 }

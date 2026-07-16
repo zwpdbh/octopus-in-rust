@@ -21,9 +21,10 @@ use std::marker::PhantomData;
 pub struct GenerationConfig {
     /// Number of labeled samples to generate.
     pub sample_count: usize,
-    /// Practical time limit in seconds; slower plans are labeled NotPractical.
-    pub time_limit_seconds: f64,
     /// Maximum number of tasks in a generated plan.
+    ///
+    /// The current predictor is trained on single-task plans, so this is kept for
+    /// API compatibility but the generator always produces exactly one task.
     pub max_tasks: usize,
     /// Maximum number of builders assigned to a single task.
     pub max_builders_per_task: usize,
@@ -35,7 +36,6 @@ impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
             sample_count: 10_000,
-            time_limit_seconds: 600.0,
             max_tasks: 5,
             max_builders_per_task: 20,
             max_targets_per_task: 5,
@@ -120,8 +120,6 @@ impl DatasetGenerator {
             db_path: db_path.to_path_buf(),
             conn,
             stats: NormalizationParams::new(),
-            practical_count: 0,
-            not_practical_count: 0,
             _stage: PhantomData,
         })
     }
@@ -140,7 +138,7 @@ impl DatasetGenerator {
     fn generate_sample<R: Rng>(&self, rng: &mut R) -> EcoPlanSample<Unsimulated> {
         let initial_eco = self.sample_initial_eco(rng);
 
-        // The prediction of finish time only apply to only one task in the plan.
+        // This predictor is trained on single-task plans only.
         let task_count = 1;
         let plan: Vec<BuildTask> = (0..task_count)
             .map(|id| self.sample_build_task(rng, id as u32))
@@ -237,8 +235,6 @@ pub struct DatasetPipeline<Stage: PipelineStage> {
     db_path: PathBuf,
     conn: Connection,
     stats: NormalizationParams<Stage::NormState>,
-    practical_count: usize,
-    not_practical_count: usize,
     _stage: PhantomData<Stage>,
 }
 
@@ -258,8 +254,6 @@ impl DatasetPipeline<PipelineNew> {
             db_path: self.db_path,
             conn: self.conn,
             stats: self.stats,
-            practical_count: self.practical_count,
-            not_practical_count: self.not_practical_count,
             _stage: PhantomData,
         })
     }
@@ -271,7 +265,6 @@ impl DatasetPipeline<SchemaCreated> {
         let config = self.generator.config;
         println!("Generating dataset:");
         println!("  samples: {}", config.sample_count);
-        println!("  time_limit_seconds: {}", config.time_limit_seconds);
         println!("  max_tasks: {}", config.max_tasks);
         println!("  max_builders_per_task: {}", config.max_builders_per_task);
         println!("  max_targets_per_task: {}", config.max_targets_per_task);
@@ -284,11 +277,8 @@ impl DatasetPipeline<SchemaCreated> {
             .context("Failed to start SQLite transaction")?;
         let mut rng = rand::rng();
         let sample_count = config.sample_count;
-        let time_limit = config.time_limit_seconds;
         let generator = &self.generator;
         let stats = &mut self.stats;
-        let practical_count = &mut self.practical_count;
-        let not_practical_count = &mut self.not_practical_count;
 
         for i in 0..sample_count {
             SamplePipeline {
@@ -296,11 +286,9 @@ impl DatasetPipeline<SchemaCreated> {
                 rng: &mut rng,
                 tx: &tx,
                 stats,
-                practical_count,
-                not_practical_count,
             }
             .generate_sample()
-            .simulate(time_limit)
+            .simulate()
             .extract_sequence_features()
             .insert_sample()
             .with_context(|| format!("Failed to insert sample {}", i + 1))?;
@@ -317,8 +305,6 @@ impl DatasetPipeline<SchemaCreated> {
             db_path: self.db_path,
             conn: self.conn,
             stats,
-            practical_count: self.practical_count,
-            not_practical_count: self.not_practical_count,
             _stage: PhantomData,
         })
     }
@@ -334,8 +320,6 @@ impl DatasetPipeline<SamplesGenerated> {
             db_path: self.db_path,
             conn: self.conn,
             stats: self.stats,
-            practical_count: self.practical_count,
-            not_practical_count: self.not_practical_count,
             _stage: PhantomData,
         })
     }
@@ -351,8 +335,6 @@ impl DatasetPipeline<NormSaved> {
             total,
             self.db_path.display()
         );
-        println!("  practical: {}", self.practical_count);
-        println!("  not_practical: {}", self.not_practical_count);
         println!("  normalization saved to {}", norm_path.display());
         Ok(())
     }
@@ -368,8 +350,6 @@ struct SamplePipeline<'a, 'conn, R: Rng> {
     rng: &'a mut R,
     tx: &'a Transaction<'conn>,
     stats: &'a mut NormalizationParams<Collecting>,
-    practical_count: &'a mut usize,
-    not_practical_count: &'a mut usize,
 }
 
 impl<'a, 'conn, R: Rng> SamplePipeline<'a, 'conn, R> {
@@ -385,8 +365,8 @@ struct UnsimulatedSample<'a, 'conn, R: Rng> {
 }
 
 impl<'a, 'conn, R: Rng> UnsimulatedSample<'a, 'conn, R> {
-    fn simulate(self, time_limit_seconds: f64) -> SimulatedSample<'a, 'conn, R> {
-        let sample = self.sample.simulate(time_limit_seconds);
+    fn simulate(self) -> SimulatedSample<'a, 'conn, R> {
+        let sample = self.sample.simulate();
         SimulatedSample {
             sample,
             ctx: self.ctx,
@@ -419,11 +399,6 @@ struct FeaturedSample<'a, 'conn, R: Rng> {
 
 impl<'a, 'conn, R: Rng> FeaturedSample<'a, 'conn, R> {
     fn insert_sample(self) -> Result<()> {
-        if self.sample.is_practical() {
-            *self.ctx.practical_count += 1;
-        } else {
-            *self.ctx.not_practical_count += 1;
-        }
         insert_sample(self.ctx.tx, &self.features, &self.sample)
     }
 }
@@ -443,8 +418,7 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
         "CREATE TABLE samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sequence_features TEXT NOT NULL,
-            target_time REAL NOT NULL,
-            is_practical INTEGER NOT NULL
+            target_time REAL NOT NULL
         )",
         [],
     )
@@ -465,8 +439,8 @@ fn create_schema(conn: &mut Connection) -> Result<()> {
 /// Insert a simulated sample into the database.
 ///
 /// The `EcoPlanSample<Simulated>` type guarantees at compile time that the
-/// sample has been simulated and carries a real label; un-simulated samples
-/// cannot be passed here.
+/// sample has been simulated and carries a real completion time; un-simulated
+/// samples cannot be passed here.
 fn insert_sample(
     tx: &Transaction,
     task_features: &[[f64; crate::data::sample::TASK_FEATURE_DIM]],
@@ -475,15 +449,10 @@ fn insert_sample(
     let features_json =
         serde_json::to_string(task_features).context("Failed to serialize sequence features")?;
     let target_time = sample.time_seconds();
-    let is_practical = sample.is_practical() as i32;
 
     tx.execute(
-        "INSERT INTO samples (sequence_features, target_time, is_practical) VALUES (?1, ?2, ?3)",
-        [
-            &features_json,
-            &target_time.to_string(),
-            &is_practical.to_string(),
-        ],
+        "INSERT INTO samples (sequence_features, target_time) VALUES (?1, ?2)",
+        [&features_json, &target_time.to_string()],
     )
     .context("Failed to insert sample")?;
 

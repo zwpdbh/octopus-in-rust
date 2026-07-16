@@ -4,7 +4,7 @@
 //!
 //! - `data`: generation of labeled SQLite datasets using the `faf-sim` simulator,
 //!   plus a Burn `Dataset` implementation.
-//! - `model`: an LSTM sequence regression model predicting `log(completion_time)`.
+//! - `model`: a single-task MLP regression model predicting `log(completion_time)`.
 //! - `train`: the Burn training loop.
 
 pub mod data;
@@ -20,8 +20,8 @@ pub use data::generator::{
 };
 pub use data::normalize::{Collecting, NormalizationParams, Ready};
 pub use data::sample::{
-    build_queue, extract_sequence_features, EcoPlanLabel, EcoPlanSample, Simulated, Unsimulated,
-    MAX_SEQ_LEN, TASK_FEATURE_DIM,
+    build_queue, extract_sequence_features, EcoPlanSample, Simulated, Unsimulated, MAX_SEQ_LEN,
+    TASK_FEATURE_DIM,
 };
 pub use model::predictor::{EcoPredictor, EcoPredictorConfig};
 pub use predict::{

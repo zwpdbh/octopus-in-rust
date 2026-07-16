@@ -36,7 +36,7 @@ impl SampleState for Unsimulated {
 }
 
 impl SampleState for Simulated {
-    type Label = EcoPlanLabel;
+    type Label = f64;
 }
 
 /// A single training example: initial economy + plan, paired with the simulated
@@ -47,7 +47,7 @@ impl SampleState for Simulated {
 ///
 /// - `EcoPlanSample<Unsimulated>` is produced by the generator. It has no label
 ///   and cannot be inserted into the training database.
-/// - `EcoPlanSample<Simulated>` has a real [`EcoPlanLabel`] and is the only form
+/// - `EcoPlanSample<Simulated>` has a real completion time and is the only form
 ///   that can be serialized and inserted into the training database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
@@ -57,7 +57,7 @@ impl SampleState for Simulated {
 pub struct EcoPlanSample<S: SampleState = Simulated> {
     pub initial_eco: EcoSnapshot,
     pub plan: Vec<BuildTask>,
-    pub label: S::Label,
+    pub time_seconds: S::Label,
     #[serde(skip)]
     _state: PhantomData<S>,
 }
@@ -68,69 +68,32 @@ impl EcoPlanSample<Unsimulated> {
         Self {
             initial_eco,
             plan,
-            label: (),
+            time_seconds: (),
             _state: PhantomData,
         }
     }
 
-    /// Run the simulator to produce a real label and transition to [`Simulated`].
-    pub fn simulate(self, time_limit_seconds: f64) -> EcoPlanSample<Simulated> {
-        let label = simulate_label(&self.initial_eco, &self.plan, time_limit_seconds);
+    /// Run the simulator to produce a real completion time and transition to [`Simulated`].
+    pub fn simulate(self) -> EcoPlanSample<Simulated> {
+        let time_seconds = simulate_label(&self.initial_eco, &self.plan);
         EcoPlanSample {
             initial_eco: self.initial_eco,
             plan: self.plan,
-            label,
+            time_seconds,
             _state: PhantomData,
         }
     }
 }
 
 impl EcoPlanSample<Simulated> {
-    // Only `EcoPlanSample<Simulated>` exposes label-derived getters because
-    // only simulated samples are allowed to be persisted or used for training.
-
-    /// True if the simulated plan finished within the practical time limit.
-    pub fn is_practical(&self) -> bool {
-        self.label.is_practical()
-    }
-
-    /// Simulated completion time (or cap, if not practical).
+    /// Simulated completion time.
     pub fn time_seconds(&self) -> f64 {
-        self.label.time_seconds()
+        self.time_seconds
     }
 
-    /// Target value used for regression: `log(completion_time_or_cap)`.
+    /// Target value used for regression: `log(completion_time)`.
     pub fn regression_target(&self) -> f64 {
-        self.label.regression_target()
-    }
-}
-
-/// The supervised target for a sample.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum EcoPlanLabel {
-    /// Plan finished within the practical time limit.
-    Practical { time_seconds: f64 },
-    /// Plan did not finish within the practical time limit, but the simulator
-    /// ran until a larger cap so the model can learn how slow it is.
-    NotPractical { time_seconds: f64 },
-}
-
-impl EcoPlanLabel {
-    /// Target value used for regression: `log(completion_time_or_cap)`.
-    pub fn regression_target(&self) -> f64 {
-        self.time_seconds().ln()
-    }
-
-    pub fn is_practical(&self) -> bool {
-        matches!(self, EcoPlanLabel::Practical { .. })
-    }
-
-    /// Completion time (or cap) associated with the label.
-    pub fn time_seconds(&self) -> f64 {
-        match self {
-            EcoPlanLabel::Practical { time_seconds } => *time_seconds,
-            EcoPlanLabel::NotPractical { time_seconds } => *time_seconds,
-        }
+        self.time_seconds.ln()
     }
 }
 
@@ -281,16 +244,16 @@ pub fn build_queue(snapshot: &EcoSnapshot, plan: Vec<BuildTask>) -> BuildQueue {
     }
 }
 
-/// Run the simulator on a plan and produce a real label.
-fn simulate_label(
-    initial_eco: &EcoSnapshot,
-    plan: &[BuildTask],
-    time_limit_seconds: f64,
-) -> EcoPlanLabel {
+/// Hard upper bound on how long the simulator may run for a single sample.
+///
+/// This is a safety guard against pathological inputs; it is not a
+/// practical/not-practical threshold.
+const MAX_SIM_TIME_SECONDS: f64 = 6_000.0;
+
+/// Run the simulator on a plan and return the completion time in seconds.
+fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f64 {
     let dt = StepTime::from_seconds(1).expect("1 second dt is valid");
-    // Run the simulator up to 10x the practical threshold so the model can
-    // learn degrees of "not practical" instead of a single clipped value.
-    let max_sim_time = Time::from_raw(time_limit_seconds * 10.0);
+    let max_sim_time = Time::from_raw(MAX_SIM_TIME_SECONDS);
     let queue = build_queue(initial_eco, plan.to_vec());
 
     let mut sim = Simulation::new(queue, dt, Some(max_sim_time), None);
@@ -299,16 +262,7 @@ fn simulate_label(
         sim.step();
     }
 
-    let final_time = sim.current_time().value();
-    if final_time < time_limit_seconds - dt.as_time().value() {
-        EcoPlanLabel::Practical {
-            time_seconds: final_time,
-        }
-    } else {
-        EcoPlanLabel::NotPractical {
-            time_seconds: final_time,
-        }
-    }
+    sim.current_time().value()
 }
 
 #[cfg(test)]
