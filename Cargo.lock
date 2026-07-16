@@ -4031,6 +4031,7 @@ dependencies = [
  "faf-sim",
  "faf-sim-shared",
  "gloo-net",
+ "js-sys",
  "petgraph 0.8.3",
  "serde",
  "serde_json",

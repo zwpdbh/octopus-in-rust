@@ -1,8 +1,34 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use faf_sim_shared::plan::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
+
+/// AntV G6-shaped blueprint dependency graph payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct G6GraphData {
+    pub nodes: Vec<G6NodeData>,
+    pub edges: Vec<G6EdgeData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct G6NodeData {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    pub summary: UnitSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct G6EdgeData {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub dashed: bool,
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]

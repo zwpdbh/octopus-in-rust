@@ -91,6 +91,7 @@ impl GraphEdgeLabel for String {
 /// Simple serializable node descriptor for fetching graphs over HTTP.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphNodeData {
+    pub id: String,
     pub label: String,
     #[serde(default)]
     pub color: Option<String>,
@@ -150,6 +151,13 @@ impl From<&GraphData> for DiGraph<GraphNodeData, GraphEdgeData> {
             graph.add_edge(from_idx, to_idx, edge.clone());
         }
         graph
+    }
+}
+
+impl GraphData {
+    /// Look up a node by its `id`.
+    pub fn node_by_id(&self, id: &str) -> Option<&GraphNodeData> {
+        self.nodes.iter().find(|n| n.id == id)
     }
 }
 

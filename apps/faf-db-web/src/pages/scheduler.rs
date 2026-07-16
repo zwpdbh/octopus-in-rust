@@ -1,47 +1,49 @@
 use dioxus::prelude::*;
-use faf_dioxus_ui::{GraphData, GraphEdgeData, GraphInput, GraphNodeData, GraphOptions, GraphView};
 use gloo_net::http::Request;
-use petgraph::graph::DiGraph;
 
-use crate::components::AppHeader;
+use crate::components::{AppHeader, BlueprintGraphG6, UnitDetail};
 use crate::route::Route;
+use crate::types::{G6GraphData, UnitSummary};
 
 #[component]
 pub fn Scheduler() -> Element {
     let graph = use_resource(|| async move {
-        Request::get("/api/blueprint-graph")
+        Request::get("/api/blueprint-graph-g6")
             .send()
             .await
             .ok()?
-            .json::<GraphData>()
+            .json::<G6GraphData>()
             .await
             .ok()
     });
+    let mut selected = use_signal(|| None::<UnitSummary>);
 
     rsx! {
         div { class: "flex flex-col h-screen bg-neutral-950 text-neutral-100",
             AppHeader { active: Route::Scheduler {} }
 
-            main { class: "flex-1 overflow-auto p-6",
+            main { class: "flex-1 overflow-hidden p-6",
                 h2 { class: "text-xl font-semibold mb-4", "Scheduler — Blueprint Dependency Graph" }
 
                 match graph.read().as_ref() {
-                    Some(Some(data)) => {
-                        let digraph: DiGraph<GraphNodeData, GraphEdgeData> = DiGraph::from(data);
-                        rsx! {
-                            div { class: "w-full overflow-auto border border-neutral-800 rounded bg-neutral-900 p-4",
+                    Some(Some(data)) => rsx! {
+                        div { class: "flex gap-4", style: "height: calc(100% - 2rem);",
+                            div { class: "flex-1 min-w-0 flex flex-col border border-neutral-800 rounded bg-neutral-900 p-4 overflow-hidden",
                                 GraphLegend {}
-                                GraphView {
-                                    graph: GraphInput(digraph),
-                                    options: GraphOptions {
-                                        min_width: 800,
-                                        min_height: 600,
-                                        ..Default::default()
-                                    },
+                                div { class: "mt-3",
+                                    BlueprintGraphG6 {
+                                        data: data.clone(),
+                                        on_node_click: move |summary: UnitSummary| {
+                                            selected.set(Some(summary));
+                                        },
+                                    }
                                 }
                             }
+                            div { class: "w-96 flex-shrink-0 border border-neutral-800 rounded bg-neutral-900 p-4 overflow-auto",
+                                UnitDetail { selected }
+                            }
                         }
-                    }
+                    },
                     Some(None) => rsx! {
                         p { class: "text-red-400", "Failed to load blueprint graph." }
                     },
@@ -57,7 +59,7 @@ pub fn Scheduler() -> Element {
 #[component]
 fn GraphLegend() -> Element {
     rsx! {
-        div { class: "flex gap-6 mt-3 text-sm text-neutral-300",
+        div { class: "flex gap-6 text-sm text-neutral-300",
             span { class: "flex items-center gap-2",
                 span {
                     class: "inline-block w-8 border-t-2",
