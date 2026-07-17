@@ -113,7 +113,8 @@ impl BlueprintLibrary {
             mass_cost: 800.0,
             energy_cost: 6000.0,
             build_time: 1000.0,
-            production_per_second_mass: 6.0,
+            // 4 adjacent mass storages: base 6.0 * (1 + 4 * 0.5) = 18.0
+            production_per_second_mass: 18.0,
             production_per_second_energy: 0.0,
             maintenance_consumption_per_second_energy: 9.0,
             mass_storage: 2000.0,
@@ -137,7 +138,8 @@ impl BlueprintLibrary {
             mass_cost: 800.0,
             energy_cost: 6000.0,
             build_time: 1000.0,
-            production_per_second_mass: 18.0,
+            // 4 adjacent mass storages: base 18.0 * (1 + 4 * 0.5) = 54.0
+            production_per_second_mass: 54.0,
             production_per_second_energy: 0.0,
             maintenance_consumption_per_second_energy: 54.0,
             mass_storage: 2000.0,
@@ -783,9 +785,10 @@ mod tests {
         let units = load_library();
 
         assert!(units.mass_storage(&UnitKind::CapT2Mex) > 0.0);
+        // A capped mex produces 3x the base output (4 storages * +50%).
         assert!(
             (units.production_per_second_mass(&UnitKind::CapT2Mex)
-                - units.production_per_second_mass(&UnitKind::Mex(TechLevel::T2)))
+                - 3.0 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T2)))
             .abs()
                 < 1e-9
         );
@@ -793,7 +796,7 @@ mod tests {
         assert!(units.mass_storage(&UnitKind::CapT3Mex) > 0.0);
         assert!(
             (units.production_per_second_mass(&UnitKind::CapT3Mex)
-                - units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)))
+                - 3.0 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)))
             .abs()
                 < 1e-9
         );
