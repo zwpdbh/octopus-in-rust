@@ -241,6 +241,18 @@ fn collect_edges(index: &DataIndex, nodes: &[ConcreteGraphNode]) -> Vec<Concrete
             if source.id == node.id {
                 continue;
             }
+            // Layout-oriented pruning: only show the minimal honest builder for
+            // each target. Higher-tier builders can also construct lower-tier
+            // targets in-game, but drawing those edges buries the graph under
+            // fan-out; the tech chain keeps reachability visible.
+            //   - builders never point to lower-tier targets
+            //   - the unupgraded ACU only builds T1 targets
+            if source.layer > node.layer {
+                continue;
+            }
+            if source.role == EconRole::Commander && node.layer > 1 {
+                continue;
+            }
             edges.push(ConcreteGraphEdge {
                 source: source.id.clone(),
                 target: node.id.clone(),

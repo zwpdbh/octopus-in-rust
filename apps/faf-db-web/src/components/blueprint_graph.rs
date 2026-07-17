@@ -22,7 +22,16 @@ pub fn BlueprintGraph(
     highlight: Option<String>,
     on_node_click: EventHandler<UnitSummary>,
 ) -> Element {
-    let data = use_memo(move || to_graph_data(&nodes, &edges, &summaries, &faction, &highlight));
+    // Track the raw props as reactive dependencies so the faction subgraph is
+    // recomputed when the caller changes faction/highlight.
+    let data =
+        use_memo(use_reactive!(|nodes,
+                                edges,
+                                summaries,
+                                faction,
+                                highlight| {
+            to_graph_data(&nodes, &edges, &summaries, &faction, &highlight)
+        }));
     let data_for_lookup = data();
 
     rsx! {

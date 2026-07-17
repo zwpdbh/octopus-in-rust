@@ -122,7 +122,9 @@ where
     let listener_for_drop = listener.clone();
     let effect_id = id.clone();
 
-    use_effect(move || {
+    // Track `data` as a reactive dependency so the graph re-initializes
+    // whenever the caller passes new data (e.g. switching faction tabs).
+    use_effect(use_reactive!(|data| {
         // Attach the custom-event listener only once.
         if listener_for_effect.borrow().is_none() {
             let on_click = on_node_click;
@@ -150,7 +152,7 @@ where
                 console::error_1(&format!("[GraphView] init failed: {err:?}").into());
             }
         }
-    });
+    }));
 
     use_drop(move || {
         if let Some(closure) = listener_for_drop.borrow_mut().take() {

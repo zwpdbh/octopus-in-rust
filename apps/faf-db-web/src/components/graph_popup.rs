@@ -24,11 +24,11 @@ pub fn GraphPopup(
     let mut faction = use_signal(|| initial.clone());
 
     // Reset the tab whenever the popup is (re-)opened with a new focus.
-    use_effect(move || {
+    use_effect(use_reactive!(|open, initial| {
         if open {
-            faction.set(initial.clone());
+            faction.set(initial);
         }
-    });
+    }));
 
     if !open {
         return rsx! {};

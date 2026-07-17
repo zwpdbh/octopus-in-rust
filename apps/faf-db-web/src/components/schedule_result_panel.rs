@@ -37,13 +37,13 @@ pub fn ScheduleResultPanel(
     rsx! {
         div { class: "flex-1 min-w-0 flex flex-col border border-neutral-800 rounded bg-neutral-900 p-4 overflow-hidden",
             div { class: "flex items-center gap-2 mb-3 shrink-0",
-                h3 { class: "text-sm font-semibold text-white flex-1", "Result" }
                 button {
                     class: "px-2 py-1 text-xs rounded bg-neutral-800 text-neutral-300 hover:bg-neutral-700 border border-neutral-700 transition-colors",
                     title: "Show dependency map",
                     onclick: move |_| on_open_map.call(()),
                     "🗺 Map"
                 }
+                h3 { class: "text-sm font-semibold text-white flex-1 text-right", "Result" }
             }
 
             match current {
