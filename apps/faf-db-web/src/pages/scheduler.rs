@@ -11,7 +11,7 @@ use crate::state::save_plan_to_storage;
 use crate::types::{
     BlueprintGraphResponse, Schedule, ScheduleApiError, ScheduleUiState, UnitKind, UnitSummary,
 };
-use crate::utils::{kind_label, kind_node_id};
+use crate::utils::kind_node_id;
 
 #[component]
 pub fn Scheduler() -> Element {
@@ -64,18 +64,28 @@ pub fn Scheduler() -> Element {
 
     let graph_data = graph.read().clone().flatten();
 
-    // Abstract kinds offered as targets and inventory entries, sorted by label.
-    let kinds = graph_data
+    // Units offered in the picker modal, and the lookup from a unit's
+    // blueprint id back to its abstract kind (for building the request).
+    let candidates = graph_data
         .as_ref()
         .map(|data| {
-            let mut kinds: Vec<UnitKind> = data
-                .graph
+            let mut candidates: Vec<UnitSummary> = data.summaries.values().cloned().collect();
+            candidates.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+            candidates
+        })
+        .unwrap_or_default();
+    let id_to_kind = graph_data
+        .as_ref()
+        .map(|data| {
+            data.graph
                 .graph
                 .node_weights()
-                .map(|n| n.kind.clone())
-                .collect();
-            kinds.sort_by_key(kind_label);
-            kinds
+                .filter_map(|node| {
+                    data.summaries
+                        .get(&kind_node_id(&node.kind))
+                        .map(|summary| (summary.id.clone(), node.kind.clone()))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
         })
         .unwrap_or_default();
 
@@ -108,7 +118,7 @@ pub fn Scheduler() -> Element {
                 div { class: "flex gap-4 flex-1 min-h-0",
                     // Left: request form.
                     div { class: "w-[340px] flex-shrink-0 overflow-auto",
-                        ScheduleRequestPanel { form, kinds, computing, on_compute }
+                        ScheduleRequestPanel { form, candidates, id_to_kind, computing, on_compute }
                     }
 
                     // Center: result.

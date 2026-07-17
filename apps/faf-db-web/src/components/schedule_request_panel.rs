@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 
-use crate::components::SliderField;
-use crate::types::{EcoSnapshot, ScheduleApiRequest, SearchOptions, UnitKind};
+use crate::components::{SliderField, UnitSelectorModal};
+use crate::types::{
+    AssignmentTarget, EcoSnapshot, ScheduleApiRequest, SearchOptions, UnitKind, UnitSummary,
+};
 use crate::utils::kind_label;
 
 /// Which scheduling mode the form is configured for; mirrors the CLI's
@@ -100,18 +104,53 @@ impl ScheduleFormState {
     }
 }
 
+/// Which form slot the unit picker modal is currently filling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingSlot {
+    UnitTarget,
+    AddInventory,
+}
+
 /// Left-column scheduling request form.
 #[component]
 pub fn ScheduleRequestPanel(
     mut form: Signal<ScheduleFormState>,
-    /// Abstract unit kinds offered as targets/inventory entries.
-    kinds: Vec<UnitKind>,
+    /// Units offered in the picker modal (from the blueprint graph summaries).
+    candidates: Vec<UnitSummary>,
+    /// Lookup from a candidate's blueprint id to its abstract unit kind.
+    id_to_kind: HashMap<String, UnitKind>,
     /// True while a request is in flight.
     computing: bool,
     on_compute: EventHandler<()>,
 ) -> Element {
+    let mut pending_slot = use_signal(|| None::<PendingSlot>);
+
     let mode = form.read().mode;
     let valid = form.read().is_valid();
+
+    let id_to_kind_for_pick = id_to_kind.clone();
+    let on_pick = move |summary: UnitSummary| {
+        let kind = id_to_kind_for_pick.get(&summary.id).cloned();
+        if let (Some(slot), Some(kind)) = (*pending_slot.read(), kind) {
+            match slot {
+                PendingSlot::UnitTarget => form.write().unit_target = Some(kind),
+                PendingSlot::AddInventory => {
+                    let mut f = form.write();
+                    if !f.initial_inventory.contains(&kind) {
+                        f.initial_inventory.push(kind);
+                    }
+                }
+            }
+        }
+        pending_slot.set(None);
+    };
+
+    let target_summary = form.read().unit_target.as_ref().and_then(|kind| {
+        candidates
+            .iter()
+            .find(|u| id_to_kind.get(&u.id) == Some(kind))
+            .cloned()
+    });
 
     rsx! {
         div { class: "flex flex-col gap-3 min-w-0 p-3 rounded-lg border border-neutral-700 bg-neutral-900/80",
@@ -157,13 +196,12 @@ pub fn ScheduleRequestPanel(
                     }
                 },
                 ScheduleModeTab::Unit => rsx! {
-                    KindSelect {
+                    UnitSlot {
                         label: "Target unit",
-                        kinds: kinds.clone(),
-                        selected: form.read().unit_target.clone(),
-                        placeholder: "Select target unit...",
+                        summary: target_summary,
+                        hint: "Click to select",
                         disabled: computing,
-                        on_change: move |k: Option<UnitKind>| form.write().unit_target = k,
+                        on_click: move |_| pending_slot.set(Some(PendingSlot::UnitTarget)),
                     }
                 },
             }
@@ -208,7 +246,13 @@ pub fn ScheduleRequestPanel(
                         disabled: computing,
                         on_change: move |v: f64| form.write().initial_energy_storage = v.clamp(0.0, 10000.0),
                     }
-                    InventoryEditor { form, kinds: kinds.clone(), disabled: computing }
+                    InventoryEditor {
+                        form,
+                        id_to_kind,
+                        candidates: candidates.clone(),
+                        disabled: computing,
+                        on_add: move |_| pending_slot.set(Some(PendingSlot::AddInventory)),
+                    }
                 }
             }
 
@@ -243,6 +287,14 @@ pub fn ScheduleRequestPanel(
                 onclick: move |_| on_compute.call(()),
                 if computing { "⚡ Computing..." } else { "⚡ Compute Schedule" }
             }
+        }
+
+        UnitSelectorModal {
+            open: pending_slot.read().is_some(),
+            units: candidates.clone(),
+            target: AssignmentTarget::NewTarget,
+            on_select: on_pick,
+            on_close: move |_| pending_slot.set(None),
         }
     }
 }
@@ -290,66 +342,84 @@ fn NumberField(
     }
 }
 
-/// A `<select>` of abstract unit kinds. The selected kind travels through the
-/// option value as serialized JSON to avoid any string grammar.
+/// A "?" slot button that opens the unit picker modal, styled like the
+/// `UnitBlock` used on the simulate build page.
 #[component]
-fn KindSelect(
+fn UnitSlot(
     label: &'static str,
-    kinds: Vec<UnitKind>,
-    selected: Option<UnitKind>,
-    placeholder: &'static str,
+    summary: Option<UnitSummary>,
+    hint: &'static str,
     #[props(default = false)] disabled: bool,
-    on_change: EventHandler<Option<UnitKind>>,
+    on_click: EventHandler<()>,
 ) -> Element {
-    let selected_json = selected
-        .as_ref()
-        .and_then(|k| serde_json::to_string(k).ok())
-        .unwrap_or_default();
-
+    let button_class = if disabled {
+        "w-16 h-16 p-1 rounded bg-black border border-neutral-700 flex items-center justify-center self-center cursor-not-allowed opacity-60"
+    } else {
+        "w-16 h-16 p-1 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400 self-center"
+    };
     rsx! {
-        label { class: "flex flex-col gap-1 text-sm",
-            span { class: "text-neutral-400", "{label}" }
-            select {
-                class: "px-2 py-1.5 text-xs rounded bg-neutral-950 border border-neutral-700 text-neutral-200 focus:outline-none focus:border-blue-500",
+        div { class: "flex flex-col gap-2 p-2 rounded bg-neutral-800/50 border border-neutral-700",
+            span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
+            button {
+                class: "{button_class}",
                 disabled: disabled,
-                value: "{selected_json}",
-                onchange: move |e| {
-                    let raw = e.value();
-                    let parsed = serde_json::from_str::<UnitKind>(&raw).ok();
-                    on_change.call(parsed);
-                },
-                option { value: "", "{placeholder}" }
-                for kind in kinds.iter() {
-                    {
-                        let json = serde_json::to_string(kind).unwrap_or_default();
-                        rsx! {
-                            option { value: "{json}", "{kind_label(kind)}" }
-                        }
+                onclick: move |_| {
+                    if !disabled {
+                        on_click.call(());
                     }
+                },
+                title: "Click to select a unit",
+                if let Some(ref u) = summary {
+                    img {
+                        src: "/api/portraits/{u.id}.png",
+                        alt: "{u.display_name}",
+                        class: "w-full h-full object-contain",
+                    }
+                } else {
+                    span { class: "text-neutral-500 text-3xl", "?" }
                 }
+            }
+            div { class: "flex flex-col items-center text-center gap-1",
+                span { class: "text-sm text-neutral-300 truncate w-full",
+                    {summary.as_ref().map(|u| u.display_name.as_str()).unwrap_or("—")}
+                }
+                span { class: "text-[10px] text-neutral-500", "{hint}" }
             }
         }
     }
 }
 
-/// Tag-list editor for the initial inventory.
+/// Tag-list editor for the initial inventory, plus a "?" slot to add units.
 #[component]
 fn InventoryEditor(
     mut form: Signal<ScheduleFormState>,
-    kinds: Vec<UnitKind>,
+    id_to_kind: HashMap<String, UnitKind>,
+    candidates: Vec<UnitSummary>,
     disabled: bool,
+    on_add: EventHandler<()>,
 ) -> Element {
     let inventory = form.read().initial_inventory.clone();
 
     rsx! {
-        div { class: "flex flex-col gap-1 text-sm",
+        div { class: "flex flex-col gap-2 text-sm",
             span { class: "text-neutral-400", "Initial inventory" }
-            div { class: "flex flex-wrap gap-1.5",
+            div { class: "flex flex-wrap items-center gap-1.5",
                 for kind in inventory.iter() {
                     {
                         let k = kind.clone();
+                        let summary = candidates
+                            .iter()
+                            .find(|u| id_to_kind.get(&u.id) == Some(&k))
+                            .cloned();
                         rsx! {
-                            span { class: "inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-xs text-neutral-200",
+                            span { class: "inline-flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-800 border border-neutral-700 text-xs text-neutral-200",
+                                if let Some(ref u) = summary {
+                                    img {
+                                        src: "/api/portraits/{u.id}.png",
+                                        alt: "{u.display_name}",
+                                        class: "w-5 h-5 object-contain",
+                                    }
+                                }
                                 "{kind_label(kind)}"
                                 button {
                                     class: "text-neutral-500 hover:text-red-400 leading-none",
@@ -363,29 +433,16 @@ fn InventoryEditor(
                         }
                     }
                 }
-            }
-            {
-                let remaining: Vec<UnitKind> = kinds
-                    .iter()
-                    .filter(|k| !inventory.contains(k))
-                    .cloned()
-                    .collect();
-                rsx! {
-                    KindSelect {
-                        label: "Add unit",
-                        kinds: remaining,
-                        selected: None,
-                        placeholder: "Add to inventory...",
-                        disabled: disabled,
-                        on_change: move |k: Option<UnitKind>| {
-                            if let Some(k) = k {
-                                let mut f = form.write();
-                                if !f.initial_inventory.contains(&k) {
-                                    f.initial_inventory.push(k);
-                                }
-                            }
-                        },
-                    }
+                button {
+                    class: "w-7 h-7 rounded bg-black border border-neutral-600 flex items-center justify-center text-neutral-500 hover:text-neutral-200 hover:border-neutral-400 transition-colors text-lg leading-none",
+                    disabled: disabled,
+                    title: "Add unit to inventory",
+                    onclick: move |_| {
+                        if !disabled {
+                            on_add.call(());
+                        }
+                    },
+                    "?"
                 }
             }
         }
