@@ -101,9 +101,12 @@ pub fn concrete_graph_response(index: &DataIndex) -> ConcreteGraphResponse {
     let summaries = nodes
         .iter()
         .filter_map(|node| {
-            index
-                .find_unit(&node.id)
-                .map(|unit| (node.id.clone(), unit_summary(unit)))
+            index.find_unit(&node.id).map(|unit| {
+                let mut summary = unit_summary(unit);
+                // Show the same friendly label in the pickers as on the map.
+                summary.display_name = node.display_name.clone();
+                (node.id.clone(), summary)
+            })
         })
         .collect();
     ConcreteGraphResponse {
@@ -139,7 +142,14 @@ fn classify_node(unit: &Unit) -> Option<ConcreteGraphNode> {
             UnitKind::Unique(UnitId(unit.id.clone()))
         };
         (EconRole::Experimental, kind)
-    } else if has("ENGINEER") && has("MOBILE") && has("LAND") && !has("SUBCOMMANDER") {
+    } else if has("ENGINEER")
+        && has("MOBILE")
+        && has("LAND")
+        && !has("SUBCOMMANDER")
+        && !has("FIELDENGINEER")
+    {
+        // FIELDENGINEER (Sparky, Scarab) are combat engineers, not normal
+        // build power — exclude them so the canonical T{n} engineer wins.
         (EconRole::Engineer, UnitKind::Engineer(parse_tech(tier)?))
     } else if has("FACTORY")
         && has("STRUCTURE")
@@ -165,13 +175,38 @@ fn classify_node(unit: &Unit) -> Option<ConcreteGraphNode> {
 
     Some(ConcreteGraphNode {
         id: unit.id.clone(),
-        display_name: unit.name().unwrap_or(&unit.id).to_string(),
+        display_name: friendly_label(unit, role, tier),
         faction: faction.to_string(),
         tech: tier.unwrap_or("").to_string(),
         role,
         layer: layer_of(role, tier),
         kind,
     })
+}
+
+/// User-facing node label: the unit's nickname when it has one ("Ythotha",
+/// "Fatboy", "Ahwassa"), otherwise a synthetic `T{n} Role` label that is far
+/// friendlier than the raw blueprint id.
+fn friendly_label(unit: &Unit, role: EconRole, tier: Option<&str>) -> String {
+    if let Some(name) = unit.name() {
+        return name.to_string();
+    }
+    let prefix = match tier {
+        Some("TECH1") => "T1",
+        Some("TECH2") => "T2",
+        Some("TECH3") => "T3",
+        _ => "",
+    };
+    match role {
+        EconRole::Commander => "ACU".to_string(),
+        EconRole::Engineer => format!("{prefix} Eng"),
+        EconRole::Factory => format!("{prefix} Factory"),
+        EconRole::Mex => format!("{prefix} Mex"),
+        EconRole::Pgen => format!("{prefix} Pgen"),
+        EconRole::MassStorage => "Mass Storage".to_string(),
+        EconRole::EnergyStorage => "Energy Storage".to_string(),
+        EconRole::Experimental => "Experimental".to_string(),
+    }
 }
 
 fn parse_tech(tech: Option<&str>) -> Option<TechLevel> {
@@ -294,8 +329,10 @@ fn collect_edges(index: &DataIndex, nodes: &[ConcreteGraphNode]) -> Vec<Concrete
         source.role.producer_priority() >= target.role.producer_priority()
     });
 
-    // Upgrade edges: tier chains within (faction, Factory|Mex|Pgen).
-    for role in [EconRole::Factory, EconRole::Mex, EconRole::Pgen] {
+    // Upgrade edges: tier chains within (faction, Factory|Mex).
+    // Power generators are not upgradable in FAF — higher tiers are built
+    // directly by the corresponding engineer, so they only get built-by edges.
+    for role in [EconRole::Factory, EconRole::Mex] {
         for faction in FACTIONS {
             for (lower, higher) in [
                 (TechLevel::T1, TechLevel::T2),
