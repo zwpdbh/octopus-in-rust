@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 pub use faf_dioxus_ui::components::GraphData;
 pub use faf_sim::runtime::EcoSnapshot;
-pub use faf_sim::units::{BlueprintGraph, UnitKind};
+pub use faf_sim::units::UnitKind;
 pub use faf_sim_shared::plan::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
@@ -95,19 +95,78 @@ pub enum ScheduleUiState {
     Failed(String),
 }
 
-/// Server response for the blueprint graph endpoint: raw symbolic graph plus a
-/// unit summary for every shown node.
+// ---------------------------------------------------------------------------
+// Concrete blueprint relationship graph (mirror of faf-db-server's
+// /api/blueprint-graph protocol).
+// ---------------------------------------------------------------------------
+
+/// Economic/builder role of a concrete node; drives node color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EconRole {
+    Commander,
+    Engineer,
+    Factory,
+    Mex,
+    Pgen,
+    MassStorage,
+    EnergyStorage,
+    Experimental,
+}
+
+impl EconRole {
+    pub fn color(self) -> &'static str {
+        match self {
+            EconRole::Commander => "#fbbf24",
+            EconRole::Engineer => "#60a5fa",
+            EconRole::Factory => "#a78bfa",
+            EconRole::Mex => "#34d399",
+            EconRole::Pgen => "#f87171",
+            EconRole::MassStorage => "#2dd4bf",
+            EconRole::EnergyStorage => "#f472b6",
+            EconRole::Experimental => "#f97316",
+        }
+    }
+}
+
+/// A concrete unit node in the relationship graph.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ConcreteGraphNode {
+    /// Blueprint id, e.g. "UEL0105".
+    pub id: String,
+    pub display_name: String,
+    pub faction: String,
+    pub tech: String,
+    pub role: EconRole,
+    /// Dagre layer: ACU=0, T1=1, T2=2, T3=3, Experimental=4.
+    pub layer: i32,
+    /// Abstract kind this concrete unit maps to (needed by schedule requests).
+    pub kind: UnitKind,
+}
+
+/// The kind of a directed edge between two concrete units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConcreteEdgeKind {
+    BuiltBy,
+    UpgradesInto,
+}
+
+/// A directed edge from `source` (builder / lower tier) to `target`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ConcreteGraphEdge {
+    pub source: String,
+    pub target: String,
+    pub kind: ConcreteEdgeKind,
+}
+
+/// Server response for the blueprint graph endpoint: the concrete unit
+/// relationship graph plus a unit summary for every node.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct BlueprintGraphResponse {
-    pub graph: BlueprintGraph,
-    /// Concrete unit details for every shown graph node, keyed by node id.
-    ///
-    /// The graph itself is symbolic: nodes only carry abstract [`UnitKind`]
-    /// identities and rendering metadata. The UI needs real blueprint data
-    /// (id, faction, tech, build costs, economy, portrait) for the detail
-    /// panel on node click and for stable node identity. The server resolves
-    /// those from the raw unit index and sends them here so the frontend does
-    /// not need its own copy of the unit database.
+    pub nodes: Vec<ConcreteGraphNode>,
+    pub edges: Vec<ConcreteGraphEdge>,
+    /// Unit summaries keyed by blueprint id.
     pub summaries: HashMap<String, UnitSummary>,
 }
 

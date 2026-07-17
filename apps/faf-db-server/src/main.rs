@@ -22,6 +22,7 @@ struct AppState {
     index: Arc<DataIndex>,
     sim_service: Arc<faf_sim_service::SimulationService>,
     scheduler: Arc<Scheduler>,
+    blueprint_graph: Arc<blueprint_graph::ConcreteGraphResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Loaded {} units", index.units.len());
 
     let state = AppState {
+        blueprint_graph: Arc::new(blueprint_graph::concrete_graph_response(&index)),
         scheduler: Arc::new(Scheduler::new(BlueprintLibrary::new(index.clone()))),
         index: Arc::new(index),
         sim_service: Arc::new(faf_sim_service::SimulationService::new()),
@@ -98,7 +100,7 @@ async fn index_handler() -> impl IntoResponse {
   "use strict";
   function toG6Data(input) {
     const nodes = input.nodes.map(function (n) {
-      return { id: n.id, label: n.label, color: n.color || "#f8f9fa", layer: n.layer, data: n.data };
+      return { id: n.id, label: n.label, color: n.color || "#f8f9fa", layer: n.layer, icon: n.icon, highlight: !!n.highlight, data: n.data };
     });
     const edges = input.edges.map(function (e, i) {
       return { id: "e" + i, source: e.source, target: e.target, color: e.color || "#9ca3af", dashed: !!e.dashed };
@@ -129,8 +131,9 @@ async fn index_handler() -> impl IntoResponse {
             type: "rect",
             style: function (d) {
               return {
-                size: [140, 40], fill: d.color, stroke: "#333333", lineWidth: 1.5, radius: 6,
-                labelText: d.label, labelFill: "#212529", labelFontSize: 12, labelPlacement: "center", labelMaxWidth: 130
+                size: [150, 48], fill: d.color, stroke: d.highlight ? "#ffffff" : "#333333", lineWidth: d.highlight ? 3 : 1.5, radius: 6,
+                labelText: d.label, labelFill: "#212529", labelFontSize: 12, labelPlacement: "center", labelMaxWidth: 140,
+                iconSrc: d.icon, iconWidth: 28, iconHeight: 28
               };
             }
           },
@@ -171,8 +174,8 @@ async fn index_handler() -> impl IntoResponse {
 
 async fn blueprint_graph(
     State(state): State<AppState>,
-) -> Json<blueprint_graph::BlueprintGraphResponse> {
-    Json(blueprint_graph::blueprint_graph_response(&state.index))
+) -> Json<blueprint_graph::ConcreteGraphResponse> {
+    Json(state.blueprint_graph.as_ref().clone())
 }
 
 async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {

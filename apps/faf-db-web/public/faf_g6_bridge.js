@@ -17,6 +17,8 @@
         label: n.label,
         color: n.color || "#f8f9fa",
         layer: n.layer,
+        icon: n.icon,
+        highlight: !!n.highlight,
         data: n.data,
       };
     });
@@ -85,16 +87,19 @@
             type: "rect",
             style: function (d) {
               return {
-                size: [140, 40],
+                size: [150, 48],
                 fill: d.color,
-                stroke: "#333333",
-                lineWidth: 1.5,
+                stroke: d.highlight ? "#ffffff" : "#333333",
+                lineWidth: d.highlight ? 3 : 1.5,
                 radius: 6,
                 labelText: d.label,
                 labelFill: "#212529",
                 labelFontSize: 12,
                 labelPlacement: "center",
-                labelMaxWidth: 130,
+                labelMaxWidth: 140,
+                iconSrc: d.icon,
+                iconWidth: 28,
+                iconHeight: 28,
               };
             },
           },

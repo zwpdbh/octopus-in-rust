@@ -16,15 +16,6 @@ pub fn kind_label(kind: &UnitKind) -> String {
     }
 }
 
-/// Stable node id for a unit kind; mirrors the server's `node_id` helper so
-/// frontend code can look units up in the graph `summaries` map.
-pub fn kind_node_id(kind: &UnitKind) -> String {
-    match kind {
-        UnitKind::Unique(id) => id.0.clone(),
-        _ => format!("{kind:?}"),
-    }
-}
-
 pub const CATEGORY_ORDER: &[&str] = &[
     "Land",
     "Air",

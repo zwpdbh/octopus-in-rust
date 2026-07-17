@@ -1,14 +1,17 @@
 use dioxus::prelude::*;
 use faf_sim::sim::BuildQueue;
 use faf_sim::Time;
+use gloo_net::http::Request;
 
 use crate::components::{
-    AppHeader, EcoPanel, QueueItemCreator, QueueItemList, SimulationPanel, UnitSelectorModal,
+    AppHeader, EcoPanel, GraphPopup, QueueItemCreator, QueueItemList, SimulationPanel,
+    UnitSelectorModal,
 };
 use crate::route::Route;
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
 use crate::types::{
-    AssignmentTarget, ConstructionItem, ConstructionPlan, SimulationUiState, UnitSummary,
+    AssignmentTarget, BlueprintGraphResponse, ConstructionItem, ConstructionPlan,
+    SimulationUiState, UnitSummary,
 };
 
 #[component]
@@ -23,6 +26,19 @@ pub fn SimulateBuild() -> Element {
     let mut show_json_editor = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
     let mut plan_estimate = use_signal(|| None::<faf_sim::PlanResult>);
+    let mut map_focus = use_signal(|| None::<UnitSummary>);
+    let mut show_map = use_signal(|| false);
+
+    // Concrete dependency graph for the map popup.
+    let graph = use_resource(|| async move {
+        Request::get("/api/blueprint-graph")
+            .send()
+            .await
+            .ok()?
+            .json::<BlueprintGraphResponse>()
+            .await
+            .ok()
+    });
 
     use_effect(move || {
         save_plan_to_storage(&plan.read());
@@ -35,6 +51,7 @@ pub fn SimulateBuild() -> Element {
     });
 
     let assign_unit = move |unit: UnitSummary| {
+        map_focus.set(Some(unit.clone()));
         if let Some(target) = *pending_target.read() {
             match target {
                 AssignmentTarget::ExistingBuilder { item_id } => {
@@ -143,6 +160,12 @@ pub fn SimulateBuild() -> Element {
                                     },
                                     if *show_json_editor.read() { "☰" } else { "{{ }}" }
                                 }
+                                button {
+                                    class: "px-2 py-1 text-xs rounded bg-neutral-800 text-neutral-300 hover:bg-neutral-700 border border-neutral-700 transition-colors shadow-sm",
+                                    title: "Show dependency map",
+                                    onclick: move |_| show_map.set(true),
+                                    "🗺"
+                                }
                             }
                             if *show_json_editor.read() {
                                 JsonPlanEditor { plan, units: units.clone() }
@@ -169,6 +192,15 @@ pub fn SimulateBuild() -> Element {
                     target: (*pending_target.read()).unwrap_or(AssignmentTarget::NewTarget),
                     on_select: assign_unit,
                     on_close: move |_| pending_target.set(None),
+                }
+                if let Some(data) = graph.read().clone().flatten() {
+                    GraphPopup {
+                        open: *show_map.read(),
+                        data,
+                        focus: map_focus.read().clone(),
+                        on_node_click: move |summary: UnitSummary| map_focus.set(Some(summary)),
+                        on_close: move |_| show_map.set(false),
+                    }
                 }
             }
         },

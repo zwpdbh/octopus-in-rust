@@ -30,6 +30,12 @@ pub struct GraphNodeData<N = ()> {
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<i32>,
+    /// Optional image URL rendered inside the node (e.g. a unit portrait).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Visually highlight this node (e.g. the focused unit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<N>,
 }

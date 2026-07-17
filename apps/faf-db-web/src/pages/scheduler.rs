@@ -11,7 +11,6 @@ use crate::state::save_plan_to_storage;
 use crate::types::{
     BlueprintGraphResponse, Schedule, ScheduleApiError, ScheduleUiState, UnitKind, UnitSummary,
 };
-use crate::utils::kind_node_id;
 
 #[component]
 pub fn Scheduler() -> Element {
@@ -77,24 +76,34 @@ pub fn Scheduler() -> Element {
     let id_to_kind = graph_data
         .as_ref()
         .map(|data| {
-            data.graph
-                .graph
-                .node_weights()
-                .filter_map(|node| {
-                    data.summaries
-                        .get(&kind_node_id(&node.kind))
-                        .map(|summary| (summary.id.clone(), node.kind.clone()))
-                })
+            data.nodes
+                .iter()
+                .map(|node| (node.id.clone(), node.kind.clone()))
                 .collect::<std::collections::HashMap<_, _>>()
         })
         .unwrap_or_default();
 
-    let summaries_for_click = graph_data
+    // Timeline step clicks carry an abstract `UnitKind`; map it to a display
+    // summary, preferring UEF nodes as the canonical representative.
+    let kind_to_summary = graph_data
         .as_ref()
-        .map(|data| data.summaries.clone())
+        .map(|data| {
+            let mut map = std::collections::HashMap::<UnitKind, UnitSummary>::new();
+            for node in data.nodes.iter().rev() {
+                if let Some(summary) = data.summaries.get(&node.id) {
+                    let entry = map
+                        .entry(node.kind.clone())
+                        .or_insert_with(|| summary.clone());
+                    if node.faction == "UEF" {
+                        *entry = summary.clone();
+                    }
+                }
+            }
+            map
+        })
         .unwrap_or_default();
     let on_step_click = move |kind: UnitKind| {
-        if let Some(summary) = summaries_for_click.get(&kind_node_id(&kind)) {
+        if let Some(summary) = kind_to_summary.get(&kind) {
             selected.set(Some(summary.clone()));
         }
     };
@@ -142,6 +151,7 @@ pub fn Scheduler() -> Element {
                 GraphPopup {
                     open: *show_map.read(),
                     data,
+                    focus: None,
                     on_node_click: move |summary: UnitSummary| selected.set(Some(summary)),
                     on_close: move |_| show_map.set(false),
                 }
