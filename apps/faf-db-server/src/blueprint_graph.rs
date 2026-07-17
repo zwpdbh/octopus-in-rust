@@ -85,6 +85,19 @@ pub struct ConcreteGraphResponse {
 pub fn concrete_graph_response(index: &DataIndex) -> ConcreteGraphResponse {
     let nodes = collect_nodes(index);
     let edges = collect_edges(index, &nodes);
+
+    // Drop orphan nodes: units with no built-by or upgrade edges at all are
+    // not part of the normal build flow (e.g. naval/gate-built experimentals),
+    // so they are excluded from the map.
+    let connected: std::collections::HashSet<&str> = edges
+        .iter()
+        .flat_map(|e| [e.source.as_str(), e.target.as_str()])
+        .collect();
+    let nodes: Vec<ConcreteGraphNode> = nodes
+        .into_iter()
+        .filter(|node| connected.contains(node.id.as_str()))
+        .collect();
+
     let summaries = nodes
         .iter()
         .filter_map(|node| {
