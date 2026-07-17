@@ -4009,6 +4009,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
+ "faf-build-scheduler",
  "faf-sim",
  "faf-sim-service",
  "faf-units",

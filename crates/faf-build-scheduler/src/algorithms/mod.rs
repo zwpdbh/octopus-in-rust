@@ -1,6 +1,7 @@
 //! Scheduling algorithm abstraction and registry.
 
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError};
@@ -10,7 +11,7 @@ mod greedy;
 pub use greedy::Greedy;
 
 /// Selectable scheduling algorithm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum AlgorithmKind {
     /// Greedy best-first search.
     ///

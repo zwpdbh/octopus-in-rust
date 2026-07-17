@@ -1,3 +1,30 @@
+use faf_sim::units::UnitKind;
+
+/// Human-readable label for an abstract unit kind (matches the graph nodes).
+pub fn kind_label(kind: &UnitKind) -> String {
+    match kind {
+        UnitKind::Commander => "ACU".to_string(),
+        UnitKind::Engineer(t) => format!("Eng {t:?}"),
+        UnitKind::Factory(t) => format!("Factory {t:?}"),
+        UnitKind::Mex(t) => format!("Mex {t:?}"),
+        UnitKind::Pgen(t) => format!("Pgen {t:?}"),
+        UnitKind::CapT2Mex => "Cap T2 Mex".to_string(),
+        UnitKind::CapT3Mex => "Cap T3 Mex".to_string(),
+        UnitKind::EnergyStorage => "Energy Storage".to_string(),
+        UnitKind::Experimental => "Experimental".to_string(),
+        UnitKind::Unique(id) => id.0.clone(),
+    }
+}
+
+/// Stable node id for a unit kind; mirrors the server's `node_id` helper so
+/// frontend code can look units up in the graph `summaries` map.
+pub fn kind_node_id(kind: &UnitKind) -> String {
+    match kind {
+        UnitKind::Unique(id) => id.0.clone(),
+        _ => format!("{kind:?}"),
+    }
+}
+
 pub const CATEGORY_ORDER: &[&str] = &[
     "Land",
     "Air",

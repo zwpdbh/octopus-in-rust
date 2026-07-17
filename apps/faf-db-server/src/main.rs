@@ -1,12 +1,15 @@
 mod blueprint_graph;
+mod schedule_api;
 
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
+use faf_build_scheduler::Scheduler;
+use faf_sim::units::BlueprintLibrary;
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -18,6 +21,7 @@ use tracing::info;
 struct AppState {
     index: Arc<DataIndex>,
     sim_service: Arc<faf_sim_service::SimulationService>,
+    scheduler: Arc<Scheduler>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Loaded {} units", index.units.len());
 
     let state = AppState {
+        scheduler: Arc::new(Scheduler::new(BlueprintLibrary::new(index.clone()))),
         index: Arc::new(index),
         sim_service: Arc::new(faf_sim_service::SimulationService::new()),
     };
@@ -64,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/units", get(list_units))
         .route("/api/units/:id", get(get_unit))
         .route("/api/blueprint-graph", get(blueprint_graph))
+        .route("/api/schedule", post(schedule_api::schedule))
         .route("/api/portraits/:id", get(get_portrait))
         .route("/ws/simulate", get(simulate_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))

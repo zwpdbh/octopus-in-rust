@@ -1,11 +1,99 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub use faf_dioxus_ui::components::GraphData;
-pub use faf_sim::units::BlueprintGraph;
+pub use faf_sim::runtime::EcoSnapshot;
+pub use faf_sim::units::{BlueprintGraph, UnitKind};
 pub use faf_sim_shared::plan::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
+
+// ---------------------------------------------------------------------------
+// Scheduling wire types (mirror of faf-db-server's /api/schedule protocol).
+// Kept local so faf-db-web does not need to depend on faf-build-scheduler
+// (which would pull clap into the wasm bundle).
+// ---------------------------------------------------------------------------
+
+/// Search budget and simulator caps for a scheduling request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchOptions {
+    pub max_search_seconds: f64,
+    pub simulation_max_time_seconds: f64,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            max_search_seconds: 2.0,
+            simulation_max_time_seconds: 6000.0,
+        }
+    }
+}
+
+/// Scheduling request sent to `POST /api/schedule`. Tagged by `mode`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum ScheduleApiRequest {
+    Eco {
+        initial_eco: EcoSnapshot,
+        initial_inventory: Vec<UnitKind>,
+        target_mass_production: f64,
+        tolerance: f64,
+        options: SearchOptions,
+    },
+    Unit {
+        initial_eco: EcoSnapshot,
+        initial_inventory: Vec<UnitKind>,
+        target: UnitKind,
+        options: SearchOptions,
+    },
+}
+
+/// A single step in the planned build order.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct StepResult {
+    pub action: Action,
+    pub finish_time_seconds: f64,
+    pub economy: EcoSnapshot,
+}
+
+/// A concrete action the scheduler decided to take.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum Action {
+    Build {
+        target: UnitKind,
+        builder: UnitKind,
+    },
+    Upgrade {
+        from: UnitKind,
+        to: UnitKind,
+        builder: UnitKind,
+    },
+}
+
+/// The full planned schedule returned by the server.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Schedule {
+    pub plan: ConstructionPlan,
+    pub total_time_seconds: f64,
+    pub final_eco: EcoSnapshot,
+    pub steps: Vec<StepResult>,
+}
+
+/// Error envelope returned when scheduling fails.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ScheduleApiError {
+    pub error: String,
+}
+
+/// Runtime state of the scheduling panel on the scheduler page.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScheduleUiState {
+    Idle,
+    Computing,
+    Success(Schedule),
+    Failed(String),
+}
 
 /// Server response for the blueprint graph endpoint: raw symbolic graph plus a
 /// unit summary for every shown node.

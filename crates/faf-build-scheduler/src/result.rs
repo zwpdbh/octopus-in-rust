@@ -3,11 +3,12 @@
 use faf_sim::runtime::{BuildQueue, EcoSnapshot};
 use faf_sim::units::UnitKind;
 use faf_sim_shared::ConstructionPlan;
+use serde::{Deserialize, Serialize};
 
 use crate::algorithms::AlgorithmKind;
 
 /// A single step in the planned build order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepResult {
     pub action: Action,
     pub finish_time_seconds: f64,
@@ -15,7 +16,7 @@ pub struct StepResult {
 }
 
 /// A concrete action the scheduler decided to take.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Action {
     Build {
         target: UnitKind,
@@ -29,7 +30,7 @@ pub enum Action {
 }
 
 /// The full planned schedule returned by a scheduling algorithm.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schedule {
     /// The solved plan in the shared, human-editable format.
     pub plan: ConstructionPlan,
@@ -46,7 +47,7 @@ impl Schedule {
 }
 
 /// Errors that can occur during scheduling.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum ScheduleError {
     #[error("algorithm {0:?} is not implemented yet")]
     AlgorithmNotImplemented(AlgorithmKind),

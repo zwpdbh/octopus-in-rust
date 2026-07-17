@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
+faf-build-scheduler = { workspace = true }
 faf-sim = { workspace = true, features = ["headless"] }
 faf-sim-service = { workspace = true }
 faf-units = { workspace = true }
