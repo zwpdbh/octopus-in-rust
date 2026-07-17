@@ -1,5 +1,11 @@
-// Thin bridge between the Rust/Dioxus frontend and AntV G6.
+// Thin bridge between Rust/Dioxus and AntV G6.
 // Exposes window.fafG6.init(containerId, json) and window.fafG6.destroy().
+//
+// The input JSON is the generic GraphData format:
+//   { nodes: [{ id, label, color?, layer?, data? }, ...],
+//     edges: [{ source, target, color?, dashed?, data? }, ...] }
+// Any extra fields on nodes/edges (e.g. `data`) are passed through to G6 so
+// the application can attach arbitrary payloads.
 
 (function () {
   "use strict";
@@ -11,12 +17,8 @@
         label: n.label,
         color: n.color || "#f8f9fa",
         layer: n.layer,
-        summary: n.summary,
+        data: n.data,
       };
-    });
-
-    const idByIndex = input.nodes.map(function (n) {
-      return n.id;
     });
 
     const edges = input.edges.map(function (e, i) {
@@ -26,6 +28,7 @@
         target: e.target,
         color: e.color || "#9ca3af",
         dashed: !!e.dashed,
+        data: e.data,
       };
     });
 
@@ -46,7 +49,13 @@
 
       // Wait one frame so the container has its final flex layout size.
       await new Promise(requestAnimationFrame);
-      console.log("[fafG6] init in container", containerId, "size", container.clientWidth, container.clientHeight);
+      console.log(
+        "[fafG6] init in container",
+        containerId,
+        "size",
+        container.clientWidth,
+        container.clientHeight
+      );
 
       let input;
       try {

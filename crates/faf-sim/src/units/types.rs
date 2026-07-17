@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// `Common` is used for units that exist in every faction with the same
 /// abstract role, such as mass extractors, power generators, engineers, and
 /// land factories. Unique units carry their actual faction tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Faction {
     Uef,
     Aeon,
@@ -76,7 +76,7 @@ pub enum UnitKind {
 /// This is a coarser classification than [`UnitKind`]. It groups units by what
 /// they do economically (commander, builder, factory, mass extractor, etc.)
 /// without encoding tech tier or faction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UnitRole {
     Commander,
     Engineer,
@@ -128,7 +128,7 @@ pub fn role_of(kind: &UnitKind) -> UnitRole {
 }
 
 /// Broad category used to group units in build palettes and summaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UnitCategory {
     Commander,
     Engineer,

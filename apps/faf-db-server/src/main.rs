@@ -63,8 +63,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index_handler))
         .route("/api/units", get(list_units))
         .route("/api/units/:id", get(get_unit))
-        .route("/api/blueprint-graph", get(blueprint_graph_json))
-        .route("/api/blueprint-graph-g6", get(blueprint_graph_g6))
+        .route("/api/blueprint-graph", get(blueprint_graph))
         .route("/api/portraits/:id", get(get_portrait))
         .route("/ws/simulate", get(simulate_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))
@@ -93,7 +92,7 @@ async fn index_handler() -> impl IntoResponse {
   "use strict";
   function toG6Data(input) {
     const nodes = input.nodes.map(function (n) {
-      return { id: n.id, label: n.label, color: n.color || "#f8f9fa", summary: n.summary };
+      return { id: n.id, label: n.label, color: n.color || "#f8f9fa", layer: n.layer, data: n.data };
     });
     const edges = input.edges.map(function (e, i) {
       return { id: "e" + i, source: e.source, target: e.target, color: e.color || "#9ca3af", dashed: !!e.dashed };
@@ -119,7 +118,7 @@ async fn index_handler() -> impl IntoResponse {
           autoFit: "view",
           autoResize: true,
           data: data,
-          layout: { type: "antv-dagre", rankdir: "TB", ranksep: 80, nodesep: 40, edgesep: 20 },
+          layout: { type: "antv-dagre", rankdir: "LR", ranksep: 120, nodesep: 50, edgesep: 20, align: "UL" },
           node: {
             type: "rect",
             style: function (d) {
@@ -130,7 +129,7 @@ async fn index_handler() -> impl IntoResponse {
             }
           },
           edge: {
-            type: "cubic-vertical",
+            type: "cubic-horizontal",
             style: function (d) {
               return { stroke: d.color, lineWidth: 1.5, lineDash: d.dashed ? [4, 4] : [], endArrow: true, endArrowFill: d.color, endArrowSize: 10 };
             }
@@ -164,14 +163,10 @@ async fn index_handler() -> impl IntoResponse {
     )
 }
 
-async fn blueprint_graph_json(
+async fn blueprint_graph(
     State(state): State<AppState>,
-) -> Json<blueprint_graph::BlueprintGraphJson> {
-    Json(blueprint_graph::economic_graph_json(&state.index))
-}
-
-async fn blueprint_graph_g6(State(state): State<AppState>) -> Json<blueprint_graph::G6GraphJson> {
-    Json(blueprint_graph::economic_graph_g6_json(&state.index))
+) -> Json<blueprint_graph::BlueprintGraphResponse> {
+    Json(blueprint_graph::blueprint_graph_response(&state.index))
 }
 
 async fn list_units(State(state): State<AppState>) -> Json<Vec<UnitSummary>> {

@@ -1,5 +1,5 @@
 pub mod app_header;
-pub mod blueprint_graph_g6;
+pub mod blueprint_graph;
 pub mod category_grid;
 pub mod construction_item_card;
 pub mod eco_panel;
@@ -14,7 +14,7 @@ pub mod unit_selector;
 pub mod unit_selector_modal;
 
 pub use app_header::AppHeader;
-pub use blueprint_graph_g6::BlueprintGraphG6;
+pub use blueprint_graph::BlueprintGraph;
 pub use category_grid::CategoryGrid;
 pub use construction_item_card::ConstructionItemCard;
 pub use eco_panel::EcoPanel;

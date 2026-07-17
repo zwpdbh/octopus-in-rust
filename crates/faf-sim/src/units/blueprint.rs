@@ -23,7 +23,7 @@ use super::components::{
     },
     relationships::{BuiltBy, UpgradesInto},
 };
-use super::graph::{BlueprintGraph, BuildEdge, UpgradeEdge};
+use super::graph::{BlueprintEdge, BlueprintGraph};
 use super::types::{
     category_of, matches_tech_level, role_of, BuildRule, Faction, TechLevel, UnitCategory,
     UnitCost, UnitKind, UnitRole, UpgradePath,
@@ -418,10 +418,11 @@ impl BlueprintLibrary {
 
     /// Build the symbolic build/upgrade graph for visualization and planning.
     pub fn build_graph(&self) -> BlueprintGraph {
-        let mut nodes = Vec::new();
-        let mut build_edges = Vec::new();
-        let mut upgrade_edges = Vec::new();
+        let mut graph = BlueprintGraph::new();
+        let mut indices = HashMap::new();
 
+        // First pass: add every known unit kind as a node so that edges can
+        // reference their endpoints by index.
         for (kind, &entity) in &self.kind_to_entity {
             let entity_ref = self.world.entity(entity);
             let display_name = entity_ref
@@ -429,41 +430,53 @@ impl BlueprintLibrary {
                 .map(|d| d.0.clone())
                 .unwrap_or_else(|| format!("{:?}", kind));
 
-            nodes.push(super::graph::BlueprintNode {
+            let node = super::graph::BlueprintNode {
                 kind: kind.clone(),
                 display_name,
                 role: role_of(kind),
                 category: category_of(kind),
-            });
+            };
+            let idx = graph.add_node(node);
+            indices.insert(kind.clone(), idx);
+        }
+
+        // Second pass: add build and upgrade edges.
+        for (kind, &entity) in &self.kind_to_entity {
+            let entity_ref = self.world.entity(entity);
+            let target_idx = *indices
+                .get(kind)
+                .expect("every kind was assigned a node index in the first pass");
 
             if let Some(rule) = entity_ref.get::<BuiltBy>() {
-                build_edges.push(BuildEdge {
-                    target: kind.clone(),
-                    prereq: rule.prereq.clone(),
-                    builders: rule.builders.clone(),
-                });
+                for builder in &rule.builders {
+                    if let Some(&builder_idx) = indices.get(builder) {
+                        graph.add_edge(
+                            builder_idx,
+                            target_idx,
+                            BlueprintEdge::BuiltBy {
+                                prereq: rule.prereq.clone(),
+                            },
+                        );
+                    }
+                }
             }
 
             if let Some(upgrades) = entity_ref.get::<UpgradesInto>() {
                 for path in &upgrades.0 {
-                    upgrade_edges.push(UpgradeEdge {
-                        from: kind.clone(),
-                        to: path.target.clone(),
-                        builders: path.builders.clone(),
-                    });
+                    if let Some(&to_idx) = indices.get(&path.target) {
+                        graph.add_edge(
+                            target_idx,
+                            to_idx,
+                            BlueprintEdge::UpgradesInto {
+                                builders: path.builders.clone(),
+                            },
+                        );
+                    }
                 }
             }
         }
 
-        nodes.sort_by(|a, b| a.kind.cmp(&b.kind));
-        build_edges.sort_by(|a, b| a.target.cmp(&b.target));
-        upgrade_edges.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
-
-        BlueprintGraph {
-            nodes,
-            build_edges,
-            upgrade_edges,
-        }
+        graph
     }
 
     /// Hardcoded build rules for the common economic/builder units.
@@ -768,21 +781,24 @@ mod tests {
         assert!(graph.node(&UnitKind::Mex(TechLevel::T3)).is_some());
         assert!(graph.node(&UnitKind::CapT3Mex).is_some());
 
-        assert!(graph
-            .upgrades_from(&UnitKind::Mex(TechLevel::T1))
-            .any(|e| e.to == UnitKind::Mex(TechLevel::T2)));
-        assert!(graph
-            .upgrades_from(&UnitKind::Mex(TechLevel::T2))
-            .any(|e| e.to == UnitKind::Mex(TechLevel::T3)));
-        assert!(graph
-            .upgrades_from(&UnitKind::Mex(TechLevel::T3))
-            .any(|e| e.to == UnitKind::CapT3Mex));
-        assert!(graph
-            .upgrades_from(&UnitKind::CapT2Mex)
-            .any(|e| e.to == UnitKind::CapT3Mex));
+        let upgrade_targets = |from: &UnitKind| {
+            graph
+                .upgrades_from(from)
+                .map(|(target_idx, _)| graph.graph[target_idx].kind.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            upgrade_targets(&UnitKind::Mex(TechLevel::T1)).contains(&UnitKind::Mex(TechLevel::T2))
+        );
+        assert!(
+            upgrade_targets(&UnitKind::Mex(TechLevel::T2)).contains(&UnitKind::Mex(TechLevel::T3))
+        );
+        assert!(upgrade_targets(&UnitKind::Mex(TechLevel::T3)).contains(&UnitKind::CapT3Mex));
+        assert!(upgrade_targets(&UnitKind::CapT2Mex).contains(&UnitKind::CapT3Mex));
 
         // Every node should carry role/category metadata.
-        for node in &graph.nodes {
+        for node in graph.graph.node_weights() {
             assert!(!node.display_name.is_empty());
         }
     }
@@ -792,20 +808,26 @@ mod tests {
         let units = load_library();
         let graph = units.build_graph();
 
-        let t1_factory = graph
-            .builds_for(&UnitKind::Factory(TechLevel::T1))
-            .next()
-            .expect("T1 factory should have a build edge");
-        assert!(t1_factory.builders.contains(&UnitKind::Commander));
-        assert!(t1_factory
-            .builders
+        let builders_for = |target: &UnitKind| {
+            graph
+                .builds_for(target)
+                .map(|(builder_idx, _)| graph.graph[builder_idx].kind.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(builders_for(&UnitKind::Factory(TechLevel::T1)).contains(&UnitKind::Commander));
+        assert!(builders_for(&UnitKind::Factory(TechLevel::T1))
             .contains(&UnitKind::Engineer(TechLevel::T1)));
 
-        let t1_eng = graph
+        let t1_eng_builders = builders_for(&UnitKind::Engineer(TechLevel::T1));
+        assert_eq!(t1_eng_builders, vec![UnitKind::Factory(TechLevel::T1)]);
+
+        let t1_eng_prereq = graph
             .builds_for(&UnitKind::Engineer(TechLevel::T1))
-            .next()
-            .expect("T1 engineer should have a build edge");
-        assert_eq!(t1_eng.builders, vec![UnitKind::Factory(TechLevel::T1)]);
-        assert_eq!(t1_eng.prereq, Some(UnitKind::Factory(TechLevel::T1)));
+            .find_map(|(_, edge)| match edge {
+                BlueprintEdge::BuiltBy { prereq } => prereq.clone(),
+                _ => None,
+            });
+        assert_eq!(t1_eng_prereq, Some(UnitKind::Factory(TechLevel::T1)));
     }
 }

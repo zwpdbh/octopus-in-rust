@@ -1,18 +1,18 @@
 use dioxus::prelude::*;
 use gloo_net::http::Request;
 
-use crate::components::{AppHeader, BlueprintGraphG6, UnitDetail};
+use crate::components::{AppHeader, BlueprintGraph, UnitDetail};
 use crate::route::Route;
-use crate::types::{G6GraphData, UnitSummary};
+use crate::types::{BlueprintGraphResponse, UnitSummary};
 
 #[component]
 pub fn Scheduler() -> Element {
     let graph = use_resource(|| async move {
-        Request::get("/api/blueprint-graph-g6")
+        Request::get("/api/blueprint-graph")
             .send()
             .await
             .ok()?
-            .json::<G6GraphData>()
+            .json::<BlueprintGraphResponse>()
             .await
             .ok()
     });
@@ -26,13 +26,14 @@ pub fn Scheduler() -> Element {
                 h2 { class: "text-xl font-semibold mb-4 flex-shrink-0", "Scheduler — Blueprint Dependency Graph" }
 
                 match graph.read().as_ref() {
-                    Some(Some(data)) => rsx! {
+                    Some(Some(response)) => rsx! {
                         div { class: "flex gap-4 flex-1 min-h-0",
                             div { class: "flex-1 min-w-0 flex flex-col border border-neutral-800 rounded bg-neutral-900 p-4 overflow-hidden",
                                 GraphLegend {}
                                 div { class: "flex-1 min-h-0 mt-3",
-                                    BlueprintGraphG6 {
-                                        data: data.clone(),
+                                    BlueprintGraph {
+                                        graph: response.graph.clone(),
+                                        summaries: response.summaries.clone(),
                                         on_node_click: move |summary: UnitSummary| {
                                             selected.set(Some(summary));
                                         },

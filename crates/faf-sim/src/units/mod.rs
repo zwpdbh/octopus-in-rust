@@ -33,7 +33,7 @@ pub use components::{
     },
     relationships::{BuiltBy, UpgradesInto},
 };
-pub use graph::{BlueprintGraph, BlueprintNode, BuildEdge, UpgradeEdge};
+pub use graph::{BlueprintEdge, BlueprintGraph, BlueprintNode};
 pub use types::{
     category_of, category_of_role, matches_tech_level, role_of, tech_level_of, BuildRule, Faction,
     TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole, UpgradePath,
