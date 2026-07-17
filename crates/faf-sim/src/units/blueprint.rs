@@ -25,8 +25,8 @@ use super::components::{
 };
 use super::graph::{BlueprintEdge, BlueprintGraph};
 use super::types::{
-    category_of, matches_tech_level, role_of, BuildRule, Faction, TechLevel, UnitCategory,
-    UnitCost, UnitKind, UnitRole, UpgradePath,
+    category_of, matches_tech_level, role_of, tech_level_of, BuildRule, Faction, TechLevel,
+    UnitCategory, UnitCost, UnitKind, UnitRole, UpgradePath,
 };
 
 /// Unified repository of unit knowledge backed by a Bevy ECS blueprint world.
@@ -450,6 +450,13 @@ impl BlueprintLibrary {
             if let Some(rule) = entity_ref.get::<BuiltBy>() {
                 for builder in &rule.builders {
                     if let Some(&builder_idx) = indices.get(builder) {
+                        // Drop same-tier edges where a lower-priority producer
+                        // would otherwise point to a higher-priority producer.
+                        // This prevents Factory T1 <-> Eng T1 style bidirectional
+                        // cycles in the symbolic graph.
+                        if same_tier_lower_priority_builder(builder, kind) {
+                            continue;
+                        }
                         graph.add_edge(
                             builder_idx,
                             target_idx,
@@ -656,6 +663,40 @@ impl BlueprintLibrary {
     }
 }
 
+/// True if `builder` and `target` are the same tech tier and `builder` has a
+/// lower producer priority than `target`.
+///
+/// This prevents same-tier bidirectional build edges such as
+/// Factory T1 <-> Eng T1: the factory produces the engineer, but the engineer
+/// can also rebuild the factory. We keep the producer -> product direction and
+/// drop the reverse in the symbolic graph.
+fn same_tier_lower_priority_builder(builder: &UnitKind, target: &UnitKind) -> bool {
+    match (tech_level_of(builder), tech_level_of(target)) {
+        (Some(bt), Some(tt)) if bt == tt => {
+            producer_priority(role_of(builder)) < producer_priority(role_of(target))
+        }
+        _ => false,
+    }
+}
+
+/// Producer priority for breaking same-tier bidirectional build edges.
+///
+/// Higher values represent units that are more naturally "producers" in the
+/// build order: Commander produces factories, factories produce engineers, and
+/// engineers produce structures/upgrades.
+fn producer_priority(role: UnitRole) -> i32 {
+    match role {
+        UnitRole::Commander => 4,
+        UnitRole::Factory => 3,
+        UnitRole::Engineer => 2,
+        UnitRole::EnergyStorage
+        | UnitRole::MassExtractor
+        | UnitRole::PowerGenerator
+        | UnitRole::CappedMassExtractor => 1,
+        UnitRole::Experimental | UnitRole::Other => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,12 +856,17 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        // The ACU can build the T1 factory.
         assert!(builders_for(&UnitKind::Factory(TechLevel::T1)).contains(&UnitKind::Commander));
-        assert!(builders_for(&UnitKind::Factory(TechLevel::T1))
-            .contains(&UnitKind::Engineer(TechLevel::T1)));
 
-        let t1_eng_builders = builders_for(&UnitKind::Engineer(TechLevel::T1));
-        assert_eq!(t1_eng_builders, vec![UnitKind::Factory(TechLevel::T1)]);
+        // The T1 factory produces the T1 engineer (producer -> product), while
+        // the reverse engineer -> same-tier factory edge is dropped to keep the
+        // symbolic graph a clean DAG.
+        assert!(builders_for(&UnitKind::Engineer(TechLevel::T1))
+            .contains(&UnitKind::Factory(TechLevel::T1)));
+
+        let t1_factory_builders = builders_for(&UnitKind::Factory(TechLevel::T1));
+        assert!(!t1_factory_builders.contains(&UnitKind::Engineer(TechLevel::T1)));
 
         let t1_eng_prereq = graph
             .builds_for(&UnitKind::Engineer(TechLevel::T1))

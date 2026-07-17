@@ -62,26 +62,40 @@ fn GraphLegend() -> Element {
     rsx! {
         div { class: "flex gap-6 text-sm text-neutral-300",
             span { class: "flex items-center gap-2",
-                span {
-                    class: "inline-block w-8 border-t-2",
-                    style: "border-color: #38bdf8;",
-                }
+                LegendArrow { color: "#38bdf8", dashed: false }
                 "built by"
             }
             span { class: "flex items-center gap-2",
-                span {
-                    class: "inline-block w-8 border-t-2 border-dashed",
-                    style: "border-color: #94a3b8;",
-                }
+                LegendArrow { color: "#94a3b8", dashed: true }
                 "requires"
             }
             span { class: "flex items-center gap-2",
-                span {
-                    class: "inline-block w-8 border-t-2 border-dashed",
-                    style: "border-color: #fbbf24;",
-                }
+                LegendArrow { color: "#fbbf24", dashed: true }
                 "upgrades to"
             }
+        }
+    }
+}
+
+#[component]
+fn LegendArrow(color: String, dashed: bool) -> Element {
+    let dash_array = if dashed { "4,4" } else { "none" };
+    rsx! {
+        svg {
+            width: "32",
+            height: "12",
+            view_box: "0 0 32 12",
+            class: "inline-block",
+            line {
+                x1: "0",
+                y1: "6",
+                x2: "24",
+                y2: "6",
+                stroke: "{color}",
+                stroke_width: "2",
+                stroke_dasharray: "{dash_array}",
+            }
+            polygon { points: "24 2, 32 6, 24 10", fill: "{color}" }
         }
     }
 }
