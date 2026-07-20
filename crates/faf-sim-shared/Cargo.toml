@@ -7,5 +7,6 @@ description = "Shared plan and unit types for FAF simulator consumers."
 license = "MIT"
 
 [dependencies]
-faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+faf-blueprints = { workspace = true }
+faf-quantities = { workspace = true }
 serde = { workspace = true }

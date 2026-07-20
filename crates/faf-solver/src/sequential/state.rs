@@ -1,6 +1,7 @@
 //! Solver state and per-tick economy updates.
 
-use crate::runtime::{EcoSnapshot, UnitEcoStats};
+use faf_blueprints::UnitEcoStats;
+use faf_sim_shared::EcoSnapshot;
 
 pub(crate) const EPS: f64 = 1e-9;
 

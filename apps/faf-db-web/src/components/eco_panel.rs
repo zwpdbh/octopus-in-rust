@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use faf_sim::{Energy, EnergyRate, Mass, MassRate, Storage};
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
 
 use crate::components::SliderField;
 use crate::types::{ConstructionPlan, EcoInitialSettings};

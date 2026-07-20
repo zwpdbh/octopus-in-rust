@@ -5,9 +5,9 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use faf_sim::quantities::Time;
-use faf_sim::runtime::{BuildTask, EcoSnapshot, UnitEcoStats};
-use faf_sim::units::{BlueprintLibrary, TechLevel, UnitKind};
+use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
+use faf_quantities::Time;
+use faf_sim_shared::{BuildTask, EcoSnapshot};
 use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
 
@@ -646,8 +646,8 @@ fn task_drain_rates(task: &BuildTask) -> (f64, f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faf_sim::quantities::Time;
-    use faf_sim::runtime::UnitEcoStats;
+    use faf_blueprints::UnitEcoStats;
+    use faf_quantities::Time;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn solver_matches_simulator_on_random_single_task_samples() {
         use crate::data::sample::simulate_label;
-        use faf_sim::solver::single_task_completion_time;
+        use faf_solver::single_task_completion_time;
 
         let generator = DatasetGenerator::new(
             GenerationConfig {

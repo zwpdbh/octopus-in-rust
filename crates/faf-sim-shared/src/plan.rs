@@ -1,7 +1,9 @@
 //! Shared plan types that bridge the simulator and UI/tooling.
 
-use faf_sim::runtime::{BuildQueue, BuildTask, EcoSnapshot, UnitEcoStats};
-use faf_sim::{EconomyRuntimeState, Energy, EnergyRate, Mass, MassRate, Storage, Time};
+use faf_blueprints::UnitEcoStats;
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
+
+use crate::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
 use serde::{Deserialize, Serialize};
 
 /// Frontend-facing unit descriptor.

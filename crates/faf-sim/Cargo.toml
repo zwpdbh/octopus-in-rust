@@ -16,6 +16,7 @@ bevy_ecs = { version = "0.19" }
 bevy_time = { version = "0.19", optional = true }
 faf-blueprints = { workspace = true }
 faf-quantities = { workspace = true }
+faf-sim-shared = { workspace = true }
 faf-units = { workspace = true }
 petgraph = { workspace = true }
 serde = { workspace = true }

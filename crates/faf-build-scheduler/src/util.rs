@@ -3,9 +3,8 @@
 use std::collections::HashMap;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
-use faf_sim::economy::EconomyRuntimeState;
-use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
-use faf_sim::runtime::EcoSnapshot;
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
+use faf_sim_shared::{EcoSnapshot, EconomyRuntimeState};
 
 /// Returns true if the unit kind is a mass extractor (including capped).
 pub(crate) fn is_mex(library: &BlueprintLibrary, kind: &UnitKind) -> bool {

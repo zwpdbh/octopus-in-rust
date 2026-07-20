@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
-use faf_sim::sim::BuildQueue;
-use faf_sim::Time;
+use faf_quantities::Time;
+use faf_sim_shared::BuildQueue;
+use faf_solver::{plan_completion_with_tasks, PlanResult};
 use gloo_net::http::Request;
 
 use crate::components::{
@@ -25,7 +26,7 @@ pub fn SimulateBuild() -> Element {
     let simulation_state = use_signal(|| SimulationUiState::NotStartYet);
     let mut show_json_editor = use_signal(|| false);
     let mut pending_target = use_signal(|| None::<AssignmentTarget>);
-    let mut plan_estimate = use_signal(|| None::<faf_sim::PlanResult>);
+    let mut plan_estimate = use_signal(|| None::<PlanResult>);
     let mut map_focus = use_signal(|| None::<UnitSummary>);
     let mut show_map = use_signal(|| false);
 
@@ -143,7 +144,7 @@ pub fn SimulateBuild() -> Element {
                                     onclick: move |_| {
                                         let snapshot = plan.read().eco.to_snapshot();
                                         let queue = plan.read().to_build_queue();
-                                        plan_estimate.set(Some(faf_sim::plan_completion_with_tasks(
+                                        plan_estimate.set(Some(plan_completion_with_tasks(
                                             &snapshot,
                                             &queue.tasks,
                                             6000.0,

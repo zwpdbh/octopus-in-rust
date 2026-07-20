@@ -1,7 +1,9 @@
+use faf_blueprints::UnitEcoStats;
+use faf_quantities::Time;
+use faf_sim::runtime::{BuildTask, EcoSnapshot};
+
 use super::state::EPS;
 use super::*;
-use crate::runtime::{BuildTask, EcoSnapshot, UnitEcoStats};
-use crate::Time;
 
 fn simple_task_with_start(
     power: f64,
@@ -76,12 +78,12 @@ fn mass_stall_steady_state() {
 
 #[test]
 fn regression_off_by_one_case() {
-    use crate::economy::EconomyRuntimeState;
-    use crate::quantities::{
+    use faf_sim::economy::EconomyRuntimeState;
+    use faf_sim::quantities::{
         Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
     };
-    use crate::runtime::BuildQueue;
-    use crate::sim::Simulation;
+    use faf_sim::runtime::BuildQueue;
+    use faf_sim::sim::Simulation;
 
     let task = BuildTask {
         id: 0,
@@ -159,12 +161,12 @@ fn regression_off_by_one_case() {
 
 #[test]
 fn plan_solver_matches_simulator_for_two_task_sequence() {
-    use crate::economy::EconomyRuntimeState;
-    use crate::quantities::{
+    use faf_sim::economy::EconomyRuntimeState;
+    use faf_sim::quantities::{
         Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
     };
-    use crate::runtime::BuildQueue;
-    use crate::sim::Simulation;
+    use faf_sim::runtime::BuildQueue;
+    use faf_sim::sim::Simulation;
 
     let tasks = vec![
         BuildTask {
@@ -251,12 +253,12 @@ fn plan_solver_matches_simulator_for_two_task_sequence() {
 
 #[test]
 fn matches_simulator_for_simple_cases() {
-    use crate::economy::EconomyRuntimeState;
-    use crate::quantities::{
+    use faf_sim::economy::EconomyRuntimeState;
+    use faf_sim::quantities::{
         Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
     };
-    use crate::runtime::BuildQueue;
-    use crate::sim::Simulation;
+    use faf_sim::runtime::BuildQueue;
+    use faf_sim::sim::Simulation;
 
     let cases = [
         (

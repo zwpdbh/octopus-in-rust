@@ -9,7 +9,11 @@ license = "MIT"
 [dependencies]
 anyhow = { workspace = true }
 burn = { workspace = true, features = ["train", "ndarray", "dataset", "tui", "metrics"] }
+faf-blueprints = { workspace = true }
+faf-quantities = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+faf-sim-shared = { workspace = true }
+faf-solver = { workspace = true }
 faf-units = { workspace = true }
 rand = { workspace = true }
 rusqlite = { workspace = true }

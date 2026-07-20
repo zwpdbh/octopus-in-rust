@@ -1,12 +1,14 @@
 use dioxus::prelude::*;
 
+use faf_solver::PlanResult;
+
 use crate::components::ConstructionItemCard;
 use crate::types::{AssignmentTarget, ConstructionPlan};
 
 #[component]
 pub fn QueueItemList(
     plan: Signal<ConstructionPlan>,
-    plan_estimate: Signal<Option<faf_sim::PlanResult>>,
+    plan_estimate: Signal<Option<PlanResult>>,
     on_assign_slot: EventHandler<AssignmentTarget>,
     #[props(default = false)] disabled: bool,
 ) -> Element {

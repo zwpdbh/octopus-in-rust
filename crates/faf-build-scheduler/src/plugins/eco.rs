@@ -6,7 +6,7 @@ use bevy_ecs::prelude::*;
 use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
 
 use crate::config::SchedulerConfig;
-use crate::plugins::init::SchedulerSet;
+use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
     score_result, simulate_with_action, BlueprintLibraryRef, CandidateAction, CandidateScore,
@@ -20,6 +20,10 @@ pub struct EcoSchedulingPlugin;
 
 impl Plugin for EcoSchedulingPlugin {
     fn build(&self, app: &mut App) {
+        // Register eco candidates generation/evaluation in the sets declared by
+        // `SchedulerLifecyclePlugin`. The `configure_sets` call there orders
+        // `Generate -> Evaluate -> Select` and gates the whole pipeline on the
+        // `Searching` state.
         app.add_systems(
             Update,
             generate_eco_candidates_system.in_set(SchedulerSet::Generate),

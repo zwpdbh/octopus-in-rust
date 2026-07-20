@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 
+use faf_solver::PlanResult;
+
 use crate::components::{QueueItemList, ScheduleFormState, ScheduleModeTab, StepTimeline};
 use crate::types::{AssignmentTarget, ConstructionPlan, ScheduleUiState, UnitKind};
 use crate::utils::kind_label;
@@ -24,7 +26,7 @@ pub fn ScheduleResultPanel(
     // The read-only plan view needs a Signal<ConstructionPlan>; mirror the
     // solved plan out of the result state whenever it changes.
     let mut plan_signal = use_signal(ConstructionPlan::default);
-    let plan_estimate = use_signal(|| None::<faf_sim::PlanResult>);
+    let plan_estimate = use_signal(|| None::<PlanResult>);
     use_effect(move || {
         if let ScheduleUiState::Success(schedule) = &*state.read() {
             plan_signal.set(schedule.plan.clone());

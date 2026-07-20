@@ -1,7 +1,8 @@
 //! The `predict` command: estimate completion time with a model or the solver.
 
 use faf_build_prediction::{predict as predict_model, Prediction};
-use faf_sim::sim::BuildQueue;
+use faf_sim_shared::{BuildQueue, EcoSnapshot};
+use faf_solver::plan_completion_with_tasks;
 
 use crate::command_line::{PredictMode, PredictNnArgs, PredictShared, PredictSolverArgs};
 use crate::util::{eco_snapshot_from_runtime_state, read_json};
@@ -39,7 +40,7 @@ fn run_nn(args: PredictNnArgs) {
 fn run_solver(args: PredictSolverArgs) {
     let (eco, queue) = load_plan_and_eco(&args.shared);
 
-    let result = faf_sim::plan_completion_with_tasks(&eco, &queue.tasks, args.max_time_seconds);
+    let result = plan_completion_with_tasks(&eco, &queue.tasks, args.max_time_seconds);
     let tasks: Vec<_> = result
         .tasks
         .iter()
@@ -62,10 +63,10 @@ fn run_solver(args: PredictSolverArgs) {
     );
 }
 
-fn load_plan_and_eco(shared: &PredictShared) -> (faf_sim::EcoSnapshot, BuildQueue) {
+fn load_plan_and_eco(shared: &PredictShared) -> (EcoSnapshot, BuildQueue) {
     let queue = read_json::<BuildQueue>(&shared.plan);
     let eco = match &shared.eco {
-        Some(path) => read_json::<faf_sim::EcoSnapshot>(path),
+        Some(path) => read_json::<EcoSnapshot>(path),
         None => eco_snapshot_from_runtime_state(&queue.initial_eco),
     };
     (eco, queue)

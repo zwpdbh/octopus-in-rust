@@ -345,8 +345,8 @@ async fn handle_simulation_socket(
     mut socket: axum::extract::ws::WebSocket,
 ) {
     use axum::extract::ws::Message;
+    use faf_quantities::{StepTime, Time};
     use faf_sim::protocol::{SimClientMessage, SimServerMessage};
-    use faf_sim::quantities::{StepTime, Time};
     use faf_sim_service::SimServiceEvent;
 
     // Wait for the client to start or subscribe to a simulation.

@@ -4020,7 +4020,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "burn",
+ "faf-blueprints",
+ "faf-quantities",
  "faf-sim",
+ "faf-sim-shared",
+ "faf-solver",
  "faf-units",
  "rand 0.10.1",
  "rusqlite",
@@ -4039,8 +4043,8 @@ dependencies = [
  "clap",
  "faf-blueprints",
  "faf-quantities",
- "faf-sim",
  "faf-sim-shared",
+ "faf-solver",
  "faf-units",
  "petgraph 0.8.3",
  "serde",
@@ -4056,8 +4060,10 @@ dependencies = [
  "axum 0.7.9",
  "faf-blueprints",
  "faf-build-scheduler",
+ "faf-quantities",
  "faf-sim",
  "faf-sim-service",
+ "faf-sim-shared",
  "faf-units",
  "serde",
  "serde_json",
@@ -4079,6 +4085,7 @@ dependencies = [
  "faf-quantities",
  "faf-sim",
  "faf-sim-shared",
+ "faf-solver",
  "gloo-net",
  "js-sys",
  "petgraph 0.8.3",
@@ -4147,6 +4154,7 @@ dependencies = [
  "bevy_time",
  "faf-blueprints",
  "faf-quantities",
+ "faf-sim-shared",
  "faf-units",
  "petgraph 0.8.3",
  "serde",
@@ -4163,9 +4171,11 @@ dependencies = [
  "faf-blueprints",
  "faf-build-prediction",
  "faf-build-scheduler",
+ "faf-quantities",
  "faf-sim",
  "faf-sim-service",
  "faf-sim-shared",
+ "faf-solver",
  "serde",
  "serde_json",
 ]
@@ -4175,7 +4185,9 @@ name = "faf-sim-service"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "faf-quantities",
  "faf-sim",
+ "faf-sim-shared",
  "serde",
  "thiserror 2.0.18",
  "uuid",
@@ -4185,8 +4197,20 @@ dependencies = [
 name = "faf-sim-shared"
 version = "0.1.0"
 dependencies = [
- "faf-sim",
+ "faf-blueprints",
+ "faf-quantities",
  "serde",
+]
+
+[[package]]
+name = "faf-solver"
+version = "0.1.0"
+dependencies = [
+ "faf-blueprints",
+ "faf-quantities",
+ "faf-sim",
+ "faf-sim-shared",
+ "serde_json",
 ]
 
 [[package]]

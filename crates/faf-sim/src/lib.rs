@@ -6,6 +6,8 @@
 //! - `units`: ECS-backed blueprint library (`BlueprintLibrary`) and unit kinds.
 //! - `runtime`: an observable, steppable Bevy ECS economy simulation.
 //! - `sim`: the high-level simulation driver and re-exports.
+//!
+//! Core queue/economy types are re-exported from `faf-sim-shared`.
 
 pub mod economy;
 pub mod protocol;
@@ -13,12 +15,7 @@ pub mod quantities;
 pub mod runtime;
 pub mod sim;
 pub mod snapshot;
-pub mod solver;
 pub use faf_blueprints as units;
-pub use solver::{
-    plan_completion_result, plan_completion_time, plan_completion_with_tasks,
-    single_task_completion_result, single_task_completion_time, CompletionResult, PlanResult,
-};
 
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,

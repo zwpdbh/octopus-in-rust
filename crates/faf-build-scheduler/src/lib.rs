@@ -18,8 +18,8 @@ pub mod util;
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use config::SchedulerConfig;
 pub use plugins::{
-    run_to_completion, EcoSchedulingPlugin, GreedyPlugin, SchedulerInitPlugin, SchedulerResult,
-    SchedulerSet, SchedulerState, UnitSchedulingPlugin,
+    run_to_completion, EcoSchedulingPlugin, GreedyPlugin, SchedulerLifecyclePlugin,
+    SchedulerResult, SchedulerSet, SchedulerState, UnitSchedulingPlugin,
 };
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
@@ -32,8 +32,8 @@ pub use scheduler::Scheduler;
 mod tests {
     use super::*;
     use faf_blueprints::{TechLevel, UnitKind};
-    use faf_sim::quantities::MassRate;
-    use faf_sim::runtime::EcoSnapshot;
+    use faf_quantities::MassRate;
+    use faf_sim_shared::EcoSnapshot;
 
     fn test_library() -> faf_blueprints::BlueprintLibrary {
         faf_blueprints::BlueprintLibrary::from_default_units().expect("load default units")

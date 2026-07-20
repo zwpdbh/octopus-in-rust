@@ -14,9 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use faf_quantities::{StepTime, Time};
 use faf_sim::protocol::{ControlEvent, SimRuntimeStatus, SimulationMode};
-use faf_sim::quantities::{StepTime, Time};
-use faf_sim::sim::{BuildQueue, Simulation, SimulationEvent};
+use faf_sim::sim::{Simulation, SimulationEvent};
+use faf_sim_shared::BuildQueue;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -509,9 +510,9 @@ fn broadcast_events(subscribers: &mut Vec<Sender<SimServiceEvent>>, events: Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faf_sim::economy::EconomyRuntimeState;
-    use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
-    use faf_sim::sim::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats};
+    use faf_quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
+    use faf_sim::sim::{SimulationEvent, UnitEcoStats};
+    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
 
     fn rich_eco() -> EconomyRuntimeState {
         EconomyRuntimeState {

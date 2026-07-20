@@ -8,7 +8,7 @@ use bevy_ecs::prelude::*;
 use faf_blueprints::{BlueprintGraph, UnitKind};
 
 use crate::config::SchedulerConfig;
-use crate::plugins::init::SchedulerSet;
+use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
     simulate_with_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState,
@@ -22,6 +22,9 @@ pub struct UnitSchedulingPlugin;
 
 impl Plugin for UnitSchedulingPlugin {
     fn build(&self, app: &mut App) {
+        // Register unit candidate generation/evaluation in the sets declared by
+        // `SchedulerLifecyclePlugin`. The global pipeline order and state gate are
+        // configured there, not here.
         app.add_systems(
             Update,
             generate_unit_candidates_system.in_set(SchedulerSet::Generate),

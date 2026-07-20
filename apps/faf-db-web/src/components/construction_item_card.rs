@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
-use faf_sim::Time;
+use faf_quantities::Time;
+use faf_solver::{CompletionResult, PlanResult};
 
 use crate::components::UnitBlock;
 use crate::types::{AssignmentTarget, ConstructionItem, ConstructionPlan};
@@ -10,7 +11,7 @@ const MAX_SOLVER_TIME: f64 = 6_000.0;
 pub fn ConstructionItemCard(
     item: ConstructionItem,
     plan: Signal<ConstructionPlan>,
-    plan_estimate: Signal<Option<faf_sim::PlanResult>>,
+    plan_estimate: Signal<Option<PlanResult>>,
     on_assign_slot: EventHandler<AssignmentTarget>,
     #[props(default = false)] disabled: bool,
 ) -> Element {
@@ -63,7 +64,7 @@ pub fn ConstructionItemCard(
 
         let current = *result.tasks.get(index)?;
         let previous = if index == 0 {
-            faf_sim::CompletionResult {
+            CompletionResult {
                 time_seconds: 0.0,
                 economy: initial_eco,
             }

@@ -1,8 +1,10 @@
 //! Top-level completion-time computation for single-task and sequential plans.
 
-use crate::runtime::{BuildTask, EcoSnapshot};
-use crate::solver::sequential::factor::effective_factor;
-use crate::solver::sequential::state::{SolverState, EPS};
+use faf_blueprints::UnitEcoStats;
+use faf_sim_shared::{BuildTask, EcoSnapshot};
+
+use crate::sequential::factor::effective_factor;
+use crate::sequential::state::{SolverState, EPS};
 
 /// Result of solving a plan: when it finishes and what the economy looks like at
 /// that point.
@@ -192,7 +194,7 @@ pub fn plan_completion_with_tasks(
 /// progress stalls (`effective_factor == 0`).
 fn solve_target(
     state: &mut SolverState,
-    target: &crate::runtime::UnitEcoStats,
+    target: &UnitEcoStats,
     power: f64,
     mass_drain: f64,
     energy_drain: f64,

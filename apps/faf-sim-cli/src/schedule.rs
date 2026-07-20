@@ -8,7 +8,7 @@ use faf_build_scheduler::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, SchedulerConfig, UnitScheduleInput,
     UnitScheduleRequest,
 };
-use faf_sim::quantities::MassRate;
+use faf_quantities::MassRate;
 use faf_sim_shared::plan::EcoInitialSettings;
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};

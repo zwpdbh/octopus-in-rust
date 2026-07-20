@@ -8,6 +8,7 @@ members = [
     "crates/faf-quantities",
     "crates/faf-sim",
     "crates/faf-sim-service",
+    "crates/faf-solver",
     "crates/faf-build-prediction",
     "crates/faf-blueprints",
     "crates/faf-build-scheduler",
@@ -37,6 +38,7 @@ faf-blueprints = { path = "crates/faf-blueprints" }
 faf-build-scheduler = { path = "crates/faf-build-scheduler" }
 faf-quantities = { path = "crates/faf-quantities" }
 faf-sim-shared = { path = "crates/faf-sim-shared" }
+faf-solver = { path = "crates/faf-solver" }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }

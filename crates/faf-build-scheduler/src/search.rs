@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitEcoStats, UnitKind};
-use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
-use faf_sim::runtime::{BuildTask, EcoSnapshot};
-use faf_sim::{plan_completion_with_tasks, CompletionResult, PlanResult, Time};
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 use faf_sim_shared::plan::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
+use faf_sim_shared::{BuildTask, EcoSnapshot};
+use faf_solver::{plan_completion_with_tasks, CompletionResult, PlanResult};
 
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::{Action, Schedule, ScheduleError, StepResult};

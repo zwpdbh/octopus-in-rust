@@ -8,7 +8,9 @@ license = "MIT"
 
 [dependencies]
 crossbeam-channel = "0.5"
+faf-quantities = { workspace = true }
 faf-sim = { workspace = true, features = ["headless"] }
+faf-sim-shared = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

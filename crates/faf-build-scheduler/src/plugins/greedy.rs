@@ -3,7 +3,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::plugins::init::{SchedulerResult, SchedulerSet};
+use crate::plugins::lifecycle::{SchedulerResult, SchedulerSet};
 use crate::result::{ScheduleError, StepResult};
 use crate::search::{
     apply_action_to_inventory, build_schedule, build_task_for_action, BlueprintLibraryRef,
@@ -16,6 +16,8 @@ pub struct GreedyPlugin;
 
 impl Plugin for GreedyPlugin {
     fn build(&self, app: &mut App) {
+        // Place the selection system in the `Select` set so it runs after all
+        // `Generate` and `Evaluate` systems in each scheduler update loop.
         app.add_systems(Update, select_best_system.in_set(SchedulerSet::Select));
     }
 }
@@ -56,7 +58,7 @@ pub(crate) fn select_best_system(
 
         // Run the actual simulator for the chosen action to capture the resulting
         // economy and elapsed time.
-        let completion = faf_sim::plan_completion_with_tasks(
+        let completion = faf_solver::plan_completion_with_tasks(
             &state.current_eco,
             &[task.clone()],
             state.options.simulation_max_time_seconds,

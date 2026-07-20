@@ -1,8 +1,8 @@
 //! Output types for the build scheduler.
 
 use faf_blueprints::UnitKind;
-use faf_sim::runtime::{BuildQueue, EcoSnapshot};
 use faf_sim_shared::ConstructionPlan;
+use faf_sim_shared::{BuildQueue, EcoSnapshot};
 use serde::{Deserialize, Serialize};
 
 use crate::algorithms::AlgorithmKind;

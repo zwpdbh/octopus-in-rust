@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 pub use faf_blueprints::UnitKind;
 pub use faf_dioxus_ui::components::GraphData;
-pub use faf_sim::runtime::EcoSnapshot;
 pub use faf_sim_shared::plan::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
+pub use faf_sim_shared::EcoSnapshot;
 
 // ---------------------------------------------------------------------------
 // Scheduling wire types (mirror of faf-db-server's /api/schedule protocol).

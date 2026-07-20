@@ -16,7 +16,6 @@ use crate::{
     units::{BlueprintLibrary, UnitCost, UnitKind},
 };
 use faf_units::BuildTargetStats;
-use serde::{Deserialize, Serialize};
 
 /// Build power requested for a project, before any stall adjustment.
 ///
@@ -327,27 +326,7 @@ pub fn summarize_economy(
 ///
 /// For the public, point-in-time record that is emitted to consumers (UI,
 /// WebSocket, ML models), see [`EcoSnapshot`](crate::runtime::EcoSnapshot).
-/// `EcoSnapshot` is a flat, primitive view of one tick and includes construction
-/// drain rates; `EconomyRuntimeState` is the typed, evolving state that the
-/// simulator mutates to produce those snapshots.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-pub struct EconomyRuntimeState {
-    /// Gross mass produced per second (FAF `ProductionPerSecondMass`).
-    pub production_per_second_mass: MassRate,
-    /// Gross energy produced per second (FAF `ProductionPerSecondEnergy`).
-    /// Maintenance is tracked separately in [`maintenance_consumption_per_second_energy`]
-    /// and subtracted each tick.
-    pub production_per_second_energy: EnergyRate,
-    /// Total FAF `MaintenanceConsumptionPerSecondEnergy` paid by all owned units.
-    /// Used to compute the FAF-standard energy efficiency ratio that scales
-    /// `ProductionPerSecondMass` during stalls.
-    #[serde(default)]
-    pub maintenance_consumption_per_second_energy: EnergyRate,
-    /// Mass storage (current amount + capacity).
-    pub mass_storage: Storage<Mass>,
-    /// Energy storage (current amount + capacity).
-    pub energy_storage: Storage<Energy>,
-}
+pub use faf_sim_shared::EconomyRuntimeState;
 
 /// Result of applying a drain to an economy state for one second.
 #[derive(Debug, Clone, Copy, PartialEq)]

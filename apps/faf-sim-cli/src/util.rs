@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use faf_sim::EconomyRuntimeState;
+use faf_sim_shared::{EcoSnapshot, EconomyRuntimeState};
 
 /// Read and deserialize a JSON file, exiting the process on failure.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> T {
@@ -20,8 +20,8 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> T {
 ///
 /// Missing fields (drains, accumulated totals, capacities) are filled with
 /// sensible defaults so the predictor can run from a plan file alone.
-pub fn eco_snapshot_from_runtime_state(state: &EconomyRuntimeState) -> faf_sim::EcoSnapshot {
-    faf_sim::EcoSnapshot {
+pub fn eco_snapshot_from_runtime_state(state: &EconomyRuntimeState) -> EcoSnapshot {
+    EcoSnapshot {
         time: 0.0,
         production_per_second_mass: state.production_per_second_mass.value(),
         production_per_second_energy: state.production_per_second_energy.value(),

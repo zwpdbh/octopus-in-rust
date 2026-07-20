@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
-use faf_sim::quantities::{StepTime, Time};
-use faf_sim::runtime::{BuildQueue, BuildTask, EcoSnapshot};
+use faf_quantities::{StepTime, Time};
 use faf_sim::sim::Simulation;
+use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot};
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of tasks the sequence model accepts.
@@ -80,7 +80,7 @@ impl EcoPlanSample<Unsimulated> {
     /// the simulator.
     pub fn simulate(self) -> EcoPlanSample<Simulated> {
         let time_seconds = if self.plan.len() == 1 {
-            faf_sim::single_task_completion_time(
+            faf_solver::single_task_completion_time(
                 &self.initial_eco,
                 &self.plan[0],
                 MAX_SIM_TIME_SECONDS,
@@ -227,9 +227,9 @@ pub fn extract_sequence_features(
 /// runtime state when constructing a `BuildQueue`.
 pub fn eco_snapshot_to_runtime_state(
     snapshot: &EcoSnapshot,
-) -> faf_sim::economy::EconomyRuntimeState {
-    use faf_sim::economy::EconomyRuntimeState;
-    use faf_sim::quantities::{EnergyRate, MassRate, Storage};
+) -> faf_sim_shared::EconomyRuntimeState {
+    use faf_quantities::{EnergyRate, MassRate, Storage};
+    use faf_sim_shared::EconomyRuntimeState;
 
     EconomyRuntimeState {
         production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
@@ -238,12 +238,12 @@ pub fn eco_snapshot_to_runtime_state(
             snapshot.maintenance_consumption_per_second_energy,
         ),
         mass_storage: Storage {
-            current: faf_sim::quantities::Mass::from_raw(snapshot.mass_storage),
-            cap: faf_sim::quantities::Mass::from_raw(snapshot.mass_storage_cap),
+            current: faf_quantities::Mass::from_raw(snapshot.mass_storage),
+            cap: faf_quantities::Mass::from_raw(snapshot.mass_storage_cap),
         },
         energy_storage: Storage {
-            current: faf_sim::quantities::Energy::from_raw(snapshot.energy_storage),
-            cap: faf_sim::quantities::Energy::from_raw(snapshot.energy_storage_cap),
+            current: faf_quantities::Energy::from_raw(snapshot.energy_storage),
+            cap: faf_quantities::Energy::from_raw(snapshot.energy_storage_cap),
         },
     }
 }
@@ -279,6 +279,8 @@ pub(crate) fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f
 
 #[cfg(test)]
 mod tests {
+    use faf_blueprints::UnitEcoStats;
+
     use super::*;
 
     #[test]
@@ -300,11 +302,11 @@ mod tests {
         let task = BuildTask {
             id: 0,
             start_after: Time::from_raw(1.0),
-            builders: vec![faf_sim::runtime::UnitEcoStats {
+            builders: vec![UnitEcoStats {
                 build_power: 10.0,
                 ..Default::default()
             }],
-            targets: vec![faf_sim::runtime::UnitEcoStats {
+            targets: vec![UnitEcoStats {
                 mass_cost: 100.0,
                 energy_cost: 500.0,
                 build_time: 100.0,

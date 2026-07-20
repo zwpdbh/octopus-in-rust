@@ -7,7 +7,7 @@ use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::NdArray;
 use burn::prelude::*;
 use burn::record::{CompactRecorder, Recorder};
-use faf_sim::runtime::{BuildTask, EcoSnapshot};
+use faf_sim_shared::{BuildTask, EcoSnapshot};
 
 use crate::data::normalize::{NormalizationParams, Ready};
 use crate::data::sample::{extract_sequence_features, TASK_FEATURE_DIM};

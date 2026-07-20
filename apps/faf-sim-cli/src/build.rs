@@ -10,13 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use faf_sim::quantities::{StepTime, Time};
-use faf_sim::sim::{BuildQueue, Simulation, SimulationEvent};
+use faf_quantities::{StepTime, Time};
+use faf_sim::sim::{Simulation, SimulationEvent};
 use faf_sim::snapshot::{
     energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
     scaled_mass_income,
 };
 use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
+use faf_sim_shared::BuildQueue;
 
 use crate::command_line::{BuildMode, BuildShared, OutputFormat};
 

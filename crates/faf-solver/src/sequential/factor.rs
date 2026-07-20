@@ -1,6 +1,6 @@
 //! Effective build-factor calculation.
 
-use crate::solver::sequential::state::{SolverState, EPS};
+use crate::sequential::state::{SolverState, EPS};
 
 /// Compute the fraction of full build power that can be applied this tick.
 ///

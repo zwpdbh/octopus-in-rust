@@ -6,10 +6,10 @@ use std::sync::Arc;
 use bevy_app::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind};
-use faf_sim::runtime::EcoSnapshot;
+use faf_sim_shared::EcoSnapshot;
 
 use crate::config::SchedulerConfig;
-use crate::plugins::init::{run_to_completion, SchedulerInitPlugin, SchedulerResult};
+use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::{Schedule, ScheduleError};
 use crate::search::{BlueprintLibraryRef, SearchState, SearchTarget};
@@ -46,7 +46,7 @@ impl SchedulerApp {
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
         .init_resource::<SchedulerResult>()
-        .add_plugins(SchedulerInitPlugin);
+        .add_plugins(SchedulerLifecyclePlugin);
         Self { app }
     }
 
@@ -69,7 +69,7 @@ impl SchedulerApp {
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
         .init_resource::<SchedulerResult>()
-        .add_plugins(SchedulerInitPlugin);
+        .add_plugins(SchedulerLifecyclePlugin);
         Self { app }
     }
 

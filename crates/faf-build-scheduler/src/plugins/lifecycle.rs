@@ -41,12 +41,24 @@ pub struct SchedulerResult {
 ///
 /// It does **not** carry request-specific data. Callers must insert
 /// [`SearchState`] and [`BlueprintLibraryRef`] resources before running the app.
-pub struct SchedulerInitPlugin;
+pub struct SchedulerLifecyclePlugin;
 
-impl Plugin for SchedulerInitPlugin {
+impl Plugin for SchedulerLifecyclePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(StatesPlugin)
             .init_state::<SchedulerState>()
+            // Declare the cross-plugin scheduling pipeline.
+            //
+            // Mode plugins (`EcoSchedulingPlugin`, `UnitSchedulingPlugin`) and
+            // algorithm plugins (`GreedyPlugin`) register their systems in
+            // different source files. They cannot `.chain()` with each other
+            // directly because they do not import each other's system functions.
+            // Instead, each plugin tags its systems with `.in_set(...)`, and the
+            // single `configure_sets` call below orders those sets:
+            //
+            //     Generate -> Evaluate -> Select
+            //
+            // This is the only place that needs to know the global pipeline.
             .configure_sets(
                 Update,
                 (
@@ -55,6 +67,9 @@ impl Plugin for SchedulerInitPlugin {
                     SchedulerSet::Select,
                 )
                     .chain()
+                    // Only run the pipeline while the search is still active.
+                    // Once `SearchState::done` becomes true, `transition_to_done`
+                    // moves the state to `Done` and these systems stop running.
                     .run_if(in_state(SchedulerState::Searching)),
             )
             .add_systems(Update, transition_to_done.in_set(SchedulerSet::Select));

@@ -16,8 +16,10 @@ clap = { workspace = true }
 faf-blueprints = { workspace = true }
 faf-build-prediction = { workspace = true }
 faf-build-scheduler = { workspace = true }
+faf-quantities = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 faf-sim-service = { workspace = true }
 faf-sim-shared = { workspace = true }
+faf-solver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

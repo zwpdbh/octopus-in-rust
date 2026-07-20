@@ -12,6 +12,7 @@ faf-dioxus-ui = { workspace = true }
 faf-quantities = { workspace = true }
 faf-sim-shared = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
+faf-solver = { workspace = true }
 gloo-net = { workspace = true }
 js-sys = "0.3"
 petgraph = { workspace = true }

@@ -12,8 +12,8 @@ use faf_build_scheduler::{
     EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SchedulerConfig, SearchOptions,
     UnitScheduleRequest,
 };
-use faf_sim::quantities::MassRate;
-use faf_sim::runtime::EcoSnapshot;
+use faf_quantities::MassRate;
+use faf_sim_shared::EcoSnapshot;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
