@@ -23,6 +23,7 @@ pub use scheduler::Scheduler;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use faf_sim::quantities::MassRate;
     use faf_sim::runtime::EcoSnapshot;
     use faf_sim::units::{TechLevel, UnitKind};
     use std::path::PathBuf;
@@ -75,10 +76,7 @@ mod tests {
             initial_eco: default_eco(),
             initial_inventory: vec![UnitKind::Commander],
             target: EcoTarget {
-                mass_production: None,
-                energy_production: Some(70.0),
-                mass_storage_cap: None,
-                energy_storage_cap: None,
+                mass_production: MassRate::from_raw(7.0),
                 tolerance: 1.0,
             },
             options: SearchOptions::default(),
@@ -89,8 +87,8 @@ mod tests {
             .expect("schedule should succeed");
         assert!(!schedule.steps.is_empty(), "schedule should contain steps");
         assert!(
-            schedule.final_eco.production_per_second_energy >= 70.0,
-            "final energy production should meet target"
+            schedule.final_eco.production_per_second_mass >= 7.0,
+            "final mass production should meet target"
         );
     }
 
@@ -102,10 +100,7 @@ mod tests {
             initial_eco: default_eco(),
             initial_inventory: vec![UnitKind::Commander],
             target: EcoTarget {
-                mass_production: None,
-                energy_production: Some(110.0),
-                mass_storage_cap: None,
-                energy_storage_cap: None,
+                mass_production: MassRate::from_raw(15.0),
                 tolerance: 1.0,
             },
             options: SearchOptions::default(),
@@ -116,11 +111,11 @@ mod tests {
             .expect("schedule should succeed");
         assert!(
             schedule.steps.len() >= 3,
-            "should need at least three power generators"
+            "should need at least three mass extractors"
         );
         assert!(
-            schedule.final_eco.production_per_second_energy >= 110.0,
-            "final energy production should meet target"
+            schedule.final_eco.production_per_second_mass >= 15.0,
+            "final mass production should meet target"
         );
     }
 }

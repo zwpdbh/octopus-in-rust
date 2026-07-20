@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use faf_quantities::MassRate;
 
 use crate::components::{SliderField, UnitSelectorModal};
 use crate::types::{
@@ -87,7 +88,7 @@ impl ScheduleFormState {
             ScheduleModeTab::Eco => ScheduleApiRequest::Eco {
                 initial_eco,
                 initial_inventory,
-                target_mass_production: self.target_mass_production,
+                target_mass_production: MassRate::from_raw(self.target_mass_production),
                 tolerance: self.tolerance,
                 options,
             },

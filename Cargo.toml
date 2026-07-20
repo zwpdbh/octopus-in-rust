@@ -5,6 +5,7 @@ members = [
     "crates/brain",
     "crates/faf-units",
     "crates/faf-dioxus-ui",
+    "crates/faf-quantities",
     "crates/faf-sim",
     "crates/faf-sim-service",
     "crates/faf-build-prediction",
@@ -32,6 +33,7 @@ faf-sim = { path = "crates/faf-sim", default-features = false }
 faf-sim-service = { path = "crates/faf-sim-service" }
 faf-build-prediction = { path = "crates/faf-build-prediction" }
 faf-build-scheduler = { path = "crates/faf-build-scheduler" }
+faf-quantities = { path = "crates/faf-quantities" }
 faf-sim-shared = { path = "crates/faf-sim-shared" }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }

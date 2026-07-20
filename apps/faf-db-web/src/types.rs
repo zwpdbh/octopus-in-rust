@@ -1,3 +1,4 @@
+use faf_quantities::MassRate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -37,7 +38,7 @@ pub enum ScheduleApiRequest {
     Eco {
         initial_eco: EcoSnapshot,
         initial_inventory: Vec<UnitKind>,
-        target_mass_production: f64,
+        target_mass_production: MassRate,
         tolerance: f64,
         options: SearchOptions,
     },

@@ -68,10 +68,6 @@ pub struct ScheduleEcoArgs {
     #[arg(long)]
     pub target_mass_production: Option<f64>,
 
-    /// Target energy income per second. Overrides the value in `--input`.
-    #[arg(long)]
-    pub target_energy_production: Option<f64>,
-
     /// Output path for the generated BuildQueue JSON.
     /// If omitted, the JSON is printed to stdout.
     #[arg(short, long)]

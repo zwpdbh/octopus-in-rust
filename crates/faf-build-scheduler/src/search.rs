@@ -222,28 +222,17 @@ pub(crate) fn score_result(
     max_time_seconds: f64,
 ) -> f64 {
     if target.is_reached(&completion.economy) {
-        let mass_waste = target.mass_production.map_or(0.0, |v| {
-            (completion.economy.production_per_second_mass - v).max(0.0)
-        });
-        let energy_waste = target.energy_production.map_or(0.0, |v| {
-            (completion.economy.production_per_second_energy - v).max(0.0)
-        });
-        return completion.time_seconds + (mass_waste + energy_waste) * 1e-6;
+        let mass_waste = (completion.economy.production_per_second_mass
+            - target.mass_production.value())
+        .max(0.0);
+        return completion.time_seconds + mass_waste * 1e-6;
     }
 
-    let mass_gap = target.mass_production.map_or(0.0, |v| {
-        (v - completion.economy.production_per_second_mass).max(0.0)
-    });
-    let energy_gap = target.energy_production.map_or(0.0, |v| {
-        (v - completion.economy.production_per_second_energy).max(0.0)
-    });
+    let mass_gap =
+        (target.mass_production.value() - completion.economy.production_per_second_mass).max(0.0);
+    let income = completion.economy.production_per_second_mass.max(1.0);
 
-    let income = (completion.economy.production_per_second_mass
-        + completion.economy.production_per_second_energy)
-        .max(1.0);
-
-    let heuristic = (mass_gap + energy_gap) / income;
-    max_time_seconds + heuristic
+    max_time_seconds + mass_gap / income
 }
 
 /// Simulate `action` as the next step from the current search state and

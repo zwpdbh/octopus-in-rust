@@ -7,6 +7,7 @@ use faf_build_scheduler::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, UnitScheduleInput,
     UnitScheduleRequest,
 };
+use faf_sim::quantities::MassRate;
 use faf_sim::units::{TechLevel, UnitId, UnitKind};
 use faf_sim_shared::plan::EcoInitialSettings;
 
@@ -35,20 +36,13 @@ fn run_eco(args: ScheduleEcoArgs) {
     };
 
     let inventory = parse_inventory(&input.initial_inventory);
-    let mut mass_production = args.target_mass_production.or(input.target_mass_production);
-    let energy_production = args
-        .target_energy_production
-        .or(input.target_energy_production);
-
-    if mass_production.is_none() && energy_production.is_none() {
-        mass_production = Some(500.0);
-    }
+    let mass_production = MassRate::from_raw(
+        args.target_mass_production
+            .unwrap_or(input.target_mass_production.value()),
+    );
 
     let target = EcoTarget {
         mass_production,
-        energy_production,
-        mass_storage_cap: None,
-        energy_storage_cap: None,
         tolerance: input.tolerance,
     };
 
@@ -118,8 +112,7 @@ fn default_eco_input() -> EcoScheduleInput {
     EcoScheduleInput {
         initial_eco: EcoInitialSettings::default().to_snapshot(),
         initial_inventory: vec!["Commander".to_string()],
-        target_mass_production: None,
-        target_energy_production: None,
+        target_mass_production: MassRate::from_raw(500.0),
         tolerance: 1.0,
         options: faf_build_scheduler::SearchOptions::default(),
     }

@@ -5,15 +5,15 @@ default algorithm is the greedy scheduler from `faf-build-scheduler`.
 
 ## `schedule eco`
 
-Find the fastest way to reach a mass and/or energy income target.
+Find the fastest way to reach a target mass income.
 
 ```bash
-# No input file: start from a single ACU with the default economy.
-# With no target flags the scheduler targets 500 mass income per second.
+# No input file: start from a single ACU with the default economy and target
+# 500 mass income per second.
 cargo run --release -p faf-sim-cli -- schedule eco
 
-# Target energy income instead; mass target defaults to 500 unless overridden.
-cargo run --release -p faf-sim-cli -- schedule eco --target-energy-production 70
+# Override the mass target.
+cargo run --release -p faf-sim-cli -- schedule eco --target-mass-production 70
 
 # Provide an input file and write the result to a file.
 cargo run --release -p faf-sim-cli -- schedule eco \
@@ -23,7 +23,7 @@ cargo run --release -p faf-sim-cli -- schedule eco \
 # Override the target from the input file.
 cargo run --release -p faf-sim-cli -- schedule eco \
   /tmp/eco_input.json \
-  --target-energy-production 100 \
+  --target-mass-production 100 \
   -o /tmp/schedule_queue.json
 ```
 
@@ -46,7 +46,7 @@ The input file is a JSON `EcoScheduleInput`:
     "energy_storage_cap": 4000.0
   },
   "initial_inventory": ["Commander"],
-  "target_energy_production": 70.0
+  "target_mass_production": 70.0
 }
 ```
 

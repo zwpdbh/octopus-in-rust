@@ -1,34 +1,23 @@
 //! Input types for the build scheduler.
 
+use faf_quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
 use faf_sim::units::UnitKind;
 use serde::{Deserialize, Serialize};
 
-/// Lower-bound thresholds that define an eco goal.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Lower-bound threshold that defines an eco goal.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EcoTarget {
-    pub mass_production: Option<f64>,
-    pub energy_production: Option<f64>,
-    pub mass_storage_cap: Option<f64>,
-    pub energy_storage_cap: Option<f64>,
+    /// Target mass income per second.
+    pub mass_production: MassRate,
+    /// Tolerance applied when checking whether the target is reached.
     pub tolerance: f64,
 }
 
 impl EcoTarget {
-    /// True if every set threshold is met by the given snapshot.
+    /// True if the snapshot's mass income meets the target within tolerance.
     pub fn is_reached(&self, eco: &EcoSnapshot) -> bool {
-        let tol = self.tolerance;
-        self.mass_production
-            .is_none_or(|t| eco.production_per_second_mass + tol >= t)
-            && self
-                .energy_production
-                .is_none_or(|t| eco.production_per_second_energy + tol >= t)
-            && self
-                .mass_storage_cap
-                .is_none_or(|t| eco.mass_storage_cap + tol >= t)
-            && self
-                .energy_storage_cap
-                .is_none_or(|t| eco.energy_storage_cap + tol >= t)
+        eco.production_per_second_mass + self.tolerance >= self.mass_production.value()
     }
 }
 
@@ -81,18 +70,13 @@ pub struct UnitScheduleRequest {
 }
 
 /// CLI-friendly input file format for `schedule eco`.
-///
-/// The target is intentionally simple: just target income thresholds for mass
-/// and/or energy production.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EcoScheduleInput {
     pub initial_eco: EcoSnapshot,
     #[serde(default = "default_inventory")]
     pub initial_inventory: Vec<String>,
-    #[serde(default)]
-    pub target_mass_production: Option<f64>,
-    #[serde(default)]
-    pub target_energy_production: Option<f64>,
+    #[serde(default = "default_target_mass_production")]
+    pub target_mass_production: MassRate,
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
     #[serde(default)]
@@ -101,6 +85,10 @@ pub struct EcoScheduleInput {
 
 fn default_tolerance() -> f64 {
     1.0
+}
+
+fn default_target_mass_production() -> MassRate {
+    MassRate::from_raw(500.0)
 }
 
 /// CLI-friendly input file format for `schedule unit`.

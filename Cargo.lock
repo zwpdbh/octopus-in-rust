@@ -3997,6 +3997,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "clap",
+ "faf-quantities",
  "faf-sim",
  "faf-sim-shared",
  "faf-units",
@@ -4031,6 +4032,7 @@ dependencies = [
  "dioxus",
  "dioxus-router",
  "faf-dioxus-ui",
+ "faf-quantities",
  "faf-sim",
  "faf-sim-shared",
  "gloo-net",
@@ -4086,12 +4088,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-quantities"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "faf-sim"
 version = "0.1.0"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
  "bevy_time",
+ "faf-quantities",
  "faf-units",
  "petgraph 0.8.3",
  "serde",

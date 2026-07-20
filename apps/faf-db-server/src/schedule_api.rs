@@ -10,6 +10,7 @@ use axum::Json;
 use faf_build_scheduler::{
     EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SearchOptions, UnitScheduleRequest,
 };
+use faf_sim::quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
 use faf_sim::units::UnitKind;
 use serde::{Deserialize, Serialize};
@@ -83,10 +84,7 @@ pub async fn schedule(
             options,
         } => {
             let target = EcoTarget {
-                mass_production: Some(*target_mass_production),
-                energy_production: None,
-                mass_storage_cap: None,
-                energy_storage_cap: None,
+                mass_production: MassRate::from_raw(*target_mass_production),
                 tolerance: *tolerance,
             };
             state.scheduler.schedule_eco(&EcoScheduleRequest {
