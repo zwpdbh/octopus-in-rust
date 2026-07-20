@@ -61,10 +61,8 @@ pub enum UnitKind {
     Factory(TechLevel),
     Mex(TechLevel),
     Pgen(TechLevel),
-    /// T2 mass extractor surrounded by four mass storages.
-    CapT2Mex,
-    /// T3 mass extractor surrounded by four mass storages.
-    CapT3Mex,
+    /// Mass extractor surrounded by four mass storages.
+    CapMex(TechLevel),
     EnergyStorage,
     /// T4 experimental unit (canonical UEF Fatboy representative).
     Experimental,
@@ -84,7 +82,6 @@ pub enum UnitRole {
     MassExtractor,
     PowerGenerator,
     EnergyStorage,
-    CappedMassExtractor,
     Experimental,
     Other,
 }
@@ -92,9 +89,11 @@ pub enum UnitRole {
 /// Extract the tech tier from a unit kind, if it has one.
 pub fn tech_level_of(kind: &UnitKind) -> Option<TechLevel> {
     match kind {
-        UnitKind::Engineer(t) | UnitKind::Factory(t) | UnitKind::Mex(t) | UnitKind::Pgen(t) => {
-            Some(*t)
-        }
+        UnitKind::Engineer(t)
+        | UnitKind::Factory(t)
+        | UnitKind::Mex(t)
+        | UnitKind::Pgen(t)
+        | UnitKind::CapMex(t) => Some(*t),
         UnitKind::Experimental => Some(TechLevel::T4),
         _ => None,
     }
@@ -108,6 +107,7 @@ pub fn matches_tech_level(kind: &UnitKind, tech: TechLevel) -> bool {
             | UnitKind::Factory(t)
             | UnitKind::Mex(t)
             | UnitKind::Pgen(t)
+            | UnitKind::CapMex(t)
             if *t == tech
     ) || matches!(kind, UnitKind::Experimental if tech == TechLevel::T4)
 }
@@ -121,7 +121,7 @@ pub fn role_of(kind: &UnitKind) -> UnitRole {
         UnitKind::Mex(_) => UnitRole::MassExtractor,
         UnitKind::Pgen(_) => UnitRole::PowerGenerator,
         UnitKind::EnergyStorage => UnitRole::EnergyStorage,
-        UnitKind::CapT2Mex | UnitKind::CapT3Mex => UnitRole::CappedMassExtractor,
+        UnitKind::CapMex(_) => UnitRole::MassExtractor,
         UnitKind::Experimental => UnitRole::Experimental,
         UnitKind::Unique(_) => UnitRole::Other,
     }
@@ -158,10 +158,9 @@ pub fn category_of_role(role: UnitRole) -> UnitCategory {
         UnitRole::Commander => UnitCategory::Commander,
         UnitRole::Engineer => UnitCategory::Engineer,
         UnitRole::Factory => UnitCategory::Factory,
-        UnitRole::MassExtractor
-        | UnitRole::PowerGenerator
-        | UnitRole::EnergyStorage
-        | UnitRole::CappedMassExtractor => UnitCategory::Economic,
+        UnitRole::MassExtractor | UnitRole::PowerGenerator | UnitRole::EnergyStorage => {
+            UnitCategory::Economic
+        }
         UnitRole::Experimental => UnitCategory::Military,
         UnitRole::Other => UnitCategory::Other,
     }

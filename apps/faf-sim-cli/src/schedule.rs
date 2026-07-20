@@ -137,10 +137,10 @@ fn parse_unit_kind(s: &str) -> Result<UnitKind, String> {
         return Ok(UnitKind::Commander);
     }
     if s.eq_ignore_ascii_case("CapT2Mex") {
-        return Ok(UnitKind::CapT2Mex);
+        return Ok(UnitKind::CapMex(TechLevel::T2));
     }
     if s.eq_ignore_ascii_case("CapT3Mex") {
-        return Ok(UnitKind::CapT3Mex);
+        return Ok(UnitKind::CapMex(TechLevel::T3));
     }
     if s.eq_ignore_ascii_case("EnergyStorage") {
         return Ok(UnitKind::EnergyStorage);

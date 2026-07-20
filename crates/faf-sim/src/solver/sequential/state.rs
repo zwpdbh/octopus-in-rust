@@ -83,8 +83,10 @@ impl SolverState {
 
     /// Add a completed target's economy contributions to the running state.
     pub(crate) fn add_target_contributions(&mut self, target: &UnitEcoStats) {
-        self.mass_income += target.production_per_second_mass;
-        self.energy_income += target.production_per_second_energy;
+        self.mass_income +=
+            target.production_per_second_mass * target.adjacency.mass_production_multiplier();
+        self.energy_income +=
+            target.production_per_second_energy * target.adjacency.energy_production_multiplier();
         self.maintenance += target.maintenance_consumption_per_second_energy;
         self.mass_cap += target.mass_storage;
         self.energy_cap += target.energy_storage;

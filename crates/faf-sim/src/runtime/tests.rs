@@ -228,6 +228,132 @@ mod tests {
     }
 
     #[test]
+    fn mass_storage_adjacency_boosts_production() {
+        use crate::economy::EconomyRuntimeState;
+        use crate::runtime::AdjacencyBonus;
+
+        // A mex with 4 adjacent mass storages produces 1.5x its base mass income.
+        let base_mass_income = 6.0;
+        let mut initial_eco = EconomyRuntimeState::default();
+        initial_eco.production_per_second_energy = EnergyRate::from_raw(1000.0);
+        initial_eco.mass_storage = Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0));
+        initial_eco.energy_storage =
+            Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0));
+        let queue = BuildQueue {
+            initial_eco,
+            tasks: vec![BuildTask {
+                id: 1,
+                start_after: Time::from_raw(0.0),
+                builders: vec![UnitEcoStats {
+                    build_power: 10.0,
+                    ..Default::default()
+                }],
+                targets: vec![UnitEcoStats {
+                    build_power: 0.0,
+                    mass_cost: 100.0,
+                    energy_cost: 100.0,
+                    build_time: 100.0,
+                    production_per_second_mass: base_mass_income,
+                    adjacency: AdjacencyBonus {
+                        mass_storage_sides: 4,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+            }],
+        };
+
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+            Some(5.0),
+        );
+
+        let mut saw_boosted_income = false;
+        while !sim.is_finished() {
+            for event in sim.step() {
+                if let SimulationEvent::Ticked(s) = event {
+                    // The target finishes at time 10.0; check post-completion ticks.
+                    if s.time > 10.0
+                        && (s.production_per_second_mass - base_mass_income * 1.5).abs() < 1e-9
+                    {
+                        saw_boosted_income = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_boosted_income,
+            "mass storage adjacency should boost mex production by 50%"
+        );
+    }
+
+    #[test]
+    fn partial_mass_storage_adjacency_scales_linearly() {
+        use crate::economy::EconomyRuntimeState;
+        use crate::runtime::AdjacencyBonus;
+
+        // A mex with 2 adjacent mass storages produces 1.25x its base mass income.
+        let base_mass_income = 6.0;
+        let mut initial_eco = EconomyRuntimeState::default();
+        initial_eco.production_per_second_energy = EnergyRate::from_raw(1000.0);
+        initial_eco.mass_storage = Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0));
+        initial_eco.energy_storage =
+            Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0));
+        let queue = BuildQueue {
+            initial_eco,
+            tasks: vec![BuildTask {
+                id: 1,
+                start_after: Time::from_raw(0.0),
+                builders: vec![UnitEcoStats {
+                    build_power: 10.0,
+                    ..Default::default()
+                }],
+                targets: vec![UnitEcoStats {
+                    build_power: 0.0,
+                    mass_cost: 100.0,
+                    energy_cost: 100.0,
+                    build_time: 100.0,
+                    production_per_second_mass: base_mass_income,
+                    adjacency: AdjacencyBonus {
+                        mass_storage_sides: 2,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+            }],
+        };
+
+        let mut sim = Simulation::new(
+            queue,
+            StepTime::from_seconds(1).unwrap(),
+            Some(Time::from_raw(1000.0)),
+            Some(5.0),
+        );
+
+        let mut saw_boosted_income = false;
+        while !sim.is_finished() {
+            for event in sim.step() {
+                if let SimulationEvent::Ticked(s) = event {
+                    // The target finishes at time 10.0; check post-completion ticks.
+                    if s.time > 10.0
+                        && (s.production_per_second_mass - base_mass_income * 1.25).abs() < 1e-9
+                    {
+                        saw_boosted_income = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_boosted_income,
+            "two mass storages should boost mex production by 25%"
+        );
+    }
+
+    #[test]
     fn step_with_dt_advances_by_requested_amount_and_restores_default_dt() {
         let queue = make_queue(vec![BuildTask {
             id: 1,

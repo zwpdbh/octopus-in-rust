@@ -8,7 +8,7 @@
 
 use faf_units::Unit;
 
-use crate::runtime::UnitEcoStats;
+use crate::runtime::{AdjacencyBonus, UnitEcoStats};
 
 use super::components::{
     attributes::{
@@ -93,7 +93,7 @@ pub(crate) fn unit_eco_stats(unit: &Unit, kind: &UnitKind) -> UnitEcoStats {
             0.0,
             0.0,
         ),
-        UnitKind::CapT2Mex | UnitKind::CapT3Mex => {
+        UnitKind::CapMex(_) => {
             // These are inserted manually in BlueprintLibrary::new, not from raw units.
             (0.0, 0.0, 0.0, 0.0, 0.0)
         }
@@ -116,6 +116,7 @@ pub(crate) fn unit_eco_stats(unit: &Unit, kind: &UnitKind) -> UnitEcoStats {
         maintenance_consumption_per_second_energy: maintenance,
         mass_storage,
         energy_storage,
+        adjacency: AdjacencyBonus::default(),
         unit_id: Some(unit.display_name()),
     }
 }

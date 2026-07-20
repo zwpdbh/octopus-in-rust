@@ -209,6 +209,7 @@ impl ConstructionPlan {
                         mass_storage: t.mass_storage.unwrap_or(0.0),
                         energy_storage: t.energy_storage.unwrap_or(0.0),
                         unit_id: Some(t.id.clone()),
+                        ..Default::default()
                     })
                     .collect(),
             })

@@ -9,17 +9,44 @@
 //! 4. `progress_system` — advance construction sites using the global stall factor.
 //! 5. `completion_system` — finish targets, spawn producers, unlock next tasks.
 //! 6. `termination_system` — detect when the queue is done or timed out.
+//!
+//! A startup system, `seed_initial_economy_system`, creates the initial economy
+//! entities from the `EcoState` resource inserted by [`crate::sim::Simulation`].
 
 use bevy_ecs::prelude::*;
 
 use crate::economy::apply_tick_graph;
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Time};
-use crate::runtime::components::{ActiveBuildTask, Producer, StorageContributor};
+use crate::runtime::components::{
+    ActiveBuildTask, AdjacencyBonusComp, Producer, StorageContributor,
+};
 use crate::runtime::resources::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 use crate::runtime::types::{EcoSnapshot, SimulationEvent};
+
+/// Spawn the initial economy entities from the [`EcoState`] resource.
+///
+/// This runs once at startup before the first update, so the entities exist
+/// when `recompute_base_economy_system` first aggregates income and storage.
+pub(crate) fn seed_initial_economy_system(mut commands: Commands, eco: Res<EcoState>) {
+    commands.spawn((
+        Producer {
+            production_per_second_mass: eco.0.production_per_second_mass.value(),
+            production_per_second_energy: eco.0.production_per_second_energy.value(),
+            maintenance_consumption_per_second_energy: eco
+                .0
+                .maintenance_consumption_per_second_energy
+                .value(),
+        },
+        AdjacencyBonusComp::default(),
+    ));
+    commands.spawn(StorageContributor {
+        mass: eco.0.mass_storage.cap.value(),
+        energy: eco.0.energy_storage.cap.value(),
+    });
+}
 
 pub(crate) fn spawn_tasks_system(
     mut commands: Commands,
@@ -41,12 +68,15 @@ pub(crate) fn spawn_tasks_system(
                 .unwrap_or(0.0);
 
             for builder in &task.builders {
-                commands.spawn((Producer {
-                    production_per_second_mass: 0.0,
-                    production_per_second_energy: 0.0,
-                    maintenance_consumption_per_second_energy: builder
-                        .maintenance_consumption_per_second_energy,
-                },));
+                commands.spawn((
+                    Producer {
+                        production_per_second_mass: 0.0,
+                        production_per_second_energy: 0.0,
+                        maintenance_consumption_per_second_energy: builder
+                            .maintenance_consumption_per_second_energy,
+                    },
+                    AdjacencyBonusComp::default(),
+                ));
             }
 
             commands.spawn((ActiveBuildTask {
@@ -73,7 +103,7 @@ pub(crate) fn spawn_tasks_system(
 }
 
 pub(crate) fn recompute_base_economy_system(
-    producers: Query<&Producer>,
+    producers: Query<(&Producer, &AdjacencyBonusComp)>,
     storage: Query<&StorageContributor>,
     mut eco: ResMut<EcoState>,
 ) {
@@ -81,9 +111,11 @@ pub(crate) fn recompute_base_economy_system(
     let mut production_per_second_mass = 0.0;
     let mut production_per_second_energy = 0.0;
     let mut maintenance_consumption_per_second_energy = 0.0;
-    for p in producers.iter() {
-        production_per_second_mass += p.production_per_second_mass;
-        production_per_second_energy += p.production_per_second_energy;
+    for (p, bonus) in producers.iter() {
+        production_per_second_mass +=
+            p.production_per_second_mass * bonus.0.mass_production_multiplier();
+        production_per_second_energy +=
+            p.production_per_second_energy * bonus.0.energy_production_multiplier();
         maintenance_consumption_per_second_energy += p.maintenance_consumption_per_second_energy;
     }
 
@@ -220,6 +252,7 @@ pub(crate) fn completion_system(
                 mass: target.mass_storage,
                 energy: target.energy_storage,
             },
+            AdjacencyBonusComp(target.adjacency),
         ));
 
         let next_index = site.current_target_index + 1;

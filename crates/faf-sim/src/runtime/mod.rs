@@ -12,14 +12,16 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-pub use types::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats};
+pub use types::{
+    AdjacencyBonus, BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
+};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use systems::{
     completion_system, eco_system, progress_system, recompute_base_economy_system,
-    spawn_tasks_system, termination_system,
+    seed_initial_economy_system, spawn_tasks_system, termination_system,
 };
 
 /// Bevy plugin that registers the economy simulation systems.
@@ -30,17 +32,30 @@ pub struct BuildQueueSimulationPlugin;
 
 impl Plugin for BuildQueueSimulationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                spawn_tasks_system,
-                recompute_base_economy_system,
-                eco_system,
-                progress_system,
-                completion_system,
-                termination_system,
-            )
-                .chain(),
-        );
+        app.add_systems(Startup, seed_initial_economy_system)
+            .add_systems(
+                Update,
+                (
+                    // Activate pending tasks whose `ready_at` time has arrived and
+                    // spawn builder producers plus an ActiveBuildTask for each.
+                    spawn_tasks_system,
+                    // Aggregate base income, maintenance, and storage from all
+                    // Producer and StorageContributor entities into EcoState.
+                    recompute_base_economy_system,
+                    // Run the global economy tick: apply drains, update storage,
+                    // compute the stall factor, and emit an EcoSnapshot event.
+                    eco_system,
+                    // Advance each ActiveBuildTask by the global effective factor.
+                    progress_system,
+                    // Finish targets whose remaining work reached zero, spawn their
+                    // Producer/StorageContributor/AdjacencyBonusComp, and unlock
+                    // the next pending task.
+                    completion_system,
+                    // Detect whether the queue is empty or max_time was reached and
+                    // emit the Finished event.
+                    termination_system,
+                )
+                    .chain(),
+            );
     }
 }

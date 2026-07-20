@@ -20,6 +20,14 @@ pub(crate) struct Producer {
     pub(crate) maintenance_consumption_per_second_energy: f64,
 }
 
+/// Adjacency bonuses that modify this unit's effective production.
+///
+/// This is the ECS component form of [`crate::runtime::types::AdjacencyBonus`].
+/// It is attached to every entity that has a [`Producer`]; the runtime applies
+/// the derived multipliers when recomputing base economy.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct AdjacencyBonusComp(pub crate::runtime::types::AdjacencyBonus);
+
 /// A unit that contributes mass/energy storage capacity.
 #[derive(Component)]
 pub(crate) struct StorageContributor {

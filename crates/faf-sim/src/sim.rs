@@ -10,13 +10,13 @@
 use bevy_app::prelude::*;
 
 use crate::quantities::{StepTime, Time};
-use crate::runtime::components::{Producer, StorageContributor};
 use crate::runtime::resources::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 pub use crate::runtime::{
-    BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
+    AdjacencyBonus, BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot,
+    SimulationEvent, UnitEcoStats,
 };
 
 /// Steppable economy simulation.
@@ -58,26 +58,8 @@ impl Simulation {
                 energy: 0.0,
             })
             .insert_resource(TailEndTime::default())
-            .insert_resource(PostQueueTailSeconds(tail_seconds));
-
-        // Seed the world with the initial economy so recompute_base_economy_system
-        // preserves the caller's starting income and storage capacity.
-        {
-            let initial = queue.initial_eco;
-            let world = app.world_mut();
-            world.spawn((Producer {
-                production_per_second_mass: initial.production_per_second_mass.value(),
-                production_per_second_energy: initial.production_per_second_energy.value(),
-                maintenance_consumption_per_second_energy: initial
-                    .maintenance_consumption_per_second_energy
-                    .value(),
-            },));
-            world.spawn((StorageContributor {
-                mass: initial.mass_storage.cap.value(),
-                energy: initial.energy_storage.cap.value(),
-            },));
-            world.insert_resource(EcoState(initial));
-        }
+            .insert_resource(PostQueueTailSeconds(tail_seconds))
+            .insert_resource(EcoState(queue.initial_eco));
 
         Self { app, dt }
     }

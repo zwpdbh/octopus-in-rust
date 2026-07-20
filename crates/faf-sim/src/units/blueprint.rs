@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 use faf_units::DataIndex;
 
-use crate::runtime::UnitEcoStats;
+use crate::runtime::{AdjacencyBonus, UnitEcoStats};
 
 use super::build;
 use super::components::{
@@ -106,57 +106,58 @@ impl BlueprintLibrary {
         // Synthetic definitions for capped mass extractors. These do not exist
         // as raw blueprints; they represent a T2/T3 mex surrounded by four mass
         // storages. The base `ProductionPerSecondMass` matches the underlying
-        // mex; the +50% adjacency bonus is applied at runtime by the adjacency
-        // tracker.
-        let cap_t2_stats = UnitEcoStats {
-            build_power: 0.0,
-            mass_cost: 800.0,
-            energy_cost: 6000.0,
-            build_time: 1000.0,
-            // 4 adjacent mass storages: base 6.0 * (1 + 4 * 0.5) = 18.0
-            production_per_second_mass: 18.0,
-            production_per_second_energy: 0.0,
-            maintenance_consumption_per_second_energy: 9.0,
-            mass_storage: 2000.0,
-            energy_storage: 0.0,
-            unit_id: Some("Capped T2 Mass Extractor".to_string()),
-        };
-        let cap_t2_entity = world
-            .spawn(BlueprintBundle {
-                blueprint_id: BlueprintId("UEB1202+CAPPED".to_string()),
-                kind: UnitKindComp(UnitKind::CapT2Mex),
-                role: UnitRoleComp(UnitRole::CappedMassExtractor),
-                faction: FactionComp(Faction::Common),
-                display_name: DisplayName("Capped T2 Mass Extractor".to_string()),
-            })
-            .id();
-        kind_to_entity.insert(UnitKind::CapT2Mex, cap_t2_entity);
-        eco_table.insert(UnitKind::CapT2Mex, cap_t2_stats);
-
-        let cap_t3_stats = UnitEcoStats {
-            build_power: 0.0,
-            mass_cost: 800.0,
-            energy_cost: 6000.0,
-            build_time: 1000.0,
-            // 4 adjacent mass storages: base 18.0 * (1 + 4 * 0.5) = 54.0
-            production_per_second_mass: 54.0,
-            production_per_second_energy: 0.0,
-            maintenance_consumption_per_second_energy: 54.0,
-            mass_storage: 2000.0,
-            energy_storage: 0.0,
-            unit_id: Some("Capped T3 Mass Extractor".to_string()),
-        };
-        let cap_t3_entity = world
-            .spawn(BlueprintBundle {
-                blueprint_id: BlueprintId("UEB1302+CAPPED".to_string()),
-                kind: UnitKindComp(UnitKind::CapT3Mex),
-                role: UnitRoleComp(UnitRole::CappedMassExtractor),
-                faction: FactionComp(Faction::Common),
-                display_name: DisplayName("Capped T3 Mass Extractor".to_string()),
-            })
-            .id();
-        kind_to_entity.insert(UnitKind::CapT3Mex, cap_t3_entity);
-        eco_table.insert(UnitKind::CapT3Mex, cap_t3_stats);
+        // mex; the adjacency bonus is applied at runtime based on the number of
+        // fully-surrounded sides.
+        for (tech, base_mex, blueprint_id, display_name, maintenance) in [
+            (
+                TechLevel::T2,
+                UnitKind::Mex(TechLevel::T2),
+                "UEB1202+CAPPED",
+                "Capped T2 Mass Extractor",
+                9.0,
+            ),
+            (
+                TechLevel::T3,
+                UnitKind::Mex(TechLevel::T3),
+                "UEB1302+CAPPED",
+                "Capped T3 Mass Extractor",
+                54.0,
+            ),
+        ] {
+            let base_mass = eco_table
+                .get(&base_mex)
+                .map(|s| s.production_per_second_mass)
+                .unwrap_or(0.0);
+            let kind = UnitKind::CapMex(tech);
+            let stats = UnitEcoStats {
+                build_power: 0.0,
+                mass_cost: 800.0,
+                energy_cost: 6000.0,
+                build_time: 1000.0,
+                // 4 adjacent mass storages: base * (1 + 4 * 0.125) = base * 1.5
+                production_per_second_mass: base_mass,
+                production_per_second_energy: 0.0,
+                maintenance_consumption_per_second_energy: maintenance,
+                mass_storage: 2000.0,
+                energy_storage: 0.0,
+                adjacency: AdjacencyBonus {
+                    mass_storage_sides: 4,
+                    ..Default::default()
+                },
+                unit_id: Some(display_name.to_string()),
+            };
+            let entity = world
+                .spawn(BlueprintBundle {
+                    blueprint_id: BlueprintId(blueprint_id.to_string()),
+                    kind: UnitKindComp(kind.clone()),
+                    role: UnitRoleComp(UnitRole::MassExtractor),
+                    faction: FactionComp(Faction::Common),
+                    display_name: DisplayName(display_name.to_string()),
+                })
+                .id();
+            kind_to_entity.insert(kind.clone(), entity);
+            eco_table.insert(kind, stats);
+        }
 
         // Synthetic definition for the T4 experimental tier.
         // The UEF Fatboy is used as the canonical representative.
@@ -248,8 +249,9 @@ impl BlueprintLibrary {
     pub fn blueprint_id(&self, kind: &UnitKind) -> Option<String> {
         match kind {
             UnitKind::Unique(id) => Some(id.0.clone()),
-            UnitKind::CapT2Mex => Some("UEB1202".to_string()),
-            UnitKind::CapT3Mex => Some("UEB1302".to_string()),
+            UnitKind::CapMex(TechLevel::T2) => Some("UEB1202".to_string()),
+            UnitKind::CapMex(TechLevel::T3) => Some("UEB1302".to_string()),
+            UnitKind::CapMex(_) => None,
             _ => build::canonical_blueprint_id(kind).map(|s| s.to_string()),
         }
     }
@@ -356,19 +358,19 @@ impl BlueprintLibrary {
             .unwrap_or(0.0)
     }
 
-    /// Mass production per second for a unit kind.
+    /// Mass production per second for a unit kind, including adjacency bonuses.
     pub fn production_per_second_mass(&self, kind: &UnitKind) -> f64 {
         self.eco_table
             .get(kind)
-            .map(|s| s.production_per_second_mass)
+            .map(|s| s.production_per_second_mass * s.adjacency.mass_production_multiplier())
             .unwrap_or(0.0)
     }
 
-    /// Energy production per second for a unit kind.
+    /// Energy production per second for a unit kind, including adjacency bonuses.
     pub fn production_per_second_energy(&self, kind: &UnitKind) -> f64 {
         self.eco_table
             .get(kind)
-            .map(|s| s.production_per_second_energy)
+            .map(|s| s.production_per_second_energy * s.adjacency.energy_production_multiplier())
             .unwrap_or(0.0)
     }
 
@@ -620,7 +622,7 @@ impl BlueprintLibrary {
                 },
                 // Cap a T2 mex with four mass storages.
                 UpgradePath {
-                    target: UnitKind::CapT2Mex,
+                    target: UnitKind::CapMex(TechLevel::T2),
                     builders: any_engineer.clone(),
                 },
             ],
@@ -628,14 +630,14 @@ impl BlueprintLibrary {
         m.insert(
             UnitKind::Mex(TechLevel::T3),
             vec![UpgradePath {
-                target: UnitKind::CapT3Mex,
+                target: UnitKind::CapMex(TechLevel::T3),
                 builders: t2_plus_engineer.clone(),
             }],
         );
         m.insert(
-            UnitKind::CapT2Mex,
+            UnitKind::CapMex(TechLevel::T2),
             vec![UpgradePath {
-                target: UnitKind::CapT3Mex,
+                target: UnitKind::CapMex(TechLevel::T3),
                 builders: t2_plus_engineer.clone(),
             }],
         );
@@ -691,10 +693,7 @@ fn producer_priority(role: UnitRole) -> i32 {
         UnitRole::Commander => 4,
         UnitRole::Factory => 3,
         UnitRole::Engineer => 2,
-        UnitRole::EnergyStorage
-        | UnitRole::MassExtractor
-        | UnitRole::PowerGenerator
-        | UnitRole::CappedMassExtractor => 1,
+        UnitRole::EnergyStorage | UnitRole::MassExtractor | UnitRole::PowerGenerator => 1,
         UnitRole::Experimental | UnitRole::Other => 0,
     }
 }
@@ -784,19 +783,19 @@ mod tests {
     fn storage_and_capped_mex_units_are_defined() {
         let units = load_library();
 
-        assert!(units.mass_storage(&UnitKind::CapT2Mex) > 0.0);
-        // A capped mex produces 3x the base output (4 storages * +50%).
+        assert!(units.mass_storage(&UnitKind::CapMex(TechLevel::T2)) > 0.0);
+        // A capped mex produces 1.5x the base output (4 storages * +12.5%).
         assert!(
-            (units.production_per_second_mass(&UnitKind::CapT2Mex)
-                - 3.0 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T2)))
+            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T2))
+                - 1.5 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T2)))
             .abs()
                 < 1e-9
         );
 
-        assert!(units.mass_storage(&UnitKind::CapT3Mex) > 0.0);
+        assert!(units.mass_storage(&UnitKind::CapMex(TechLevel::T3)) > 0.0);
         assert!(
-            (units.production_per_second_mass(&UnitKind::CapT3Mex)
-                - 3.0 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)))
+            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T3))
+                - 1.5 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)))
             .abs()
                 < 1e-9
         );
@@ -808,11 +807,11 @@ mod tests {
         assert!(units
             .upgrade_paths(&UnitKind::Mex(TechLevel::T2))
             .iter()
-            .any(|r| r.target == UnitKind::CapT2Mex));
+            .any(|r| r.target == UnitKind::CapMex(TechLevel::T2)));
         assert!(units
-            .upgrade_paths(&UnitKind::CapT2Mex)
+            .upgrade_paths(&UnitKind::CapMex(TechLevel::T2))
             .iter()
-            .any(|r| r.target == UnitKind::CapT3Mex));
+            .any(|r| r.target == UnitKind::CapMex(TechLevel::T3)));
     }
 
     #[test]
@@ -823,7 +822,7 @@ mod tests {
         assert!(graph.node(&UnitKind::Mex(TechLevel::T1)).is_some());
         assert!(graph.node(&UnitKind::Mex(TechLevel::T2)).is_some());
         assert!(graph.node(&UnitKind::Mex(TechLevel::T3)).is_some());
-        assert!(graph.node(&UnitKind::CapT3Mex).is_some());
+        assert!(graph.node(&UnitKind::CapMex(TechLevel::T3)).is_some());
 
         let upgrade_targets = |from: &UnitKind| {
             graph
@@ -838,8 +837,10 @@ mod tests {
         assert!(
             upgrade_targets(&UnitKind::Mex(TechLevel::T2)).contains(&UnitKind::Mex(TechLevel::T3))
         );
-        assert!(upgrade_targets(&UnitKind::Mex(TechLevel::T3)).contains(&UnitKind::CapT3Mex));
-        assert!(upgrade_targets(&UnitKind::CapT2Mex).contains(&UnitKind::CapT3Mex));
+        assert!(upgrade_targets(&UnitKind::Mex(TechLevel::T3))
+            .contains(&UnitKind::CapMex(TechLevel::T3)));
+        assert!(upgrade_targets(&UnitKind::CapMex(TechLevel::T2))
+            .contains(&UnitKind::CapMex(TechLevel::T3)));
 
         // Every node should carry role/category metadata.
         for node in graph.graph.node_weights() {
