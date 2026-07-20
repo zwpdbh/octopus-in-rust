@@ -47,7 +47,7 @@ impl Schedule {
 }
 
 /// Errors that can occur during scheduling.
-#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 pub enum ScheduleError {
     #[error("algorithm {0:?} is not implemented yet")]
     AlgorithmNotImplemented(AlgorithmKind),

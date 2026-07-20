@@ -57,14 +57,25 @@ pub struct ScheduleEcoArgs {
 
     /// JSON file describing the scheduling request.
     ///
-    /// The file must contain `initial_eco`, optional `initial_inventory`, and
+    /// The file may contain `initial_eco`, optional `initial_inventory`, and
     /// target production thresholds (`target_mass_production`,
-    /// `target_energy_production`).
-    pub input: PathBuf,
+    /// `target_energy_production`). If omitted, the request starts with a single
+    /// ACU and the default initial economy.
+    pub input: Option<PathBuf>,
+
+    /// Target mass income per second. Overrides the value in `--input`.
+    /// Defaults to 500 if no target is specified.
+    #[arg(long)]
+    pub target_mass_production: Option<f64>,
+
+    /// Target energy income per second. Overrides the value in `--input`.
+    #[arg(long)]
+    pub target_energy_production: Option<f64>,
 
     /// Output path for the generated BuildQueue JSON.
-    #[arg(short, long, default_value = "schedule_queue.json")]
-    pub output: PathBuf,
+    /// If omitted, the JSON is printed to stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -75,13 +86,20 @@ pub struct ScheduleUnitArgs {
 
     /// JSON file describing the scheduling request.
     ///
-    /// The file must contain `initial_eco`, optional `initial_inventory`, and
-    /// a `target` UnitKind string such as `Engineer(T1)`.
-    pub input: PathBuf,
+    /// The file may contain `initial_eco`, optional `initial_inventory`, and
+    /// a `target` UnitKind string such as `Engineer(T1)`. If omitted, the
+    /// request starts with a single ACU and the default initial economy, and
+    /// `--target` must be provided.
+    pub input: Option<PathBuf>,
+
+    /// Target unit kind, such as `Engineer(T1)`. Overrides the value in `--input`.
+    #[arg(long)]
+    pub target: Option<String>,
 
     /// Output path for the generated BuildQueue JSON.
-    #[arg(short, long, default_value = "schedule_queue.json")]
-    pub output: PathBuf,
+    /// If omitted, the JSON is printed to stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]

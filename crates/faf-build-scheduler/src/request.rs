@@ -37,6 +37,10 @@ impl EcoTarget {
 pub struct SearchOptions {
     pub max_search_seconds: f64,
     pub simulation_max_time_seconds: f64,
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
+    #[serde(default = "default_max_steps")]
+    pub max_steps: usize,
 }
 
 impl Default for SearchOptions {
@@ -44,8 +48,18 @@ impl Default for SearchOptions {
         Self {
             max_search_seconds: 2.0,
             simulation_max_time_seconds: 6000.0,
+            max_iterations: default_max_iterations(),
+            max_steps: default_max_steps(),
         }
     }
+}
+
+fn default_max_iterations() -> usize {
+    1_000
+}
+
+fn default_max_steps() -> usize {
+    100
 }
 
 /// Request to reach an eco target as quickly as possible.

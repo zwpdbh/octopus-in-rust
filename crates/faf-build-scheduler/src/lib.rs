@@ -9,6 +9,7 @@ pub mod algorithms;
 pub mod request;
 pub mod result;
 pub mod scheduler;
+pub mod search;
 pub mod util;
 
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
@@ -67,8 +68,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "implement greedy eco scheduling")]
-    fn greedy_eco_schedule_is_todo() {
+    fn greedy_eco_schedule_reaches_target() {
         let library = test_library();
         let scheduler = Scheduler::new(library);
         let request = EcoScheduleRequest {
@@ -84,6 +84,43 @@ mod tests {
             options: SearchOptions::default(),
         };
 
-        let _ = scheduler.schedule_eco(&request);
+        let schedule = scheduler
+            .schedule_eco(&request)
+            .expect("schedule should succeed");
+        assert!(!schedule.steps.is_empty(), "schedule should contain steps");
+        assert!(
+            schedule.final_eco.production_per_second_energy >= 70.0,
+            "final energy production should meet target"
+        );
+    }
+
+    #[test]
+    fn greedy_eco_schedule_builds_multiple_steps() {
+        let library = test_library();
+        let scheduler = Scheduler::new(library);
+        let request = EcoScheduleRequest {
+            initial_eco: default_eco(),
+            initial_inventory: vec![UnitKind::Commander],
+            target: EcoTarget {
+                mass_production: None,
+                energy_production: Some(110.0),
+                mass_storage_cap: None,
+                energy_storage_cap: None,
+                tolerance: 1.0,
+            },
+            options: SearchOptions::default(),
+        };
+
+        let schedule = scheduler
+            .schedule_eco(&request)
+            .expect("schedule should succeed");
+        assert!(
+            schedule.steps.len() >= 3,
+            "should need at least three power generators"
+        );
+        assert!(
+            schedule.final_eco.production_per_second_energy >= 110.0,
+            "final energy production should meet target"
+        );
     }
 }

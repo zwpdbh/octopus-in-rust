@@ -398,6 +398,15 @@ impl BlueprintLibrary {
             .unwrap_or(0.0)
     }
 
+    /// Full economic descriptor for a unit kind, if it is defined.
+    ///
+    /// This includes base production, storage, maintenance, cost, build time,
+    /// and adjacency metadata. It is the same shape used by the runtime for
+    /// build-task targets and builders.
+    pub fn unit_eco_stats(&self, kind: &UnitKind) -> Option<UnitEcoStats> {
+        self.eco_table.get(kind).cloned()
+    }
+
     /// Convert a blueprint into the flat runtime economic representation.
     ///
     /// `as_builder` controls whether cost/storage fields are zeroed out, matching

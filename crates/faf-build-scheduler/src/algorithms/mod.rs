@@ -7,6 +7,8 @@ use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError};
 use faf_sim::units::BlueprintLibrary;
 
+use std::sync::Arc;
+
 mod greedy;
 pub use greedy::Greedy;
 
@@ -26,13 +28,13 @@ pub trait SchedulingAlgorithm: Send + Sync {
 
     fn schedule_eco(
         &self,
-        library: &BlueprintLibrary,
+        library: Arc<BlueprintLibrary>,
         request: &EcoScheduleRequest,
     ) -> Result<Schedule, ScheduleError>;
 
     fn schedule_unit(
         &self,
-        library: &BlueprintLibrary,
+        library: Arc<BlueprintLibrary>,
         request: &UnitScheduleRequest,
     ) -> Result<Schedule, ScheduleError>;
 }

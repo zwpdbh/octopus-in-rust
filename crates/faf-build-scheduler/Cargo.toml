@@ -8,6 +8,8 @@ license = "MIT"
 
 [dependencies]
 anyhow = { workspace = true }
+bevy_app = { version = "0.19" }
+bevy_ecs = { version = "0.19" }
 clap = { workspace = true }
 faf-sim = { workspace = true, default-features = false, features = ["headless"] }
 faf-sim-shared = { workspace = true }

@@ -9,6 +9,7 @@ It can:
 - Train a neural network to predict how long a plan will take.
 - Predict completion time with either the trained neural network or the exact
   analytical solver.
+- Compute a build order that reaches an eco target or builds a target unit.
 
 ## Commands
 
@@ -18,5 +19,6 @@ It can:
 | 2 | [`dataset generate`](02-dataset.md) | Generate a SQLite dataset of simulated plan completion times. |
 | 3 | [`train`](03-train.md) | Train the build-time prediction model. |
 | 4 | [`predict`](04-predict.md) | Predict completion time for a concrete plan (`nn` or `solver`). |
+| 5 | [`schedule`](05-schedule.md) | Compute a build order for an eco or unit target. |
 
 Run any command with `--help` for the full list of flags.

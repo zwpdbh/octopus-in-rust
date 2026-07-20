@@ -8,6 +8,7 @@ use faf_build_scheduler::{
     UnitScheduleRequest,
 };
 use faf_sim::units::{TechLevel, UnitId, UnitKind};
+use faf_sim_shared::plan::EcoInitialSettings;
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};
 
@@ -25,24 +26,31 @@ fn run_eco(args: ScheduleEcoArgs) {
         std::process::exit(1);
     });
 
-    let input: EcoScheduleInput = read_json(&args.input).unwrap_or_else(|e| {
-        eprintln!("Failed to read input file: {e}");
-        std::process::exit(1);
-    });
+    let input = match &args.input {
+        Some(path) => read_json::<EcoScheduleInput>(path).unwrap_or_else(|e| {
+            eprintln!("Failed to read input file: {e}");
+            std::process::exit(1);
+        }),
+        None => default_eco_input(),
+    };
 
     let inventory = parse_inventory(&input.initial_inventory);
+    let mut mass_production = args.target_mass_production.or(input.target_mass_production);
+    let energy_production = args
+        .target_energy_production
+        .or(input.target_energy_production);
+
+    if mass_production.is_none() && energy_production.is_none() {
+        mass_production = Some(500.0);
+    }
+
     let target = EcoTarget {
-        mass_production: input.target_mass_production,
-        energy_production: input.target_energy_production,
+        mass_production,
+        energy_production,
         mass_storage_cap: None,
         energy_storage_cap: None,
         tolerance: input.tolerance,
     };
-
-    if target.mass_production.is_none() && target.energy_production.is_none() {
-        eprintln!("At least one of target_mass_production or target_energy_production must be set");
-        std::process::exit(1);
-    }
 
     let request = EcoScheduleRequest {
         initial_eco: input.initial_eco,
@@ -56,12 +64,11 @@ fn run_eco(args: ScheduleEcoArgs) {
         std::process::exit(1);
     });
 
-    write_output(&args.output, &schedule.plan);
+    write_output(args.output.as_deref(), &schedule.plan);
     eprintln!(
-        "Scheduled eco target in {:.2}s ({} steps). Output written to {}",
+        "Scheduled eco target in {:.2}s ({} steps).",
         schedule.total_time_seconds,
         schedule.steps.len(),
-        args.output.display()
     );
 }
 
@@ -71,14 +78,19 @@ fn run_unit(args: ScheduleUnitArgs) {
         std::process::exit(1);
     });
 
-    let input: UnitScheduleInput = read_json(&args.input).unwrap_or_else(|e| {
-        eprintln!("Failed to read input file: {e}");
-        std::process::exit(1);
-    });
+    let input = match &args.input {
+        Some(path) => read_json::<UnitScheduleInput>(path).unwrap_or_else(|e| {
+            eprintln!("Failed to read input file: {e}");
+            std::process::exit(1);
+        }),
+        None => default_unit_input(),
+    };
+
+    let target_string = args.target.as_ref().unwrap_or(&input.target);
 
     let inventory = parse_inventory(&input.initial_inventory);
-    let target = parse_unit_kind(&input.target).unwrap_or_else(|e| {
-        eprintln!("Invalid target unit '{}': {e}", input.target);
+    let target = parse_unit_kind(target_string).unwrap_or_else(|e| {
+        eprintln!("Invalid target unit '{target_string}': {e}");
         std::process::exit(1);
     });
 
@@ -94,13 +106,33 @@ fn run_unit(args: ScheduleUnitArgs) {
         std::process::exit(1);
     });
 
-    write_output(&args.output, &schedule.plan);
+    write_output(args.output.as_deref(), &schedule.plan);
     eprintln!(
-        "Scheduled unit target in {:.2}s ({} steps). Output written to {}",
+        "Scheduled unit target in {:.2}s ({} steps).",
         schedule.total_time_seconds,
         schedule.steps.len(),
-        args.output.display()
     );
+}
+
+fn default_eco_input() -> EcoScheduleInput {
+    EcoScheduleInput {
+        initial_eco: EcoInitialSettings::default().to_snapshot(),
+        initial_inventory: vec!["Commander".to_string()],
+        target_mass_production: None,
+        target_energy_production: None,
+        tolerance: 1.0,
+        options: faf_build_scheduler::SearchOptions::default(),
+    }
+}
+
+fn default_unit_input() -> UnitScheduleInput {
+    UnitScheduleInput {
+        initial_eco: EcoInitialSettings::default().to_snapshot(),
+        initial_inventory: vec!["Commander".to_string()],
+        // UEF Novax Center: a recognizable late-game unit target.
+        target: "XEB2402".to_string(),
+        options: faf_build_scheduler::SearchOptions::default(),
+    }
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
@@ -120,15 +152,21 @@ fn parse_inventory(strings: &[String]) -> Vec<UnitKind> {
         .collect()
 }
 
-fn write_output<T: serde::Serialize>(path: &Path, value: &T) {
+fn write_output<T: serde::Serialize>(path: Option<&Path>, value: &T) {
     let json = serde_json::to_string_pretty(value).unwrap_or_else(|e| {
         eprintln!("Failed to serialize output: {e}");
         std::process::exit(1);
     });
-    fs::write(path, json).unwrap_or_else(|e| {
-        eprintln!("Failed to write output {}: {e}", path.display());
-        std::process::exit(1);
-    });
+
+    match path {
+        Some(path) => {
+            fs::write(path, json).unwrap_or_else(|e| {
+                eprintln!("Failed to write output {}: {e}", path.display());
+                std::process::exit(1);
+            });
+        }
+        None => println!("{json}"),
+    }
 }
 
 fn parse_unit_kind(s: &str) -> Result<UnitKind, String> {
