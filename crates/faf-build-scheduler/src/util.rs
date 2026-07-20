@@ -1,8 +1,25 @@
 //! Shared helpers for the scheduler.
 
+use std::collections::HashMap;
+
+use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
 use faf_sim::economy::EconomyRuntimeState;
 use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
 use faf_sim::runtime::EcoSnapshot;
+
+/// Returns true if the unit kind is a mass extractor (including capped).
+pub(crate) fn is_mex(library: &BlueprintLibrary, kind: &UnitKind) -> bool {
+    library.role(kind) == UnitRole::MassExtractor
+}
+
+/// Counts how many mass extractors are in the inventory.
+pub(crate) fn count_mex(inventory: &HashMap<UnitKind, u32>, library: &BlueprintLibrary) -> u32 {
+    inventory
+        .iter()
+        .filter(|(kind, _)| is_mex(library, kind))
+        .map(|(_, count)| *count)
+        .sum()
+}
 
 /// Convert a flat snapshot into the simulator's typed runtime state.
 pub fn eco_snapshot_to_runtime_state(snapshot: &EcoSnapshot) -> EconomyRuntimeState {

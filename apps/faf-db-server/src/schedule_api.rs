@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use faf_blueprints::UnitKind;
 use faf_build_scheduler::{
-    EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SearchOptions, UnitScheduleRequest,
+    EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SchedulerConfig, SearchOptions,
+    UnitScheduleRequest,
 };
 use faf_sim::quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
@@ -30,6 +31,8 @@ pub enum ScheduleApiRequest {
         tolerance: f64,
         #[serde(default)]
         options: SearchOptions,
+        #[serde(default = "default_max_mex_count")]
+        max_mex_count: u32,
     },
     Unit {
         initial_eco: EcoSnapshot,
@@ -38,6 +41,8 @@ pub enum ScheduleApiRequest {
         target: UnitKind,
         #[serde(default)]
         options: SearchOptions,
+        #[serde(default = "default_max_mex_count")]
+        max_mex_count: u32,
     },
 }
 
@@ -47,6 +52,10 @@ fn default_inventory() -> Vec<UnitKind> {
 
 fn default_tolerance() -> f64 {
     1.0
+}
+
+fn default_max_mex_count() -> u32 {
+    10
 }
 
 /// Error envelope returned when scheduling fails.
@@ -82,6 +91,7 @@ pub async fn schedule(
             target_mass_production,
             tolerance,
             options,
+            max_mex_count,
         } => {
             let target = EcoTarget {
                 mass_production: MassRate::from_raw(*target_mass_production),
@@ -92,6 +102,9 @@ pub async fn schedule(
                 initial_inventory: initial_inventory.clone(),
                 target,
                 options: options.clone(),
+                config: SchedulerConfig {
+                    max_mex_count: *max_mex_count,
+                },
             })
         }
         ScheduleApiRequest::Unit {
@@ -99,11 +112,15 @@ pub async fn schedule(
             initial_inventory,
             target,
             options,
+            max_mex_count,
         } => state.scheduler.schedule_unit(&UnitScheduleRequest {
             initial_eco: *initial_eco,
             initial_inventory: initial_inventory.clone(),
             target: target.clone(),
             options: options.clone(),
+            config: SchedulerConfig {
+                max_mex_count: *max_mex_count,
+            },
         }),
     }));
 

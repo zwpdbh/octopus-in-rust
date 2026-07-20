@@ -7,12 +7,14 @@ use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintGraph, UnitKind};
 
-use crate::plugins::scheduler::SchedulerSet;
+use crate::config::SchedulerConfig;
+use crate::plugins::init::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
     simulate_with_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState,
     SearchTarget,
 };
+use crate::util::{count_mex, is_mex};
 
 /// Plugin that registers candidate generation and evaluation for unit
 /// scheduling.
@@ -39,6 +41,7 @@ pub(crate) fn generate_unit_candidates_system(
     mut commands: Commands,
     state: Res<SearchState>,
     library: Res<BlueprintLibraryRef>,
+    config: Res<SchedulerConfig>,
 ) {
     if state.done {
         return;
@@ -52,6 +55,8 @@ pub(crate) fn generate_unit_candidates_system(
     }
 
     let library = &*library.0;
+    let current_mex_count = count_mex(&state.inventory, library);
+    let mex_cap = config.max_mex_count;
 
     // All legal build actions.
     for (builder, count) in &state.inventory {
@@ -59,6 +64,10 @@ pub(crate) fn generate_unit_candidates_system(
             continue;
         }
         for target in library.buildable_by(builder) {
+            // Enforce the global mex cap on *new* mass extractors.
+            if is_mex(library, &target) && current_mex_count >= mex_cap {
+                continue;
+            }
             commands.spawn(CandidateAction(Action::Build {
                 builder: builder.clone(),
                 target,

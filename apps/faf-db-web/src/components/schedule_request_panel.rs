@@ -34,6 +34,7 @@ pub struct ScheduleFormState {
     pub initial_energy_storage: f64,
     pub initial_inventory: Vec<UnitKind>,
     pub options: SearchOptions,
+    pub max_mex_count: u32,
 }
 
 impl Default for ScheduleFormState {
@@ -49,6 +50,7 @@ impl Default for ScheduleFormState {
             initial_energy_storage: 4000.0,
             initial_inventory: vec![UnitKind::Commander],
             options: SearchOptions::default(),
+            max_mex_count: 10u32,
         }
     }
 }
@@ -91,6 +93,7 @@ impl ScheduleFormState {
                 target_mass_production: MassRate::from_raw(self.target_mass_production),
                 tolerance: self.tolerance,
                 options,
+                max_mex_count: self.max_mex_count,
             },
             ScheduleModeTab::Unit => ScheduleApiRequest::Unit {
                 initial_eco,
@@ -100,6 +103,7 @@ impl ScheduleFormState {
                     .clone()
                     .expect("unit target must be set before computing"),
                 options,
+                max_mex_count: self.max_mex_count,
             },
         }
     }
@@ -274,6 +278,13 @@ pub fn ScheduleRequestPanel(
                         step: 60.0,
                         disabled: computing,
                         on_change: move |v: f64| form.write().options.simulation_max_time_seconds = v.max(60.0),
+                    }
+                    NumberField {
+                        label: "Max mex count",
+                        value: form.read().max_mex_count as f64,
+                        step: 1.0,
+                        disabled: computing,
+                        on_change: move |v: f64| form.write().max_mex_count = v.max(0.0) as u32,
                     }
                 }
             }

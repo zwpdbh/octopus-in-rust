@@ -5,7 +5,7 @@ use std::path::Path;
 
 use faf_blueprints::{TechLevel, UnitId, UnitKind};
 use faf_build_scheduler::{
-    EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, UnitScheduleInput,
+    EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, SchedulerConfig, UnitScheduleInput,
     UnitScheduleRequest,
 };
 use faf_sim::quantities::MassRate;
@@ -46,11 +46,15 @@ fn run_eco(args: ScheduleEcoArgs) {
         tolerance: input.tolerance,
     };
 
+    let max_mex_count = args.max_mex.unwrap_or(input.config.max_mex_count);
+    let config = SchedulerConfig::new(max_mex_count);
+
     let request = EcoScheduleRequest {
         initial_eco: input.initial_eco,
         initial_inventory: inventory,
         target,
         options: input.options,
+        config,
     };
 
     let schedule = scheduler.schedule_eco(&request).unwrap_or_else(|e| {
@@ -93,6 +97,7 @@ fn run_unit(args: ScheduleUnitArgs) {
         initial_inventory: inventory,
         target,
         options: input.options,
+        config: input.config,
     };
 
     let schedule = scheduler.schedule_unit(&request).unwrap_or_else(|e| {
@@ -115,6 +120,7 @@ fn default_eco_input() -> EcoScheduleInput {
         target_mass_production: MassRate::from_raw(15.0),
         tolerance: 1.0,
         options: faf_build_scheduler::SearchOptions::default(),
+        config: SchedulerConfig::default(),
     }
 }
 
@@ -125,6 +131,7 @@ fn default_unit_input() -> UnitScheduleInput {
         // UEF Novax Center: a recognizable late-game unit target.
         target: "XEB2402".to_string(),
         options: faf_build_scheduler::SearchOptions::default(),
+        config: SchedulerConfig::default(),
     }
 }
 

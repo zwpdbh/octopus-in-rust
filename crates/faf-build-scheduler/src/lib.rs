@@ -7,6 +7,7 @@
 
 pub mod algorithms;
 pub mod app;
+pub mod config;
 pub mod plugins;
 pub mod request;
 pub mod result;
@@ -15,6 +16,7 @@ pub mod search;
 pub mod util;
 
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
+pub use config::SchedulerConfig;
 pub use plugins::{
     run_to_completion, EcoSchedulingPlugin, GreedyPlugin, SchedulerInitPlugin, SchedulerResult,
     SchedulerSet, SchedulerState, UnitSchedulingPlugin,
@@ -63,6 +65,7 @@ mod tests {
             initial_inventory: vec![UnitKind::Commander],
             target: UnitKind::Engineer(TechLevel::T1),
             options: SearchOptions::default(),
+            config: SchedulerConfig::default(),
         };
 
         let schedule = scheduler
@@ -83,6 +86,7 @@ mod tests {
                 tolerance: 1.0,
             },
             options: SearchOptions::default(),
+            config: SchedulerConfig::default(),
         };
 
         let schedule = scheduler
@@ -92,6 +96,47 @@ mod tests {
         assert!(
             schedule.final_eco.production_per_second_mass >= 7.0,
             "final mass production should meet target"
+        );
+    }
+
+    #[test]
+    fn greedy_eco_schedule_respects_max_mex_count() {
+        let library = test_library();
+        let scheduler = Scheduler::new(library);
+        let request = EcoScheduleRequest {
+            initial_eco: default_eco(),
+            initial_inventory: vec![UnitKind::Commander, UnitKind::Mex(TechLevel::T1)],
+            target: EcoTarget {
+                mass_production: MassRate::from_raw(7.0),
+                tolerance: 1.0,
+            },
+            options: SearchOptions::default(),
+            config: SchedulerConfig { max_mex_count: 1 },
+        };
+
+        let schedule = scheduler
+            .schedule_eco(&request)
+            .expect("schedule should succeed");
+        let new_mex_builds = schedule
+            .steps
+            .iter()
+            .filter(|s| {
+                matches!(
+                    &s.action,
+                    Action::Build {
+                        target: UnitKind::Mex(_) | UnitKind::CapMex(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            new_mex_builds, 0,
+            "should not build new mass extractors when already at max_mex_count"
+        );
+        assert!(
+            schedule.final_eco.production_per_second_mass >= 7.0,
+            "final mass production should still meet target via upgrades"
         );
     }
 
@@ -107,6 +152,7 @@ mod tests {
                 tolerance: 1.0,
             },
             options: SearchOptions::default(),
+            config: SchedulerConfig::default(),
         };
 
         let schedule = scheduler

@@ -31,6 +31,11 @@ impl Default for SearchOptions {
     }
 }
 
+#[allow(dead_code)]
+fn default_max_mex_count() -> u32 {
+    10
+}
+
 /// Scheduling request sent to `POST /api/schedule`. Tagged by `mode`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -41,12 +46,16 @@ pub enum ScheduleApiRequest {
         target_mass_production: MassRate,
         tolerance: f64,
         options: SearchOptions,
+        #[serde(default = "default_max_mex_count")]
+        max_mex_count: u32,
     },
     Unit {
         initial_eco: EcoSnapshot,
         initial_inventory: Vec<UnitKind>,
         target: UnitKind,
         options: SearchOptions,
+        #[serde(default = "default_max_mex_count")]
+        max_mex_count: u32,
     },
 }
 

@@ -8,16 +8,18 @@ use bevy_app::prelude::*;
 use faf_blueprints::{BlueprintLibrary, UnitKind};
 use faf_sim::runtime::EcoSnapshot;
 
-use crate::plugins::scheduler::{run_to_completion, SchedulerInitPlugin};
+use crate::config::SchedulerConfig;
+use crate::plugins::init::{run_to_completion, SchedulerInitPlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::{Schedule, ScheduleError};
+use crate::search::{BlueprintLibraryRef, SearchState, SearchTarget};
 
 /// A Bevy `App` configured for scheduling.
 ///
 /// Build one with [`SchedulerApp::new_eco`] or [`SchedulerApp::new_unit`], add
-/// mode plugins such as [`EcoSchedulingPlugin`](crate::eco_plugin::EcoSchedulingPlugin)
-/// or [`UnitSchedulingPlugin`](crate::unit_plugin::UnitSchedulingPlugin), and an
-/// algorithm plugin such as [`GreedyPlugin`](crate::algorithms::GreedyPlugin),
+/// mode plugins such as [`EcoSchedulingPlugin`](crate::plugins::eco::EcoSchedulingPlugin)
+/// or [`UnitSchedulingPlugin`](crate::plugins::unit::UnitSchedulingPlugin), and an
+/// algorithm plugin such as [`GreedyPlugin`](crate::plugins::greedy::GreedyPlugin),
 /// then call [`SchedulerApp::run_eco`] or [`SchedulerApp::run_unit`] to execute
 /// the search.
 pub struct SchedulerApp {
@@ -26,40 +28,48 @@ pub struct SchedulerApp {
 
 impl SchedulerApp {
     /// Create a scheduler app for eco scheduling.
-    pub fn new_eco(
+    pub fn new_for_eco(
         library: Arc<BlueprintLibrary>,
         initial_eco: EcoSnapshot,
-        initial_inventory: HashMap<UnitKind, u32>,
+        inventory: HashMap<UnitKind, u32>,
         target: EcoTarget,
         options: SearchOptions,
+        config: SchedulerConfig,
     ) -> Self {
         let mut app = App::new();
-        app.add_plugins(SchedulerInitPlugin::new_eco(
-            library,
+        app.insert_resource(SearchState::new(
             initial_eco,
-            initial_inventory,
-            target,
+            inventory,
+            SearchTarget::Eco(target),
             options,
-        ));
+        ))
+        .insert_resource(BlueprintLibraryRef(library))
+        .insert_resource(config)
+        .init_resource::<SchedulerResult>()
+        .add_plugins(SchedulerInitPlugin);
         Self { app }
     }
 
     /// Create a scheduler app for unit scheduling.
-    pub fn new_unit(
+    pub fn new_for_unit(
         library: Arc<BlueprintLibrary>,
         initial_eco: EcoSnapshot,
-        initial_inventory: HashMap<UnitKind, u32>,
+        inventory: HashMap<UnitKind, u32>,
         target: UnitKind,
         options: SearchOptions,
+        config: SchedulerConfig,
     ) -> Self {
         let mut app = App::new();
-        app.add_plugins(SchedulerInitPlugin::new_unit(
-            library,
+        app.insert_resource(SearchState::new(
             initial_eco,
-            initial_inventory,
-            target,
+            inventory,
+            SearchTarget::Unit(target),
             options,
-        ));
+        ))
+        .insert_resource(BlueprintLibraryRef(library))
+        .insert_resource(config)
+        .init_resource::<SchedulerResult>()
+        .add_plugins(SchedulerInitPlugin);
         Self { app }
     }
 

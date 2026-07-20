@@ -68,6 +68,11 @@ pub struct ScheduleEcoArgs {
     #[arg(long)]
     pub target_mass_production: Option<f64>,
 
+    /// Maximum number of mass extractors (including capped variants) allowed
+    /// in the plan. Overrides the value in `--input`. Defaults to 10.
+    #[arg(long)]
+    pub max_mex: Option<u32>,
+
     /// Output path for the generated BuildQueue JSON.
     /// If omitted, the JSON is printed to stdout.
     #[arg(short, long)]

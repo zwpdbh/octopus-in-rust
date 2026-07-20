@@ -5,6 +5,8 @@ use faf_quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
 use serde::{Deserialize, Serialize};
 
+use crate::config::SchedulerConfig;
+
 /// Lower-bound threshold that defines an eco goal.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EcoTarget {
@@ -58,6 +60,7 @@ pub struct EcoScheduleRequest {
     pub initial_inventory: Vec<UnitKind>,
     pub target: EcoTarget,
     pub options: SearchOptions,
+    pub config: SchedulerConfig,
 }
 
 /// Request to build a target unit as quickly as possible.
@@ -67,6 +70,7 @@ pub struct UnitScheduleRequest {
     pub initial_inventory: Vec<UnitKind>,
     pub target: UnitKind,
     pub options: SearchOptions,
+    pub config: SchedulerConfig,
 }
 
 /// CLI-friendly input file format for `schedule eco`.
@@ -81,6 +85,8 @@ pub struct EcoScheduleInput {
     pub tolerance: f64,
     #[serde(default)]
     pub options: SearchOptions,
+    #[serde(default)]
+    pub config: SchedulerConfig,
 }
 
 fn default_tolerance() -> f64 {
@@ -100,6 +106,8 @@ pub struct UnitScheduleInput {
     pub target: String,
     #[serde(default)]
     pub options: SearchOptions,
+    #[serde(default)]
+    pub config: SchedulerConfig,
 }
 
 fn default_inventory() -> Vec<String> {

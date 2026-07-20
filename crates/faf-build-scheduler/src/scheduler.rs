@@ -44,12 +44,13 @@ impl Scheduler {
     /// Plan the fastest way to reach the eco target.
     pub fn schedule_eco(&self, request: &EcoScheduleRequest) -> Result<Schedule, ScheduleError> {
         let inventory = count_inventory(&request.initial_inventory);
-        let mut app = SchedulerApp::new_eco(
+        let mut app = SchedulerApp::new_for_eco(
             Arc::clone(&self.library),
             request.initial_eco,
             inventory,
             request.target.clone(),
             request.options.clone(),
+            request.config,
         );
         app = app
             .with_plugin(EcoSchedulingPlugin)
@@ -60,12 +61,13 @@ impl Scheduler {
     /// Plan the fastest way to build the target unit.
     pub fn schedule_unit(&self, request: &UnitScheduleRequest) -> Result<Schedule, ScheduleError> {
         let inventory = count_inventory(&request.initial_inventory);
-        let mut app = SchedulerApp::new_unit(
+        let mut app = SchedulerApp::new_for_unit(
             Arc::clone(&self.library),
             request.initial_eco,
             inventory,
             request.target.clone(),
             request.options.clone(),
+            request.config,
         );
         app = app
             .with_plugin(UnitSchedulingPlugin)

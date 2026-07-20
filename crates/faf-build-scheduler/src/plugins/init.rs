@@ -1,19 +1,12 @@
 //! Core scheduler plugin and lifecycle.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use bevy_state::app::StatesPlugin;
 use bevy_state::prelude::*;
 
-use faf_blueprints::{BlueprintLibrary, UnitKind};
-use faf_sim::runtime::EcoSnapshot;
-
-use crate::request::{EcoTarget, SearchOptions};
 use crate::result::{Schedule, ScheduleError};
-use crate::search::{BlueprintLibraryRef, SearchState, SearchTarget};
+use crate::search::SearchState;
 
 /// Lifecycle states of a scheduling search.
 ///
@@ -44,54 +37,11 @@ pub struct SchedulerResult {
     pub result: Option<Result<Schedule, ScheduleError>>,
 }
 
-/// Per-request init plugin that sets up a Bevy app for one scheduling run.
+/// Static plugin that registers the shared scheduler lifecycle and system sets.
 ///
-/// It registers the shared search state, blueprint library, and lifecycle
-/// systems. Mode-specific plugins (such as [`EcoSchedulingPlugin`]) and
-/// algorithm plugins (such as [`GreedyPlugin`]) must also be added.
-pub struct SchedulerInitPlugin {
-    library: Arc<BlueprintLibrary>,
-    initial_eco: EcoSnapshot,
-    inventory: HashMap<UnitKind, u32>,
-    target: SearchTarget,
-    options: SearchOptions,
-}
-
-impl SchedulerInitPlugin {
-    /// Set up an eco scheduling search.
-    pub fn new_eco(
-        library: Arc<BlueprintLibrary>,
-        initial_eco: EcoSnapshot,
-        inventory: HashMap<UnitKind, u32>,
-        target: EcoTarget,
-        options: SearchOptions,
-    ) -> Self {
-        Self {
-            library,
-            initial_eco,
-            inventory,
-            target: SearchTarget::Eco(target),
-            options,
-        }
-    }
-
-    /// Set up a unit scheduling search.
-    pub fn new_unit(
-        library: Arc<BlueprintLibrary>,
-        initial_eco: EcoSnapshot,
-        inventory: HashMap<UnitKind, u32>,
-        target: UnitKind,
-        options: SearchOptions,
-    ) -> Self {
-        Self {
-            library,
-            initial_eco,
-            inventory,
-            target: SearchTarget::Unit(target),
-            options,
-        }
-    }
-}
+/// It does **not** carry request-specific data. Callers must insert
+/// [`SearchState`] and [`BlueprintLibraryRef`] resources before running the app.
+pub struct SchedulerInitPlugin;
 
 impl Plugin for SchedulerInitPlugin {
     fn build(&self, app: &mut App) {
@@ -107,14 +57,6 @@ impl Plugin for SchedulerInitPlugin {
                     .chain()
                     .run_if(in_state(SchedulerState::Searching)),
             )
-            .insert_resource(SearchState::new(
-                self.initial_eco,
-                self.inventory.clone(),
-                self.target.clone(),
-                self.options.clone(),
-            ))
-            .insert_resource(BlueprintLibraryRef(self.library.clone()))
-            .init_resource::<SchedulerResult>()
             .add_systems(Update, transition_to_done.in_set(SchedulerSet::Select));
     }
 }

@@ -3,7 +3,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::plugins::scheduler::{SchedulerResult, SchedulerSet};
+use crate::plugins::init::{SchedulerResult, SchedulerSet};
 use crate::result::{ScheduleError, StepResult};
 use crate::search::{
     apply_action_to_inventory, build_schedule, build_task_for_action, BlueprintLibraryRef,
