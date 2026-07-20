@@ -11,7 +11,8 @@ use faf_sim_shared::{BuildTask, EcoSnapshot};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
 use crate::request::{EcoTarget, SearchOptions};
-use crate::result::{Action, Schedule, ScheduleError, StepResult};
+use crate::resources::{CurrentInventory, EconomyState, SearchGoal, StepLog, TaskLog};
+use crate::result::{Action, Schedule, ScheduleError};
 
 /// Resource wrapper so the `BlueprintLibrary` can be inserted into a Bevy
 /// `World`.
@@ -28,7 +29,7 @@ pub(crate) struct CandidateScore(pub f64);
 
 /// The search goal.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum SearchTarget {
+pub enum SearchTarget {
     Eco(EcoTarget),
     Unit(UnitKind),
 }
@@ -47,82 +48,56 @@ impl SearchTarget {
     }
 }
 
-/// State of a best-first search through the build space.
-#[derive(Resource)]
-pub(crate) struct SearchState {
-    /// Economy snapshot the search started from.
-    pub initial_eco: EcoSnapshot,
-    /// Current economy snapshot at the end of the chosen steps.
-    pub current_eco: EcoSnapshot,
-    /// Units currently owned by the player.
-    pub inventory: HashMap<UnitKind, u32>,
-    /// Search goal.
-    pub target: SearchTarget,
-    /// Options controlling the search.
-    pub options: SearchOptions,
-    /// Tasks committed to by the search so far.
-    pub tasks: Vec<BuildTask>,
-    /// Human-readable steps produced so far.
-    pub steps: Vec<StepResult>,
-    /// Next available task id.
-    pub next_id: u32,
-    /// Number of greedy iterations completed.
-    pub iteration: usize,
-    /// Whether the search has finished.
-    pub done: bool,
-}
+/// Compute the highest technology tier available from the current inventory.
+///
+/// The tier is determined by the highest engineer owned. If no engineer is
+/// present, the tier defaults to [`TechLevel::T1`].
+pub(crate) fn compute_current_tech_level(
+    inventory: &HashMap<UnitKind, u32>,
+) -> faf_blueprints::TechLevel {
+    use faf_blueprints::TechLevel;
 
-impl SearchState {
-    pub fn new(
-        initial_eco: EcoSnapshot,
-        inventory: HashMap<UnitKind, u32>,
-        target: SearchTarget,
-        options: SearchOptions,
-    ) -> Self {
-        Self {
-            initial_eco,
-            current_eco: initial_eco,
-            inventory,
-            target,
-            options,
-            tasks: Vec::new(),
-            steps: Vec::new(),
-            next_id: 1,
-            iteration: 0,
-            done: false,
-        }
-    }
-
-    /// True if the search should stop due to iteration/step limits.
-    pub fn should_terminate(&self) -> bool {
-        self.iteration >= self.options.max_iterations || self.steps.len() >= self.options.max_steps
-    }
+    inventory
+        .iter()
+        .filter(|(_, count)| **count > 0)
+        .filter_map(|(kind, _)| match kind {
+            UnitKind::Engineer(tech) => Some(*tech),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(TechLevel::T1)
 }
 
 /// Convert the chosen actions into a final `Schedule`.
-pub(crate) fn build_schedule(state: &SearchState) -> Result<Schedule, ScheduleError> {
-    if !state
-        .target
-        .is_reached(&state.current_eco, &state.inventory)
-    {
+pub(crate) fn build_schedule(
+    economy_state: &EconomyState,
+    inventory: &CurrentInventory,
+    task_log: &TaskLog,
+    step_log: &StepLog,
+    goal: &SearchGoal,
+) -> Result<Schedule, ScheduleError> {
+    if !goal.0.is_reached(&economy_state.current, &inventory.0) {
+        // The apply step already checks this before calling `build_schedule`,
+        // but keep the guard for robustness.
         return Err(ScheduleError::GoalUnreachable);
     }
-    let plan = build_construction_plan(state);
+
+    let plan = build_construction_plan(economy_state, task_log);
     Ok(Schedule {
         plan,
-        steps: state.steps.clone(),
-        final_eco: state.current_eco,
-        total_time_seconds: state
-            .steps
+        steps: step_log.0.clone(),
+        final_eco: economy_state.current,
+        total_time_seconds: step_log
+            .0
             .last()
             .map(|s| s.finish_time_seconds)
             .unwrap_or(0.0),
     })
 }
 
-fn build_construction_plan(state: &SearchState) -> ConstructionPlan {
-    let items = state
-        .tasks
+fn build_construction_plan(economy_state: &EconomyState, task_log: &TaskLog) -> ConstructionPlan {
+    let items = task_log
+        .0
         .iter()
         .map(|task| ConstructionItem {
             id: task.id,
@@ -141,7 +116,7 @@ fn build_construction_plan(state: &SearchState) -> ConstructionPlan {
         .collect();
 
     ConstructionPlan {
-        eco: snapshot_to_initial_settings(&state.initial_eco),
+        eco: snapshot_to_initial_settings(&economy_state.initial),
         items,
     }
 }
@@ -237,14 +212,17 @@ pub(crate) fn apply_action_to_inventory(action: &Action, inventory: &mut HashMap
 /// Simulate `action` as the next step from the current search state and
 /// return the per-task result.
 pub(crate) fn solve_action(
-    state: &SearchState,
+    current_economy: &EcoSnapshot,
+    inventory: &HashMap<UnitKind, u32>,
+    next_id: u32,
+    options: &SearchOptions,
     action: &Action,
     library: &BlueprintLibrary,
 ) -> Option<PlanResult> {
-    let task = build_task_for_action(action, &state.inventory, library, state.next_id)?;
+    let task = build_task_for_action(action, inventory, library, next_id)?;
     Some(plan_completion_with_tasks(
-        &state.current_eco,
+        current_economy,
         &[task],
-        state.options.simulation_max_time_seconds,
+        options.simulation_max_time_seconds,
     ))
 }

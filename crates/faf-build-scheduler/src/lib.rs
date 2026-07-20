@@ -10,6 +10,7 @@ pub mod app;
 pub mod config;
 pub mod plugins;
 pub mod request;
+pub mod resources;
 pub mod result;
 pub mod scheduler;
 pub mod search;
@@ -24,6 +25,9 @@ pub use plugins::{
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
     UnitScheduleRequest,
+};
+pub use resources::{
+    CurrentInventory, CurrentTechLevel, EconomyState, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
 pub use result::{Action, Schedule, ScheduleError, StepResult};
 pub use scheduler::Scheduler;

@@ -11,15 +11,18 @@ use faf_sim_shared::EcoSnapshot;
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
+use crate::resources::{
+    CurrentInventory, CurrentTechLevel, EconomyState, SearchGoal, SearchProgress, StepLog, TaskLog,
+};
 use crate::result::{Schedule, ScheduleError};
-use crate::search::{BlueprintLibraryRef, SearchState, SearchTarget};
+use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarget};
 
 /// A Bevy `App` configured for scheduling.
 ///
 /// Build one with [`SchedulerApp::new_eco`] or [`SchedulerApp::new_unit`], add
 /// mode plugins such as [`EcoSchedulingPlugin`](crate::plugins::eco::EcoSchedulingPlugin)
 /// or [`UnitSchedulingPlugin`](crate::plugins::unit::UnitSchedulingPlugin), and an
-/// algorithm plugin such as [`GreedyPlugin`](crate::plugins::greedy::GreedyPlugin),
+/// algorithm plugin such as [`ApplyPlugin`](crate::plugins::apply::ApplyPlugin),
 /// then call [`SchedulerApp::run_eco`] or [`SchedulerApp::run_unit`] to execute
 /// the search.
 pub struct SchedulerApp {
@@ -37,16 +40,16 @@ impl SchedulerApp {
         config: SchedulerConfig,
     ) -> Self {
         let mut app = App::new();
-        app.insert_resource(SearchState::new(
+        Self::insert_shared_resources(
+            &mut app,
+            library,
             initial_eco,
             inventory,
             SearchTarget::Eco(target),
             options,
-        ))
-        .insert_resource(BlueprintLibraryRef(library))
-        .insert_resource(config)
-        .init_resource::<SchedulerResult>()
-        .add_plugins(SchedulerLifecyclePlugin);
+            config,
+        );
+        app.add_plugins(SchedulerLifecyclePlugin);
         Self { app }
     }
 
@@ -60,17 +63,48 @@ impl SchedulerApp {
         config: SchedulerConfig,
     ) -> Self {
         let mut app = App::new();
-        app.insert_resource(SearchState::new(
+        Self::insert_shared_resources(
+            &mut app,
+            library,
             initial_eco,
             inventory,
             SearchTarget::Unit(target),
             options,
-        ))
+            config,
+        );
+        app.add_plugins(SchedulerLifecyclePlugin);
+        Self { app }
+    }
+
+    fn insert_shared_resources(
+        app: &mut App,
+        library: Arc<BlueprintLibrary>,
+        initial_eco: EcoSnapshot,
+        inventory: HashMap<UnitKind, u32>,
+        target: SearchTarget,
+        options: SearchOptions,
+        config: SchedulerConfig,
+    ) {
+        let tech_level = compute_current_tech_level(&inventory);
+
+        app.insert_resource(EconomyState {
+            initial: initial_eco,
+            current: initial_eco,
+        })
+        .insert_resource(CurrentInventory(inventory))
+        .insert_resource(CurrentTechLevel(tech_level))
+        .insert_resource(SearchGoal(target))
+        .insert_resource(options)
+        .insert_resource(SearchProgress {
+            iteration: 0,
+            next_id: 1,
+            done: false,
+        })
+        .init_resource::<TaskLog>()
+        .init_resource::<StepLog>()
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
-        .init_resource::<SchedulerResult>()
-        .add_plugins(SchedulerLifecyclePlugin);
-        Self { app }
+        .init_resource::<SchedulerResult>();
     }
 
     /// Add an arbitrary plugin (e.g. a scheduling mode or an algorithm).

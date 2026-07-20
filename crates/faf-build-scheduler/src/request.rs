@@ -1,5 +1,6 @@
 //! Input types for the build scheduler.
 
+use bevy_ecs::prelude::Resource;
 use faf_blueprints::UnitKind;
 use faf_quantities::MassRate;
 use faf_sim_shared::EcoSnapshot;
@@ -24,7 +25,7 @@ impl EcoTarget {
 }
 
 /// Search budget and simulator caps.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Resource, Serialize, Deserialize)]
 pub struct SearchOptions {
     pub max_search_seconds: f64,
     pub simulation_max_time_seconds: f64,

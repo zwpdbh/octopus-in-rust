@@ -1,16 +1,17 @@
 //! Greedy best-first scheduling algorithm.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy_app::prelude::*;
 use faf_blueprints::{BlueprintGraph, BlueprintLibrary, UnitKind};
+use faf_sim_shared::EcoSnapshot;
 use faf_solver::CompletionResult;
 
 use crate::algorithms::SchedulingAlgorithm;
 use crate::plugins::apply::ApplyPlugin;
-use crate::request::EcoTarget;
+use crate::request::{EcoTarget, SearchOptions};
 use crate::result::Action;
-use crate::search::{solve_action, SearchState};
+use crate::search::solve_action;
 
 /// Greedy search: at each iteration, generate candidates, simulate them, and
 /// commit the lowest-scoring candidate.
@@ -35,20 +36,26 @@ impl SchedulingAlgorithm for Greedy {
 /// Candidates that do not reach the target are pushed above the simulation cap
 /// so that any reaching candidate is preferred.
 pub(crate) fn score_eco_candidate(
-    state: &SearchState,
+    current_economy: &EcoSnapshot,
+    inventory: &HashMap<UnitKind, u32>,
+    next_id: u32,
+    options: &SearchOptions,
     action: &Action,
     library: &BlueprintLibrary,
     target: &EcoTarget,
 ) -> f64 {
-    let Some(result) = solve_action(state, action, library) else {
+    let Some(result) = solve_action(
+        current_economy,
+        inventory,
+        next_id,
+        options,
+        action,
+        library,
+    ) else {
         return f64::INFINITY;
     };
     let completion = result.tasks.last().cloned().unwrap_or(result.total);
-    score_eco_completion(
-        &completion,
-        target,
-        state.options.simulation_max_time_seconds,
-    )
+    score_eco_completion(&completion, target, options.simulation_max_time_seconds)
 }
 
 fn score_eco_completion(
@@ -76,17 +83,27 @@ fn score_eco_completion(
 /// all others are ranked by how many build/upgrade edges separate their result
 /// from the goal.
 pub(crate) fn score_unit_candidate(
-    state: &SearchState,
+    current_economy: &EcoSnapshot,
+    inventory: &HashMap<UnitKind, u32>,
+    next_id: u32,
+    options: &SearchOptions,
     action: &Action,
     library: &BlueprintLibrary,
     target: &UnitKind,
 ) -> f64 {
     let graph = library.build_graph();
-    let max_time = state.options.simulation_max_time_seconds;
+    let max_time = options.simulation_max_time_seconds;
     let resulting_unit = resulting_unit(action);
 
     if resulting_unit == *target {
-        if let Some(result) = solve_action(state, action, library) {
+        if let Some(result) = solve_action(
+            current_economy,
+            inventory,
+            next_id,
+            options,
+            action,
+            library,
+        ) {
             let completion = result.tasks.last().cloned().unwrap_or(result.total);
             completion.time_seconds
         } else {

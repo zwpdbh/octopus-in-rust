@@ -4,10 +4,14 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use crate::plugins::lifecycle::{SchedulerResult, SchedulerSet};
+use crate::request::SearchOptions;
+use crate::resources::{
+    CurrentInventory, CurrentTechLevel, EconomyState, SearchGoal, SearchProgress, StepLog, TaskLog,
+};
 use crate::result::{ScheduleError, StepResult};
 use crate::search::{
-    apply_action_to_inventory, build_schedule, build_task_for_action, BlueprintLibraryRef,
-    CandidateAction, CandidateScore, SearchState,
+    apply_action_to_inventory, build_schedule, build_task_for_action, compute_current_tech_level,
+    BlueprintLibraryRef, CandidateAction, CandidateScore,
 };
 
 /// Plugin that registers the generic apply step.
@@ -27,16 +31,23 @@ impl Plugin for ApplyPlugin {
 /// Apply the lowest-scoring candidate by committing it and updating the search state.
 pub(crate) fn apply_best_system(
     mut commands: Commands,
-    mut state: ResMut<SearchState>,
+    mut economy: ResMut<EconomyState>,
+    mut inventory: ResMut<CurrentInventory>,
+    mut tech_level: ResMut<CurrentTechLevel>,
+    mut progress: ResMut<SearchProgress>,
+    mut task_log: ResMut<TaskLog>,
+    mut step_log: ResMut<StepLog>,
+    goal: Res<SearchGoal>,
+    options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
     mut result: ResMut<SchedulerResult>,
     candidates: Query<(Entity, &CandidateAction, &CandidateScore)>,
 ) {
-    if state.done {
+    if progress.done {
         return;
     }
 
-    state.iteration += 1;
+    progress.iteration += 1;
 
     let library = &*library.0;
 
@@ -45,32 +56,35 @@ pub(crate) fn apply_best_system(
         .min_by(|(_, _, a), (_, _, b)| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
     {
         let Some(task) =
-            build_task_for_action(&best_action.0, &state.inventory, library, state.next_id)
+            build_task_for_action(&best_action.0, &inventory.0, library, progress.next_id)
         else {
             commands.entity(best_entity).despawn();
-            if state.should_terminate() {
-                state.done = true;
+            if progress.should_terminate(&options) {
+                progress.done = true;
                 result.result = Some(Err(ScheduleError::GoalUnreachable));
             }
             return;
         };
 
-        apply_action_to_inventory(&best_action.0, &mut state.inventory);
-        state.next_id += 1;
+        apply_action_to_inventory(&best_action.0, &mut inventory.0);
+        progress.next_id += 1;
+
+        // Recompute the available tech tier now that the inventory has changed.
+        tech_level.0 = compute_current_tech_level(&inventory.0);
 
         // Run the actual simulator for the chosen action to capture the resulting
         // economy and elapsed time.
         let completion = faf_solver::plan_completion_with_tasks(
-            &state.current_eco,
+            &economy.current,
             &[task.clone()],
-            state.options.simulation_max_time_seconds,
+            options.simulation_max_time_seconds,
         );
         let final_task = completion.tasks.last().cloned().unwrap_or(completion.total);
-        state.current_eco = final_task.economy.clone();
+        economy.current = final_task.economy.clone();
 
         let finish_time_seconds = final_task.time_seconds;
-        state.tasks.push(task);
-        state.steps.push(StepResult {
+        task_log.0.push(task);
+        step_log.0.push(StepResult {
             action: best_action.0.clone(),
             finish_time_seconds,
             economy: final_task.economy.clone(),
@@ -78,17 +92,16 @@ pub(crate) fn apply_best_system(
 
         commands.entity(best_entity).despawn();
 
-        if state
-            .target
-            .is_reached(&state.current_eco, &state.inventory)
-        {
-            state.done = true;
-            result.result = Some(build_schedule(&state));
+        if goal.0.is_reached(&economy.current, &inventory.0) {
+            progress.done = true;
+            result.result = Some(build_schedule(
+                &economy, &inventory, &task_log, &step_log, &goal,
+            ));
             return;
         }
 
-        if state.should_terminate() {
-            state.done = true;
+        if progress.should_terminate(&options) {
+            progress.done = true;
             result.result = Some(Err(ScheduleError::GoalUnreachable));
         }
 
@@ -100,7 +113,7 @@ pub(crate) fn apply_best_system(
         }
     } else {
         // No candidates: search is stuck.
-        state.done = true;
+        progress.done = true;
         result.result = Some(Err(ScheduleError::GoalUnreachable));
     }
 }

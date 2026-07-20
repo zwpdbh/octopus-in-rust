@@ -6,10 +6,10 @@ use bevy_ecs::prelude::*;
 use crate::algorithms::greedy::score_unit_candidate;
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
+use crate::request::SearchOptions;
+use crate::resources::{CurrentInventory, EconomyState, SearchGoal, SearchProgress};
 use crate::result::Action;
-use crate::search::{
-    BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState, SearchTarget,
-};
+use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
 use crate::util::{count_mex, is_mex};
 
 /// Plugin that registers candidate generation and evaluation for unit
@@ -38,27 +38,27 @@ impl Plugin for UnitSchedulingPlugin {
 /// inventory; the evaluation step scores them by symbolic distance to the goal.
 pub(crate) fn generate_unit_candidates_system(
     mut commands: Commands,
-    state: Res<SearchState>,
+    progress: Res<SearchProgress>,
+    economy: Res<EconomyState>,
+    inventory: Res<CurrentInventory>,
+    goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
 ) {
-    if state.done {
+    if progress.done {
         return;
     }
 
-    if state
-        .target
-        .is_reached(&state.current_eco, &state.inventory)
-    {
+    if goal.0.is_reached(&economy.current, &inventory.0) {
         return;
     }
 
     let library = &*library.0;
-    let current_mex_count = count_mex(&state.inventory, library);
+    let current_mex_count = count_mex(&inventory.0, library);
     let mex_cap = config.max_mex_count;
 
     // All legal build actions.
-    for (builder, count) in &state.inventory {
+    for (builder, count) in &inventory.0 {
         if *count == 0 {
             continue;
         }
@@ -75,13 +75,13 @@ pub(crate) fn generate_unit_candidates_system(
     }
 
     // All legal upgrade actions.
-    for (from, count) in &state.inventory {
+    for (from, count) in &inventory.0 {
         if *count == 0 {
             continue;
         }
         for path in library.upgrade_paths(from) {
             for builder in &path.builders {
-                if state.inventory.get(builder).copied().unwrap_or(0) > 0 {
+                if inventory.0.get(builder).copied().unwrap_or(0) > 0 {
                     commands.spawn(CandidateAction(Action::Upgrade {
                         from: from.clone(),
                         to: path.target.clone(),
@@ -100,22 +100,34 @@ pub(crate) fn generate_unit_candidates_system(
 /// algorithms can reuse the same ECS pipeline.
 pub(crate) fn evaluate_unit_candidates_system(
     mut commands: Commands,
-    state: Res<SearchState>,
+    progress: Res<SearchProgress>,
+    economy: Res<EconomyState>,
+    inventory: Res<CurrentInventory>,
+    goal: Res<SearchGoal>,
+    options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
     candidates: Query<(Entity, &CandidateAction)>,
 ) {
-    if state.done {
+    if progress.done {
         return;
     }
 
-    let SearchTarget::Unit(target) = &state.target else {
+    let SearchTarget::Unit(target) = &goal.0 else {
         return;
     };
 
     let library = &*library.0;
 
     for (entity, action) in candidates.iter() {
-        let score = score_unit_candidate(&state, &action.0, library, target);
+        let score = score_unit_candidate(
+            &economy.current,
+            &inventory.0,
+            progress.next_id,
+            &options,
+            &action.0,
+            library,
+            target,
+        );
         commands.entity(entity).insert(CandidateScore(score));
     }
 }
