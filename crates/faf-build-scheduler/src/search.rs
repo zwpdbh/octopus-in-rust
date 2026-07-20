@@ -8,7 +8,7 @@ use faf_blueprints::{BlueprintLibrary, UnitEcoStats, UnitKind};
 use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 use faf_sim_shared::plan::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
 use faf_sim_shared::{BuildTask, EcoSnapshot};
-use faf_solver::{plan_completion_with_tasks, CompletionResult, PlanResult};
+use faf_solver::{plan_completion_with_tasks, PlanResult};
 
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::{Action, Schedule, ScheduleError, StepResult};
@@ -232,32 +232,6 @@ pub(crate) fn apply_action_to_inventory(action: &Action, inventory: &mut HashMap
             *inventory.entry(to.clone()).or_insert(0) += 1;
         }
     }
-}
-
-/// Score a plan completion. Lower is better.
-///
-/// If the target is reached, the score is the finish time plus a tiny penalty
-/// for resource waste. Candidates that do not reach the target are penalised
-/// with the simulation cap so that any reaching candidate is always preferred;
-/// among non-reaching candidates the score estimates how long the remaining gap
-/// would take to close at the projected income.
-pub(crate) fn score_result(
-    completion: &CompletionResult,
-    target: &EcoTarget,
-    max_time_seconds: f64,
-) -> f64 {
-    if target.is_reached(&completion.economy) {
-        let mass_waste = (completion.economy.production_per_second_mass
-            - target.mass_production.value())
-        .max(0.0);
-        return completion.time_seconds + mass_waste * 1e-6;
-    }
-
-    let mass_gap =
-        (target.mass_production.value() - completion.economy.production_per_second_mass).max(0.0);
-    let income = completion.economy.production_per_second_mass.max(1.0);
-
-    max_time_seconds + mass_gap / income
 }
 
 /// Simulate `action` as the next step from the current search state and

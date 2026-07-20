@@ -1,4 +1,4 @@
-//! Greedy algorithm plugin.
+//! Apply-best plugin.
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
@@ -10,20 +10,22 @@ use crate::search::{
     CandidateAction, CandidateScore, SearchState,
 };
 
-/// Plugin form of the greedy algorithm. Add this alongside [`SchedulerPlugin`]
-/// and a scheduling-mode plugin such as [`EcoSchedulingPlugin`].
-pub struct GreedyPlugin;
+/// Plugin that registers the generic apply step.
+///
+/// Add this alongside a scheduling-mode plugin (`EcoSchedulingPlugin` or
+/// `UnitSchedulingPlugin`). The mode plugin scores candidates in the
+/// `EvaluateCandidate` set; this system picks the lowest-scored candidate and
+/// commits it in the `Apply` set.
+pub struct ApplyPlugin;
 
-impl Plugin for GreedyPlugin {
+impl Plugin for ApplyPlugin {
     fn build(&self, app: &mut App) {
-        // Place the selection system in the `Select` set so it runs after all
-        // `Generate` and `Evaluate` systems in each scheduler update loop.
-        app.add_systems(Update, select_best_system.in_set(SchedulerSet::Select));
+        app.add_systems(Update, apply_best_system.in_set(SchedulerSet::Apply));
     }
 }
 
-/// Select the lowest-scoring candidate, commit it, and update the search state.
-pub(crate) fn select_best_system(
+/// Apply the lowest-scoring candidate by committing it and updating the search state.
+pub(crate) fn apply_best_system(
     mut commands: Commands,
     mut state: ResMut<SearchState>,
     library: Res<BlueprintLibraryRef>,

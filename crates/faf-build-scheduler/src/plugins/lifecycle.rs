@@ -23,11 +23,14 @@ pub enum SchedulerState {
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum SchedulerSet {
     /// Produce candidate actions for the current state.
-    Generate,
+    GenerateCandidate,
     /// Evaluate candidate actions by simulating them.
-    Evaluate,
-    /// Commit the best candidate and check for termination.
-    Select,
+    ///
+    /// Different scheduling algorithms or evaluation modes plug in here:
+    /// they assign a score to every candidate generated in the previous set.
+    EvaluateCandidate,
+    /// Pick the best-scored candidate and apply it to the search state.
+    Apply,
 }
 
 /// Resource that carries the final result of a scheduling run once the search
@@ -56,15 +59,15 @@ impl Plugin for SchedulerLifecyclePlugin {
             // Instead, each plugin tags its systems with `.in_set(...)`, and the
             // single `configure_sets` call below orders those sets:
             //
-            //     Generate -> Evaluate -> Select
+            //     GenerateCandidate -> EvaluateCandidate -> Apply
             //
             // This is the only place that needs to know the global pipeline.
             .configure_sets(
                 Update,
                 (
-                    SchedulerSet::Generate,
-                    SchedulerSet::Evaluate,
-                    SchedulerSet::Select,
+                    SchedulerSet::GenerateCandidate,
+                    SchedulerSet::EvaluateCandidate,
+                    SchedulerSet::Apply,
                 )
                     .chain()
                     // Only run the pipeline while the search is still active.
@@ -72,7 +75,7 @@ impl Plugin for SchedulerLifecyclePlugin {
                     // moves the state to `Done` and these systems stop running.
                     .run_if(in_state(SchedulerState::Searching)),
             )
-            .add_systems(Update, transition_to_done.in_set(SchedulerSet::Select));
+            .add_systems(Update, transition_to_done.in_set(SchedulerSet::Apply));
     }
 }
 

@@ -18,8 +18,8 @@ pub mod util;
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use config::SchedulerConfig;
 pub use plugins::{
-    run_to_completion, EcoSchedulingPlugin, GreedyPlugin, SchedulerLifecyclePlugin,
-    SchedulerResult, SchedulerSet, SchedulerState, UnitSchedulingPlugin,
+    run_to_completion, ApplyPlugin, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
+    SchedulerSet, SchedulerState, UnitSchedulingPlugin,
 };
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,

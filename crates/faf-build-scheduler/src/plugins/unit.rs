@@ -1,17 +1,14 @@
 //! Unit scheduling mode plugin.
 
-use std::collections::{HashSet, VecDeque};
-
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use faf_blueprints::{BlueprintGraph, UnitKind};
-
+use crate::algorithms::greedy::score_unit_candidate;
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
-    solve_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState, SearchTarget,
+    BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState, SearchTarget,
 };
 use crate::util::{count_mex, is_mex};
 
@@ -26,11 +23,11 @@ impl Plugin for UnitSchedulingPlugin {
         // configured there, not here.
         app.add_systems(
             Update,
-            generate_unit_candidates_system.in_set(SchedulerSet::Generate),
+            generate_unit_candidates_system.in_set(SchedulerSet::GenerateCandidate),
         )
         .add_systems(
             Update,
-            evaluate_unit_candidates_system.in_set(SchedulerSet::Evaluate),
+            evaluate_unit_candidates_system.in_set(SchedulerSet::EvaluateCandidate),
         );
     }
 }
@@ -96,11 +93,11 @@ pub(crate) fn generate_unit_candidates_system(
     }
 }
 
-/// Score unit-scheduling candidates by symbolic distance to the target unit.
+/// Evaluate every spawned [`CandidateAction`] for unit scheduling and attach a
+/// [`CandidateScore`].
 ///
-/// Candidates that directly build the target use the simulated completion time;
-/// all others are ranked by how many build/upgrade edges separate their result
-/// from the goal.
+/// The actual scoring function lives in the algorithm module so that different
+/// algorithms can reuse the same ECS pipeline.
 pub(crate) fn evaluate_unit_candidates_system(
     mut commands: Commands,
     state: Res<SearchState>,
@@ -116,66 +113,9 @@ pub(crate) fn evaluate_unit_candidates_system(
     };
 
     let library = &*library.0;
-    let graph = library.build_graph();
-    let max_time = state.options.simulation_max_time_seconds;
 
     for (entity, action) in candidates.iter() {
-        let resulting_unit = resulting_unit(&action.0);
-        let score = if resulting_unit == *target {
-            // Direct construction of the goal: use the actual simulated time.
-            if let Some(result) = solve_action(&state, &action.0, library) {
-                let completion = result.tasks.last().cloned().unwrap_or(result.total);
-                completion.time_seconds
-            } else {
-                f64::INFINITY
-            }
-        } else {
-            match distance_to_target(&graph, &resulting_unit, target) {
-                Some(distance) => max_time + distance as f64,
-                None => f64::INFINITY,
-            }
-        };
-
+        let score = score_unit_candidate(&state, &action.0, library, target);
         commands.entity(entity).insert(CandidateScore(score));
     }
-}
-
-fn resulting_unit(action: &Action) -> UnitKind {
-    match action {
-        Action::Build { target, .. } => target.clone(),
-        Action::Upgrade { to, .. } => to.clone(),
-    }
-}
-
-/// Shortest number of build/upgrade steps from `from` to `target` in the
-/// symbolic blueprint graph. Returns `None` if the target is unreachable.
-fn distance_to_target(graph: &BlueprintGraph, from: &UnitKind, target: &UnitKind) -> Option<usize> {
-    if from == target {
-        return Some(0);
-    }
-
-    let start = graph.node_index(from)?;
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-    visited.insert(start);
-    queue.push_back((start, 0usize));
-
-    while let Some((idx, dist)) = queue.pop_front() {
-        let kind = &graph.graph[idx].kind;
-        if kind == target {
-            return Some(dist);
-        }
-
-        for neighbor in graph
-            .builds_by(kind)
-            .map(|(n, _)| n)
-            .chain(graph.upgrades_from(kind).map(|(n, _)| n))
-        {
-            if visited.insert(neighbor) {
-                queue.push_back((neighbor, dist + 1));
-            }
-        }
-    }
-
-    None
 }

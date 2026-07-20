@@ -5,12 +5,12 @@ use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
 
+use crate::algorithms::greedy::score_eco_candidate;
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
-    score_result, solve_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState,
-    SearchTarget,
+    BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState, SearchTarget,
 };
 use crate::util::{count_mex, is_mex};
 
@@ -22,15 +22,15 @@ impl Plugin for EcoSchedulingPlugin {
     fn build(&self, app: &mut App) {
         // Register eco candidates generation/evaluation in the sets declared by
         // `SchedulerLifecyclePlugin`. The `configure_sets` call there orders
-        // `Generate -> Evaluate -> Select` and gates the whole pipeline on the
-        // `Searching` state.
+        // `GenerateCandidate -> EvaluateCandidate -> Apply` and gates the whole
+        // pipeline on the `Searching` state.
         app.add_systems(
             Update,
-            generate_eco_candidates_system.in_set(SchedulerSet::Generate),
+            generate_eco_candidates_system.in_set(SchedulerSet::GenerateCandidate),
         )
         .add_systems(
             Update,
-            evaluate_eco_candidates_system.in_set(SchedulerSet::Evaluate),
+            evaluate_eco_candidates_system.in_set(SchedulerSet::EvaluateCandidate),
         );
     }
 }
@@ -107,6 +107,9 @@ pub(crate) fn generate_eco_candidates_system(
 
 /// Evaluate every spawned [`CandidateAction`] for eco scheduling and attach a
 /// [`CandidateScore`].
+///
+/// The actual scoring function lives in the algorithm module so that different
+/// algorithms can reuse the same ECS pipeline.
 pub(crate) fn evaluate_eco_candidates_system(
     mut commands: Commands,
     state: Res<SearchState>,
@@ -124,17 +127,7 @@ pub(crate) fn evaluate_eco_candidates_system(
     let library = &*library.0;
 
     for (entity, action) in candidates.iter() {
-        let score = if let Some(result) = solve_action(&state, &action.0, library) {
-            let completion = result.tasks.last().cloned().unwrap_or(result.total);
-            score_result(
-                &completion,
-                target,
-                state.options.simulation_max_time_seconds,
-            )
-        } else {
-            f64::INFINITY
-        };
-
+        let score = score_eco_candidate(&state, &action.0, library, target);
         commands.entity(entity).insert(CandidateScore(score));
     }
 }
