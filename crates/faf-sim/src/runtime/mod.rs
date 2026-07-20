@@ -12,9 +12,8 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-pub use types::{
-    AdjacencyBonus, BuildQueue, BuildTask, EcoSnapshot, SimulationEvent, UnitEcoStats,
-};
+pub use faf_blueprints::{AdjacencyBonus, UnitEcoStats};
+pub use types::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;

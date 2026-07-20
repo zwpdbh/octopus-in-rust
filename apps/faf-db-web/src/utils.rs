@@ -1,4 +1,4 @@
-use faf_sim::units::UnitKind;
+use faf_blueprints::UnitKind;
 
 /// Human-readable label for an abstract unit kind (matches the graph nodes).
 pub fn kind_label(kind: &UnitKind) -> String {

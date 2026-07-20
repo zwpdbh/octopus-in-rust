@@ -1,8 +1,8 @@
 //! Input types for the build scheduler.
 
+use faf_blueprints::UnitKind;
 use faf_quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
-use faf_sim::units::UnitKind;
 use serde::{Deserialize, Serialize};
 
 /// Lower-bound threshold that defines an eco goal.

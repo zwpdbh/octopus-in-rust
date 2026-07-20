@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
+use faf_blueprints::{BlueprintLibrary, UnitKind};
 use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
-use faf_sim::units::{BlueprintLibrary, UnitKind};
 use faf_sim::{plan_completion_with_tasks, CompletionResult, PlanResult, Time};
 use faf_sim_shared::plan::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
 

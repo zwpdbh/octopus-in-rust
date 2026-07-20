@@ -14,11 +14,11 @@ pub mod runtime;
 pub mod sim;
 pub mod snapshot;
 pub mod solver;
+pub use faf_blueprints as units;
 pub use solver::{
     plan_completion_result, plan_completion_time, plan_completion_with_tasks,
     single_task_completion_result, single_task_completion_time, CompletionResult, PlanResult,
 };
-pub mod units;
 
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
@@ -45,8 +45,7 @@ mod tests {
     use super::*;
 
     fn load_library() -> BlueprintLibrary {
-        let json = include_str!("../../../plugins/faf-units/data/faf_units.json");
-        BlueprintLibrary::new(serde_json::from_str(json).expect("embedded index should parse"))
+        BlueprintLibrary::from_default_units().expect("default units should load")
     }
 
     #[test]

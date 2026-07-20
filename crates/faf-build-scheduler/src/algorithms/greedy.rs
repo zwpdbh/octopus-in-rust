@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use faf_sim::units::{BlueprintLibrary, TechLevel, UnitKind};
+use faf_blueprints::{BlueprintLibrary, TechLevel, UnitKind};
 
 use crate::algorithms::SchedulingAlgorithm;
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};

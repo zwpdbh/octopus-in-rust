@@ -3,12 +3,12 @@
 use std::fs;
 use std::path::Path;
 
+use faf_blueprints::{TechLevel, UnitId, UnitKind};
 use faf_build_scheduler::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, UnitScheduleInput,
     UnitScheduleRequest,
 };
 use faf_sim::quantities::MassRate;
-use faf_sim::units::{TechLevel, UnitId, UnitKind};
 use faf_sim_shared::plan::EcoInitialSettings;
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};

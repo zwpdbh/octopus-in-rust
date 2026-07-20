@@ -7,6 +7,7 @@ edition = "2021"
 console_error_panic_hook = { workspace = true }
 dioxus = { workspace = true }
 dioxus-router = "0.7.3"
+faf-blueprints = { workspace = true }
 faf-dioxus-ui = { workspace = true }
 faf-quantities = { workspace = true }
 faf-sim-shared = { workspace = true }

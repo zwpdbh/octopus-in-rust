@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 use faf_units::DataIndex;
 
-use crate::runtime::{AdjacencyBonus, UnitEcoStats};
+use crate::unit_eco::{AdjacencyBonus, UnitEcoStats};
 
 use super::build;
 use super::components::{
@@ -55,6 +55,13 @@ impl BlueprintLibrary {
     /// Build the repository from a borrowed raw unit index.
     pub fn from_ref(index: &DataIndex) -> Self {
         Self::from_index(index.clone())
+    }
+
+    /// Build the repository from the default FAF units JSON shipped with the
+    /// workspace.
+    pub fn from_default_units() -> anyhow::Result<Self> {
+        let index = crate::loader::load_default_data_index()?;
+        Ok(Self::new(index))
     }
 
     fn from_index(index: DataIndex) -> Self {
@@ -712,8 +719,7 @@ mod tests {
     use super::*;
 
     fn load_library() -> BlueprintLibrary {
-        let json = include_str!("../../../../plugins/faf-units/data/faf_units.json");
-        BlueprintLibrary::new(serde_json::from_str(json).expect("embedded index should parse"))
+        BlueprintLibrary::from_default_units().expect("default units should load")
     }
 
     #[test]

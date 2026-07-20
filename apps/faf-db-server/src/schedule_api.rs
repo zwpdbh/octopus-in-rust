@@ -7,12 +7,12 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
+use faf_blueprints::UnitKind;
 use faf_build_scheduler::{
     EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SearchOptions, UnitScheduleRequest,
 };
 use faf_sim::quantities::MassRate;
 use faf_sim::runtime::EcoSnapshot;
-use faf_sim::units::UnitKind;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;

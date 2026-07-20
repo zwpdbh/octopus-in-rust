@@ -8,8 +8,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use faf_blueprints::BlueprintLibrary;
 use faf_build_scheduler::Scheduler;
-use faf_sim::units::BlueprintLibrary;
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 use std::path::PathBuf;

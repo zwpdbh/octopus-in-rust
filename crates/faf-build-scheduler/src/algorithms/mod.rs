@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError};
-use faf_sim::units::BlueprintLibrary;
+use faf_blueprints::BlueprintLibrary;
 
 use std::sync::Arc;
 

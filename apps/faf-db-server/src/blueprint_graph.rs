@@ -5,12 +5,12 @@
 //! the unit index; upgrade edges are derived from tier chains within the same
 //! (faction, role). The frontend renders faction subgraphs of this graph.
 //!
-//! The abstract symbolic [`faf_sim::units::BlueprintGraph`] used by the
+//! The abstract symbolic [`faf_blueprints::BlueprintGraph`] used by the
 //! scheduler algorithm is a separate model and is untouched.
 
 use std::collections::HashMap;
 
-use faf_sim::units::{TechLevel, UnitId, UnitKind};
+use faf_blueprints::{TechLevel, UnitId, UnitKind};
 use faf_units::{DataIndex, Unit};
 use serde::Serialize;
 

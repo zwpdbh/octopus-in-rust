@@ -23,17 +23,12 @@ pub use scheduler::Scheduler;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use faf_blueprints::{TechLevel, UnitKind};
     use faf_sim::quantities::MassRate;
     use faf_sim::runtime::EcoSnapshot;
-    use faf_sim::units::{TechLevel, UnitKind};
-    use std::path::PathBuf;
 
-    fn test_library() -> faf_sim::units::BlueprintLibrary {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let units_file = manifest.join("../../plugins/faf-units/data/faf_units.json");
-        let text = std::fs::read_to_string(&units_file).expect("read units file");
-        let index: faf_units::DataIndex = serde_json::from_str(&text).expect("parse units file");
-        faf_sim::units::BlueprintLibrary::new(index)
+    fn test_library() -> faf_blueprints::BlueprintLibrary {
+        faf_blueprints::BlueprintLibrary::from_default_units().expect("load default units")
     }
 
     fn default_eco() -> EcoSnapshot {

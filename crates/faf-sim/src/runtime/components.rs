@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::runtime::types::UnitEcoStats;
+use faf_blueprints::UnitEcoStats;
 
 /// A unit that contributes FAF `ProductionPerSecondMass` / `ProductionPerSecondEnergy`
 /// and/or pays FAF `MaintenanceConsumptionPerSecondEnergy`.
@@ -22,11 +22,11 @@ pub(crate) struct Producer {
 
 /// Adjacency bonuses that modify this unit's effective production.
 ///
-/// This is the ECS component form of [`crate::runtime::types::AdjacencyBonus`].
+/// This is the ECS component form of [`faf_blueprints::AdjacencyBonus`].
 /// It is attached to every entity that has a [`Producer`]; the runtime applies
 /// the derived multipliers when recomputing base economy.
 #[derive(Component, Clone, Copy, Debug, Default)]
-pub(crate) struct AdjacencyBonusComp(pub crate::runtime::types::AdjacencyBonus);
+pub(crate) struct AdjacencyBonusComp(pub faf_blueprints::AdjacencyBonus);
 
 /// A unit that contributes mass/energy storage capacity.
 #[derive(Component)]

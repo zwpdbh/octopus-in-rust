@@ -1,12 +1,11 @@
 //! High-level scheduler facade.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::algorithms::{algorithm_by_kind, AlgorithmKind, SchedulingAlgorithm};
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError};
-use faf_sim::units::BlueprintLibrary;
+use faf_blueprints::BlueprintLibrary;
 
 /// Build-order scheduler.
 ///
@@ -34,12 +33,8 @@ impl Scheduler {
     /// Create a scheduler using the default FAF units database shipped with the
     /// workspace.
     pub fn from_default_units(kind: AlgorithmKind) -> anyhow::Result<Self> {
-        let path = default_units_path();
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("failed to read units file {}: {e}", path.display()))?;
-        let index: faf_units::DataIndex = serde_json::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("failed to parse units file {}: {e}", path.display()))?;
-        Ok(Self::with_algorithm(BlueprintLibrary::new(index), kind))
+        let library = BlueprintLibrary::from_default_units()?;
+        Ok(Self::with_algorithm(library, kind))
     }
 
     /// Plan the fastest way to reach the eco target.
@@ -53,8 +48,4 @@ impl Scheduler {
         self.algorithm
             .schedule_unit(Arc::clone(&self.library), request)
     }
-}
-
-fn default_units_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/faf-units/data/faf_units.json")
 }

@@ -8,7 +8,7 @@
 
 use faf_units::Unit;
 
-use crate::runtime::{AdjacencyBonus, UnitEcoStats};
+use crate::unit_eco::{AdjacencyBonus, UnitEcoStats};
 
 use super::components::{
     attributes::{

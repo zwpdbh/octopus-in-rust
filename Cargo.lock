@@ -3976,6 +3976,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-blueprints"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy_ecs",
+ "faf-units",
+ "petgraph 0.8.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "faf-build-prediction"
 version = "0.1.0"
 dependencies = [
@@ -3997,6 +4009,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "clap",
+ "faf-blueprints",
  "faf-quantities",
  "faf-sim",
  "faf-sim-shared",
@@ -4012,6 +4025,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
+ "faf-blueprints",
  "faf-build-scheduler",
  "faf-sim",
  "faf-sim-service",
@@ -4031,6 +4045,7 @@ dependencies = [
  "console_error_panic_hook",
  "dioxus",
  "dioxus-router",
+ "faf-blueprints",
  "faf-dioxus-ui",
  "faf-quantities",
  "faf-sim",
@@ -4101,6 +4116,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "bevy_time",
+ "faf-blueprints",
  "faf-quantities",
  "faf-units",
  "petgraph 0.8.3",
@@ -4115,6 +4131,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "faf-blueprints",
  "faf-build-prediction",
  "faf-build-scheduler",
  "faf-sim",
