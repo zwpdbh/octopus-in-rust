@@ -77,11 +77,8 @@ pub struct UnitScheduleRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EcoScheduleInput {
     pub initial_eco: EcoSnapshot,
-    #[serde(default = "default_inventory")]
     pub initial_inventory: Vec<String>,
-    #[serde(default = "default_target_mass_production")]
     pub target_mass_production: MassRate,
-    #[serde(default = "default_tolerance")]
     pub tolerance: f64,
     #[serde(default)]
     pub options: SearchOptions,
@@ -89,27 +86,14 @@ pub struct EcoScheduleInput {
     pub config: SchedulerConfig,
 }
 
-fn default_tolerance() -> f64 {
-    1.0
-}
-
-fn default_target_mass_production() -> MassRate {
-    MassRate::from_raw(500.0)
-}
-
 /// CLI-friendly input file format for `schedule unit`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnitScheduleInput {
     pub initial_eco: EcoSnapshot,
-    #[serde(default = "default_inventory")]
     pub initial_inventory: Vec<String>,
     pub target: String,
     #[serde(default)]
     pub options: SearchOptions,
     #[serde(default)]
     pub config: SchedulerConfig,
-}
-
-fn default_inventory() -> Vec<String> {
-    vec!["Commander".to_string()]
 }
