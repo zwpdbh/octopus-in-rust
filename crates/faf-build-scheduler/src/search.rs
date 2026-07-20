@@ -262,7 +262,7 @@ pub(crate) fn score_result(
 
 /// Simulate `action` as the next step from the current search state and
 /// return the per-task result.
-pub(crate) fn simulate_with_action(
+pub(crate) fn solve_action(
     state: &SearchState,
     action: &Action,
     library: &BlueprintLibrary,

@@ -9,8 +9,8 @@ use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
-    score_result, simulate_with_action, BlueprintLibraryRef, CandidateAction, CandidateScore,
-    SearchState, SearchTarget,
+    score_result, solve_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState,
+    SearchTarget,
 };
 use crate::util::{count_mex, is_mex};
 
@@ -124,7 +124,7 @@ pub(crate) fn evaluate_eco_candidates_system(
     let library = &*library.0;
 
     for (entity, action) in candidates.iter() {
-        let score = if let Some(result) = simulate_with_action(&state, &action.0, library) {
+        let score = if let Some(result) = solve_action(&state, &action.0, library) {
             let completion = result.tasks.last().cloned().unwrap_or(result.total);
             score_result(
                 &completion,

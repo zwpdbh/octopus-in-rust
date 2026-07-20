@@ -11,8 +11,7 @@ use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::result::Action;
 use crate::search::{
-    simulate_with_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState,
-    SearchTarget,
+    solve_action, BlueprintLibraryRef, CandidateAction, CandidateScore, SearchState, SearchTarget,
 };
 use crate::util::{count_mex, is_mex};
 
@@ -124,7 +123,7 @@ pub(crate) fn evaluate_unit_candidates_system(
         let resulting_unit = resulting_unit(&action.0);
         let score = if resulting_unit == *target {
             // Direct construction of the goal: use the actual simulated time.
-            if let Some(result) = simulate_with_action(&state, &action.0, library) {
+            if let Some(result) = solve_action(&state, &action.0, library) {
                 let completion = result.tasks.last().cloned().unwrap_or(result.total);
                 completion.time_seconds
             } else {
