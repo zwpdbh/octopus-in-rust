@@ -121,7 +121,8 @@ fn status_for(err: &ScheduleError) -> StatusCode {
     match err {
         ScheduleError::NoLegalBuilder { .. }
         | ScheduleError::GoalUnreachable
-        | ScheduleError::SimulationStalled => StatusCode::UNPROCESSABLE_ENTITY,
+        | ScheduleError::SimulationStalled
+        | ScheduleError::SearchTimeout => StatusCode::UNPROCESSABLE_ENTITY,
         ScheduleError::AlgorithmNotImplemented(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

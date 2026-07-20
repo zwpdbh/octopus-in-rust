@@ -57,4 +57,6 @@ pub enum ScheduleError {
     GoalUnreachable,
     #[error("the plan stalled during simulation")]
     SimulationStalled,
+    #[error("the search timed out")]
+    SearchTimeout,
 }

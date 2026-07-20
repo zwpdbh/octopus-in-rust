@@ -1,11 +1,15 @@
 //! High-level scheduler facade.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use faf_blueprints::{BlueprintLibrary, UnitKind};
+
 use crate::algorithms::{algorithm_by_kind, AlgorithmKind, SchedulingAlgorithm};
+use crate::app::SchedulerApp;
+use crate::plugins::{EcoSchedulingPlugin, UnitSchedulingPlugin};
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError};
-use faf_blueprints::BlueprintLibrary;
 
 /// Build-order scheduler.
 ///
@@ -39,13 +43,41 @@ impl Scheduler {
 
     /// Plan the fastest way to reach the eco target.
     pub fn schedule_eco(&self, request: &EcoScheduleRequest) -> Result<Schedule, ScheduleError> {
-        self.algorithm
-            .schedule_eco(Arc::clone(&self.library), request)
+        let inventory = count_inventory(&request.initial_inventory);
+        let mut app = SchedulerApp::new_eco(
+            Arc::clone(&self.library),
+            request.initial_eco,
+            inventory,
+            request.target.clone(),
+            request.options.clone(),
+        );
+        app = app
+            .with_plugin(EcoSchedulingPlugin)
+            .configure(|app| self.algorithm.configure_app(app));
+        app.run_eco()
     }
 
     /// Plan the fastest way to build the target unit.
     pub fn schedule_unit(&self, request: &UnitScheduleRequest) -> Result<Schedule, ScheduleError> {
-        self.algorithm
-            .schedule_unit(Arc::clone(&self.library), request)
+        let inventory = count_inventory(&request.initial_inventory);
+        let mut app = SchedulerApp::new_unit(
+            Arc::clone(&self.library),
+            request.initial_eco,
+            inventory,
+            request.target.clone(),
+            request.options.clone(),
+        );
+        app = app
+            .with_plugin(UnitSchedulingPlugin)
+            .configure(|app| self.algorithm.configure_app(app));
+        app.run_unit()
     }
+}
+
+fn count_inventory(items: &[UnitKind]) -> HashMap<UnitKind, u32> {
+    let mut counts = HashMap::new();
+    for kind in items {
+        *counts.entry(kind.clone()).or_insert(0u32) += 1;
+    }
+    counts
 }

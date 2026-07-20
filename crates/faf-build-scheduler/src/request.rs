@@ -48,7 +48,7 @@ fn default_max_iterations() -> usize {
 }
 
 fn default_max_steps() -> usize {
-    100
+    1000
 }
 
 /// Request to reach an eco target as quickly as possible.

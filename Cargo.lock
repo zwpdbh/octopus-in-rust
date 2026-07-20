@@ -641,6 +641,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_state"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c22e694ea52e42994aea6ed2d0b378fa1e9d5a9b615db88626e33508bc03f35"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_state_macros",
+ "bevy_utils",
+ "log",
+ "variadics_please",
+]
+
+[[package]]
+name = "bevy_state_macros"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835f45091fa0df1ff3cb10f4ca5a397d4e9249b550f1be6893b08a2a06d6eed7"
+dependencies = [
+ "bevy_macro_utils",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bevy_tasks"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4008,12 +4035,14 @@ dependencies = [
  "anyhow",
  "bevy_app",
  "bevy_ecs",
+ "bevy_state",
  "clap",
  "faf-blueprints",
  "faf-quantities",
  "faf-sim",
  "faf-sim-shared",
  "faf-units",
+ "petgraph 0.8.3",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

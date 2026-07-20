@@ -6,6 +6,8 @@
 //! [`SchedulingAlgorithm`] trait.
 
 pub mod algorithms;
+pub mod app;
+pub mod plugins;
 pub mod request;
 pub mod result;
 pub mod scheduler;
@@ -13,6 +15,10 @@ pub mod search;
 pub mod util;
 
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
+pub use plugins::{
+    run_to_completion, EcoSchedulingPlugin, GreedyPlugin, SchedulerInitPlugin, SchedulerResult,
+    SchedulerSet, SchedulerState, UnitSchedulingPlugin,
+};
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
     UnitScheduleRequest,
@@ -49,8 +55,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "implement greedy unit scheduling")]
-    fn greedy_unit_schedule_is_todo() {
+    fn greedy_unit_schedule_builds_target() {
         let library = test_library();
         let scheduler = Scheduler::new(library);
         let request = UnitScheduleRequest {
@@ -60,7 +65,10 @@ mod tests {
             options: SearchOptions::default(),
         };
 
-        let _ = scheduler.schedule_unit(&request);
+        let schedule = scheduler
+            .schedule_unit(&request)
+            .expect("schedule should succeed");
+        assert!(!schedule.steps.is_empty(), "schedule should contain steps");
     }
 
     #[test]

@@ -112,7 +112,7 @@ fn default_eco_input() -> EcoScheduleInput {
     EcoScheduleInput {
         initial_eco: EcoInitialSettings::default().to_snapshot(),
         initial_inventory: vec!["Commander".to_string()],
-        target_mass_production: MassRate::from_raw(500.0),
+        target_mass_production: MassRate::from_raw(15.0),
         tolerance: 1.0,
         options: faf_build_scheduler::SearchOptions::default(),
     }

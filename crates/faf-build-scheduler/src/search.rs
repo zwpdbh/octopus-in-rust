@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use faf_blueprints::{BlueprintLibrary, UnitKind};
+use faf_blueprints::{BlueprintLibrary, UnitEcoStats, UnitKind};
 use faf_sim::quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
 use faf_sim::{plan_completion_with_tasks, CompletionResult, PlanResult, Time};
@@ -26,6 +26,27 @@ pub(crate) struct CandidateAction(pub Action);
 #[derive(Component)]
 pub(crate) struct CandidateScore(pub f64);
 
+/// The search goal.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SearchTarget {
+    Eco(EcoTarget),
+    Unit(UnitKind),
+}
+
+impl SearchTarget {
+    /// True if the goal has been met given the current economy and inventory.
+    pub fn is_reached(
+        &self,
+        current_eco: &EcoSnapshot,
+        inventory: &HashMap<UnitKind, u32>,
+    ) -> bool {
+        match self {
+            SearchTarget::Eco(target) => target.is_reached(current_eco),
+            SearchTarget::Unit(kind) => inventory.get(kind).copied().unwrap_or(0) > 0,
+        }
+    }
+}
+
 /// State of a best-first search through the build space.
 #[derive(Resource)]
 pub(crate) struct SearchState {
@@ -35,8 +56,8 @@ pub(crate) struct SearchState {
     pub current_eco: EcoSnapshot,
     /// Units currently owned by the player.
     pub inventory: HashMap<UnitKind, u32>,
-    /// Target economy to reach.
-    pub target: EcoTarget,
+    /// Search goal.
+    pub target: SearchTarget,
     /// Options controlling the search.
     pub options: SearchOptions,
     /// Tasks committed to by the search so far.
@@ -49,15 +70,13 @@ pub(crate) struct SearchState {
     pub iteration: usize,
     /// Whether the search has finished.
     pub done: bool,
-    /// Final result once the search terminates.
-    pub result: Option<Result<Schedule, ScheduleError>>,
 }
 
 impl SearchState {
     pub fn new(
         initial_eco: EcoSnapshot,
         inventory: HashMap<UnitKind, u32>,
-        target: EcoTarget,
+        target: SearchTarget,
         options: SearchOptions,
     ) -> Self {
         Self {
@@ -71,7 +90,6 @@ impl SearchState {
             next_id: 1,
             iteration: 0,
             done: false,
-            result: None,
         }
     }
 
@@ -83,7 +101,10 @@ impl SearchState {
 
 /// Convert the chosen actions into a final `Schedule`.
 pub(crate) fn build_schedule(state: &SearchState) -> Result<Schedule, ScheduleError> {
-    if !state.target.is_reached(&state.current_eco) {
+    if !state
+        .target
+        .is_reached(&state.current_eco, &state.inventory)
+    {
         return Err(ScheduleError::GoalUnreachable);
     }
     let plan = build_construction_plan(state);
@@ -162,7 +183,7 @@ pub(crate) fn build_task_for_action(
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),
-                builders: vec![library.to_unit_eco_stats(builder, true)?],
+                builders: vec![to_builder_stats(library, builder)?],
                 targets: vec![library.unit_eco_stats(target)?],
             })
         }
@@ -184,11 +205,15 @@ pub(crate) fn build_task_for_action(
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),
-                builders: vec![library.to_unit_eco_stats(builder, true)?],
+                builders: vec![to_builder_stats(library, builder)?],
                 targets: vec![target_stats],
             })
         }
     }
+}
+
+fn to_builder_stats(library: &BlueprintLibrary, kind: &UnitKind) -> Option<UnitEcoStats> {
+    library.to_unit_eco_stats(kind, true)
 }
 
 fn has_builder(inventory: &HashMap<UnitKind, u32>, builder: &UnitKind) -> bool {
