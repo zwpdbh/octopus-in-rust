@@ -5,7 +5,7 @@ use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
 
-use crate::algorithms::greedy::score_eco_candidate;
+use crate::algorithms::greedy;
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::request::SearchOptions;
@@ -84,22 +84,29 @@ pub(crate) fn generate_eco_candidates_system(
     }
 
     // Upgrade extractors and storages. Upgrades do not increase the mex count
-    // (they replace an existing unit), so the cap is not checked here.
+    // (they replace an existing unit), so the cap is not checked here. The
+    // source unit provides its own build power, so we do not need to check for
+    // an available engineer or ACU before proposing an upgrade.
     for (kind, count) in &inventory.0 {
         if *count == 0 {
             continue;
         }
-        for path in library.upgrade_paths(kind) {
-            if is_eco_candidate(library, &path.target) {
-                for builder in &path.builders {
-                    if inventory.0.get(builder).copied().unwrap_or(0) > 0 {
-                        commands.spawn(CandidateAction(Action::Upgrade {
-                            from: kind.clone(),
-                            to: path.target.clone(),
-                            builder: builder.clone(),
-                        }));
-                    }
-                }
+        if let Some(target) = library.upgrade_target(kind) {
+            if is_eco_candidate(library, &target) {
+                commands.spawn(CandidateAction(Action::Upgrade {
+                    from: kind.clone(),
+                    to: target,
+                }));
+            }
+        }
+        // Cap mexes of a tier that supports it. Capping also replaces the
+        // existing unit and does not increase the mex count.
+        if let Some(target) = library.cap_target(kind) {
+            if is_eco_candidate(library, &target) {
+                commands.spawn(CandidateAction(Action::Upgrade {
+                    from: kind.clone(),
+                    to: target,
+                }));
             }
         }
     }
@@ -131,7 +138,7 @@ pub(crate) fn evaluate_eco_candidates_system(
     let library = &*library.0;
 
     for (entity, action) in candidates.iter() {
-        let score = score_eco_candidate(
+        let score = greedy::score_eco_candidate(
             &economy.current,
             &inventory.0,
             progress.next_id,

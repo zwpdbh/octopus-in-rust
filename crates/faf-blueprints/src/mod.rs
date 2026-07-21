@@ -31,12 +31,12 @@ pub use components::{
         BlueprintBundle, BlueprintId, DisplayName, FactionComp, TechLevelComp, UnitKindComp,
         UnitRoleComp,
     },
-    relationships::{BuiltBy, UpgradesInto},
+    relationships::{BuiltBy, CapsInto, UpgradesInto},
 };
 pub use graph::{BlueprintEdge, BlueprintGraph, BlueprintNode};
 pub use types::{
     category_of, category_of_role, matches_tech_level, role_of, tech_level_of, BuildRule, Faction,
-    TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole, UpgradePath,
+    TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole,
 };
 
 mod blueprint;

@@ -223,13 +223,3 @@ pub struct BuildRule {
     pub prereq: Option<UnitKind>,
     pub builders: Vec<UnitKind>,
 }
-
-/// One upgrade edge in the tech tree.
-///
-/// The source unit is implicit from where the path is stored. `target` is the
-/// unit the source can become, and `builders` lists the legal upgrade assisters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpgradePath {
-    pub target: UnitKind,
-    pub builders: Vec<UnitKind>,
-}

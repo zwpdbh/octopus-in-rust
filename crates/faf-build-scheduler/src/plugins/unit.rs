@@ -74,21 +74,23 @@ pub(crate) fn generate_unit_candidates_system(
         }
     }
 
-    // All legal upgrade actions.
+    // All legal upgrade and cap actions. The source unit transforms itself,
+    // so no separate builder availability check is required.
     for (from, count) in &inventory.0 {
         if *count == 0 {
             continue;
         }
-        for path in library.upgrade_paths(from) {
-            for builder in &path.builders {
-                if inventory.0.get(builder).copied().unwrap_or(0) > 0 {
-                    commands.spawn(CandidateAction(Action::Upgrade {
-                        from: from.clone(),
-                        to: path.target.clone(),
-                        builder: builder.clone(),
-                    }));
-                }
-            }
+        if let Some(target) = library.upgrade_target(from) {
+            commands.spawn(CandidateAction(Action::Upgrade {
+                from: from.clone(),
+                to: target,
+            }));
+        }
+        if let Some(target) = library.cap_target(from) {
+            commands.spawn(CandidateAction(Action::Upgrade {
+                from: from.clone(),
+                to: target,
+            }));
         }
     }
 }

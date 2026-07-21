@@ -18,15 +18,8 @@ pub struct StepResult {
 /// A concrete action the scheduler decided to take.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Action {
-    Build {
-        target: UnitKind,
-        builder: UnitKind,
-    },
-    Upgrade {
-        from: UnitKind,
-        to: UnitKind,
-        builder: UnitKind,
-    },
+    Build { target: UnitKind, builder: UnitKind },
+    Upgrade { from: UnitKind, to: UnitKind },
 }
 
 /// The full planned schedule returned by a scheduling algorithm.

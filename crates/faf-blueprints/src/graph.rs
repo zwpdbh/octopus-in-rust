@@ -1,14 +1,16 @@
-//! Symbolic build/upgrade graph derived from a [`BlueprintLibrary`].
+//! Symbolic build/upgrade/cap graph derived from a [`BlueprintLibrary`].
 //!
 //! This graph is intended for visualization, planning, and scheduling. It is
 //! backed by [`petgraph::graph::DiGraph`], with nodes representing unit kinds
-//! and directed edges representing the relationships that make construction or
-//! upgrade possible:
+//! and directed edges representing the relationships that make construction,
+//! upgrade, or capping possible:
 //!
 //! - **BuiltBy** — a builder unit can construct the target when an optional
 //!   prerequisite unit already exists (`builder -> target`).
-//! - **UpgradesInto** — an existing unit can be transformed into another unit
+//! - **UpgradesInto** — an existing unit can be transformed into the next tier
 //!   (`from -> to`).
+//! - **CapsInto** — an existing unit can be capped (e.g., a mex surrounded by
+//!   mass storages) (`from -> to`).
 //!
 //! Costs are intentionally not part of the graph; they are resolved from the
 //! runtime economic table in [`BlueprintLibrary`](super::BlueprintLibrary).
@@ -46,12 +48,16 @@ pub enum BlueprintEdge {
         /// Unit that must already be finished before construction starts.
         prereq: Option<UnitKind>,
     },
-    /// The source unit can be upgraded into the target unit by any of the
-    /// listed builders.
-    UpgradesInto {
-        /// Legal builders for the upgrade.
-        builders: Vec<UnitKind>,
-    },
+    /// The source unit can be upgraded into the target unit.
+    ///
+    /// The source unit's own build power drives the upgrade, so the edge does
+    /// not carry a separate builder list.
+    UpgradesInto,
+    /// The source unit can be capped into the target unit.
+    ///
+    /// Capping is a separate transformation from tier upgrades (e.g., a T2 mex
+    /// surrounded by mass storages).
+    CapsInto,
 }
 
 /// The complete symbolic build/upgrade graph.
@@ -256,7 +262,7 @@ impl BlueprintGraph {
             Some(from_idx) => self
                 .graph
                 .edges_directed(from_idx, Direction::Outgoing)
-                .filter(|e| matches!(e.weight(), BlueprintEdge::UpgradesInto { .. }))
+                .filter(|e| matches!(e.weight(), BlueprintEdge::UpgradesInto))
                 .map(move |e| (e.target(), e.weight()))
                 .collect::<Vec<_>>()
                 .into_iter(),
@@ -276,7 +282,47 @@ impl BlueprintGraph {
             Some(to_idx) => self
                 .graph
                 .edges_directed(to_idx, Direction::Incoming)
-                .filter(|e| matches!(e.weight(), BlueprintEdge::UpgradesInto { .. }))
+                .filter(|e| matches!(e.weight(), BlueprintEdge::UpgradesInto))
+                .map(move |e| (e.source(), e.weight()))
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => Vec::new().into_iter(),
+        }
+    }
+
+    /// All cap edges that start from the given kind.
+    ///
+    /// Yields `(target_node_index, edge_weight)` for every outgoing
+    /// `CapsInto` edge from `from`.
+    pub fn caps_from<'a>(
+        &'a self,
+        from: &UnitKind,
+    ) -> impl Iterator<Item = (NodeIndex, &'a BlueprintEdge)> + 'a {
+        match self.kind_to_index.get(from).copied() {
+            Some(from_idx) => self
+                .graph
+                .edges_directed(from_idx, Direction::Outgoing)
+                .filter(|e| matches!(e.weight(), BlueprintEdge::CapsInto))
+                .map(move |e| (e.target(), e.weight()))
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => Vec::new().into_iter(),
+        }
+    }
+
+    /// All cap edges that end at the given kind.
+    ///
+    /// Yields `(source_node_index, edge_weight)` for every incoming
+    /// `CapsInto` edge to `to`.
+    pub fn caps_to<'a>(
+        &'a self,
+        to: &UnitKind,
+    ) -> impl Iterator<Item = (NodeIndex, &'a BlueprintEdge)> + 'a {
+        match self.kind_to_index.get(to).copied() {
+            Some(to_idx) => self
+                .graph
+                .edges_directed(to_idx, Direction::Incoming)
+                .filter(|e| matches!(e.weight(), BlueprintEdge::CapsInto))
                 .map(move |e| (e.source(), e.weight()))
                 .collect::<Vec<_>>()
                 .into_iter(),

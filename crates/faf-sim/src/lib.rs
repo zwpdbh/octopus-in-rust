@@ -32,9 +32,9 @@ pub use snapshot::{
 };
 pub use units::{
     category_of, category_of_role, role_of, tech_level_of, BlueprintEdge, BlueprintGraph,
-    BlueprintLibrary, BlueprintNode, BuildRule, BuiltBy, DisplayName, Faction, FactionComp,
-    TechLevel, TechLevelComp, UnitCategory, UnitCost, UnitId, UnitKind, UnitKindComp, UnitRole,
-    UnitRoleComp, UpgradePath, UpgradesInto,
+    BlueprintLibrary, BlueprintNode, BuildRule, BuiltBy, CapsInto, DisplayName, Faction,
+    FactionComp, TechLevel, TechLevelComp, UnitCategory, UnitCost, UnitId, UnitKind, UnitKindComp,
+    UnitRole, UnitRoleComp, UpgradesInto,
 };
 
 #[cfg(test)]

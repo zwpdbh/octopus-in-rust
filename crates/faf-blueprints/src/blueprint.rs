@@ -21,12 +21,12 @@ use super::components::{
     attributes::{
         BlueprintBundle, BlueprintId, DisplayName, FactionComp, UnitKindComp, UnitRoleComp,
     },
-    relationships::{BuiltBy, UpgradesInto},
+    relationships::{BuiltBy, CapsInto, UpgradesInto},
 };
 use super::graph::{BlueprintEdge, BlueprintGraph};
 use super::types::{
     category_of, matches_tech_level, role_of, tech_level_of, BuildRule, Faction, TechLevel,
-    UnitCategory, UnitCost, UnitKind, UnitRole, UpgradePath,
+    UnitCategory, UnitCost, UnitKind, UnitRole,
 };
 
 /// Unified repository of unit knowledge backed by a Bevy ECS blueprint world.
@@ -70,6 +70,7 @@ impl BlueprintLibrary {
         let mut eco_table: HashMap<UnitKind, UnitEcoStats> = HashMap::new();
         let builds = Self::hardcoded_builds();
         let upgrades = Self::hardcoded_upgrades();
+        let caps = Self::hardcoded_caps();
 
         // Track which common kinds have already been fixed to their canonical
         // UEF blueprint. Non-canonical duplicates are ignored once the canonical
@@ -183,7 +184,15 @@ impl BlueprintLibrary {
             eco_table.insert(UnitKind::Experimental, experimental_stats);
         }
 
-        // Attach build and upgrade rules to their target/source entities.
+        // Attach build, upgrade, and cap rules to their source/target entities.
+        //
+        // - `BuiltBy` goes on the target entity (who can build it).
+        // - `UpgradesInto` and `CapsInto` go on the source entity (what it can
+        //   become).
+        //
+        // The source unit's own build rate drives the transformation in the
+        // simulator; no external builder is encoded here because FAF structures
+        // can upgrade and cap themselves without assistance.
         for (target, rule) in &builds {
             if let Some(&entity) = kind_to_entity.get(target) {
                 world.entity_mut(entity).insert(BuiltBy {
@@ -192,9 +201,16 @@ impl BlueprintLibrary {
                 });
             }
         }
-        for (from, paths) in &upgrades {
+        for (from, target) in &upgrades {
             if let Some(&entity) = kind_to_entity.get(from) {
-                world.entity_mut(entity).insert(UpgradesInto(paths.clone()));
+                world
+                    .entity_mut(entity)
+                    .insert(UpgradesInto(target.clone()));
+            }
+        }
+        for (from, target) in &caps {
+            if let Some(&entity) = kind_to_entity.get(from) {
+                world.entity_mut(entity).insert(CapsInto(target.clone()));
             }
         }
 
@@ -328,22 +344,32 @@ impl BlueprintLibrary {
             .collect()
     }
 
-    /// Return the upgrade paths available from a source unit kind.
-    pub fn upgrade_paths(&self, from: &UnitKind) -> &[UpgradePath] {
+    /// Return the single upgrade target for a source unit kind, if any.
+    ///
+    /// The target is reached by upgrading the source unit. The upgrade's build
+    /// power comes from the source unit itself, not from a separate builder
+    /// encoded in the blueprint data.
+    pub fn upgrade_target(&self, from: &UnitKind) -> Option<UnitKind> {
         self.entity_for_kind(from)
             .and_then(|e| self.world.entity(e).get::<UpgradesInto>())
-            .map(|r| r.0.as_slice())
-            .unwrap_or(&[])
+            .map(|r| r.0.clone())
     }
 
-    /// Return the first upgrade target for a unit kind, if any.
-    pub fn upgrade_target(&self, from: &UnitKind) -> Option<UnitKind> {
-        self.upgrade_paths(from).first().map(|r| r.target.clone())
+    /// Return the capped variant of a unit kind, if one exists.
+    pub fn cap_target(&self, from: &UnitKind) -> Option<UnitKind> {
+        self.entity_for_kind(from)
+            .and_then(|e| self.world.entity(e).get::<CapsInto>())
+            .map(|r| r.0.clone())
     }
 
-    /// True if the unit has at least one registered upgrade target.
+    /// True if the unit has a registered upgrade target.
     pub fn is_upgradeable(&self, kind: &UnitKind) -> bool {
-        !self.upgrade_paths(kind).is_empty()
+        self.upgrade_target(kind).is_some()
+    }
+
+    /// True if the unit has a registered cap target.
+    pub fn is_cappable(&self, kind: &UnitKind) -> bool {
+        self.cap_target(kind).is_some()
     }
 
     /// All unit kinds that can act as builders, optionally filtered to a tech tier.
@@ -436,7 +462,7 @@ impl BlueprintLibrary {
         Some(stats)
     }
 
-    /// Build the symbolic build/upgrade graph for visualization and planning.
+    /// Build the symbolic build/upgrade/cap graph for visualization and planning.
     pub fn build_graph(&self) -> BlueprintGraph {
         let mut graph = BlueprintGraph::new();
         let mut indices = HashMap::new();
@@ -489,16 +515,14 @@ impl BlueprintLibrary {
             }
 
             if let Some(upgrades) = entity_ref.get::<UpgradesInto>() {
-                for path in &upgrades.0 {
-                    if let Some(&to_idx) = indices.get(&path.target) {
-                        graph.add_edge(
-                            target_idx,
-                            to_idx,
-                            BlueprintEdge::UpgradesInto {
-                                builders: path.builders.clone(),
-                            },
-                        );
-                    }
+                if let Some(&to_idx) = indices.get(&upgrades.0) {
+                    graph.add_edge(target_idx, to_idx, BlueprintEdge::UpgradesInto);
+                }
+            }
+
+            if let Some(cap) = entity_ref.get::<CapsInto>() {
+                if let Some(&to_idx) = indices.get(&cap.0) {
+                    graph.add_edge(target_idx, to_idx, BlueprintEdge::CapsInto);
                 }
             }
         }
@@ -605,57 +629,21 @@ impl BlueprintLibrary {
         m
     }
 
-    /// Hardcoded upgrade paths for the common economic units.
-    fn hardcoded_upgrades() -> HashMap<UnitKind, Vec<UpgradePath>> {
-        let mut m: HashMap<UnitKind, Vec<UpgradePath>> = HashMap::new();
+    /// Hardcoded upgrade targets for the common economic units.
+    ///
+    /// This table is the authoritative source for upgrade relationships because
+    /// the raw FAF unit index does not explicitly name upgrade targets. It is
+    /// converted into `UpgradesInto` ECS components after all blueprint entities
+    /// have been spawned.
+    fn hardcoded_upgrades() -> HashMap<UnitKind, UnitKind> {
+        let mut m: HashMap<UnitKind, UnitKind> = HashMap::new();
 
-        let any_engineer = vec![
-            UnitKind::Commander,
-            UnitKind::Engineer(TechLevel::T1),
-            UnitKind::Engineer(TechLevel::T2),
-            UnitKind::Engineer(TechLevel::T3),
-        ];
-        let t2_plus_engineer = vec![
-            UnitKind::Commander,
-            UnitKind::Engineer(TechLevel::T2),
-            UnitKind::Engineer(TechLevel::T3),
-        ];
-
-        // Mass extractors: T1 -> T2 -> T3, plus capped variants.
-        m.insert(
-            UnitKind::Mex(TechLevel::T1),
-            vec![UpgradePath {
-                target: UnitKind::Mex(TechLevel::T2),
-                builders: any_engineer.clone(),
-            }],
-        );
-        m.insert(
-            UnitKind::Mex(TechLevel::T2),
-            vec![
-                UpgradePath {
-                    target: UnitKind::Mex(TechLevel::T3),
-                    builders: t2_plus_engineer.clone(),
-                },
-                // Cap a T2 mex with four mass storages.
-                UpgradePath {
-                    target: UnitKind::CapMex(TechLevel::T2),
-                    builders: any_engineer.clone(),
-                },
-            ],
-        );
-        m.insert(
-            UnitKind::Mex(TechLevel::T3),
-            vec![UpgradePath {
-                target: UnitKind::CapMex(TechLevel::T3),
-                builders: t2_plus_engineer.clone(),
-            }],
-        );
+        // Mass extractors: T1 -> T2 -> T3.
+        m.insert(UnitKind::Mex(TechLevel::T1), UnitKind::Mex(TechLevel::T2));
+        m.insert(UnitKind::Mex(TechLevel::T2), UnitKind::Mex(TechLevel::T3));
         m.insert(
             UnitKind::CapMex(TechLevel::T2),
-            vec![UpgradePath {
-                target: UnitKind::CapMex(TechLevel::T3),
-                builders: t2_plus_engineer.clone(),
-            }],
+            UnitKind::CapMex(TechLevel::T3),
         );
 
         // Power generators are rebuilt at each tier, not upgraded.
@@ -663,20 +651,31 @@ impl BlueprintLibrary {
         // Factories: T1 -> T2 -> T3.
         m.insert(
             UnitKind::Factory(TechLevel::T1),
-            vec![UpgradePath {
-                target: UnitKind::Factory(TechLevel::T2),
-                builders: any_engineer.clone(),
-            }],
+            UnitKind::Factory(TechLevel::T2),
         );
         m.insert(
             UnitKind::Factory(TechLevel::T2),
-            vec![UpgradePath {
-                target: UnitKind::Factory(TechLevel::T3),
-                // Engineer(T2) is allowed so the search can reach T3 without
-                // already owning a T3 engineer (the engineering-suite
-                // prerequisite is abstracted away in this model).
-                builders: t2_plus_engineer.clone(),
-            }],
+            UnitKind::Factory(TechLevel::T3),
+        );
+
+        m
+    }
+
+    /// Hardcoded cap targets for mass extractors.
+    ///
+    /// Capping is treated as a separate relationship from tier upgrades because
+    /// it transforms the same-tier unit into a storage-boosted variant rather
+    /// than advancing its tech level.
+    fn hardcoded_caps() -> HashMap<UnitKind, UnitKind> {
+        let mut m: HashMap<UnitKind, UnitKind> = HashMap::new();
+
+        m.insert(
+            UnitKind::Mex(TechLevel::T2),
+            UnitKind::CapMex(TechLevel::T2),
+        );
+        m.insert(
+            UnitKind::Mex(TechLevel::T3),
+            UnitKind::CapMex(TechLevel::T3),
         );
 
         m
@@ -819,14 +818,19 @@ mod tests {
 
         assert!(units.can_build(&UnitKind::Engineer(TechLevel::T1), &UnitKind::EnergyStorage));
         assert!(units.is_upgradeable(&UnitKind::Mex(TechLevel::T2)));
-        assert!(units
-            .upgrade_paths(&UnitKind::Mex(TechLevel::T2))
-            .iter()
-            .any(|r| r.target == UnitKind::CapMex(TechLevel::T2)));
-        assert!(units
-            .upgrade_paths(&UnitKind::CapMex(TechLevel::T2))
-            .iter()
-            .any(|r| r.target == UnitKind::CapMex(TechLevel::T3)));
+        assert!(units.is_cappable(&UnitKind::Mex(TechLevel::T2)));
+        assert_eq!(
+            units.upgrade_target(&UnitKind::Mex(TechLevel::T2)),
+            Some(UnitKind::Mex(TechLevel::T3))
+        );
+        assert_eq!(
+            units.cap_target(&UnitKind::Mex(TechLevel::T2)),
+            Some(UnitKind::CapMex(TechLevel::T2))
+        );
+        assert_eq!(
+            units.upgrade_target(&UnitKind::CapMex(TechLevel::T2)),
+            Some(UnitKind::CapMex(TechLevel::T3))
+        );
     }
 
     #[test]
@@ -852,10 +856,21 @@ mod tests {
         assert!(
             upgrade_targets(&UnitKind::Mex(TechLevel::T2)).contains(&UnitKind::Mex(TechLevel::T3))
         );
-        assert!(upgrade_targets(&UnitKind::Mex(TechLevel::T3))
-            .contains(&UnitKind::CapMex(TechLevel::T3)));
         assert!(upgrade_targets(&UnitKind::CapMex(TechLevel::T2))
             .contains(&UnitKind::CapMex(TechLevel::T3)));
+
+        let cap_targets = |from: &UnitKind| {
+            graph
+                .caps_from(from)
+                .map(|(target_idx, _)| graph.graph[target_idx].kind.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            cap_targets(&UnitKind::Mex(TechLevel::T2)).contains(&UnitKind::CapMex(TechLevel::T2))
+        );
+        assert!(
+            cap_targets(&UnitKind::Mex(TechLevel::T3)).contains(&UnitKind::CapMex(TechLevel::T3))
+        );
 
         // Every node should carry role/category metadata.
         for node in graph.graph.node_weights() {

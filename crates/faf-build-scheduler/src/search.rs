@@ -162,25 +162,28 @@ pub(crate) fn build_task_for_action(
                 targets: vec![library.unit_eco_stats(target)?],
             })
         }
-        Action::Upgrade { from, to, builder } => {
-            if !has_builder(inventory, builder) {
-                return None;
-            }
+        Action::Upgrade { from, to } => {
+            // A unit can only upgrade if we already own the source unit. Unlike
+            // new construction, an upgrade does not require a separate builder
+            // kind; the source structure upgrades itself using its own build
+            // power (e.g., a T1 mex's BuildRate).
             let count = *inventory.get(from)?;
             if count == 0 {
                 return None;
             }
-            // Find an upgrade path from `from` to `to` using `builder`.
-            let path = library
-                .upgrade_paths(from)
-                .iter()
-                .find(|p| p.target == *to && p.builders.contains(builder))?;
-            let mut target_stats = library.unit_eco_stats(&path.target)?;
+            // Verify the upgrade or cap target is reachable from `from`.
+            let is_upgrade = library.upgrade_target(from) == Some(to.clone());
+            let is_cap = library.cap_target(from) == Some(to.clone());
+            if !is_upgrade && !is_cap {
+                return None;
+            }
+            // The source unit acts as its own builder for the upgrade/cap task.
+            let mut target_stats = library.unit_eco_stats(to)?;
             target_stats.unit_id = Some(format!("upgrade {:?} to {:?}", from, to));
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),
-                builders: vec![to_builder_stats(library, builder)?],
+                builders: vec![to_builder_stats(library, from)?],
                 targets: vec![target_stats],
             })
         }
@@ -201,7 +204,7 @@ pub(crate) fn apply_action_to_inventory(action: &Action, inventory: &mut HashMap
         Action::Build { target, .. } => {
             *inventory.entry(target.clone()).or_insert(0) += 1;
         }
-        Action::Upgrade { from, to, .. } => {
+        Action::Upgrade { from, to } => {
             let from_count = inventory.get_mut(from).expect("upgrade from owned unit");
             *from_count = from_count.saturating_sub(1);
             *inventory.entry(to.clone()).or_insert(0) += 1;
