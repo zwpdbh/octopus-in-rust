@@ -10,3 +10,7 @@ license = "MIT"
 faf-blueprints = { workspace = true }
 faf-quantities = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

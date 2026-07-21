@@ -4,15 +4,16 @@ use std::collections::HashMap;
 
 pub use faf_blueprints::UnitKind;
 pub use faf_dioxus_ui::components::GraphData;
-pub use faf_sim_shared::plan::{
+pub use faf_sim_shared::plan_types::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
-pub use faf_sim_shared::EcoSnapshot;
+pub use faf_sim_shared::{Action, EcoSnapshot, Schedule, StepResult};
 
 // ---------------------------------------------------------------------------
-// Scheduling wire types (mirror of faf-db-server's /api/schedule protocol).
-// Kept local so faf-db-web does not need to depend on faf-build-scheduler
-// (which would pull clap into the wasm bundle).
+// Scheduling wire types (from faf-sim-shared's /api/schedule protocol).
+//
+// These types live in `faf-sim-shared` so the backend and frontend share a
+// single serialized format and cannot drift out of sync.
 // ---------------------------------------------------------------------------
 
 /// Search budget and simulator caps for a scheduling request.
@@ -57,37 +58,6 @@ pub enum ScheduleApiRequest {
         #[serde(default = "default_max_mex_count")]
         max_mex_count: u32,
     },
-}
-
-/// A single step in the planned build order.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct StepResult {
-    pub action: Action,
-    pub finish_time_seconds: f64,
-    pub economy: EcoSnapshot,
-}
-
-/// A concrete action the scheduler decided to take.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub enum Action {
-    Build {
-        target: UnitKind,
-        builder: UnitKind,
-    },
-    Upgrade {
-        from: UnitKind,
-        to: UnitKind,
-        builder: UnitKind,
-    },
-}
-
-/// The full planned schedule returned by the server.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Schedule {
-    pub plan: ConstructionPlan,
-    pub total_time_seconds: f64,
-    pub final_eco: EcoSnapshot,
-    pub steps: Vec<StepResult>,
 }
 
 /// Error envelope returned when scheduling fails.

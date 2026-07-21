@@ -25,13 +25,13 @@ impl SolverState {
     pub(crate) fn from_snapshot(snapshot: &EcoSnapshot) -> Self {
         Self {
             time: 0.0,
-            mass: snapshot.mass_storage,
-            energy: snapshot.energy_storage,
-            mass_income: snapshot.production_per_second_mass,
-            energy_income: snapshot.production_per_second_energy,
-            maintenance: snapshot.maintenance_consumption_per_second_energy,
-            mass_cap: snapshot.mass_storage_cap,
-            energy_cap: snapshot.energy_storage_cap,
+            mass: snapshot.mass_storage.value(),
+            energy: snapshot.energy_storage.value(),
+            mass_income: snapshot.production_per_second_mass.value(),
+            energy_income: snapshot.production_per_second_energy.value(),
+            maintenance: snapshot.maintenance_consumption_per_second_energy.value(),
+            mass_cap: snapshot.mass_storage_cap.value(),
+            energy_cap: snapshot.energy_storage_cap.value(),
         }
     }
 
@@ -98,19 +98,21 @@ impl SolverState {
     /// Drain and spent totals are not tracked by the solver, so they are set to
     /// zero.
     pub(crate) fn to_snapshot(&self) -> EcoSnapshot {
+        use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
+
         EcoSnapshot {
-            time: self.time,
-            production_per_second_mass: self.mass_income,
-            production_per_second_energy: self.energy_income,
-            maintenance_consumption_per_second_energy: self.maintenance,
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: self.mass,
-            mass_storage_cap: self.mass_cap,
-            energy_storage: self.energy,
-            energy_storage_cap: self.energy_cap,
+            time: Time::from_raw(self.time),
+            production_per_second_mass: MassRate::from_raw(self.mass_income),
+            production_per_second_energy: EnergyRate::from_raw(self.energy_income),
+            maintenance_consumption_per_second_energy: EnergyRate::from_raw(self.maintenance),
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: Mass::from_raw(self.mass),
+            mass_storage_cap: Mass::from_raw(self.mass_cap),
+            energy_storage: Energy::from_raw(self.energy),
+            energy_storage_cap: Energy::from_raw(self.energy_cap),
         }
     }
 }

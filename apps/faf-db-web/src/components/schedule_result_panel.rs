@@ -70,8 +70,8 @@ pub fn ScheduleResultPanel(
                     let total = schedule.total_time_seconds;
                     let form_state = form.read();
                     let initial_mass = form_state.initial_mass_production;
-                    let final_mass = schedule.final_eco.production_per_second_mass;
-                    let final_energy = schedule.final_eco.production_per_second_energy;
+                    let final_mass = schedule.final_eco.production_per_second_mass.value();
+                    let final_energy = schedule.final_eco.production_per_second_energy.value();
                     let is_eco = form_state.mode == ScheduleModeTab::Eco;
                     let target_met = final_mass + form_state.tolerance >= form_state.target_mass_production;
                     let headline = match form_state.mode {

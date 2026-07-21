@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 use faf_sim_shared::{EcoSnapshot, EconomyRuntimeState};
 
 /// Read and deserialize a JSON file, exiting the process on failure.
@@ -22,19 +23,17 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> T {
 /// sensible defaults so the predictor can run from a plan file alone.
 pub fn eco_snapshot_from_runtime_state(state: &EconomyRuntimeState) -> EcoSnapshot {
     EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: state.production_per_second_mass.value(),
-        production_per_second_energy: state.production_per_second_energy.value(),
-        maintenance_consumption_per_second_energy: state
-            .maintenance_consumption_per_second_energy
-            .value(),
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage: state.mass_storage.current.value(),
-        mass_storage_cap: state.mass_storage.cap.value(),
-        energy_storage: state.energy_storage.current.value(),
-        energy_storage_cap: state.energy_storage.cap.value(),
+        time: Time::from_raw(0.0),
+        production_per_second_mass: state.production_per_second_mass,
+        production_per_second_energy: state.production_per_second_energy,
+        maintenance_consumption_per_second_energy: state.maintenance_consumption_per_second_energy,
+        mass_drain: MassRate::from_raw(0.0),
+        energy_drain: EnergyRate::from_raw(0.0),
+        total_mass_spent: Mass::from_raw(0.0),
+        total_energy_spent: Energy::from_raw(0.0),
+        mass_storage: state.mass_storage.current,
+        mass_storage_cap: state.mass_storage.cap,
+        energy_storage: state.energy_storage.current,
+        energy_storage_cap: state.energy_storage.cap,
     }
 }

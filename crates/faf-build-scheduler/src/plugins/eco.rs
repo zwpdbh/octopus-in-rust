@@ -3,7 +3,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use faf_blueprints::{BlueprintLibrary, UnitKind, UnitRole};
+use faf_blueprints::{BlueprintLibrary, TechLevel, UnitKind, UnitRole};
 
 use crate::algorithms::greedy;
 use crate::config::SchedulerConfig;
@@ -62,7 +62,68 @@ pub(crate) fn generate_eco_candidates_system(
     let current_mex_count = count_mex(&inventory.0, library);
     let mex_cap = config.max_mex_count;
 
-    // Build candidates from every owned builder.
+    // Opening-phase constraints: a human-like FAF opening requires a factory
+    // before the ACU builds economy, and a few engineers before the economy
+    // expansion really starts.
+    let has_factory = inventory
+        .0
+        .keys()
+        .any(|k| matches!(k, UnitKind::Factory(_)));
+    let engineer_count: u32 = inventory
+        .0
+        .iter()
+        .filter(|(k, _)| matches!(k, UnitKind::Engineer(_)))
+        .map(|(_, c)| *c)
+        .sum();
+    const MIN_OPENING_ENGINEERS: u32 = 2;
+
+    // Phase 0: no factory yet => ACU must build a T1 factory first.
+    if !has_factory {
+        if let Some(&count) = inventory.0.get(&UnitKind::Commander) {
+            if count > 0 {
+                if let Some(target) = library
+                    .buildable_by(&UnitKind::Commander)
+                    .into_iter()
+                    .find(|t| matches!(t, UnitKind::Factory(TechLevel::T1)))
+                {
+                    commands.spawn(CandidateAction(Action::Build {
+                        builder: UnitKind::Commander,
+                        target,
+                    }));
+                }
+            }
+        }
+        // No other build candidates until the factory exists.
+        return;
+    }
+
+    // Phase 1: factory exists but we still need opening engineers => factories
+    // must produce engineers. The ACU waits; this models the factory working on
+    // engineers while the ACU is free to scout/protect but not expand economy
+    // yet.
+    if engineer_count < MIN_OPENING_ENGINEERS {
+        for (kind, count) in &inventory.0 {
+            if *count == 0 {
+                continue;
+            }
+            if !matches!(kind, UnitKind::Factory(_)) {
+                continue;
+            }
+            if let Some(target) = library
+                .buildable_by(kind)
+                .into_iter()
+                .find(|t| matches!(t, UnitKind::Engineer(_)))
+            {
+                commands.spawn(CandidateAction(Action::Build {
+                    builder: kind.clone(),
+                    target,
+                }));
+            }
+        }
+        return;
+    }
+
+    // Phase 2: normal economy expansion.
     for (kind, count) in &inventory.0 {
         if *count == 0 {
             continue;
@@ -70,6 +131,11 @@ pub(crate) fn generate_eco_candidates_system(
 
         for target in library.buildable_by(kind) {
             if !is_eco_candidate(library, &target) {
+                continue;
+            }
+            // Once engineers are available, the ACU focuses on power/factories
+            // while engineers handle mex expansion.
+            if *kind == UnitKind::Commander && is_mex(library, &target) {
                 continue;
             }
             // Enforce the global mex cap on *new* mass extractors.
@@ -137,6 +203,8 @@ pub(crate) fn evaluate_eco_candidates_system(
 
     let library = &*library.0;
 
+    let direction = greedy::choose_eco_direction(&economy.current, target);
+
     for (entity, action) in candidates.iter() {
         let score = greedy::score_eco_candidate(
             &economy.current,
@@ -145,7 +213,7 @@ pub(crate) fn evaluate_eco_candidates_system(
             &options,
             &action.0,
             library,
-            target,
+            direction,
         );
         commands.entity(entity).insert(CandidateScore(score));
     }

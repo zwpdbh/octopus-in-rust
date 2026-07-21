@@ -9,7 +9,7 @@ use faf_build_scheduler::{
     UnitScheduleRequest,
 };
 use faf_quantities::MassRate;
-use faf_sim_shared::plan::EcoInitialSettings;
+use faf_sim_shared::plan_types::EcoInitialSettings;
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};
 

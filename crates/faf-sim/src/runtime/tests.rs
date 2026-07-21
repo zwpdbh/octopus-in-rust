@@ -212,8 +212,8 @@ mod tests {
         while !sim.is_finished() {
             for event in sim.step() {
                 if let SimulationEvent::Ticked(s) = event {
-                    if s.maintenance_consumption_per_second_energy > 1.0
-                        && s.mass_storage.abs() < 1e-9
+                    if s.maintenance_consumption_per_second_energy.value() > 1.0
+                        && s.mass_storage.value().abs() < 1e-9
                     {
                         saw_scaled_mass_income = true;
                     }
@@ -275,8 +275,9 @@ mod tests {
             for event in sim.step() {
                 if let SimulationEvent::Ticked(s) = event {
                     // The target finishes at time 10.0; check post-completion ticks.
-                    if s.time > 10.0
-                        && (s.production_per_second_mass - base_mass_income * 1.5).abs() < 1e-9
+                    if s.time.value() > 10.0
+                        && (s.production_per_second_mass.value() - base_mass_income * 1.5).abs()
+                            < 1e-9
                     {
                         saw_boosted_income = true;
                     }
@@ -338,8 +339,9 @@ mod tests {
             for event in sim.step() {
                 if let SimulationEvent::Ticked(s) = event {
                     // The target finishes at time 10.0; check post-completion ticks.
-                    if s.time > 10.0
-                        && (s.production_per_second_mass - base_mass_income * 1.25).abs() < 1e-9
+                    if s.time.value() > 10.0
+                        && (s.production_per_second_mass.value() - base_mass_income * 1.25).abs()
+                            < 1e-9
                     {
                         saw_boosted_income = true;
                     }

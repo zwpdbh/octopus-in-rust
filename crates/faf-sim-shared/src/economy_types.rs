@@ -41,32 +41,32 @@ pub struct BuildQueue {
 /// A point-in-time view of the economy.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EcoSnapshot {
-    pub time: f64,
+    pub time: Time,
     /// Gross FAF `ProductionPerSecondMass`.
-    pub production_per_second_mass: f64,
+    pub production_per_second_mass: MassRate,
     /// Gross FAF `ProductionPerSecondEnergy`.
-    pub production_per_second_energy: f64,
+    pub production_per_second_energy: EnergyRate,
     /// Total FAF `MaintenanceConsumptionPerSecondEnergy` paid by all owned units.
     #[serde(default)]
-    pub maintenance_consumption_per_second_energy: f64,
+    pub maintenance_consumption_per_second_energy: EnergyRate,
     /// Total mass requested by all active construction sites per second.
     #[serde(default)]
-    pub mass_drain: f64,
+    pub mass_drain: MassRate,
     /// Total energy requested by all active construction sites per second.
     #[serde(default)]
-    pub energy_drain: f64,
-    pub total_mass_spent: f64,
-    pub total_energy_spent: f64,
+    pub energy_drain: EnergyRate,
+    pub total_mass_spent: Mass,
+    pub total_energy_spent: Energy,
     /// Current mass stored.
-    pub mass_storage: f64,
+    pub mass_storage: Mass,
     /// Mass storage capacity.
     #[serde(default)]
-    pub mass_storage_cap: f64,
+    pub mass_storage_cap: Mass,
     /// Current energy stored.
-    pub energy_storage: f64,
+    pub energy_storage: Energy,
     /// Energy storage capacity.
     #[serde(default)]
-    pub energy_storage_cap: f64,
+    pub energy_storage_cap: Energy,
 }
 
 /// `EcoSnapshot` is a flat, primitive view of one tick and includes construction

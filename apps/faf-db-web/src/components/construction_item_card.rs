@@ -80,14 +80,22 @@ pub fn ConstructionItemCard(
             let finish = current.time_seconds;
             let duration = finish - previous.time_seconds;
             let delta = EcoDelta {
-                mass_prod: current.economy.production_per_second_mass
-                    - previous.economy.production_per_second_mass,
-                energy_prod: current.economy.production_per_second_energy
-                    - previous.economy.production_per_second_energy,
-                mass_storage: current.economy.mass_storage - previous.economy.mass_storage,
-                energy_storage: current.economy.energy_storage - previous.economy.energy_storage,
-                maintenance: current.economy.maintenance_consumption_per_second_energy
-                    - previous.economy.maintenance_consumption_per_second_energy,
+                mass_prod: current.economy.production_per_second_mass.value()
+                    - previous.economy.production_per_second_mass.value(),
+                energy_prod: current.economy.production_per_second_energy.value()
+                    - previous.economy.production_per_second_energy.value(),
+                mass_storage: current.economy.mass_storage.value()
+                    - previous.economy.mass_storage.value(),
+                energy_storage: current.economy.energy_storage.value()
+                    - previous.economy.energy_storage.value(),
+                maintenance: current
+                    .economy
+                    .maintenance_consumption_per_second_energy
+                    .value()
+                    - previous
+                        .economy
+                        .maintenance_consumption_per_second_energy
+                        .value(),
             };
             (Some(finish), Some(duration), delta)
         },
@@ -186,27 +194,27 @@ pub fn ConstructionItemCard(
                                 }
                                 DeltaLine {
                                     label: "Mass",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_mass),
+                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_mass.value()),
                                     delta: delta.mass_prod,
                                 }
                                 DeltaLine {
                                     label: "Energy",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_energy),
+                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_energy.value()),
                                     delta: delta.energy_prod,
                                 }
                                 DeltaLine {
                                     label: "Mass cap",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.mass_storage),
+                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.mass_storage.value()),
                                     delta: delta.mass_storage,
                                 }
                                 DeltaLine {
                                     label: "Energy cap",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.energy_storage),
+                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.energy_storage.value()),
                                     delta: delta.energy_storage,
                                 }
                                 DeltaLine {
                                     label: "Maint",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.maintenance_consumption_per_second_energy),
+                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.maintenance_consumption_per_second_energy.value()),
                                     delta: delta.maintenance,
                                 }
                             }

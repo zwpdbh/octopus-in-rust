@@ -180,20 +180,18 @@ pub(crate) fn eco_system(
     clock.time = clock.time + dt;
 
     journal.0.push(SimulationEvent::Ticked(EcoSnapshot {
-        time: clock.time.value(),
-        production_per_second_mass: eco.production_per_second_mass.value(),
-        production_per_second_energy: eco.production_per_second_energy.value(),
-        maintenance_consumption_per_second_energy: eco
-            .maintenance_consumption_per_second_energy
-            .value(),
-        mass_drain: total_mass_drain,
-        energy_drain: total_energy_drain,
-        total_mass_spent: totals.mass,
-        total_energy_spent: totals.energy,
-        mass_storage: eco.mass_storage.current.value(),
-        mass_storage_cap: eco.mass_storage.cap.value(),
-        energy_storage: eco.energy_storage.current.value(),
-        energy_storage_cap: eco.energy_storage.cap.value(),
+        time: clock.time,
+        production_per_second_mass: eco.production_per_second_mass,
+        production_per_second_energy: eco.production_per_second_energy,
+        maintenance_consumption_per_second_energy: eco.maintenance_consumption_per_second_energy,
+        mass_drain: MassRate::from_raw(total_mass_drain),
+        energy_drain: EnergyRate::from_raw(total_energy_drain),
+        total_mass_spent: Mass::from_raw(totals.mass),
+        total_energy_spent: Energy::from_raw(totals.energy),
+        mass_storage: eco.mass_storage.current,
+        mass_storage_cap: eco.mass_storage.cap,
+        energy_storage: eco.energy_storage.current,
+        energy_storage_cap: eco.energy_storage.cap,
     }));
 }
 

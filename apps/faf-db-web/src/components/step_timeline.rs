@@ -22,15 +22,10 @@ pub fn StepTimeline(steps: Vec<StepResult>, on_click: EventHandler<UnitKind>) ->
                                 format!("Build {} w/ {}", kind_label(target), kind_label(builder)),
                                 target.clone(),
                             ),
-                            Action::Upgrade { from, to, builder } => (
+                            Action::Upgrade { from, to } => (
                                 "⬆️",
                                 "border-amber-700",
-                                format!(
-                                    "Upgrade {}→{} w/ {}",
-                                    kind_label(from),
-                                    kind_label(to),
-                                    kind_label(builder)
-                                ),
+                                format!("Upgrade {}→{}", kind_label(from), kind_label(to)),
                                 to.clone(),
                             ),
                         };

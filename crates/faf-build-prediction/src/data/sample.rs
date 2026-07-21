@@ -174,8 +174,10 @@ pub(crate) fn extract_task_features(
 ) -> [f64; TASK_FEATURE_DIM] {
     let t = TaskStats::from_task(task);
 
-    let net_energy_start = initial_eco.production_per_second_energy
-        - initial_eco.maintenance_consumption_per_second_energy
+    let net_energy_start = initial_eco.production_per_second_energy.value()
+        - initial_eco
+            .maintenance_consumption_per_second_energy
+            .value()
         - t.builder_maintenance;
     let first_build_time = t.first_build_time.max(1.0);
     let first_mass_drain = t.first_mass_cost / first_build_time * t.build_power;
@@ -184,13 +186,15 @@ pub(crate) fn extract_task_features(
     [
         1.0, // is_present flag
         task.start_after.value(),
-        initial_eco.production_per_second_mass,
-        initial_eco.production_per_second_energy,
-        initial_eco.maintenance_consumption_per_second_energy,
-        initial_eco.mass_storage,
-        initial_eco.energy_storage,
-        initial_eco.mass_storage_cap,
-        initial_eco.energy_storage_cap,
+        initial_eco.production_per_second_mass.value(),
+        initial_eco.production_per_second_energy.value(),
+        initial_eco
+            .maintenance_consumption_per_second_energy
+            .value(),
+        initial_eco.mass_storage.value(),
+        initial_eco.energy_storage.value(),
+        initial_eco.mass_storage_cap.value(),
+        initial_eco.energy_storage_cap.value(),
         t.builder_count as f64,
         t.target_count as f64,
         t.build_power,
@@ -228,22 +232,21 @@ pub fn extract_sequence_features(
 pub fn eco_snapshot_to_runtime_state(
     snapshot: &EcoSnapshot,
 ) -> faf_sim_shared::EconomyRuntimeState {
-    use faf_quantities::{EnergyRate, MassRate, Storage};
+    use faf_quantities::Storage;
     use faf_sim_shared::EconomyRuntimeState;
 
     EconomyRuntimeState {
-        production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
-        production_per_second_energy: EnergyRate::from_raw(snapshot.production_per_second_energy),
-        maintenance_consumption_per_second_energy: EnergyRate::from_raw(
-            snapshot.maintenance_consumption_per_second_energy,
-        ),
+        production_per_second_mass: snapshot.production_per_second_mass,
+        production_per_second_energy: snapshot.production_per_second_energy,
+        maintenance_consumption_per_second_energy: snapshot
+            .maintenance_consumption_per_second_energy,
         mass_storage: Storage {
-            current: faf_quantities::Mass::from_raw(snapshot.mass_storage),
-            cap: faf_quantities::Mass::from_raw(snapshot.mass_storage_cap),
+            current: snapshot.mass_storage,
+            cap: snapshot.mass_storage_cap,
         },
         energy_storage: Storage {
-            current: faf_quantities::Energy::from_raw(snapshot.energy_storage),
-            cap: faf_quantities::Energy::from_raw(snapshot.energy_storage_cap),
+            current: snapshot.energy_storage,
+            cap: snapshot.energy_storage_cap,
         },
     }
 }
@@ -280,24 +283,25 @@ pub(crate) fn simulate_label(initial_eco: &EcoSnapshot, plan: &[BuildTask]) -> f
 #[cfg(test)]
 mod tests {
     use faf_blueprints::UnitEcoStats;
+    use faf_quantities::{Energy, EnergyRate, Mass, MassRate};
 
     use super::*;
 
     #[test]
     fn extracted_sequence_features_have_expected_shape() {
         let snapshot = EcoSnapshot {
-            time: 0.0,
-            production_per_second_mass: 0.0,
-            production_per_second_energy: 0.0,
-            maintenance_consumption_per_second_energy: 0.0,
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: 0.0,
-            mass_storage_cap: 0.0,
-            energy_storage: 0.0,
-            energy_storage_cap: 0.0,
+            time: Time::from_raw(0.0),
+            production_per_second_mass: MassRate::from_raw(0.0),
+            production_per_second_energy: EnergyRate::from_raw(0.0),
+            maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: Mass::from_raw(0.0),
+            mass_storage_cap: Mass::from_raw(0.0),
+            energy_storage: Energy::from_raw(0.0),
+            energy_storage_cap: Energy::from_raw(0.0),
         };
         let task = BuildTask {
             id: 0,

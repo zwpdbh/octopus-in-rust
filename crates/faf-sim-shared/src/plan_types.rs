@@ -122,20 +122,19 @@ impl EcoInitialSettings {
 
     pub fn to_snapshot(&self) -> EcoSnapshot {
         EcoSnapshot {
-            time: 0.0,
-            production_per_second_mass: self.production_per_second_mass.value(),
-            production_per_second_energy: self.production_per_second_energy.value(),
+            time: Time::from_raw(0.0),
+            production_per_second_mass: self.production_per_second_mass,
+            production_per_second_energy: self.production_per_second_energy,
             maintenance_consumption_per_second_energy: self
-                .maintenance_consumption_per_second_energy
-                .value(),
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: self.mass_storage.current.value(),
-            mass_storage_cap: self.mass_storage.cap.value(),
-            energy_storage: self.energy_storage.current.value(),
-            energy_storage_cap: self.energy_storage.cap.value(),
+                .maintenance_consumption_per_second_energy,
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: self.mass_storage.current,
+            mass_storage_cap: self.mass_storage.cap,
+            energy_storage: self.energy_storage.current,
+            energy_storage_cap: self.energy_storage.cap,
         }
     }
 

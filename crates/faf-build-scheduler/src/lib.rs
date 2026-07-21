@@ -44,19 +44,21 @@ mod tests {
     }
 
     fn default_eco() -> EcoSnapshot {
+        use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
+
         EcoSnapshot {
-            time: 0.0,
-            production_per_second_mass: 5.0,
-            production_per_second_energy: 50.0,
-            maintenance_consumption_per_second_energy: 0.0,
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: 2000.0,
-            mass_storage_cap: 2000.0,
-            energy_storage: 4000.0,
-            energy_storage_cap: 4000.0,
+            time: Time::from_raw(0.0),
+            production_per_second_mass: MassRate::from_raw(5.0),
+            production_per_second_energy: EnergyRate::from_raw(50.0),
+            maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: Mass::from_raw(2000.0),
+            mass_storage_cap: Mass::from_raw(2000.0),
+            energy_storage: Energy::from_raw(4000.0),
+            energy_storage_cap: Energy::from_raw(4000.0),
         }
     }
 

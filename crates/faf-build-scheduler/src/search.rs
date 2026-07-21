@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitEcoStats, UnitKind};
-use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
-use faf_sim_shared::plan::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
+use faf_quantities::{Storage, Time};
+use faf_sim_shared::plan_types::{
+    ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
+};
 use faf_sim_shared::{BuildTask, EcoSnapshot};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
@@ -123,19 +125,12 @@ fn build_construction_plan(economy_state: &EconomyState, task_log: &TaskLog) -> 
 
 fn snapshot_to_initial_settings(snapshot: &EcoSnapshot) -> EcoInitialSettings {
     EcoInitialSettings {
-        production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
-        production_per_second_energy: EnergyRate::from_raw(snapshot.production_per_second_energy),
-        maintenance_consumption_per_second_energy: EnergyRate::from_raw(
-            snapshot.maintenance_consumption_per_second_energy,
-        ),
-        mass_storage: Storage::new(
-            Mass::from_raw(snapshot.mass_storage),
-            Mass::from_raw(snapshot.mass_storage_cap),
-        ),
-        energy_storage: Storage::new(
-            Energy::from_raw(snapshot.energy_storage),
-            Energy::from_raw(snapshot.energy_storage_cap),
-        ),
+        production_per_second_mass: snapshot.production_per_second_mass,
+        production_per_second_energy: snapshot.production_per_second_energy,
+        maintenance_consumption_per_second_energy: snapshot
+            .maintenance_consumption_per_second_energy,
+        mass_storage: Storage::new(snapshot.mass_storage, snapshot.mass_storage_cap),
+        energy_storage: Storage::new(snapshot.energy_storage, snapshot.energy_storage_cap),
     }
 }
 

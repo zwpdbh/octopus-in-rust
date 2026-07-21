@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use faf_dioxus_ui::components::{GraphEdgeData, GraphNodeData, GraphView};
-use faf_sim_shared::plan::UnitSummary;
+use faf_sim_shared::plan_types::UnitSummary;
 
 use crate::types::{BlueprintGraphData, ConcreteEdgeKind, ConcreteGraphEdge, ConcreteGraphNode};
 

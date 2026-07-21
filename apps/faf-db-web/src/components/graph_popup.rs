@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use faf_sim_shared::plan::UnitSummary;
+use faf_sim_shared::plan_types::UnitSummary;
 
 use crate::components::BlueprintGraph;
 use crate::types::BlueprintGraphResponse;

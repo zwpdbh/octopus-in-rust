@@ -1,5 +1,5 @@
 use faf_blueprints::UnitEcoStats;
-use faf_quantities::Time;
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 use faf_sim::runtime::{BuildTask, EcoSnapshot};
 
 use super::state::EPS;
@@ -40,18 +40,18 @@ fn eco(
     energy_storage: f64,
 ) -> EcoSnapshot {
     EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: mass_income,
-        production_per_second_energy: energy_income,
-        maintenance_consumption_per_second_energy: maintenance,
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage,
-        mass_storage_cap: 1000.0,
-        energy_storage,
-        energy_storage_cap: 1000.0,
+        time: Time::from_raw(0.0),
+        production_per_second_mass: MassRate::from_raw(mass_income),
+        production_per_second_energy: EnergyRate::from_raw(energy_income),
+        maintenance_consumption_per_second_energy: EnergyRate::from_raw(maintenance),
+        mass_drain: MassRate::from_raw(0.0),
+        energy_drain: EnergyRate::from_raw(0.0),
+        total_mass_spent: Mass::from_raw(0.0),
+        total_energy_spent: Energy::from_raw(0.0),
+        mass_storage: Mass::from_raw(mass_storage),
+        mass_storage_cap: Mass::from_raw(1000.0),
+        energy_storage: Energy::from_raw(energy_storage),
+        energy_storage_cap: Energy::from_raw(1000.0),
     }
 }
 
@@ -79,9 +79,7 @@ fn mass_stall_steady_state() {
 #[test]
 fn regression_off_by_one_case() {
     use faf_sim::economy::EconomyRuntimeState;
-    use faf_sim::quantities::{
-        Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
-    };
+    use faf_sim::quantities::{StepTime, Storage, Time as SimTime};
     use faf_sim::runtime::BuildQueue;
     use faf_sim::sim::Simulation;
 
@@ -115,37 +113,34 @@ fn regression_off_by_one_case() {
         ],
     };
     let snapshot = EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: 9.0,
-        production_per_second_energy: 200.0,
-        maintenance_consumption_per_second_energy: 8.0,
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage: 650.0,
-        mass_storage_cap: 650.0,
-        energy_storage: 3900.0,
-        energy_storage_cap: 3900.0,
+        time: Time::from_raw(0.0),
+        production_per_second_mass: MassRate::from_raw(9.0),
+        production_per_second_energy: EnergyRate::from_raw(200.0),
+        maintenance_consumption_per_second_energy: EnergyRate::from_raw(8.0),
+        mass_drain: MassRate::from_raw(0.0),
+        energy_drain: EnergyRate::from_raw(0.0),
+        total_mass_spent: Mass::from_raw(0.0),
+        total_energy_spent: Energy::from_raw(0.0),
+        mass_storage: Mass::from_raw(650.0),
+        mass_storage_cap: Mass::from_raw(650.0),
+        energy_storage: Energy::from_raw(3900.0),
+        energy_storage_cap: Energy::from_raw(3900.0),
     };
     let solver_time = single_task_completion_time(&snapshot, &task, 6000.0);
 
     let queue = BuildQueue {
         initial_eco: EconomyRuntimeState {
-            production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
-            production_per_second_energy: EnergyRate::from_raw(
-                snapshot.production_per_second_energy,
-            ),
-            maintenance_consumption_per_second_energy: EnergyRate::from_raw(
-                snapshot.maintenance_consumption_per_second_energy,
-            ),
+            production_per_second_mass: snapshot.production_per_second_mass,
+            production_per_second_energy: snapshot.production_per_second_energy,
+            maintenance_consumption_per_second_energy: snapshot
+                .maintenance_consumption_per_second_energy,
             mass_storage: Storage {
-                current: Mass::from_raw(snapshot.mass_storage),
-                cap: Mass::from_raw(snapshot.mass_storage_cap),
+                current: snapshot.mass_storage,
+                cap: snapshot.mass_storage_cap,
             },
             energy_storage: Storage {
-                current: Energy::from_raw(snapshot.energy_storage),
-                cap: Energy::from_raw(snapshot.energy_storage_cap),
+                current: snapshot.energy_storage,
+                cap: snapshot.energy_storage_cap,
             },
         },
         tasks: vec![task],
@@ -162,9 +157,7 @@ fn regression_off_by_one_case() {
 #[test]
 fn plan_solver_matches_simulator_for_two_task_sequence() {
     use faf_sim::economy::EconomyRuntimeState;
-    use faf_sim::quantities::{
-        Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
-    };
+    use faf_sim::quantities::{StepTime, Storage, Time as SimTime};
     use faf_sim::runtime::BuildQueue;
     use faf_sim::sim::Simulation;
 
@@ -200,38 +193,35 @@ fn plan_solver_matches_simulator_for_two_task_sequence() {
         },
     ];
     let snapshot = EcoSnapshot {
-        time: 0.0,
-        production_per_second_mass: 10.0,
-        production_per_second_energy: 10.0,
-        maintenance_consumption_per_second_energy: 0.0,
-        mass_drain: 0.0,
-        energy_drain: 0.0,
-        total_mass_spent: 0.0,
-        total_energy_spent: 0.0,
-        mass_storage: 1000.0,
-        mass_storage_cap: 1000.0,
-        energy_storage: 5000.0,
-        energy_storage_cap: 5000.0,
+        time: Time::from_raw(0.0),
+        production_per_second_mass: MassRate::from_raw(10.0),
+        production_per_second_energy: EnergyRate::from_raw(10.0),
+        maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
+        mass_drain: MassRate::from_raw(0.0),
+        energy_drain: EnergyRate::from_raw(0.0),
+        total_mass_spent: Mass::from_raw(0.0),
+        total_energy_spent: Energy::from_raw(0.0),
+        mass_storage: Mass::from_raw(1000.0),
+        mass_storage_cap: Mass::from_raw(1000.0),
+        energy_storage: Energy::from_raw(5000.0),
+        energy_storage_cap: Energy::from_raw(5000.0),
     };
 
     let solver_time = plan_completion_time(&snapshot, &tasks, 6000.0);
 
     let queue = BuildQueue {
         initial_eco: EconomyRuntimeState {
-            production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
-            production_per_second_energy: EnergyRate::from_raw(
-                snapshot.production_per_second_energy,
-            ),
-            maintenance_consumption_per_second_energy: EnergyRate::from_raw(
-                snapshot.maintenance_consumption_per_second_energy,
-            ),
+            production_per_second_mass: snapshot.production_per_second_mass,
+            production_per_second_energy: snapshot.production_per_second_energy,
+            maintenance_consumption_per_second_energy: snapshot
+                .maintenance_consumption_per_second_energy,
             mass_storage: Storage {
-                current: Mass::from_raw(snapshot.mass_storage),
-                cap: Mass::from_raw(snapshot.mass_storage_cap),
+                current: snapshot.mass_storage,
+                cap: snapshot.mass_storage_cap,
             },
             energy_storage: Storage {
-                current: Energy::from_raw(snapshot.energy_storage),
-                cap: Energy::from_raw(snapshot.energy_storage_cap),
+                current: snapshot.energy_storage,
+                cap: snapshot.energy_storage_cap,
             },
         },
         tasks,
@@ -254,9 +244,7 @@ fn plan_solver_matches_simulator_for_two_task_sequence() {
 #[test]
 fn matches_simulator_for_simple_cases() {
     use faf_sim::economy::EconomyRuntimeState;
-    use faf_sim::quantities::{
-        Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time as SimTime,
-    };
+    use faf_sim::quantities::{StepTime, Storage, Time as SimTime};
     use faf_sim::runtime::BuildQueue;
     use faf_sim::sim::Simulation;
 
@@ -280,20 +268,17 @@ fn matches_simulator_for_simple_cases() {
 
         let queue = BuildQueue {
             initial_eco: EconomyRuntimeState {
-                production_per_second_mass: MassRate::from_raw(snapshot.production_per_second_mass),
-                production_per_second_energy: EnergyRate::from_raw(
-                    snapshot.production_per_second_energy,
-                ),
-                maintenance_consumption_per_second_energy: EnergyRate::from_raw(
-                    snapshot.maintenance_consumption_per_second_energy,
-                ),
+                production_per_second_mass: snapshot.production_per_second_mass,
+                production_per_second_energy: snapshot.production_per_second_energy,
+                maintenance_consumption_per_second_energy: snapshot
+                    .maintenance_consumption_per_second_energy,
                 mass_storage: Storage {
-                    current: Mass::from_raw(snapshot.mass_storage),
-                    cap: Mass::from_raw(snapshot.mass_storage_cap),
+                    current: snapshot.mass_storage,
+                    cap: snapshot.mass_storage_cap,
                 },
                 energy_storage: Storage {
-                    current: Energy::from_raw(snapshot.energy_storage),
-                    cap: Energy::from_raw(snapshot.energy_storage_cap),
+                    current: snapshot.energy_storage,
+                    cap: snapshot.energy_storage_cap,
                 },
             },
             tasks: vec![task],

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
-use faf_quantities::Time;
+use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 use faf_sim_shared::{BuildTask, EcoSnapshot};
 use rand::{Rng, RngExt};
 use rusqlite::{Connection, Transaction};
@@ -609,18 +609,18 @@ impl<'a, R: Rng> EcoSnapshotBuilder<'a, R> {
 
     fn build(self) -> EcoSnapshot {
         EcoSnapshot {
-            time: 0.0,
-            production_per_second_mass: self.production_mass,
-            production_per_second_energy: self.production_energy,
-            maintenance_consumption_per_second_energy: self.maintenance,
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: self.mass_storage_cap,
-            mass_storage_cap: self.mass_storage_cap,
-            energy_storage: self.energy_storage_cap,
-            energy_storage_cap: self.energy_storage_cap,
+            time: Time::from_raw(0.0),
+            production_per_second_mass: MassRate::from_raw(self.production_mass),
+            production_per_second_energy: EnergyRate::from_raw(self.production_energy),
+            maintenance_consumption_per_second_energy: EnergyRate::from_raw(self.maintenance),
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: Mass::from_raw(self.mass_storage_cap),
+            mass_storage_cap: Mass::from_raw(self.mass_storage_cap),
+            energy_storage: Energy::from_raw(self.energy_storage_cap),
+            energy_storage_cap: Energy::from_raw(self.energy_storage_cap),
         }
     }
 }
@@ -697,12 +697,11 @@ mod tests {
 
         for _ in 0..20 {
             let eco = sample_real_initial_eco(&mut rng, &library, &task);
-            let net_energy = eco.production_per_second_energy
-                - eco.maintenance_consumption_per_second_energy
-                - 0.0; // builder maintenance is zero in this task
+            let net_energy = eco.production_per_second_energy.value()
+                - eco.maintenance_consumption_per_second_energy.value();
             let first_target = task.targets.first().unwrap();
             let mass_drain = first_target.mass_cost / first_target.build_time * 10.0;
-            let net_mass = eco.production_per_second_mass - mass_drain;
+            let net_mass = eco.production_per_second_mass.value() - mass_drain;
 
             assert!(
                 net_energy > 0.0,

@@ -20,7 +20,7 @@ pub struct EcoTarget {
 impl EcoTarget {
     /// True if the snapshot's mass income meets the target within tolerance.
     pub fn is_reached(&self, eco: &EcoSnapshot) -> bool {
-        eco.production_per_second_mass + self.tolerance >= self.mass_production.value()
+        eco.production_per_second_mass.value() + self.tolerance >= self.mass_production.value()
     }
 }
 

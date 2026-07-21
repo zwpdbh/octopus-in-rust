@@ -4,8 +4,10 @@
 //! (the analytical solver), providing stable, serializable plan and economy
 //! representations that can be used without pulling in Bevy.
 
-pub mod plan;
-pub mod types;
+pub mod economy_types;
+pub mod plan_types;
+pub mod scheduler_types;
 
-pub use plan::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
-pub use types::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
+pub use economy_types::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
+pub use plan_types::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
+pub use scheduler_types::{Action, Schedule, ScheduleError, StepResult};

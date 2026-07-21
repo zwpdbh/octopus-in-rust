@@ -88,7 +88,7 @@ pub fn SimulationPanel(
             SnapshotDetails { snapshot: *s }
         }
     });
-    let current_time = snaps.last().map_or(0.0, |s| s.time);
+    let current_time = snaps.last().map_or(0.0, |s| s.time.value());
     let is_finished = current_state == SimulationUiState::Finished;
 
     let start_enabled = current_state == SimulationUiState::NotStartYet;
@@ -168,7 +168,7 @@ pub fn SimulationPanel(
                     }
                         UplotChart {
                             data: snapshots,
-                            x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
+                            x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time.value()),
                             sidebar,
                         tabs: vec![
                             ChartTab {
@@ -177,12 +177,12 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Income",
                                         RGBColor(34, 197, 94),
-                                        ChartMetric::new(|s| s.production_per_second_energy),
+                                        ChartMetric::new(|s| s.production_per_second_energy.value()),
                                     ),
                                     ChartSeries::new(
                                         "Maintenance",
                                         RGBColor(234, 179, 8),
-                                        ChartMetric::new(|s| s.maintenance_consumption_per_second_energy),
+                                        ChartMetric::new(|s| s.maintenance_consumption_per_second_energy.value()),
                                     ),
                                     ChartSeries::new(
                                         "Available",
@@ -192,7 +192,7 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Drain",
                                         RGBColor(239, 68, 68),
-                                        ChartMetric::new(|s| s.energy_drain),
+                                        ChartMetric::new(|s| s.energy_drain.value()),
                                     ),
                                     ChartSeries::new(
                                         "Net",
@@ -207,7 +207,7 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Gross income",
                                         RGBColor(156, 163, 175),
-                                        ChartMetric::new(|s: &EcoSnapshot| s.production_per_second_mass),
+                                        ChartMetric::new(|s: &EcoSnapshot| s.production_per_second_mass.value()),
                                     )
                                     .with_dash([4.0, 4.0]),
                                     ChartSeries::new(
@@ -218,7 +218,7 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Drain",
                                         RGBColor(239, 68, 68),
-                                        ChartMetric::new(|s| s.mass_drain),
+                                        ChartMetric::new(|s| s.mass_drain.value()),
                                     ),
                                     ChartSeries::new(
                                         "Net",
@@ -249,12 +249,12 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Current",
                                         RGBColor(99, 102, 241),
-                                        ChartMetric::new(|s| s.mass_storage),
+                                        ChartMetric::new(|s| s.mass_storage.value()),
                                     ),
                                     ChartSeries::new(
                                         "Cap",
                                         RGBColor(168, 85, 247),
-                                        ChartMetric::new(|s| s.mass_storage_cap),
+                                        ChartMetric::new(|s| s.mass_storage_cap.value()),
                                     ),
                                 ],
                             },
@@ -264,17 +264,17 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Current",
                                         RGBColor(14, 165, 233),
-                                        ChartMetric::new(|s| s.energy_storage),
+                                        ChartMetric::new(|s| s.energy_storage.value()),
                                     ),
                                     ChartSeries::new(
                                         "Cap",
                                         RGBColor(236, 72, 153),
-                                        ChartMetric::new(|s| s.energy_storage_cap),
+                                        ChartMetric::new(|s| s.energy_storage_cap.value()),
                                     ),
                                     ChartSeries::new(
                                         "Maintenance threshold",
                                         RGBColor(249, 115, 22),
-                                        ChartMetric::new(|s: &EcoSnapshot| s.maintenance_consumption_per_second_energy),
+                                        ChartMetric::new(|s: &EcoSnapshot| s.maintenance_consumption_per_second_energy.value()),
                                     )
                                     .with_dash([4.0, 4.0]),
                                 ],
@@ -285,7 +285,7 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Total mass spent",
                                         RGBColor(34, 197, 94),
-                                        ChartMetric::new(|s| s.total_mass_spent),
+                                        ChartMetric::new(|s| s.total_mass_spent.value()),
                                     ),
                                 ],
                             },
@@ -295,7 +295,7 @@ pub fn SimulationPanel(
                                     ChartSeries::new(
                                         "Total energy spent",
                                         RGBColor(249, 115, 22),
-                                        ChartMetric::new(|s| s.total_energy_spent),
+                                        ChartMetric::new(|s| s.total_energy_spent.value()),
                                     ),
                                 ],
                             },
@@ -324,24 +324,24 @@ fn SnapshotDetails(snapshot: EcoSnapshot) -> Element {
         div { class: "flex flex-col gap-2 w-56 shrink-0 self-start text-xs text-neutral-300",
             div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
                 div { class: "font-semibold text-white mb-1", "Snapshot" }
-                div { "Time: {snapshot.time:.1}s" }
+                div { "Time: {snapshot.time.value():.1}s" }
             }
             div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
                 div { class: "font-semibold text-white mb-1", "Mass" }
-                div { "Production: {snapshot.production_per_second_mass:.2}" }
+                div { "Production: {snapshot.production_per_second_mass.value():.2}" }
                 div { "Scaled: {scaled:.2}" }
-                div { "Drain: {snapshot.mass_drain:.2}" }
-                div { "Net: {snapshot.production_per_second_mass - snapshot.mass_drain:.2}" }
-                div { "Storage: {snapshot.mass_storage:.0} / {snapshot.mass_storage_cap:.0}" }
+                div { "Drain: {snapshot.mass_drain.value():.2}" }
+                div { "Net: {snapshot.production_per_second_mass.value() - snapshot.mass_drain.value():.2}" }
+                div { "Storage: {snapshot.mass_storage.value():.0} / {snapshot.mass_storage_cap.value():.0}" }
             }
             div { class: "p-2 rounded bg-neutral-900/80 border border-neutral-800",
                 div { class: "font-semibold text-white mb-1", "Energy" }
-                div { "Production: {snapshot.production_per_second_energy:.2}" }
-                div { "Maintenance: {snapshot.maintenance_consumption_per_second_energy:.2}" }
+                div { "Production: {snapshot.production_per_second_energy.value():.2}" }
+                div { "Maintenance: {snapshot.maintenance_consumption_per_second_energy.value():.2}" }
                 div { "Available: {energy_avail:.2}" }
-                div { "Drain: {snapshot.energy_drain:.2}" }
+                div { "Drain: {snapshot.energy_drain.value():.2}" }
                 div { "Net: {energy_net:.2}" }
-                div { "Storage: {snapshot.energy_storage:.0} / {snapshot.energy_storage_cap:.0}" }
+                div { "Storage: {snapshot.energy_storage.value():.0} / {snapshot.energy_storage_cap.value():.0}" }
                 div { "Efficiency: {efficiency:.2}{scaling_label}" }
             }
         }

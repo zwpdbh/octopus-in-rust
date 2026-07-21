@@ -57,19 +57,21 @@ impl Default for ScheduleFormState {
 
 impl ScheduleFormState {
     fn initial_snapshot(&self) -> EcoSnapshot {
+        use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
+
         EcoSnapshot {
-            time: 0.0,
-            production_per_second_mass: self.initial_mass_production,
-            production_per_second_energy: self.initial_energy_production,
-            maintenance_consumption_per_second_energy: 0.0,
-            mass_drain: 0.0,
-            energy_drain: 0.0,
-            total_mass_spent: 0.0,
-            total_energy_spent: 0.0,
-            mass_storage: self.initial_mass_storage,
-            mass_storage_cap: self.initial_mass_storage,
-            energy_storage: self.initial_energy_storage,
-            energy_storage_cap: self.initial_energy_storage,
+            time: Time::from_raw(0.0),
+            production_per_second_mass: MassRate::from_raw(self.initial_mass_production),
+            production_per_second_energy: EnergyRate::from_raw(self.initial_energy_production),
+            maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
+            mass_drain: MassRate::from_raw(0.0),
+            energy_drain: EnergyRate::from_raw(0.0),
+            total_mass_spent: Mass::from_raw(0.0),
+            total_energy_spent: Energy::from_raw(0.0),
+            mass_storage: Mass::from_raw(self.initial_mass_storage),
+            mass_storage_cap: Mass::from_raw(self.initial_mass_storage),
+            energy_storage: Energy::from_raw(self.initial_energy_storage),
+            energy_storage_cap: Energy::from_raw(self.initial_energy_storage),
         }
     }
 
