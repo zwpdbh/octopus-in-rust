@@ -1,6 +1,5 @@
-//! Apply-best plugin.
+//! Apply lifecycle step.
 
-use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use faf_quantities::Time;
@@ -8,7 +7,7 @@ use faf_quantities::Time;
 use crate::components::{
     BuildPowerComp, BuilderState, CandidateAssignment, ScheduledTask, UnitKindComp,
 };
-use crate::plugins::lifecycle::{SchedulerResult, SchedulerSet};
+use crate::plugins::lifecycle::SchedulerResult;
 use crate::request::SearchOptions;
 use crate::resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
@@ -19,21 +18,7 @@ use crate::search::{
     CandidateAction, CandidateScore, SearchTarget,
 };
 
-/// Plugin that registers the generic apply step.
-///
-/// Add this alongside a scheduling-mode plugin (`EcoSchedulingPlugin` or
-/// `UnitSchedulingPlugin`). The mode plugin scores candidates in the
-/// `EvaluateCandidate` set; this system picks the lowest-scored candidate and
-/// commits it in the `Apply` set.
-pub struct ApplyPlugin;
-
-impl Plugin for ApplyPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, apply_best_system.in_set(SchedulerSet::Apply));
-    }
-}
-
-/// Apply the lowest-scoring candidate by committing it and updating the search state.
+/// Apply the best-scored candidate by committing it and updating the search state.
 pub(crate) fn apply_best_system(
     mut commands: Commands,
     mut economy: ResMut<EconomyState>,

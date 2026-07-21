@@ -7,7 +7,6 @@ pub mod lifecycle;
 pub mod observe;
 pub mod unit;
 
-pub use apply::ApplyPlugin;
 pub use eco::EcoSchedulingPlugin;
 pub use lifecycle::{
     run_to_completion, SchedulerLifecyclePlugin, SchedulerResult, SchedulerSet, SchedulerState,

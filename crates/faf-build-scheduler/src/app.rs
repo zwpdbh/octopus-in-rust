@@ -23,9 +23,8 @@ use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarge
 /// A Bevy `App` configured for scheduling.
 ///
 /// Build one with [`SchedulerApp::new_eco`] or [`SchedulerApp::new_unit`], add
-/// mode plugins such as [`EcoSchedulingPlugin`](crate::plugins::eco::EcoSchedulingPlugin)
-/// or [`UnitSchedulingPlugin`](crate::plugins::unit::UnitSchedulingPlugin), and an
-/// algorithm plugin such as [`ApplyPlugin`](crate::plugins::apply::ApplyPlugin),
+/// a mode plugin such as [`EcoSchedulingPlugin`](crate::plugins::eco::EcoSchedulingPlugin)
+/// or [`UnitSchedulingPlugin`](crate::plugins::unit::UnitSchedulingPlugin),
 /// then call [`SchedulerApp::run_eco`] or [`SchedulerApp::run_unit`] to execute
 /// the search.
 pub struct SchedulerApp {

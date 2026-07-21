@@ -57,12 +57,12 @@ impl Plugin for SchedulerLifecyclePlugin {
             .init_state::<SchedulerState>()
             // Declare the cross-plugin scheduling pipeline.
             //
-            // Mode plugins (`EcoSchedulingPlugin`, `UnitSchedulingPlugin`) and
-            // algorithm plugins (`ApplyPlugin`) register their systems in
-            // different source files. They cannot `.chain()` with each other
-            // directly because they do not import each other's system functions.
-            // Instead, each plugin tags its systems with `.in_set(...)`, and the
-            // single `configure_sets` call below orders those sets:
+            // Mode plugins (`EcoSchedulingPlugin`, `UnitSchedulingPlugin`)
+            // register their lifecycle systems in different source files. They
+            // cannot `.chain()` with each other directly because they do not
+            // import each other's system functions. Instead, each plugin tags
+            // its systems with `.in_set(...)`, and the single `configure_sets`
+            // call below orders those sets:
             //
             //     Observe -> DecideDirection -> GenerateCandidate -> EvaluateCandidate -> Apply
             //

@@ -12,7 +12,6 @@ use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::plugins::apply::ApplyPlugin;
 use crate::plugins::decide_direction::EcoDirection;
 use crate::request::SearchOptions;
 use crate::result::Action;
@@ -38,8 +37,9 @@ impl SchedulingAlgorithm for Greedy {
         "greedy"
     }
 
-    fn configure_app(&self, app: &mut App) {
-        app.add_plugins(ApplyPlugin);
+    fn configure_app(&self, _app: &mut App) {
+        // The apply step is registered by the scheduling-mode plugin, so the
+        // greedy algorithm itself only needs to provide the scoring helpers.
     }
 }
 

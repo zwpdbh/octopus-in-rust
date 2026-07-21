@@ -6,13 +6,13 @@ pub mod generate;
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+use crate::plugins::apply::apply_best_system;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::plugins::unit::{
     evaluate::evaluate_unit_candidates_system, generate::generate_unit_candidates_system,
 };
 
-/// Plugin that registers candidate generation and evaluation for unit
-/// scheduling.
+/// Plugin that registers the full unit scheduling lifecycle.
 pub struct UnitSchedulingPlugin;
 
 impl Plugin for UnitSchedulingPlugin {
@@ -27,6 +27,7 @@ impl Plugin for UnitSchedulingPlugin {
         .add_systems(
             Update,
             evaluate_unit_candidates_system.in_set(SchedulerSet::EvaluateCandidate),
-        );
+        )
+        .add_systems(Update, apply_best_system.in_set(SchedulerSet::Apply));
     }
 }

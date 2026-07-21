@@ -3,6 +3,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+use crate::plugins::apply::apply_best_system;
 use crate::plugins::decide_direction::decide_eco_direction_system;
 use crate::plugins::eco::{
     evaluate::evaluate_eco_candidates_system, generate::generate_eco_candidates_system,
@@ -10,8 +11,7 @@ use crate::plugins::eco::{
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::plugins::observe::observe_eco_system;
 
-/// Plugin that registers candidate generation and evaluation for economy (mass
-/// income) scheduling.
+/// Plugin that registers the full eco scheduling lifecycle.
 pub struct EcoSchedulingPlugin;
 
 impl Plugin for EcoSchedulingPlugin {
@@ -32,6 +32,7 @@ impl Plugin for EcoSchedulingPlugin {
             .add_systems(
                 Update,
                 evaluate_eco_candidates_system.in_set(SchedulerSet::EvaluateCandidate),
-            );
+            )
+            .add_systems(Update, apply_best_system.in_set(SchedulerSet::Apply));
     }
 }

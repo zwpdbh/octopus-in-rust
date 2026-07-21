@@ -22,7 +22,7 @@ pub use config::SchedulerConfig;
 pub use plugins::{
     decide_direction::{CurrentEcoDirection, EcoDirection},
     observe::Observation,
-    run_to_completion, ApplyPlugin, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
+    run_to_completion, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
     SchedulerSet, SchedulerState, UnitSchedulingPlugin,
 };
 pub use request::{
