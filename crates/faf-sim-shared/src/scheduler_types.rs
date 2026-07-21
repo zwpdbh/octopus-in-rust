@@ -15,6 +15,10 @@ use crate::plan_types::ConstructionPlan;
 pub struct StepResult {
     pub action: Action,
     pub finish_time_seconds: f64,
+    /// Number of builder units assigned to this step. For scheduler-generated
+    /// steps this is typically one; it is preserved so the timeline can show
+    /// actionable descriptions like "4 Engineers build X".
+    pub builder_count: usize,
     pub economy: EcoSnapshot,
 }
 
@@ -128,6 +132,7 @@ mod tests {
                     to: UnitKind::Mex(TechLevel::T2),
                 },
                 finish_time_seconds: 12.0,
+                builder_count: 1,
                 economy: snapshot,
             }],
         };

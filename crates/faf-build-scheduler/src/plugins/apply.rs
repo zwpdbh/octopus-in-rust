@@ -83,10 +83,12 @@ pub(crate) fn apply_best_system(
         economy.current = final_task.economy.clone();
 
         let finish_time_seconds = final_task.time_seconds;
+        let builder_count = task.builders.len();
         task_log.0.push(task);
         step_log.0.push(StepResult {
             action: best_action.0.clone(),
             finish_time_seconds,
+            builder_count,
             economy: final_task.economy.clone(),
         });
 

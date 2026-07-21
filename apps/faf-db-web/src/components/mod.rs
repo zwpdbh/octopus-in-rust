@@ -28,7 +28,7 @@ pub use portrait_button::PortraitButton;
 pub use queue_item_creator::QueueItemCreator;
 pub use queue_item_list::QueueItemList;
 pub use schedule_request_panel::{ScheduleFormState, ScheduleModeTab, ScheduleRequestPanel};
-pub use schedule_result_panel::{ResultTab, ScheduleResultPanel};
+pub use schedule_result_panel::ScheduleResultPanel;
 pub use simulation_panel::SimulationPanel;
 pub use step_timeline::StepTimeline;
 pub use unit_block::UnitBlock;

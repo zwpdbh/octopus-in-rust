@@ -1,40 +1,19 @@
 use dioxus::prelude::*;
 
-use faf_solver::PlanResult;
-
-use crate::components::{QueueItemList, ScheduleFormState, ScheduleModeTab, StepTimeline};
-use crate::types::{AssignmentTarget, ConstructionPlan, ScheduleUiState, UnitKind};
+use crate::components::{ScheduleFormState, ScheduleModeTab, StepTimeline};
+use crate::types::{ConstructionPlan, ScheduleUiState, UnitKind};
 use crate::utils::kind_label;
 
-/// Which result tab is active: the computed timeline or the read-only plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResultTab {
-    Timeline,
-    Plan,
-}
-
-/// Center column: scheduling result — summary, timeline/plan tabs, actions.
+/// Center column: scheduling result — summary, timeline, actions.
 #[component]
 pub fn ScheduleResultPanel(
     state: Signal<ScheduleUiState>,
     form: Signal<ScheduleFormState>,
-    mut tab: Signal<ResultTab>,
     on_step_click: EventHandler<UnitKind>,
     on_open_map: EventHandler<()>,
     on_send_to_simulate: EventHandler<()>,
 ) -> Element {
-    // The read-only plan view needs a Signal<ConstructionPlan>; mirror the
-    // solved plan out of the result state whenever it changes.
-    let mut plan_signal = use_signal(ConstructionPlan::default);
-    let plan_estimate = use_signal(|| None::<PlanResult>);
-    use_effect(move || {
-        if let ScheduleUiState::Success(schedule) = &*state.read() {
-            plan_signal.set(schedule.plan.clone());
-        }
-    });
-
     let current = state.read().clone();
-    let active_tab = *tab.read();
 
     rsx! {
         div { class: "flex-1 min-w-0 flex flex-col border border-neutral-800 rounded bg-neutral-900 p-4 overflow-hidden",
@@ -104,34 +83,8 @@ pub fn ScheduleResultPanel(
                                 p { class: "text-xs text-neutral-300", "Energy income → {final_energy:.0}/s" }
                             }
 
-                            // Tabs.
-                            div { class: "flex items-center gap-1 p-1 rounded bg-neutral-950 border border-neutral-800 shrink-0 self-start",
-                                TabButton {
-                                    label: "Timeline",
-                                    active: active_tab == ResultTab::Timeline,
-                                    onclick: move |_| tab.set(ResultTab::Timeline),
-                                }
-                                TabButton {
-                                    label: "Plan",
-                                    active: active_tab == ResultTab::Plan,
-                                    onclick: move |_| tab.set(ResultTab::Plan),
-                                }
-                            }
-
-                            // Tab content.
-                            match active_tab {
-                                ResultTab::Timeline => rsx! {
-                                    StepTimeline { steps: schedule.steps.clone(), on_click: on_step_click }
-                                },
-                                ResultTab::Plan => rsx! {
-                                    QueueItemList {
-                                        plan: plan_signal,
-                                        plan_estimate,
-                                        disabled: true,
-                                        on_assign_slot: move |_: AssignmentTarget| {},
-                                    }
-                                },
-                            }
+                            // Timeline.
+                            StepTimeline { steps: schedule.steps.clone(), on_click: on_step_click }
 
                             // Actions.
                             div { class: "flex items-center gap-2 shrink-0",
@@ -146,21 +99,6 @@ pub fn ScheduleResultPanel(
                     }
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn TabButton(label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
-    rsx! {
-        button {
-            class: if active {
-                "px-3 py-1 text-xs font-semibold rounded bg-blue-700 text-white transition-colors"
-            } else {
-                "px-3 py-1 text-xs font-semibold rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors"
-            },
-            onclick: move |e| onclick.call(e),
-            "{label}"
         }
     }
 }

@@ -167,6 +167,26 @@ pub fn SimulateBuild() -> Element {
                                     onclick: move |_| show_map.set(true),
                                     "🗺"
                                 }
+                                {
+                                    let locked = plan_locked(simulation_state);
+                                    rsx! {
+                                        button {
+                                            class: if locked {
+                                                "px-2 py-1 text-xs rounded bg-red-900/50 text-red-300/50 cursor-not-allowed shadow-sm"
+                                            } else {
+                                                "px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors shadow-sm"
+                                            },
+                                            title: if locked { "Cannot clear while simulating" } else { "Clear construction plan" },
+                                            disabled: locked,
+                                            onclick: move |_| {
+                                                if !locked {
+                                                    plan.write().items.clear();
+                                                }
+                                            },
+                                            "Clear"
+                                        }
+                                    }
+                                }
                             }
                             if *show_json_editor.read() {
                                 JsonPlanEditor { plan, units: units.clone() }

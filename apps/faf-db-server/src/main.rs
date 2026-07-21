@@ -227,18 +227,33 @@ async fn get_unit(
 
 async fn get_portrait(Path(id): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     let id = id.strip_suffix(".png").map(|s| s.to_string()).unwrap_or(id);
-    let path = workspace_path("assets")
-        .join("icons")
-        .join("units")
-        .join(format!("{id}.png"));
-    tracing::info!("Serving portrait: {}", path.display());
-    match std::fs::read(&path) {
-        Ok(bytes) => Ok(([(axum::http::header::CONTENT_TYPE, "image/png")], bytes)),
-        Err(e) => {
-            tracing::warn!("Portrait not found: {} ({e})", path.display());
-            Err(StatusCode::NOT_FOUND)
+
+    // Capped mass extractor variants (e.g. UEB1202+CAPPED) are synthetic units
+    // without their own portrait assets. Fall back to the base unit portrait.
+    let base_id = id.strip_suffix("+CAPPED").map(|s| s.to_string());
+    let mut candidates = vec![id.as_str()];
+    if let Some(ref base) = base_id {
+        candidates.push(base.as_str());
+    }
+
+    for candidate in candidates {
+        let path = workspace_path("assets")
+            .join("icons")
+            .join("units")
+            .join(format!("{candidate}.png"));
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                tracing::info!("Serving portrait: {}", path.display());
+                return Ok(([(axum::http::header::CONTENT_TYPE, "image/png")], bytes));
+            }
+            Err(e) => {
+                tracing::debug!("Portrait candidate not found: {} ({e})", path.display());
+            }
         }
     }
+
+    tracing::warn!("Portrait not found for id: {id}");
+    Err(StatusCode::NOT_FOUND)
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

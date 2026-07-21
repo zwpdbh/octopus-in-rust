@@ -3,8 +3,7 @@ use dioxus_router::use_navigator;
 use gloo_net::http::Request;
 
 use crate::components::{
-    AppHeader, GraphPopup, ResultTab, ScheduleFormState, ScheduleRequestPanel, ScheduleResultPanel,
-    UnitDetail,
+    AppHeader, GraphPopup, ScheduleFormState, ScheduleRequestPanel, ScheduleResultPanel, UnitDetail,
 };
 use crate::route::Route;
 use crate::state::save_plan_to_storage;
@@ -27,7 +26,6 @@ pub fn Scheduler() -> Element {
 
     let form = use_signal(ScheduleFormState::default);
     let mut state = use_signal(|| ScheduleUiState::Idle);
-    let tab = use_signal(|| ResultTab::Timeline);
     let mut show_map = use_signal(|| false);
     let mut selected = use_signal(|| None::<UnitSummary>);
 
@@ -134,7 +132,6 @@ pub fn Scheduler() -> Element {
                     ScheduleResultPanel {
                         state,
                         form,
-                        tab,
                         on_step_click,
                         on_open_map: move |_| show_map.set(true),
                         on_send_to_simulate,
