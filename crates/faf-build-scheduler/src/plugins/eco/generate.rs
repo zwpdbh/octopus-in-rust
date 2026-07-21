@@ -5,6 +5,7 @@ use bevy_ecs::prelude::*;
 use crate::algorithms::greedy;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
+use crate::decision::CurrentEcoDirection;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, IdleBuilderQuery};
 
@@ -20,6 +21,7 @@ pub(crate) fn generate_eco_candidates_system(
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
+    direction: Res<CurrentEcoDirection>,
     units: Query<&UnitKindComp>,
     idle_builders: IdleBuilderQuery,
 ) {
@@ -33,5 +35,12 @@ pub(crate) fn generate_eco_candidates_system(
     }
 
     let library = &*library.0;
-    greedy::spawn_eco_candidates(&mut commands, library, &config, &units, &idle_builders);
+    greedy::spawn_eco_candidates(
+        &mut commands,
+        library,
+        &config,
+        direction.0,
+        &units,
+        &idle_builders,
+    );
 }

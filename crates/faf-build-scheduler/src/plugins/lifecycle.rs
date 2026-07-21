@@ -22,6 +22,10 @@ pub enum SchedulerState {
 /// System sets used to order the phases of a scheduling search.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum SchedulerSet {
+    /// Observe the current world and produce symbolic conditions.
+    Observe,
+    /// Use observations to decide which direction the scheduler should take.
+    DecideDirection,
     /// Produce candidate actions for the current state.
     GenerateCandidate,
     /// Evaluate candidate actions by simulating them.
@@ -60,12 +64,14 @@ impl Plugin for SchedulerLifecyclePlugin {
             // Instead, each plugin tags its systems with `.in_set(...)`, and the
             // single `configure_sets` call below orders those sets:
             //
-            //     GenerateCandidate -> EvaluateCandidate -> Apply
+            //     Observe -> DecideDirection -> GenerateCandidate -> EvaluateCandidate -> Apply
             //
             // This is the only place that needs to know the global pipeline.
             .configure_sets(
                 Update,
                 (
+                    SchedulerSet::Observe,
+                    SchedulerSet::DecideDirection,
                     SchedulerSet::GenerateCandidate,
                     SchedulerSet::EvaluateCandidate,
                     SchedulerSet::Apply,

@@ -4,6 +4,7 @@ use bevy_ecs::prelude::*;
 
 use crate::algorithms::greedy;
 use crate::components::CandidateAssignment;
+use crate::decision::CurrentEcoDirection;
 use crate::request::SearchOptions;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
@@ -20,18 +21,18 @@ pub(crate) fn evaluate_eco_candidates_system(
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
+    direction: Res<CurrentEcoDirection>,
     candidates: Query<(Entity, &CandidateAction, &CandidateAssignment)>,
 ) {
     if progress.done {
         return;
     }
 
-    let SearchTarget::Eco(target) = &goal.0 else {
+    let SearchTarget::Eco(_) = &goal.0 else {
         return;
     };
 
     let library = &*library.0;
-    let direction = greedy::choose_eco_direction(&economy.current, target);
 
     for (entity, action, assignment) in candidates.iter() {
         let score = greedy::score_eco_candidate(
@@ -41,7 +42,7 @@ pub(crate) fn evaluate_eco_candidates_system(
             &action.0,
             &assignment.0,
             library,
-            direction,
+            direction.0,
         );
         commands.entity(entity).insert(CandidateScore(score));
     }

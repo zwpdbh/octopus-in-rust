@@ -5,15 +5,16 @@ use std::collections::{HashSet, VecDeque};
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use faf_blueprints::UnitEcoStats;
-use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
+use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind, UnitRole};
 use faf_sim_shared::EcoSnapshot;
 
 use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
+use crate::decision::EcoDirection;
 use crate::plugins::apply::ApplyPlugin;
-use crate::request::{EcoTarget, SearchOptions};
+use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{
     solve_action, spawn_build_candidates, spawn_upgrade_candidates, IdleBuilderQuery,
@@ -42,10 +43,6 @@ impl SchedulingAlgorithm for Greedy {
     }
 }
 
-/// Mass income threshold above which T2 tech upgrades become the top priority.
-const TECH2_PRIORITY_MASS_THRESHOLD: f64 = 35.0;
-/// Mass income threshold above which T3 tech upgrades become the top priority.
-const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
 /// Minimum net energy income (production - demand) to maintain before switching
 /// back to mass/tech expansion. Building pgens preemptively prevents the economy
 /// from stalling when mex maintenance rises.
@@ -61,45 +58,6 @@ const ENERGY_DIRECTION_BONUS: f64 = 1_000.0;
 /// Bonus applied to engineer actions when build power is the active direction.
 const BUILD_POWER_BONUS: f64 = 1_000.0;
 
-/// Direction the eco scheduler should emphasize for the current step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EcoDirection {
-    /// Advance tech by upgrading to the given tier.
-    Tech(TechLevel),
-    /// Increase mass income as efficiently as possible.
-    MassIncome,
-    /// Increase available build power.
-    BuildPower,
-    /// Increase energy income to avoid stalls.
-    Energy,
-}
-
-/// Pick the direction for this scheduling step based on the current economy.
-///
-/// Preventing energy stalls takes precedence over everything else, because a
-/// stalled economy slows or stops all construction.
-pub(crate) fn choose_eco_direction(current: &EcoSnapshot, target: &EcoTarget) -> EcoDirection {
-    let energy_demand = current.maintenance_consumption_per_second_energy + current.energy_drain;
-    let net_energy = current.production_per_second_energy - energy_demand;
-
-    // Prevent energy stalls before they happen by building power when the net
-    // energy margin gets thin.
-    if net_energy < ENERGY_BUFFER {
-        return EcoDirection::Energy;
-    }
-
-    if current.production_per_second_mass >= TECH3_PRIORITY_MASS_THRESHOLD {
-        return EcoDirection::Tech(TechLevel::T3);
-    }
-    if current.production_per_second_mass >= TECH2_PRIORITY_MASS_THRESHOLD {
-        return EcoDirection::Tech(TechLevel::T2);
-    }
-    if !target.is_reached(current) {
-        return EcoDirection::MassIncome;
-    }
-    EcoDirection::BuildPower
-}
-
 /// Spawn eco candidates according to the greedy opening and expansion rules.
 ///
 /// The actual decision logic lives here so that the ECS system in
@@ -108,6 +66,7 @@ pub(crate) fn spawn_eco_candidates(
     commands: &mut Commands,
     library: &BlueprintLibrary,
     config: &SchedulerConfig,
+    direction: EcoDirection,
     units: &Query<&UnitKindComp>,
     idle_builders: &IdleBuilderQuery,
 ) {
@@ -168,54 +127,95 @@ pub(crate) fn spawn_eco_candidates(
         return;
     }
 
-    // Phase 2: normal economy expansion.
-    for kind in &owned_kinds {
-        for target in library.buildable_by(kind) {
-            if !is_eco_candidate(library, &target) {
-                continue;
+    // Phase 2: generate candidates that correspond to the decided direction.
+    match direction {
+        EcoDirection::MassIncome => {
+            for kind in &owned_kinds {
+                for target in library.buildable_by(kind) {
+                    if !is_mex(library, &target) {
+                        continue;
+                    }
+                    // Once engineers are available, the ACU focuses on
+                    // power/factories while engineers handle mex expansion.
+                    if *kind == UnitKind::Commander {
+                        continue;
+                    }
+                    // Enforce the global mex cap on *new* mass extractors.
+                    if current_mex_count >= mex_cap {
+                        continue;
+                    }
+                    spawn_build_candidates(commands, library, kind, target, idle_builders);
+                }
+                if let Some(target) = library.upgrade_target(kind) {
+                    if is_mex(library, &target) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
+                if let Some(target) = library.cap_target(kind) {
+                    if is_mex(library, &target) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
             }
-            // Once engineers are available, the ACU focuses on power/factories
-            // while engineers handle mex expansion.
-            if *kind == UnitKind::Commander && is_mex(library, &target) {
-                continue;
+        }
+        EcoDirection::Energy => {
+            for kind in &owned_kinds {
+                for target in library.buildable_by(kind) {
+                    let role = library.role(&target);
+                    if matches!(role, UnitRole::PowerGenerator | UnitRole::EnergyStorage) {
+                        spawn_build_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
             }
-            // Enforce the global mex cap on *new* mass extractors.
-            if is_mex(library, &target) && current_mex_count >= mex_cap {
-                continue;
+        }
+        EcoDirection::Tech(desired_tech) => {
+            for kind in &owned_kinds {
+                if let Some(target) = library.upgrade_target(kind) {
+                    if heuristic::is_tech_upgrade_to(
+                        &Action::Upgrade {
+                            from: kind.clone(),
+                            to: target.clone(),
+                            assisted_by: vec![],
+                        },
+                        desired_tech,
+                    ) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
+                if let Some(target) = library.cap_target(kind) {
+                    if heuristic::is_tech_upgrade_to(
+                        &Action::Upgrade {
+                            from: kind.clone(),
+                            to: target.clone(),
+                            assisted_by: vec![],
+                        },
+                        desired_tech,
+                    ) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
             }
-            spawn_build_candidates(commands, library, kind, target, idle_builders);
+        }
+        EcoDirection::BuildPower => {
+            for kind in &owned_kinds {
+                for target in library.buildable_by(kind) {
+                    if matches!(target, UnitKind::Engineer(_)) {
+                        spawn_build_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
+                if let Some(target) = library.upgrade_target(kind) {
+                    if matches!(target, UnitKind::Engineer(_)) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
+                if let Some(target) = library.cap_target(kind) {
+                    if matches!(target, UnitKind::Engineer(_)) {
+                        spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+                    }
+                }
+            }
         }
     }
-
-    // Upgrade extractors and storages. Upgrades do not increase the mex count
-    // (they replace an existing unit), so the cap is not checked here. The
-    // source unit provides its own build power, so we do not need to check for
-    // an available engineer or ACU before proposing an upgrade.
-    for kind in &owned_kinds {
-        if let Some(target) = library.upgrade_target(kind) {
-            if is_eco_candidate(library, &target) {
-                spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
-            }
-        }
-        // Cap mexes of a tier that supports it. Capping also replaces the
-        // existing unit and does not increase the mex count.
-        if let Some(target) = library.cap_target(kind) {
-            if is_eco_candidate(library, &target) {
-                spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
-            }
-        }
-    }
-}
-
-fn is_eco_candidate(library: &BlueprintLibrary, kind: &UnitKind) -> bool {
-    matches!(
-        library.role(kind),
-        faf_blueprints::UnitRole::MassExtractor
-            | faf_blueprints::UnitRole::PowerGenerator
-            | faf_blueprints::UnitRole::EnergyStorage
-            | faf_blueprints::UnitRole::Engineer
-            | faf_blueprints::UnitRole::Factory
-    )
 }
 
 /// Score an eco candidate according to the current scheduling direction.

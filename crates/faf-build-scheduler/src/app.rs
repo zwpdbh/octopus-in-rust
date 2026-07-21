@@ -10,6 +10,8 @@ use faf_sim_shared::EcoSnapshot;
 
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
+use crate::decision::CurrentEcoDirection;
+use crate::observation::Observation;
 use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
@@ -119,6 +121,8 @@ impl SchedulerApp {
         .init_resource::<StepLog>()
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
+        .init_resource::<Observation>()
+        .init_resource::<CurrentEcoDirection>()
         .init_resource::<SchedulerResult>();
     }
 

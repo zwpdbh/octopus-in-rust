@@ -9,6 +9,8 @@ pub mod algorithms;
 pub mod app;
 pub mod components;
 pub mod config;
+pub mod decision;
+pub mod observation;
 pub mod plugins;
 pub mod request;
 pub mod resources;
@@ -19,6 +21,8 @@ pub mod util;
 
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use config::SchedulerConfig;
+pub use decision::{CurrentEcoDirection, EcoDirection};
+pub use observation::Observation;
 pub use plugins::{
     run_to_completion, ApplyPlugin, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
     SchedulerSet, SchedulerState, UnitSchedulingPlugin,
