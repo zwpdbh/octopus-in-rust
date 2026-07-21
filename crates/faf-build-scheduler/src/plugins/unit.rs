@@ -3,14 +3,19 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+use faf_blueprints::UnitKind;
+
 use crate::algorithms::greedy::score_unit_candidate;
+use crate::components::{CandidateAssignment, UnitKindComp};
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::request::SearchOptions;
 use crate::resources::{CurrentInventory, EconomyState, SearchGoal, SearchProgress};
-use crate::result::Action;
-use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
-use crate::util::{count_mex, is_mex};
+use crate::search::{
+    spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, CandidateAction,
+    CandidateScore, IdleBuilderQuery, SearchTarget,
+};
+use crate::util::{count_mex_from_iter, is_mex};
 
 /// Plugin that registers candidate generation and evaluation for unit
 /// scheduling.
@@ -40,57 +45,45 @@ pub(crate) fn generate_unit_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
     economy: Res<EconomyState>,
-    inventory: Res<CurrentInventory>,
+    _inventory: Res<CurrentInventory>,
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
+    units: Query<&UnitKindComp>,
+    idle_builders: IdleBuilderQuery,
 ) {
     if progress.done {
         return;
     }
 
-    if goal.0.is_reached(&economy.current, &inventory.0) {
+    if goal.0.is_reached_from_entities(&economy.current, &units) {
         return;
     }
 
     let library = &*library.0;
-    let current_mex_count = count_mex(&inventory.0, library);
+    let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
+    let current_mex_count = count_mex_from_iter(&owned_kinds, library);
     let mex_cap = config.max_mex_count;
 
     // All legal build actions.
-    for (builder, count) in &inventory.0 {
-        if *count == 0 {
-            continue;
-        }
+    for builder in &owned_kinds {
         for target in library.buildable_by(builder) {
             // Enforce the global mex cap on *new* mass extractors.
             if is_mex(library, &target) && current_mex_count >= mex_cap {
                 continue;
             }
-            commands.spawn(CandidateAction(Action::Build {
-                builder: builder.clone(),
-                target,
-            }));
+            spawn_build_candidates(&mut commands, library, builder, target, &idle_builders);
         }
     }
 
     // All legal upgrade and cap actions. The source unit transforms itself,
     // so no separate builder availability check is required.
-    for (from, count) in &inventory.0 {
-        if *count == 0 {
-            continue;
-        }
+    for from in &owned_kinds {
         if let Some(target) = library.upgrade_target(from) {
-            commands.spawn(CandidateAction(Action::Upgrade {
-                from: from.clone(),
-                to: target,
-            }));
+            spawn_upgrade_candidates(&mut commands, library, from, target, &idle_builders);
         }
         if let Some(target) = library.cap_target(from) {
-            commands.spawn(CandidateAction(Action::Upgrade {
-                from: from.clone(),
-                to: target,
-            }));
+            spawn_upgrade_candidates(&mut commands, library, from, target, &idle_builders);
         }
     }
 }
@@ -104,11 +97,10 @@ pub(crate) fn evaluate_unit_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
     economy: Res<EconomyState>,
-    inventory: Res<CurrentInventory>,
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
-    candidates: Query<(Entity, &CandidateAction)>,
+    candidates: Query<(Entity, &CandidateAction, &CandidateAssignment)>,
 ) {
     if progress.done {
         return;
@@ -120,13 +112,13 @@ pub(crate) fn evaluate_unit_candidates_system(
 
     let library = &*library.0;
 
-    for (entity, action) in candidates.iter() {
+    for (entity, action, assignment) in candidates.iter() {
         let score = score_unit_candidate(
             &economy.current,
-            &inventory.0,
             progress.next_id,
             &options,
             &action.0,
+            &assignment.0,
             library,
             target,
         );

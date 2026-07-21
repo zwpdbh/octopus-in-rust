@@ -4,11 +4,10 @@
 //! that systems declare exactly what they read or write instead of depending on a
 //! monolithic [`SearchState`](crate::search::SearchState).
 
-use std::collections::HashMap;
-
 use bevy_ecs::prelude::Resource;
 
-use faf_blueprints::{TechLevel, UnitKind};
+use faf_blueprints::TechLevel;
+use faf_quantities::Time;
 use faf_sim_shared::{BuildTask, EcoSnapshot};
 
 use crate::request::SearchOptions;
@@ -26,9 +25,22 @@ pub struct EconomyState {
     pub current: EcoSnapshot,
 }
 
-/// Units currently owned by the player.
+/// Marker resource indicating that the scheduler world owns unit entities.
+///
+/// The actual units are stored as ECS entities with [`UnitKindComp`],
+/// [`BuildPowerComp`], and [`BuilderState`] components; this resource only
+/// exists so systems can declare they need the inventory to be present.
 #[derive(Resource)]
-pub struct CurrentInventory(pub HashMap<UnitKind, u32>);
+pub struct CurrentInventory;
+
+/// Global simulation clock for the scheduler.
+///
+/// Time advances to the next committed task completion rather than ticking
+/// every frame.
+#[derive(Resource)]
+pub struct SchedulerClock {
+    pub now: Time,
+}
 
 /// Highest technology tier currently available, derived from owned engineers.
 ///

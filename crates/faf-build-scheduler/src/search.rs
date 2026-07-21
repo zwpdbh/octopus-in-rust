@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use faf_blueprints::{BlueprintLibrary, UnitEcoStats, UnitKind};
+use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
 use faf_quantities::{Storage, Time};
 use faf_sim_shared::plan_types::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
@@ -12,8 +12,9 @@ use faf_sim_shared::plan_types::{
 use faf_sim_shared::{BuildTask, EcoSnapshot};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
+use crate::components::{BuildPowerComp, BuilderState, CandidateAssignment, UnitKindComp};
 use crate::request::{EcoTarget, SearchOptions};
-use crate::resources::{CurrentInventory, EconomyState, SearchGoal, StepLog, TaskLog};
+use crate::resources::{EconomyState, StepLog, TaskLog};
 use crate::result::{Action, Schedule, ScheduleError};
 
 /// Resource wrapper so the `BlueprintLibrary` can be inserted into a Bevy
@@ -48,22 +49,35 @@ impl SearchTarget {
             SearchTarget::Unit(kind) => inventory.get(kind).copied().unwrap_or(0) > 0,
         }
     }
+
+    /// True if the goal has been met given the current economy and scheduler
+    /// unit entities.
+    pub fn is_reached_from_entities(
+        &self,
+        current_eco: &EcoSnapshot,
+        units: &Query<&UnitKindComp>,
+    ) -> bool {
+        match self {
+            SearchTarget::Eco(target) => target.is_reached(current_eco),
+            SearchTarget::Unit(kind) => units.iter().any(|u| u.0 == *kind),
+        }
+    }
 }
 
 /// Compute the highest technology tier available from the current inventory.
 ///
 /// The tier is determined by the highest engineer owned. If no engineer is
 /// present, the tier defaults to [`TechLevel::T1`].
-pub(crate) fn compute_current_tech_level(
-    inventory: &HashMap<UnitKind, u32>,
-) -> faf_blueprints::TechLevel {
+pub(crate) fn compute_current_tech_level<I>(inventory: I) -> faf_blueprints::TechLevel
+where
+    I: IntoIterator<Item = UnitKind>,
+{
     use faf_blueprints::TechLevel;
 
     inventory
-        .iter()
-        .filter(|(_, count)| **count > 0)
-        .filter_map(|(kind, _)| match kind {
-            UnitKind::Engineer(tech) => Some(*tech),
+        .into_iter()
+        .filter_map(|kind| match kind {
+            UnitKind::Engineer(tech) => Some(tech),
             _ => None,
         })
         .max()
@@ -73,17 +87,9 @@ pub(crate) fn compute_current_tech_level(
 /// Convert the chosen actions into a final `Schedule`.
 pub(crate) fn build_schedule(
     economy_state: &EconomyState,
-    inventory: &CurrentInventory,
     task_log: &TaskLog,
     step_log: &StepLog,
-    goal: &SearchGoal,
 ) -> Result<Schedule, ScheduleError> {
-    if !goal.0.is_reached(&economy_state.current, &inventory.0) {
-        // The apply step already checks this before calling `build_schedule`,
-        // but keep the guard for robustness.
-        return Err(ScheduleError::GoalUnreachable);
-    }
-
     let plan = build_construction_plan(economy_state, task_log);
     Ok(Schedule {
         plan,
@@ -134,36 +140,57 @@ fn snapshot_to_initial_settings(snapshot: &EcoSnapshot) -> EcoInitialSettings {
     }
 }
 
-/// Build a `BuildTask` representing `action` if it is legal in the current
-/// inventory.
+/// Build a `BuildTask` representing `action` given the concrete builders
+/// assigned to it.
+///
+/// `assigned_builders` is the list of unit entities, their kinds, and their
+/// builder-focused economic stats selected for this action. For builds this is
+/// the builder group; for upgrades it starts with the source unit followed by
+/// assistants.
 pub(crate) fn build_task_for_action(
     action: &Action,
-    inventory: &HashMap<UnitKind, u32>,
+    assigned_builders: &[(Entity, UnitKind, UnitEcoStats)],
     library: &BlueprintLibrary,
     id: u32,
 ) -> Option<BuildTask> {
+    if assigned_builders.is_empty() {
+        return None;
+    }
     match action {
         Action::Build { target, builder } => {
-            if !has_builder(inventory, builder) {
+            if builder.len() != assigned_builders.len() {
                 return None;
             }
-            if !library.can_build(builder, target) {
+            if assigned_builders
+                .iter()
+                .zip(builder)
+                .any(|((_, kind, _), expected)| kind != expected)
+            {
+                return None;
+            }
+            if assigned_builders
+                .iter()
+                .any(|(_, _, stats)| stats.build_power <= 0.0)
+            {
                 return None;
             }
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),
-                builders: vec![to_builder_stats(library, builder)?],
+                builders: assigned_builders
+                    .iter()
+                    .map(|(_, _, stats)| stats.clone())
+                    .collect(),
                 targets: vec![library.unit_eco_stats(target)?],
             })
         }
-        Action::Upgrade { from, to } => {
-            // A unit can only upgrade if we already own the source unit. Unlike
-            // new construction, an upgrade does not require a separate builder
-            // kind; the source structure upgrades itself using its own build
-            // power (e.g., a T1 mex's BuildRate).
-            let count = *inventory.get(from)?;
-            if count == 0 {
+        Action::Upgrade {
+            from,
+            to,
+            assisted_by,
+        } => {
+            let (_, source_kind, source_stats) = &assigned_builders[0];
+            if source_kind != from {
                 return None;
             }
             // Verify the upgrade or cap target is reachable from `from`.
@@ -172,36 +199,30 @@ pub(crate) fn build_task_for_action(
             if !is_upgrade && !is_cap {
                 return None;
             }
-            // The source unit acts as its own builder for the upgrade/cap task.
+            let mut builders = vec![source_stats.clone()];
+            builders.extend(
+                assigned_builders
+                    .iter()
+                    .skip(1)
+                    .map(|(_, _, stats)| stats.clone()),
+            );
+            // Verify assisted kinds match the action.
+            let expected_assist: Vec<_> = assisted_by.iter().cloned().collect();
+            let actual_assist: Vec<_> = assigned_builders
+                .iter()
+                .skip(1)
+                .map(|(_, kind, _)| kind.clone())
+                .collect();
+            if actual_assist != expected_assist {
+                return None;
+            }
             let target_stats = library.unit_eco_stats(to)?;
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),
-                builders: vec![to_builder_stats(library, from)?],
+                builders,
                 targets: vec![target_stats],
             })
-        }
-    }
-}
-
-fn to_builder_stats(library: &BlueprintLibrary, kind: &UnitKind) -> Option<UnitEcoStats> {
-    library.to_unit_eco_stats(kind, true)
-}
-
-fn has_builder(inventory: &HashMap<UnitKind, u32>, builder: &UnitKind) -> bool {
-    inventory.get(builder).copied().unwrap_or(0) > 0
-}
-
-/// Update the inventory as if `action` has been performed.
-pub(crate) fn apply_action_to_inventory(action: &Action, inventory: &mut HashMap<UnitKind, u32>) {
-    match action {
-        Action::Build { target, .. } => {
-            *inventory.entry(target.clone()).or_insert(0) += 1;
-        }
-        Action::Upgrade { from, to } => {
-            let from_count = inventory.get_mut(from).expect("upgrade from owned unit");
-            *from_count = from_count.saturating_sub(1);
-            *inventory.entry(to.clone()).or_insert(0) += 1;
         }
     }
 }
@@ -210,16 +231,143 @@ pub(crate) fn apply_action_to_inventory(action: &Action, inventory: &mut HashMap
 /// return the per-task result.
 pub(crate) fn solve_action(
     current_economy: &EcoSnapshot,
-    inventory: &HashMap<UnitKind, u32>,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
+    assigned_builders: &[(Entity, UnitKind, UnitEcoStats)],
     library: &BlueprintLibrary,
 ) -> Option<PlanResult> {
-    let task = build_task_for_action(action, inventory, library, next_id)?;
+    let task = build_task_for_action(action, assigned_builders, library, next_id)?;
     Some(plan_completion_with_tasks(
         current_economy,
         &[task],
         options.simulation_max_time_seconds,
     ))
+}
+
+/// Query type for idle builder units in the scheduler world.
+pub(crate) type IdleBuilderQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static UnitKindComp,
+        &'static BuildPowerComp,
+        &'static BuilderState,
+    ),
+>;
+
+/// Spawn build candidates using 1, 2, 4, or all available builders of the same
+/// kind. More builders speed up construction but tie up more units; the search
+/// score decides the best trade-off.
+pub(crate) fn spawn_build_candidates(
+    commands: &mut Commands,
+    library: &BlueprintLibrary,
+    builder: &UnitKind,
+    target: UnitKind,
+    idle_builders: &IdleBuilderQuery,
+) {
+    let available: Vec<(Entity, UnitKind, UnitEcoStats)> = idle_builders
+        .iter()
+        .filter(|(_, kind, _, state)| kind.0 == *builder && matches!(state, BuilderState::Idle))
+        .map(|(entity, kind, _, _)| {
+            let stats = library
+                .to_unit_eco_stats(&kind.0, true)
+                .expect("owned unit has stats");
+            (entity, kind.0.clone(), stats)
+        })
+        .collect();
+    if available.is_empty() {
+        return;
+    }
+    let mut counts = std::collections::BTreeSet::new();
+    counts.insert(1usize);
+    counts.insert(2.min(available.len()));
+    counts.insert(4.min(available.len()));
+    counts.insert(available.len());
+    for count in counts {
+        let assigned: Vec<(Entity, UnitKind, UnitEcoStats)> =
+            available.iter().take(count).cloned().collect();
+        commands.spawn((
+            CandidateAction(Action::Build {
+                builder: vec![builder.clone(); count],
+                target: target.clone(),
+            }),
+            CandidateAssignment(assigned),
+        ));
+    }
+}
+
+/// Spawn upgrade/cap candidates without assistance and with 1, 2, or 4
+/// assisting engineers of each available tier. Assisting engineers speed up
+/// the upgrade but tie up units that could be doing other work.
+pub(crate) fn spawn_upgrade_candidates(
+    commands: &mut Commands,
+    library: &BlueprintLibrary,
+    from: &UnitKind,
+    to: UnitKind,
+    idle_builders: &IdleBuilderQuery,
+) {
+    // Pick one idle source unit to represent the upgrade. Multiple source units
+    // would produce equivalent candidates, so a single representative is enough.
+    let source = idle_builders
+        .iter()
+        .filter(|(_, kind, _, state)| kind.0 == *from && matches!(state, BuilderState::Idle))
+        .map(|(entity, kind, _, _)| {
+            let stats = library
+                .to_unit_eco_stats(&kind.0, true)
+                .expect("owned unit has stats");
+            (entity, kind.0.clone(), stats)
+        })
+        .next();
+    let Some(source) = source else {
+        return;
+    };
+    let source_entity = source.0;
+
+    // No assistance.
+    commands.spawn((
+        CandidateAction(Action::Upgrade {
+            from: from.clone(),
+            to: to.clone(),
+            assisted_by: vec![],
+        }),
+        CandidateAssignment(vec![source.clone()]),
+    ));
+
+    // Try assisting with engineers of each available tier.
+    for tier in [TechLevel::T1, TechLevel::T2, TechLevel::T3] {
+        let helper = UnitKind::Engineer(tier);
+        let available: Vec<(Entity, UnitKind, UnitEcoStats)> = idle_builders
+            .iter()
+            .filter(|(entity, kind, _, state)| {
+                kind.0 == helper && matches!(state, BuilderState::Idle) && *entity != source_entity
+            })
+            .map(|(entity, kind, _, _)| {
+                let stats = library
+                    .to_unit_eco_stats(&kind.0, true)
+                    .expect("owned unit has stats");
+                (entity, kind.0.clone(), stats)
+            })
+            .collect();
+        if available.is_empty() {
+            continue;
+        }
+        let mut counts = std::collections::BTreeSet::new();
+        counts.insert(1usize);
+        counts.insert(2.min(available.len()));
+        counts.insert(4.min(available.len()));
+        for count in counts {
+            let mut assigned = vec![source.clone()];
+            assigned.extend(available.iter().take(count).cloned());
+            commands.spawn((
+                CandidateAction(Action::Upgrade {
+                    from: from.clone(),
+                    to: to.clone(),
+                    assisted_by: vec![helper.clone(); count],
+                }),
+                CandidateAssignment(assigned),
+            ));
+        }
+    }
 }

@@ -7,6 +7,7 @@
 
 pub mod algorithms;
 pub mod app;
+pub mod components;
 pub mod config;
 pub mod plugins;
 pub mod request;
@@ -27,7 +28,8 @@ pub use request::{
     UnitScheduleRequest,
 };
 pub use resources::{
-    CurrentInventory, CurrentTechLevel, EconomyState, SearchGoal, SearchProgress, StepLog, TaskLog,
+    CurrentInventory, CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress,
+    StepLog, TaskLog,
 };
 pub use result::{Action, Schedule, ScheduleError, StepResult};
 pub use scheduler::Scheduler;

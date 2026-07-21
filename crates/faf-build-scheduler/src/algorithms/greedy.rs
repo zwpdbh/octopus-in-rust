@@ -1,8 +1,9 @@
 //! Greedy best-first scheduling algorithm.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
 use bevy_app::prelude::*;
+use faf_blueprints::UnitEcoStats;
 use faf_blueprints::{tech_level_of, BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
 use faf_sim_shared::EcoSnapshot;
 use faf_solver::CompletionResult;
@@ -12,6 +13,13 @@ use crate::plugins::apply::ApplyPlugin;
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::Action;
 use crate::search::solve_action;
+
+/// Assignment of concrete builders to a candidate action.
+pub(crate) type CandidateBuilders = Vec<(
+    bevy_ecs::prelude::Entity,
+    faf_blueprints::UnitKind,
+    UnitEcoStats,
+)>;
 
 /// Greedy search: at each iteration, generate candidates, simulate them, and
 /// commit the lowest-scoring candidate.
@@ -89,19 +97,19 @@ pub(crate) fn choose_eco_direction(current: &EcoSnapshot, target: &EcoTarget) ->
 /// chosen while a matching candidate exists.
 pub(crate) fn score_eco_candidate(
     current_economy: &EcoSnapshot,
-    inventory: &HashMap<UnitKind, u32>,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
+    assigned_builders: &CandidateBuilders,
     library: &BlueprintLibrary,
     direction: EcoDirection,
 ) -> f64 {
     let Some(result) = solve_action(
         current_economy,
-        inventory,
         next_id,
         options,
         action,
+        assigned_builders,
         library,
     ) else {
         return f64::INFINITY;
@@ -264,10 +272,10 @@ fn build_power_delta(action: &Action, library: &BlueprintLibrary) -> f64 {
 /// from the goal.
 pub(crate) fn score_unit_candidate(
     current_economy: &EcoSnapshot,
-    inventory: &HashMap<UnitKind, u32>,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
+    assigned_builders: &CandidateBuilders,
     library: &BlueprintLibrary,
     target: &UnitKind,
 ) -> f64 {
@@ -278,10 +286,10 @@ pub(crate) fn score_unit_candidate(
     if resulting_unit == *target {
         if let Some(result) = solve_action(
             current_economy,
-            inventory,
             next_id,
             options,
             action,
+            assigned_builders,
             library,
         ) {
             let completion = result.tasks.last().cloned().unwrap_or(result.total);

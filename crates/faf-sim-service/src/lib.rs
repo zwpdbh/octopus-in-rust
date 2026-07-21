@@ -597,7 +597,7 @@ mod tests {
         let mut found = false;
         while let Ok(event) = rx.recv() {
             if let SimServiceEvent::Simulation(SimulationEvent::Ticked(snapshot)) = event {
-                assert!((snapshot.time - 2.0).abs() < 1e-9);
+                assert!((snapshot.time.value() - 2.0).abs() < 1e-9);
                 found = true;
                 break;
             }
@@ -645,8 +645,8 @@ mod tests {
         let s1 = recv_ticked(&rx1);
         let s2 = recv_ticked(&rx2);
 
-        assert!((s1.time - 2.0).abs() < 1e-9);
-        assert!((s2.time - 2.0).abs() < 1e-9);
+        assert!((s1.time.value() - 2.0).abs() < 1e-9);
+        assert!((s2.time.value() - 2.0).abs() < 1e-9);
 
         service.stop(id).unwrap();
     }

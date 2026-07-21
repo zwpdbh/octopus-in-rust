@@ -6,13 +6,16 @@ use bevy_ecs::prelude::*;
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitKind, UnitRole};
 
 use crate::algorithms::greedy;
+use crate::components::{CandidateAssignment, UnitKindComp};
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::request::SearchOptions;
 use crate::resources::{CurrentInventory, EconomyState, SearchGoal, SearchProgress};
-use crate::result::Action;
-use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
-use crate::util::{count_mex, is_mex};
+use crate::search::{
+    spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, CandidateAction,
+    CandidateScore, IdleBuilderQuery, SearchTarget,
+};
+use crate::util::{count_mex_from_iter, is_mex};
 
 /// Plugin that registers candidate generation and evaluation for economy (mass
 /// income) scheduling.
@@ -44,53 +47,54 @@ pub(crate) fn generate_eco_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
     economy: Res<EconomyState>,
-    inventory: Res<CurrentInventory>,
+    _inventory: Res<CurrentInventory>,
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
+    units: Query<&UnitKindComp>,
+    idle_builders: IdleBuilderQuery,
 ) {
     if progress.done {
         return;
     }
 
     // If the target is already reached, stop generating candidates.
-    if goal.0.is_reached(&economy.current, &inventory.0) {
+    if goal.0.is_reached_from_entities(&economy.current, &units) {
         return;
     }
 
     let library = &*library.0;
-    let current_mex_count = count_mex(&inventory.0, library);
+    let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
+    let current_mex_count = count_mex_from_iter(&owned_kinds, library);
     let mex_cap = config.max_mex_count;
 
     // Opening-phase constraints: a human-like FAF opening requires a factory
     // before the ACU builds economy, and a few engineers before the economy
     // expansion really starts.
-    let has_factory = inventory
-        .0
-        .keys()
-        .any(|k| matches!(k, UnitKind::Factory(_)));
-    let engineer_count: u32 = inventory
-        .0
+    let has_factory = owned_kinds
         .iter()
-        .filter(|(k, _)| matches!(k, UnitKind::Engineer(_)))
-        .map(|(_, c)| *c)
-        .sum();
+        .any(|k| matches!(k, UnitKind::Factory(_)));
+    let engineer_count = owned_kinds
+        .iter()
+        .filter(|k| matches!(k, UnitKind::Engineer(_)))
+        .count() as u32;
     const MIN_OPENING_ENGINEERS: u32 = 2;
 
     // Phase 0: no factory yet => ACU must build a T1 factory first.
     if !has_factory {
-        if let Some(&count) = inventory.0.get(&UnitKind::Commander) {
-            if count > 0 {
-                if let Some(target) = library
-                    .buildable_by(&UnitKind::Commander)
-                    .into_iter()
-                    .find(|t| matches!(t, UnitKind::Factory(TechLevel::T1)))
-                {
-                    commands.spawn(CandidateAction(Action::Build {
-                        builder: UnitKind::Commander,
-                        target,
-                    }));
-                }
+        if owned_kinds.iter().any(|k| *k == UnitKind::Commander) {
+            if let Some(target) = library
+                .buildable_by(&UnitKind::Commander)
+                .into_iter()
+                .find(|t| matches!(t, UnitKind::Factory(TechLevel::T1)))
+            {
+                spawn_build_candidates(
+                    &mut commands,
+                    library,
+                    &UnitKind::Commander,
+                    target,
+                    &idle_builders,
+                );
             }
         }
         // No other build candidates until the factory exists.
@@ -102,33 +106,23 @@ pub(crate) fn generate_eco_candidates_system(
     // engineers while the ACU is free to scout/protect but not expand economy
     // yet.
     if engineer_count < MIN_OPENING_ENGINEERS {
-        for (kind, count) in &inventory.0 {
-            if *count == 0 {
-                continue;
-            }
-            if !matches!(kind, UnitKind::Factory(_)) {
-                continue;
-            }
+        for kind in owned_kinds
+            .iter()
+            .filter(|k| matches!(k, UnitKind::Factory(_)))
+        {
             if let Some(target) = library
                 .buildable_by(kind)
                 .into_iter()
                 .find(|t| matches!(t, UnitKind::Engineer(_)))
             {
-                commands.spawn(CandidateAction(Action::Build {
-                    builder: kind.clone(),
-                    target,
-                }));
+                spawn_build_candidates(&mut commands, library, kind, target, &idle_builders);
             }
         }
         return;
     }
 
     // Phase 2: normal economy expansion.
-    for (kind, count) in &inventory.0 {
-        if *count == 0 {
-            continue;
-        }
-
+    for kind in &owned_kinds {
         for target in library.buildable_by(kind) {
             if !is_eco_candidate(library, &target) {
                 continue;
@@ -142,10 +136,7 @@ pub(crate) fn generate_eco_candidates_system(
             if is_mex(library, &target) && current_mex_count >= mex_cap {
                 continue;
             }
-            commands.spawn(CandidateAction(Action::Build {
-                builder: kind.clone(),
-                target,
-            }));
+            spawn_build_candidates(&mut commands, library, kind, target, &idle_builders);
         }
     }
 
@@ -153,26 +144,17 @@ pub(crate) fn generate_eco_candidates_system(
     // (they replace an existing unit), so the cap is not checked here. The
     // source unit provides its own build power, so we do not need to check for
     // an available engineer or ACU before proposing an upgrade.
-    for (kind, count) in &inventory.0 {
-        if *count == 0 {
-            continue;
-        }
+    for kind in &owned_kinds {
         if let Some(target) = library.upgrade_target(kind) {
             if is_eco_candidate(library, &target) {
-                commands.spawn(CandidateAction(Action::Upgrade {
-                    from: kind.clone(),
-                    to: target,
-                }));
+                spawn_upgrade_candidates(&mut commands, library, kind, target, &idle_builders);
             }
         }
         // Cap mexes of a tier that supports it. Capping also replaces the
         // existing unit and does not increase the mex count.
         if let Some(target) = library.cap_target(kind) {
             if is_eco_candidate(library, &target) {
-                commands.spawn(CandidateAction(Action::Upgrade {
-                    from: kind.clone(),
-                    to: target,
-                }));
+                spawn_upgrade_candidates(&mut commands, library, kind, target, &idle_builders);
             }
         }
     }
@@ -187,11 +169,10 @@ pub(crate) fn evaluate_eco_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
     economy: Res<EconomyState>,
-    inventory: Res<CurrentInventory>,
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
-    candidates: Query<(Entity, &CandidateAction)>,
+    candidates: Query<(Entity, &CandidateAction, &CandidateAssignment)>,
 ) {
     if progress.done {
         return;
@@ -202,16 +183,15 @@ pub(crate) fn evaluate_eco_candidates_system(
     };
 
     let library = &*library.0;
-
     let direction = greedy::choose_eco_direction(&economy.current, target);
 
-    for (entity, action) in candidates.iter() {
+    for (entity, action, assignment) in candidates.iter() {
         let score = greedy::score_eco_candidate(
             &economy.current,
-            &inventory.0,
             progress.next_id,
             &options,
             &action.0,
+            &assignment.0,
             library,
             direction,
         );

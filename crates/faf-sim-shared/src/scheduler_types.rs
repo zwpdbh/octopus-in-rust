@@ -27,11 +27,12 @@ pub struct StepResult {
 pub enum Action {
     Build {
         target: faf_blueprints::UnitKind,
-        builder: faf_blueprints::UnitKind,
+        builder: Vec<faf_blueprints::UnitKind>,
     },
     Upgrade {
         from: faf_blueprints::UnitKind,
         to: faf_blueprints::UnitKind,
+        assisted_by: Vec<faf_blueprints::UnitKind>,
     },
 }
 
@@ -70,6 +71,7 @@ mod tests {
         let action = Action::Upgrade {
             from: UnitKind::Mex(TechLevel::T1),
             to: UnitKind::Mex(TechLevel::T2),
+            assisted_by: vec![],
         };
         let value = serde_json::to_value(&action).unwrap();
         let variant = value
@@ -85,6 +87,7 @@ mod tests {
         );
         assert!(variant.contains_key("from"));
         assert!(variant.contains_key("to"));
+        assert!(variant.contains_key("assisted_by"));
     }
 
     #[test]
@@ -92,11 +95,12 @@ mod tests {
         let actions = vec![
             Action::Build {
                 target: UnitKind::Engineer(TechLevel::T1),
-                builder: UnitKind::Factory(TechLevel::T1),
+                builder: vec![UnitKind::Factory(TechLevel::T1)],
             },
             Action::Upgrade {
                 from: UnitKind::Mex(TechLevel::T1),
                 to: UnitKind::Mex(TechLevel::T2),
+                assisted_by: vec![UnitKind::Engineer(TechLevel::T1)],
             },
         ];
         for action in actions {
@@ -130,6 +134,7 @@ mod tests {
                 action: Action::Upgrade {
                     from: UnitKind::Mex(TechLevel::T1),
                     to: UnitKind::Mex(TechLevel::T2),
+                    assisted_by: vec![],
                 },
                 finish_time_seconds: 12.0,
                 builder_count: 1,

@@ -17,26 +17,31 @@ pub fn StepTimeline(steps: Vec<StepResult>, on_click: EventHandler<UnitKind>) ->
                 for (idx, step) in steps.iter().enumerate() {
                     {
                         let (accent, description, clicked) = match &step.action {
-                            Action::Build { target, builder } => (
-                                "border-sky-700 hover:border-sky-600",
-                                format!(
-                                    "{} {} build {}",
-                                    step.builder_count,
-                                    kind_label(builder),
-                                    kind_label(target),
-                                ),
-                                target.clone(),
-                            ),
-                            Action::Upgrade { from, to } => (
-                                "border-amber-700 hover:border-amber-600",
-                                format!(
-                                    "{} {} upgrade to {}",
-                                    step.builder_count,
-                                    kind_label(from),
-                                    kind_label(to),
-                                ),
-                                to.clone(),
-                            ),
+                            Action::Build { target, builder } => {
+                                let builder_text = describe_builders(builder);
+                                (
+                                    "border-sky-700 hover:border-sky-600",
+                                    format!("{} build {}", builder_text, kind_label(target)),
+                                    target.clone(),
+                                )
+                            }
+                            Action::Upgrade { from, to, assisted_by } => {
+                                let assist_text = if assisted_by.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" (assisted by {})", describe_builders(assisted_by))
+                                };
+                                (
+                                    "border-amber-700 hover:border-amber-600",
+                                    format!(
+                                        "{} upgrade to {}{}",
+                                        kind_label(from),
+                                        kind_label(to),
+                                        assist_text,
+                                    ),
+                                    to.clone(),
+                                )
+                            }
                         };
                         rsx! {
                             button {
@@ -52,4 +57,27 @@ pub fn StepTimeline(steps: Vec<StepResult>, on_click: EventHandler<UnitKind>) ->
             }
         }
     }
+}
+
+/// Summarise a list of builders as a count + kind string. Identical consecutive
+/// kinds are collapsed; mixed kinds are listed with counts.
+fn describe_builders(builders: &[UnitKind]) -> String {
+    if builders.is_empty() {
+        return "0 builders".to_string();
+    }
+    let mut groups: Vec<(UnitKind, usize)> = Vec::new();
+    for b in builders {
+        if let Some((last_kind, count)) = groups.last_mut() {
+            if last_kind == b {
+                *count += 1;
+                continue;
+            }
+        }
+        groups.push((b.clone(), 1));
+    }
+    groups
+        .iter()
+        .map(|(kind, count)| format!("{} {}", count, kind_label(kind)))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }

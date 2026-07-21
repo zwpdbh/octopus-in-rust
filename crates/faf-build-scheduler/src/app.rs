@@ -8,11 +8,13 @@ use bevy_app::prelude::*;
 use faf_blueprints::{BlueprintLibrary, UnitKind};
 use faf_sim_shared::EcoSnapshot;
 
+use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
-    CurrentInventory, CurrentTechLevel, EconomyState, SearchGoal, SearchProgress, StepLog, TaskLog,
+    CurrentInventory, CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress,
+    StepLog, TaskLog,
 };
 use crate::result::{Schedule, ScheduleError};
 use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarget};
@@ -85,13 +87,28 @@ impl SchedulerApp {
         options: SearchOptions,
         config: SchedulerConfig,
     ) {
-        let tech_level = compute_current_tech_level(&inventory);
+        let tech_level = compute_current_tech_level(inventory.keys().cloned());
+
+        let mut commands = app.world_mut().commands();
+        for (kind, count) in inventory {
+            for _ in 0..count {
+                let build_power = library.build_power(&kind);
+                commands.spawn((
+                    UnitKindComp(kind.clone()),
+                    BuildPowerComp(build_power),
+                    BuilderState::Idle,
+                ));
+            }
+        }
 
         app.insert_resource(EconomyState {
             initial: initial_eco,
             current: initial_eco,
         })
-        .insert_resource(CurrentInventory(inventory))
+        .insert_resource(CurrentInventory)
+        .insert_resource(SchedulerClock {
+            now: initial_eco.time,
+        })
         .insert_resource(CurrentTechLevel(tech_level))
         .insert_resource(SearchGoal(target))
         .insert_resource(options)
