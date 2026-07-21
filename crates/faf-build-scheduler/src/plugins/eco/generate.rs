@@ -1,42 +1,16 @@
-//! Eco scheduling mode plugin.
+//! Candidate generation for eco scheduling.
 
-use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitKind, UnitRole};
 
-use crate::algorithms::greedy;
-use crate::components::{CandidateAssignment, UnitKindComp};
+use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::plugins::lifecycle::SchedulerSet;
-use crate::request::SearchOptions;
 use crate::resources::{CurrentInventory, EconomyState, SearchGoal, SearchProgress};
 use crate::search::{
-    spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, CandidateAction,
-    CandidateScore, IdleBuilderQuery, SearchTarget,
+    spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, IdleBuilderQuery,
 };
 use crate::util::{count_mex_from_iter, is_mex};
-
-/// Plugin that registers candidate generation and evaluation for economy (mass
-/// income) scheduling.
-pub struct EcoSchedulingPlugin;
-
-impl Plugin for EcoSchedulingPlugin {
-    fn build(&self, app: &mut App) {
-        // Register eco candidates generation/evaluation in the sets declared by
-        // `SchedulerLifecyclePlugin`. The `configure_sets` call there orders
-        // `GenerateCandidate -> EvaluateCandidate -> Apply` and gates the whole
-        // pipeline on the `Searching` state.
-        app.add_systems(
-            Update,
-            generate_eco_candidates_system.in_set(SchedulerSet::GenerateCandidate),
-        )
-        .add_systems(
-            Update,
-            evaluate_eco_candidates_system.in_set(SchedulerSet::EvaluateCandidate),
-        );
-    }
-}
 
 /// Spawn candidate actions for increasing mass income.
 ///
@@ -157,45 +131,6 @@ pub(crate) fn generate_eco_candidates_system(
                 spawn_upgrade_candidates(&mut commands, library, kind, target, &idle_builders);
             }
         }
-    }
-}
-
-/// Evaluate every spawned [`CandidateAction`] for eco scheduling and attach a
-/// [`CandidateScore`].
-///
-/// The actual scoring function lives in the algorithm module so that different
-/// algorithms can reuse the same ECS pipeline.
-pub(crate) fn evaluate_eco_candidates_system(
-    mut commands: Commands,
-    progress: Res<SearchProgress>,
-    economy: Res<EconomyState>,
-    goal: Res<SearchGoal>,
-    options: Res<SearchOptions>,
-    library: Res<BlueprintLibraryRef>,
-    candidates: Query<(Entity, &CandidateAction, &CandidateAssignment)>,
-) {
-    if progress.done {
-        return;
-    }
-
-    let SearchTarget::Eco(target) = &goal.0 else {
-        return;
-    };
-
-    let library = &*library.0;
-    let direction = greedy::choose_eco_direction(&economy.current, target);
-
-    for (entity, action, assignment) in candidates.iter() {
-        let score = greedy::score_eco_candidate(
-            &economy.current,
-            progress.next_id,
-            &options,
-            &action.0,
-            &assignment.0,
-            library,
-            direction,
-        );
-        commands.entity(entity).insert(CandidateScore(score));
     }
 }
 

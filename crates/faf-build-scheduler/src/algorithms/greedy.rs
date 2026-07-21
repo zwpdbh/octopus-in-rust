@@ -40,16 +40,20 @@ impl SchedulingAlgorithm for Greedy {
 const TECH2_PRIORITY_MASS_THRESHOLD: f64 = 35.0;
 /// Mass income threshold above which T3 tech upgrades become the top priority.
 const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
-/// Fallback base score for energy actions when the current direction is not
-/// Energy but no primary-direction action can be taken without stalling.
-const ENERGY_FALLBACK_BASE: f64 = 10.0;
 /// Minimum net energy income (production - demand) to maintain before switching
 /// back to mass/tech expansion. Building pgens preemptively prevents the economy
 /// from stalling when mex maintenance rises.
 const ENERGY_BUFFER: f64 = 10.0;
-/// Large negative bonus applied to tech upgrades when tech is the active
+/// Large positive bonus applied to tech upgrades when tech is the active
 /// direction, so they are chosen over any fallback action.
-const TECH_PRIORITY_BONUS: f64 = -1_000_000.0;
+const TECH_PRIORITY_BONUS: f64 = 1_000_000.0;
+/// Bonus applied to mass-income actions when mass is the active direction,
+/// ensuring they outrank energy fallback candidates.
+const MASS_DIRECTION_BONUS: f64 = 1_000.0;
+/// Bonus applied to energy actions when energy is the active direction.
+const ENERGY_DIRECTION_BONUS: f64 = 1_000.0;
+/// Bonus applied to engineer actions when build power is the active direction.
+const BUILD_POWER_BONUS: f64 = 1_000.0;
 
 /// Direction the eco scheduler should emphasize for the current step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,8 +96,8 @@ pub(crate) fn choose_eco_direction(current: &EcoSnapshot, target: &EcoTarget) ->
 
 /// Score an eco candidate according to the current scheduling direction.
 ///
-/// Only actions that match the direction receive a finite score (lower is
-/// better). Unrelated actions are scored as `f64::INFINITY` so they are not
+/// Only actions that match the direction receive a positive score (higher is
+/// better). Unrelated or infeasible actions are scored as `0.0` so they are not
 /// chosen while a matching candidate exists.
 pub(crate) fn score_eco_candidate(
     current_economy: &EcoSnapshot,
@@ -112,7 +116,7 @@ pub(crate) fn score_eco_candidate(
         assigned_builders,
         library,
     ) else {
-        return f64::INFINITY;
+        return 0.0;
     };
     let completion = result.tasks.last().cloned().unwrap_or(result.total);
 
@@ -126,7 +130,7 @@ pub(crate) fn score_eco_candidate(
     let delta_energy = completion.economy.production_per_second_energy
         - current_economy.production_per_second_energy;
     if net_energy_after < ENERGY_BUFFER && delta_energy <= 0.0 {
-        return f64::INFINITY;
+        return 0.0;
     }
 
     match direction {
@@ -134,7 +138,7 @@ pub(crate) fn score_eco_candidate(
             if is_tech_upgrade_to(action, desired_tech) {
                 // Tech upgrades beat every fallback. Faster upgrades are slightly
                 // preferred among themselves.
-                return TECH_PRIORITY_BONUS + completion.time_seconds * 1e-9;
+                return TECH_PRIORITY_BONUS - completion.time_seconds * 1e-9;
             }
             // If the desired tech upgrade is stalled by energy, fall back to
             // building energy so we can tech later.
@@ -145,9 +149,9 @@ pub(crate) fn score_eco_candidate(
                 library,
                 ResourceKind::Energy,
             ) {
-                return ENERGY_FALLBACK_BASE - energy + completion.time_seconds * 1e-9;
+                return energy - completion.time_seconds * 1e-9;
             }
-            f64::INFINITY
+            0.0
         }
         EcoDirection::MassIncome => {
             if let Some(mass) = resource_efficiency(
@@ -157,7 +161,7 @@ pub(crate) fn score_eco_candidate(
                 library,
                 ResourceKind::Mass,
             ) {
-                return -mass + completion.time_seconds * 1e-9;
+                return MASS_DIRECTION_BONUS + mass - completion.time_seconds * 1e-9;
             }
             // No mass action is viable (likely energy stall). Fall back to an
             // energy-building action so expansion can continue.
@@ -168,21 +172,16 @@ pub(crate) fn score_eco_candidate(
                 library,
                 ResourceKind::Energy,
             ) {
-                return ENERGY_FALLBACK_BASE - energy + completion.time_seconds * 1e-9;
+                return energy - completion.time_seconds * 1e-9;
             }
-            f64::INFINITY
+            0.0
         }
         EcoDirection::BuildPower => {
-            if let Some(bp) = resource_efficiency(
-                current_economy,
-                &completion,
-                action,
-                library,
-                ResourceKind::BuildPower,
-            ) {
-                return -bp + completion.time_seconds * 1e-9;
-            }
-            f64::INFINITY
+            let base = match resulting_unit(action) {
+                UnitKind::Engineer(tier) => BUILD_POWER_BONUS + (tier as i32 + 1) as f64,
+                _ => 0.0,
+            };
+            base - completion.time_seconds * 1e-9
         }
         EcoDirection::Energy => {
             if let Some(energy) = resource_efficiency(
@@ -192,9 +191,9 @@ pub(crate) fn score_eco_candidate(
                 library,
                 ResourceKind::Energy,
             ) {
-                return -energy + completion.time_seconds * 1e-9;
+                return ENERGY_DIRECTION_BONUS + energy - completion.time_seconds * 1e-9;
             }
-            f64::INFINITY
+            0.0
         }
     }
 }
@@ -202,7 +201,6 @@ pub(crate) fn score_eco_candidate(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResourceKind {
     Mass,
-    BuildPower,
     Energy,
 }
 
@@ -236,7 +234,6 @@ fn resource_efficiency(
             completion.economy.production_per_second_energy.value()
                 - current.production_per_second_energy.value()
         }
-        ResourceKind::BuildPower => build_power_delta(action, library),
     };
 
     if delta <= 0.0 {
@@ -254,22 +251,11 @@ fn is_tech_upgrade_to(action: &Action, desired_tech: TechLevel) -> bool {
     tech_level_of(to) == Some(desired_tech)
 }
 
-/// Net build power change from performing the action.
-///
-/// For builds, this is the new unit's build power. For upgrades, it is the
-/// target's build power minus the consumed source unit's build power.
-fn build_power_delta(action: &Action, library: &BlueprintLibrary) -> f64 {
-    match action {
-        Action::Build { target, .. } => library.build_power(target),
-        Action::Upgrade { from, to, .. } => library.build_power(to) - library.build_power(from),
-    }
-}
-
 /// Score a unit candidate by symbolic distance to the target unit.
 ///
 /// Candidates that directly build the target use the simulated completion time;
 /// all others are ranked by how many build/upgrade edges separate their result
-/// from the goal.
+/// from the goal. Higher scores are better.
 pub(crate) fn score_unit_candidate(
     current_economy: &EcoSnapshot,
     next_id: u32,
@@ -293,14 +279,14 @@ pub(crate) fn score_unit_candidate(
             library,
         ) {
             let completion = result.tasks.last().cloned().unwrap_or(result.total);
-            completion.time_seconds
+            -completion.time_seconds
         } else {
-            f64::INFINITY
+            f64::NEG_INFINITY
         }
     } else {
         match distance_to_target(&graph, &resulting_unit, target) {
-            Some(distance) => max_time + distance as f64,
-            None => f64::INFINITY,
+            Some(distance) => -(max_time + distance as f64),
+            None => f64::NEG_INFINITY,
         }
     }
 }

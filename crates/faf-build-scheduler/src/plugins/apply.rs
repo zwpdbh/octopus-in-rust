@@ -67,7 +67,7 @@ pub(crate) fn apply_best_system(
 
     let library = &*library.0;
 
-    let best = candidates.iter().min_by(|(_, _, _, a), (_, _, _, b)| {
+    let best = candidates.iter().max_by(|(_, _, _, a), (_, _, _, b)| {
         a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
     });
 
