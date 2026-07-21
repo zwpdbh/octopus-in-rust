@@ -173,8 +173,7 @@ pub(crate) fn build_task_for_action(
                 return None;
             }
             // The source unit acts as its own builder for the upgrade/cap task.
-            let mut target_stats = library.unit_eco_stats(to)?;
-            target_stats.unit_id = Some(format!("upgrade {:?} to {:?}", from, to));
+            let target_stats = library.unit_eco_stats(to)?;
             Some(BuildTask {
                 id,
                 start_after: Time::from_raw(0.0),

@@ -42,7 +42,10 @@ pub fn UnitBlock(
             }
             div { class: "flex flex-col items-center text-center gap-1",
                 span { class: "text-sm text-neutral-300 truncate w-full",
-                    {unit.as_ref().map(|u| u.display_name.as_str()).unwrap_or("—")}
+                    {unit.as_ref().map(|u| {
+                        let name = u.display_name.trim();
+                        if name.is_empty() { u.id.as_str() } else { name }
+                    }).unwrap_or("—")}
                 }
                 CountSlider {
                     value: count,

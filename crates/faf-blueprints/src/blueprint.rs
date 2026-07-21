@@ -152,7 +152,7 @@ impl BlueprintLibrary {
                     mass_storage_sides: 4,
                     ..Default::default()
                 },
-                unit_id: Some(display_name.to_string()),
+                unit_id: Some(blueprint_id.to_string()),
             };
             let entity = world
                 .spawn(BlueprintBundle {

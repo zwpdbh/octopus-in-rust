@@ -117,7 +117,7 @@ pub(crate) fn unit_eco_stats(unit: &Unit, kind: &UnitKind) -> UnitEcoStats {
         mass_storage,
         energy_storage,
         adjacency: AdjacencyBonus::default(),
-        unit_id: Some(unit.display_name()),
+        unit_id: Some(unit.id.clone()),
     }
 }
 
