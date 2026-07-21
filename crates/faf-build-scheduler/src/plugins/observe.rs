@@ -1,15 +1,15 @@
-//! Symbolic observation of the scheduler world.
+//! Observation lifecycle step.
 //!
-//! The observer reads numeric economy and unit state and turns it into discrete
-//! conditions. The decision layer then reasons with those symbols rather than
-//! raw floats.
+//! Reads numeric economy and unit state from the Bevy world and turns it into
+//! discrete symbolic conditions for the decision layer.
 
 use bevy_ecs::prelude::*;
 
 use faf_sim_shared::EcoSnapshot;
 
 use crate::components::UnitKindComp;
-use crate::resources::SearchGoal;
+use crate::resources::{EconomyState, SearchGoal};
+use crate::search::SearchTarget;
 
 /// Net energy margin below which the economy is considered stalled.
 const STALLED_ENERGY_MARGIN: f64 = 0.0;
@@ -81,10 +81,10 @@ pub enum MassProductionTier {
     AtTech3,
 }
 
-/// Observe the eco situation and write a symbolic [`Observation`].
+/// Observe the current scheduler world and write a symbolic [`Observation`].
 pub(crate) fn observe_eco_system(
     mut observation: ResMut<Observation>,
-    economy: Res<crate::resources::EconomyState>,
+    economy: Res<EconomyState>,
     goal: Res<SearchGoal>,
     units: Query<&UnitKindComp>,
 ) {
@@ -94,7 +94,7 @@ pub(crate) fn observe_eco_system(
 /// Build an observation from the current economy, goal, and unit entities.
 pub(crate) fn observe(
     eco: &EcoSnapshot,
-    goal: &crate::search::SearchTarget,
+    goal: &SearchTarget,
     units: &Query<&UnitKindComp>,
 ) -> Observation {
     use faf_blueprints::UnitKind;
@@ -112,7 +112,7 @@ pub(crate) fn observe(
         EnergyMargin::Surplus
     };
 
-    let mass_income_vs_target = if let crate::search::SearchTarget::Eco(target) = goal {
+    let mass_income_vs_target = if let SearchTarget::Eco(target) = goal {
         if target.is_reached(eco) {
             MassIncomeVsTarget::Reached
         } else if eco.production_per_second_mass.value() > target.mass_production.value() {

@@ -1,14 +1,13 @@
-//! Rule-based decision layer for the scheduler.
+//! Decide-direction lifecycle step.
 //!
-//! Decisions are made by matching a symbolic [`Observation`] against an ordered
-//! list of rules. This keeps the "what should we do?" logic separate from the
-//! numeric observation code and from the action-efficiency heuristics.
+//! Applies a rule engine to the symbolic [`Observation`] and chooses an economic
+//! direction for the current scheduling step.
 
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::TechLevel;
 
-use crate::observation::{EnergyMargin, MassIncomeVsTarget, MassProductionTier, Observation};
+use crate::plugins::observe::{EnergyMargin, MassIncomeVsTarget, MassProductionTier, Observation};
 
 /// The currently chosen economic direction.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]

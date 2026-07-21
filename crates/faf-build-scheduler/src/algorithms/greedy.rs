@@ -12,8 +12,8 @@ use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::decision::EcoDirection;
 use crate::plugins::apply::ApplyPlugin;
+use crate::plugins::decide_direction::EcoDirection;
 use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{
