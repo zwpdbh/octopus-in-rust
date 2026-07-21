@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use bevy_app::App;
 
 pub mod greedy;
+pub mod heuristic;
 pub use greedy::Greedy;
 
 /// Selectable scheduling algorithm.

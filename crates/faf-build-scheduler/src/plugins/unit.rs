@@ -10,7 +10,7 @@ use crate::components::{CandidateAssignment, UnitKindComp};
 use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::SchedulerSet;
 use crate::request::SearchOptions;
-use crate::resources::{CurrentInventory, EconomyState, SearchGoal, SearchProgress};
+use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{
     spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, CandidateAction,
     CandidateScore, IdleBuilderQuery, SearchTarget,
@@ -45,7 +45,6 @@ pub(crate) fn generate_unit_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
     economy: Res<EconomyState>,
-    _inventory: Res<CurrentInventory>,
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,

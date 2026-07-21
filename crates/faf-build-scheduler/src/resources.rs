@@ -25,14 +25,6 @@ pub struct EconomyState {
     pub current: EcoSnapshot,
 }
 
-/// Marker resource indicating that the scheduler world owns unit entities.
-///
-/// The actual units are stored as ECS entities with [`UnitKindComp`],
-/// [`BuildPowerComp`], and [`BuilderState`] components; this resource only
-/// exists so systems can declare they need the inventory to be present.
-#[derive(Resource)]
-pub struct CurrentInventory;
-
 /// Global simulation clock for the scheduler.
 ///
 /// Time advances to the next committed task completion rather than ticking

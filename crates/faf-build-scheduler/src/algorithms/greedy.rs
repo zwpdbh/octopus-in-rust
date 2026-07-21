@@ -3,16 +3,22 @@
 use std::collections::{HashSet, VecDeque};
 
 use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
 use faf_blueprints::UnitEcoStats;
-use faf_blueprints::{tech_level_of, BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
+use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
 use faf_sim_shared::EcoSnapshot;
-use faf_solver::CompletionResult;
 
+use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
+use crate::components::UnitKindComp;
+use crate::config::SchedulerConfig;
 use crate::plugins::apply::ApplyPlugin;
 use crate::request::{EcoTarget, SearchOptions};
 use crate::result::Action;
-use crate::search::solve_action;
+use crate::search::{
+    solve_action, spawn_build_candidates, spawn_upgrade_candidates, IdleBuilderQuery,
+};
+use crate::util::{count_mex_from_iter, is_mex};
 
 /// Assignment of concrete builders to a candidate action.
 pub(crate) type CandidateBuilders = Vec<(
@@ -94,6 +100,124 @@ pub(crate) fn choose_eco_direction(current: &EcoSnapshot, target: &EcoTarget) ->
     EcoDirection::BuildPower
 }
 
+/// Spawn eco candidates according to the greedy opening and expansion rules.
+///
+/// The actual decision logic lives here so that the ECS system in
+/// `plugins::eco::generate` is only thin glue.
+pub(crate) fn spawn_eco_candidates(
+    commands: &mut Commands,
+    library: &BlueprintLibrary,
+    config: &SchedulerConfig,
+    units: &Query<&UnitKindComp>,
+    idle_builders: &IdleBuilderQuery,
+) {
+    let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
+    let current_mex_count = count_mex_from_iter(&owned_kinds, library);
+    let mex_cap = config.max_mex_count;
+
+    // Opening-phase constraints: a human-like FAF opening requires a factory
+    // before the ACU builds economy, and a few engineers before the economy
+    // expansion really starts.
+    let has_factory = owned_kinds
+        .iter()
+        .any(|k| matches!(k, UnitKind::Factory(_)));
+    let engineer_count = owned_kinds
+        .iter()
+        .filter(|k| matches!(k, UnitKind::Engineer(_)))
+        .count() as u32;
+    const MIN_OPENING_ENGINEERS: u32 = 2;
+
+    // Phase 0: no factory yet => ACU must build a T1 factory first.
+    if !has_factory {
+        if owned_kinds.iter().any(|k| *k == UnitKind::Commander) {
+            if let Some(target) = library
+                .buildable_by(&UnitKind::Commander)
+                .into_iter()
+                .find(|t| matches!(t, UnitKind::Factory(TechLevel::T1)))
+            {
+                spawn_build_candidates(
+                    commands,
+                    library,
+                    &UnitKind::Commander,
+                    target,
+                    idle_builders,
+                );
+            }
+        }
+        // No other build candidates until the factory exists.
+        return;
+    }
+
+    // Phase 1: factory exists but we still need opening engineers => factories
+    // must produce engineers. The ACU waits; this models the factory working on
+    // engineers while the ACU is free to scout/protect but not expand economy
+    // yet.
+    if engineer_count < MIN_OPENING_ENGINEERS {
+        for kind in owned_kinds
+            .iter()
+            .filter(|k| matches!(k, UnitKind::Factory(_)))
+        {
+            if let Some(target) = library
+                .buildable_by(kind)
+                .into_iter()
+                .find(|t| matches!(t, UnitKind::Engineer(_)))
+            {
+                spawn_build_candidates(commands, library, kind, target, idle_builders);
+            }
+        }
+        return;
+    }
+
+    // Phase 2: normal economy expansion.
+    for kind in &owned_kinds {
+        for target in library.buildable_by(kind) {
+            if !is_eco_candidate(library, &target) {
+                continue;
+            }
+            // Once engineers are available, the ACU focuses on power/factories
+            // while engineers handle mex expansion.
+            if *kind == UnitKind::Commander && is_mex(library, &target) {
+                continue;
+            }
+            // Enforce the global mex cap on *new* mass extractors.
+            if is_mex(library, &target) && current_mex_count >= mex_cap {
+                continue;
+            }
+            spawn_build_candidates(commands, library, kind, target, idle_builders);
+        }
+    }
+
+    // Upgrade extractors and storages. Upgrades do not increase the mex count
+    // (they replace an existing unit), so the cap is not checked here. The
+    // source unit provides its own build power, so we do not need to check for
+    // an available engineer or ACU before proposing an upgrade.
+    for kind in &owned_kinds {
+        if let Some(target) = library.upgrade_target(kind) {
+            if is_eco_candidate(library, &target) {
+                spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+            }
+        }
+        // Cap mexes of a tier that supports it. Capping also replaces the
+        // existing unit and does not increase the mex count.
+        if let Some(target) = library.cap_target(kind) {
+            if is_eco_candidate(library, &target) {
+                spawn_upgrade_candidates(commands, library, kind, target, idle_builders);
+            }
+        }
+    }
+}
+
+fn is_eco_candidate(library: &BlueprintLibrary, kind: &UnitKind) -> bool {
+    matches!(
+        library.role(kind),
+        faf_blueprints::UnitRole::MassExtractor
+            | faf_blueprints::UnitRole::PowerGenerator
+            | faf_blueprints::UnitRole::EnergyStorage
+            | faf_blueprints::UnitRole::Engineer
+            | faf_blueprints::UnitRole::Factory
+    )
+}
+
 /// Score an eco candidate according to the current scheduling direction.
 ///
 /// Only actions that match the direction receive a positive score (higher is
@@ -135,120 +259,51 @@ pub(crate) fn score_eco_candidate(
 
     match direction {
         EcoDirection::Tech(desired_tech) => {
-            if is_tech_upgrade_to(action, desired_tech) {
+            if heuristic::is_tech_upgrade_to(action, desired_tech) {
                 // Tech upgrades beat every fallback. Faster upgrades are slightly
                 // preferred among themselves.
                 return TECH_PRIORITY_BONUS - completion.time_seconds * 1e-9;
             }
             // If the desired tech upgrade is stalled by energy, fall back to
             // building energy so we can tech later.
-            if let Some(energy) = resource_efficiency(
-                current_economy,
-                &completion,
-                action,
-                library,
-                ResourceKind::Energy,
-            ) {
+            if let Some(energy) =
+                heuristic::energy_income_efficiency(current_economy, &completion, action, library)
+            {
                 return energy - completion.time_seconds * 1e-9;
             }
             0.0
         }
         EcoDirection::MassIncome => {
-            if let Some(mass) = resource_efficiency(
-                current_economy,
-                &completion,
-                action,
-                library,
-                ResourceKind::Mass,
-            ) {
+            if let Some(mass) =
+                heuristic::mass_income_efficiency(current_economy, &completion, action, library)
+            {
                 return MASS_DIRECTION_BONUS + mass - completion.time_seconds * 1e-9;
             }
             // No mass action is viable (likely energy stall). Fall back to an
             // energy-building action so expansion can continue.
-            if let Some(energy) = resource_efficiency(
-                current_economy,
-                &completion,
-                action,
-                library,
-                ResourceKind::Energy,
-            ) {
+            if let Some(energy) =
+                heuristic::energy_income_efficiency(current_economy, &completion, action, library)
+            {
                 return energy - completion.time_seconds * 1e-9;
             }
             0.0
         }
         EcoDirection::BuildPower => {
-            let base = match resulting_unit(action) {
-                UnitKind::Engineer(tier) => BUILD_POWER_BONUS + (tier as i32 + 1) as f64,
-                _ => 0.0,
+            let base = match heuristic::engineer_tier(action) {
+                Some(tier) => BUILD_POWER_BONUS + (tier as i32 + 1) as f64,
+                None => 0.0,
             };
             base - completion.time_seconds * 1e-9
         }
         EcoDirection::Energy => {
-            if let Some(energy) = resource_efficiency(
-                current_economy,
-                &completion,
-                action,
-                library,
-                ResourceKind::Energy,
-            ) {
+            if let Some(energy) =
+                heuristic::energy_income_efficiency(current_economy, &completion, action, library)
+            {
                 return ENERGY_DIRECTION_BONUS + energy - completion.time_seconds * 1e-9;
             }
             0.0
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResourceKind {
-    Mass,
-    Energy,
-}
-
-/// Compute the efficiency of an action for increasing `resource`.
-///
-/// Returns `Some(delta / mass_cost)` if the action increases the resource,
-/// otherwise `None`.
-fn resource_efficiency(
-    current: &EcoSnapshot,
-    completion: &CompletionResult,
-    action: &Action,
-    library: &BlueprintLibrary,
-    resource: ResourceKind,
-) -> Option<f64> {
-    let resulting = resulting_unit(action);
-    let mass_cost = library
-        .build_cost(&resulting)
-        .map(|c| c.mass)
-        .unwrap_or(0.0)
-        .max(0.0);
-    if mass_cost <= 0.0 {
-        return None;
-    }
-
-    let delta = match resource {
-        ResourceKind::Mass => {
-            completion.economy.production_per_second_mass.value()
-                - current.production_per_second_mass.value()
-        }
-        ResourceKind::Energy => {
-            completion.economy.production_per_second_energy.value()
-                - current.production_per_second_energy.value()
-        }
-    };
-
-    if delta <= 0.0 {
-        return None;
-    }
-
-    Some(delta / mass_cost)
-}
-
-/// True if the action is an upgrade whose target is exactly `desired_tech`.
-fn is_tech_upgrade_to(action: &Action, desired_tech: TechLevel) -> bool {
-    let Action::Upgrade { to, .. } = action else {
-        return false;
-    };
-    tech_level_of(to) == Some(desired_tech)
 }
 
 /// Score a unit candidate by symbolic distance to the target unit.
@@ -267,7 +322,7 @@ pub(crate) fn score_unit_candidate(
 ) -> f64 {
     let graph = library.build_graph();
     let max_time = options.simulation_max_time_seconds;
-    let resulting_unit = resulting_unit(action);
+    let resulting_unit = heuristic::resulting_unit(action);
 
     if resulting_unit == *target {
         if let Some(result) = solve_action(
@@ -288,13 +343,6 @@ pub(crate) fn score_unit_candidate(
             Some(distance) => -(max_time + distance as f64),
             None => f64::NEG_INFINITY,
         }
-    }
-}
-
-fn resulting_unit(action: &Action) -> UnitKind {
-    match action {
-        Action::Build { target, .. } => target.clone(),
-        Action::Upgrade { to, .. } => to.clone(),
     }
 }
 

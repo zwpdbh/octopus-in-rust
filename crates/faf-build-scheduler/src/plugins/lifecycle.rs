@@ -43,8 +43,8 @@ pub struct SchedulerResult {
 /// Static plugin that registers the shared scheduler lifecycle and system sets.
 ///
 /// It does **not** carry request-specific data. Callers must insert the
-/// scheduler resources (`EconomyState`, `CurrentInventory`, `SearchGoal`,
-/// `SearchOptions`, `SearchProgress`, etc.) before running the app.
+/// scheduler resources (`EconomyState`, `SearchGoal`, `SearchOptions`,
+/// `SearchProgress`, etc.) before running the app.
 pub struct SchedulerLifecyclePlugin;
 
 impl Plugin for SchedulerLifecyclePlugin {

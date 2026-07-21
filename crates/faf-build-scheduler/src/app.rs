@@ -13,8 +13,7 @@ use crate::config::SchedulerConfig;
 use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
-    CurrentInventory, CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress,
-    StepLog, TaskLog,
+    CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
 use crate::result::{Schedule, ScheduleError};
 use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarget};
@@ -105,7 +104,6 @@ impl SchedulerApp {
             initial: initial_eco,
             current: initial_eco,
         })
-        .insert_resource(CurrentInventory)
         .insert_resource(SchedulerClock {
             now: initial_eco.time,
         })
