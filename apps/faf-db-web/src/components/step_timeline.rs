@@ -97,7 +97,15 @@ fn CopyStepButton(
             title: "Copy step details for debug",
             onclick: move |e: MouseEvent| {
                 e.stop_propagation();
-                let text = debug_step_text(idx, start_seconds, end_seconds, &step, reasoning.as_ref(), &pre_eco);
+                let payload = serde_json::json!({
+                    "step_number": idx + 1,
+                    "start_seconds": start_seconds,
+                    "end_seconds": end_seconds,
+                    "action": step.action,
+                    "economy_before_decision": pre_eco,
+                    "reasoning": reasoning,
+                });
+                let text = serde_json::to_string_pretty(&payload).unwrap_or_default();
                 if let Some(window) = web_sys::window() {
                     let _ = window.navigator().clipboard().write_text(&text);
                 }
@@ -105,57 +113,6 @@ fn CopyStepButton(
             "📋"
         }
     }
-}
-
-fn debug_step_text(
-    idx: usize,
-    start_seconds: f64,
-    end_seconds: f64,
-    step: &StepResult,
-    reasoning: Option<&StepReasoning>,
-    pre_eco: &EcoSnapshot,
-) -> String {
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Step #{}: {} -> {}",
-        idx + 1,
-        format_duration(start_seconds),
-        format_duration(end_seconds)
-    ));
-    lines.push(format!("Action: {}", describe_step(&step.action)));
-    lines.push("Economy before decision:".to_string());
-    lines.push(format!(
-        "  Mass:  {:.0}/{:.0}  net {:+.1}/s  income {:+.1}/s  expense {:+.1}/s",
-        pre_eco.mass_storage.value(),
-        pre_eco.mass_storage_cap.value(),
-        pre_eco.production_per_second_mass.value() - pre_eco.mass_drain.value(),
-        pre_eco.production_per_second_mass.value(),
-        pre_eco.mass_drain.value()
-    ));
-    let energy_expense = pre_eco.energy_drain.value() + pre_eco.maintenance_consumption_per_second_energy.value();
-    lines.push(format!(
-        "  Energy: {:.0}/{:.0}  net {:+.1}/s  income {:+.1}/s  expense {:+.1}/s",
-        pre_eco.energy_storage.value(),
-        pre_eco.energy_storage_cap.value(),
-        pre_eco.production_per_second_energy.value() - energy_expense,
-        pre_eco.production_per_second_energy.value(),
-        energy_expense
-    ));
-
-    if let Some(reasoning) = reasoning {
-        lines.push("Top candidates:".to_string());
-        for candidate in reasoning.top_candidates.iter() {
-            let marker = if candidate.action == step.action { " (chosen)" } else { "" };
-            lines.push(format!(
-                "  {:.1}  {}{}",
-                candidate.score,
-                describe_step(&candidate.action),
-                marker
-            ));
-        }
-    }
-
-    lines.join("\n")
 }
 
 #[component]
@@ -229,13 +186,22 @@ fn describe_step(action: &Action) -> String {
             let builder_text = describe_builders(builder);
             format!("{} build {}", builder_text, kind_label(target))
         }
-        Action::Upgrade { from, to, assisted_by } => {
+        Action::Upgrade {
+            from,
+            to,
+            assisted_by,
+        } => {
             let assist_text = if assisted_by.is_empty() {
                 String::new()
             } else {
                 format!(" (assisted by {})", describe_builders(assisted_by))
             };
-            format!("{} upgrade to {}{}", kind_label(from), kind_label(to), assist_text)
+            format!(
+                "{} upgrade to {}{}",
+                kind_label(from),
+                kind_label(to),
+                assist_text
+            )
         }
     }
 }

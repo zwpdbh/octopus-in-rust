@@ -24,7 +24,7 @@ pub(crate) struct SolverState {
 impl SolverState {
     pub(crate) fn from_snapshot(snapshot: &EcoSnapshot) -> Self {
         Self {
-            time: 0.0,
+            time: snapshot.time.value(),
             mass: snapshot.mass_storage.value(),
             energy: snapshot.energy_storage.value(),
             mass_income: snapshot.production_per_second_mass.value(),
