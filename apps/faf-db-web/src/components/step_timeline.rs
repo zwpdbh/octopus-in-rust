@@ -27,15 +27,13 @@ pub fn StepTimeline(
                 for (idx, step) in steps.iter().enumerate() {
                     {
                         let is_selected = *selected_step.read() == Some(idx);
-                        let accent = match &step.action {
-                            Action::Build { .. } => "border-sky-700 hover:border-sky-600",
-                            Action::Upgrade { .. } => "border-amber-700 hover:border-amber-600",
-                        };
+                        let (accent_border, accent_text) = step_accent(&step.action);
+                        let (tag_label, tag_class) = step_tag(&step.action);
                         let description = describe_step(&step.action);
                         let row_class = if is_selected {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-800 transition-colors cursor-pointer")
+                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-800 transition-colors cursor-pointer")
                         } else {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors cursor-pointer")
+                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors cursor-pointer")
                         };
                         let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
                         let end_seconds = step.finish_time_seconds;
@@ -56,9 +54,10 @@ pub fn StepTimeline(
                                             selected_step.set(Some(idx));
                                         }
                                     },
-                                    span { class: "text-xs font-mono text-neutral-500 w-6 shrink-0 text-right", "#{idx + 1}" }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-44 text-right", "{time_label}" }
-                                    span { class: "flex-1 min-w-0 text-sm text-neutral-200 truncate", "{description}" }
+                                    span { class: "text-xs font-mono text-neutral-500 w-8 shrink-0 text-right", "#{idx + 1}" }
+                                    span { class: "w-14 shrink-0 inline-flex items-center justify-center px-1 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide {tag_class}", "{tag_label}" }
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-56 whitespace-nowrap text-right", "{time_label}" }
+                                    span { class: "flex-1 min-w-0 text-sm {accent_text} truncate", "{description}" }
                                     CopyStepButton {
                                         idx,
                                         start_seconds,
@@ -301,6 +300,50 @@ fn describe_step(action: &Action) -> String {
                 assist_text
             )
         }
+    }
+}
+
+/// Short label and badge classes for a step row based on what the step builds
+/// or upgrades.
+fn step_tag(action: &Action) -> (&'static str, &'static str) {
+    match action {
+        Action::Build { target, .. } => match target {
+            UnitKind::Mex(_) | UnitKind::CapMex(_) => (
+                "Mass",
+                "bg-emerald-900/50 text-emerald-300 border border-emerald-700/50",
+            ),
+            UnitKind::Pgen(_) => (
+                "Power",
+                "bg-yellow-900/30 text-yellow-300 border border-yellow-600/40",
+            ),
+            _ => (
+                "Build",
+                "bg-sky-900/30 text-sky-300 border border-sky-700/40",
+            ),
+        },
+        Action::Upgrade { .. } => (
+            "Upgrade",
+            "bg-red-900/30 text-red-300 border border-red-700/40",
+        ),
+    }
+}
+
+/// Border and text colour classes for a step row based on what the step builds
+/// or upgrades.
+fn step_accent(action: &Action) -> (&'static str, &'static str) {
+    match action {
+        Action::Build { target, .. } => match target {
+            UnitKind::Mex(_) | UnitKind::CapMex(_) => (
+                "border-emerald-700 hover:border-emerald-600",
+                "text-emerald-300",
+            ),
+            UnitKind::Pgen(_) => (
+                "border-yellow-600 hover:border-yellow-500",
+                "text-yellow-300",
+            ),
+            _ => ("border-sky-700 hover:border-sky-600", "text-sky-300"),
+        },
+        Action::Upgrade { .. } => ("border-red-700 hover:border-red-600", "text-red-300"),
     }
 }
 
