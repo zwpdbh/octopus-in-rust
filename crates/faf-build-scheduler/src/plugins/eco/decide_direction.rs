@@ -7,7 +7,7 @@ use bevy_ecs::prelude::*;
 
 use faf_blueprints::TechLevel;
 
-use super::observe::{EnergyMargin, MassIncomeVsTarget, MassProductionTier, Observation};
+use super::observe::{EnergyMargin, MassIncomeVsTarget, MassMargin, MassProductionTier, Observation};
 
 /// The currently chosen economic direction.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,9 +64,41 @@ pub(crate) fn eco_rules() -> Vec<Rule<EcoDirection>> {
             consequence: EcoDirection::Tech(TechLevel::T2),
         },
         Rule {
+            name: "recover from mass stall",
+            condition: |obs| obs.mass_margin == MassMargin::Stall,
+            consequence: EcoDirection::MassIncome,
+        },
+        Rule {
+            name: "tech to T3 when mass is high",
+            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech3,
+            consequence: EcoDirection::Tech(TechLevel::T3),
+        },
+        Rule {
+            name: "tech to T2 when mass is moderate",
+            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech2,
+            consequence: EcoDirection::Tech(TechLevel::T2),
+        },
+        Rule {
             name: "increase mass income until target reached",
             condition: |obs| obs.mass_income_vs_target == MassIncomeVsTarget::Below,
             consequence: EcoDirection::MassIncome,
+        },
+        Rule {
+            name: "spend excess mass",
+            condition: |obs| {
+                matches!(
+                    obs.mass_margin,
+                    MassMargin::Overflow | MassMargin::NeedToSpend
+                )
+            },
+            consequence: EcoDirection::BuildPower,
+        },
+        Rule {
+            name: "maintain a minimum idle build power pool",
+            condition: |obs| {
+                obs.idle_engineers.t1 + obs.idle_engineers.t2 + obs.idle_engineers.t3 < 2
+            },
+            consequence: EcoDirection::BuildPower,
         },
         Rule {
             name: "default to build power",
