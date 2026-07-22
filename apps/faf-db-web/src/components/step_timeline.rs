@@ -5,7 +5,7 @@ use crate::types::{Action, EcoSnapshot, StepReasoning, StepResult, UnitKind};
 use crate::utils::kind_label;
 
 /// Ordered list of scheduled steps rendered as a todo list. Each row shows the
-/// finish time on the left and a concise instruction like
+/// start/end time on the left and a concise instruction like
 /// "4 Eng T1 build Mex T2" on the right. Clicking a row toggles an inline
 /// details section that shows the economy state before the decision and the
 /// top candidate actions considered.
@@ -31,14 +31,22 @@ pub fn StepTimeline(
                         };
                         let description = describe_step(&step.action);
                         let row_class = if is_selected {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-800 transition-colors")
+                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-800 transition-colors cursor-pointer")
                         } else {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors")
+                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors cursor-pointer")
                         };
+                        let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
+                        let end_seconds = step.finish_time_seconds;
+                        let time_label = format!("{} -> {}", format_duration(start_seconds), format_duration(end_seconds));
+                        let pre_eco = pre_step_eco(&steps, &initial_eco, idx);
+                        let step_reasoning = reasoning.get(idx).cloned();
+
                         rsx! {
                             div { class: "flex flex-col",
-                                button {
+                                div {
                                     class: "{row_class}",
+                                    role: "button",
+                                    tabindex: "0",
                                     onclick: move |_| {
                                         if is_selected {
                                             selected_step.set(None);
@@ -47,21 +55,22 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-6 shrink-0 text-right", "#{idx + 1}" }
-                                    {
-                                        let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
-                                        let end_seconds = step.finish_time_seconds;
-                                        let time_label = format!("{} -> {}", format_duration(start_seconds), format_duration(end_seconds));
-                                        rsx! {
-                                            span { class: "text-xs font-mono text-sky-300 shrink-0 w-36 text-right", "{time_label}" }
-                                        }
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-36 text-right", "{time_label}" }
+                                    span { class: "flex-1 min-w-0 text-sm text-neutral-200 truncate", "{description}" }
+                                    CopyStepButton {
+                                        idx,
+                                        start_seconds,
+                                        end_seconds,
+                                        step: step.clone(),
+                                        reasoning: step_reasoning.clone(),
+                                        pre_eco: pre_eco.clone(),
                                     }
-                                    span { class: "flex-1 text-sm text-neutral-200 truncate", "{description}" }
                                 }
                                 if is_selected {
                                     StepDetails {
                                         step: step.clone(),
-                                        reasoning: reasoning.get(idx).cloned(),
-                                        pre_eco: pre_step_eco(&steps, &initial_eco, idx),
+                                        reasoning: step_reasoning,
+                                        pre_eco,
                                     }
                                 }
                             }
@@ -71,6 +80,82 @@ pub fn StepTimeline(
             }
         }
     }
+}
+
+#[component]
+fn CopyStepButton(
+    idx: usize,
+    start_seconds: f64,
+    end_seconds: f64,
+    step: StepResult,
+    reasoning: Option<StepReasoning>,
+    pre_eco: EcoSnapshot,
+) -> Element {
+    rsx! {
+        button {
+            class: "ml-2 px-1.5 py-0.5 text-xs rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white border border-neutral-700 transition-colors shrink-0",
+            title: "Copy step details for debug",
+            onclick: move |e: MouseEvent| {
+                e.stop_propagation();
+                let text = debug_step_text(idx, start_seconds, end_seconds, &step, reasoning.as_ref(), &pre_eco);
+                if let Some(window) = web_sys::window() {
+                    let _ = window.navigator().clipboard().write_text(&text);
+                }
+            },
+            "📋"
+        }
+    }
+}
+
+fn debug_step_text(
+    idx: usize,
+    start_seconds: f64,
+    end_seconds: f64,
+    step: &StepResult,
+    reasoning: Option<&StepReasoning>,
+    pre_eco: &EcoSnapshot,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Step #{}: {} -> {}",
+        idx + 1,
+        format_duration(start_seconds),
+        format_duration(end_seconds)
+    ));
+    lines.push(format!("Action: {}", describe_step(&step.action)));
+    lines.push("Economy before decision:".to_string());
+    lines.push(format!(
+        "  Mass:  {:.0}/{:.0}  net {:+.1}/s  income {:+.1}/s  expense {:+.1}/s",
+        pre_eco.mass_storage.value(),
+        pre_eco.mass_storage_cap.value(),
+        pre_eco.production_per_second_mass.value() - pre_eco.mass_drain.value(),
+        pre_eco.production_per_second_mass.value(),
+        pre_eco.mass_drain.value()
+    ));
+    let energy_expense = pre_eco.energy_drain.value() + pre_eco.maintenance_consumption_per_second_energy.value();
+    lines.push(format!(
+        "  Energy: {:.0}/{:.0}  net {:+.1}/s  income {:+.1}/s  expense {:+.1}/s",
+        pre_eco.energy_storage.value(),
+        pre_eco.energy_storage_cap.value(),
+        pre_eco.production_per_second_energy.value() - energy_expense,
+        pre_eco.production_per_second_energy.value(),
+        energy_expense
+    ));
+
+    if let Some(reasoning) = reasoning {
+        lines.push("Top candidates:".to_string());
+        for candidate in reasoning.top_candidates.iter() {
+            let marker = if candidate.action == step.action { " (chosen)" } else { "" };
+            lines.push(format!(
+                "  {:.1}  {}{}",
+                candidate.score,
+                describe_step(&candidate.action),
+                marker
+            ));
+        }
+    }
+
+    lines.join("\n")
 }
 
 #[component]
@@ -120,6 +205,13 @@ fn StepDetails(
     }
 }
 
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u32;
+    let mins = total / 60;
+    let secs = total % 60;
+    format!("{:02}:{:02}", mins, secs)
+}
+
 fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {
     if idx == 0 {
         initial_eco.clone()
@@ -131,35 +223,19 @@ fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> 
     }
 }
 
-fn format_duration(seconds: f64) -> String {
-    let total = seconds.max(0.0) as u32;
-    let mins = total / 60;
-    let secs = total % 60;
-    format!("{:02}:{:02}", mins, secs)
-}
-
 fn describe_step(action: &Action) -> String {
     match action {
         Action::Build { target, builder } => {
             let builder_text = describe_builders(builder);
             format!("{} build {}", builder_text, kind_label(target))
         }
-        Action::Upgrade {
-            from,
-            to,
-            assisted_by,
-        } => {
+        Action::Upgrade { from, to, assisted_by } => {
             let assist_text = if assisted_by.is_empty() {
                 String::new()
             } else {
                 format!(" (assisted by {})", describe_builders(assisted_by))
             };
-            format!(
-                "{} upgrade to {}{}",
-                kind_label(from),
-                kind_label(to),
-                assist_text
-            )
+            format!("{} upgrade to {}{}", kind_label(from), kind_label(to), assist_text)
         }
     }
 }
