@@ -37,7 +37,7 @@ pub fn StepTimeline(
                         };
                         let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
                         let end_seconds = step.finish_time_seconds;
-                        let time_label = format!("{} -> {}", format_duration(start_seconds), format_duration(end_seconds));
+                        let time_label = format_duration_range(start_seconds, end_seconds);
                         let pre_eco = pre_step_eco(&steps, &initial_eco, idx);
                         let step_reasoning = reasoning.get(idx).cloned();
 
@@ -55,7 +55,7 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-6 shrink-0 text-right", "#{idx + 1}" }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-36 text-right", "{time_label}" }
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-44 text-right", "{time_label}" }
                                     span { class: "flex-1 min-w-0 text-sm text-neutral-200 truncate", "{description}" }
                                     CopyStepButton {
                                         idx,
@@ -167,6 +167,22 @@ fn format_duration(seconds: f64) -> String {
     let mins = total / 60;
     let secs = total % 60;
     format!("{:02}:{:02}", mins, secs)
+}
+
+fn format_duration_range(start_seconds: f64, end_seconds: f64) -> String {
+    let duration = (end_seconds - start_seconds).max(0.0) as u32;
+    let duration_text = if duration < 60 {
+        format!("{}s", duration)
+    } else {
+        let mins = duration / 60;
+        let secs = duration % 60;
+        if secs == 0 {
+            format!("{} {}", mins, if mins == 1 { "min" } else { "mins" })
+        } else {
+            format!("{} {} {}s", mins, if mins == 1 { "min" } else { "mins" }, secs)
+        }
+    };
+    format!("{} -> {} ({})", format_duration(start_seconds), format_duration(end_seconds), duration_text)
 }
 
 fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {
