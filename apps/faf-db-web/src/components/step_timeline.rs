@@ -47,7 +47,7 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-6 shrink-0 text-right", "#{idx + 1}" }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0", "t+{step.finish_time_seconds:.0}s" }
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-14 text-right", "t+{step.finish_time_seconds:.0}s" }
                                     span { class: "flex-1 text-sm text-neutral-200 truncate", "{description}" }
                                 }
                                 if is_selected {
@@ -73,7 +73,7 @@ fn StepDetails(
     pre_eco: EcoSnapshot,
 ) -> Element {
     rsx! {
-        div { class: "mt-1 ml-6 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col lg:flex-row gap-4",
+        div { class: "mt-2 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col lg:flex-row gap-4",
             // Economy snapshot before the decision.
             div { class: "flex flex-col gap-1 lg:w-96 shrink-0",
                 h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Economy before decision" }
