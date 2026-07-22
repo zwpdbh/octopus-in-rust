@@ -46,7 +46,10 @@ pub fn Scheduler() -> Element {
             match response {
                 Ok(resp) if resp.ok() => match resp.json::<ScheduleWithReasoning>().await {
                     Ok(payload) => {
-                        state.set(ScheduleUiState::Success(payload.schedule, payload.reasoning));
+                        state.set(ScheduleUiState::Success(
+                            payload.schedule,
+                            payload.reasoning,
+                        ));
                     }
                     Err(e) => state.set(ScheduleUiState::Failed(format!("Invalid response: {e}"))),
                 },

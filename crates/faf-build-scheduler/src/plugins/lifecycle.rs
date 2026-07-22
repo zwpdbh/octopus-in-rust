@@ -128,10 +128,9 @@ pub fn run_to_completion_with_reasoning(
     app: &mut App,
 ) -> Result<ScheduleWithReasoning, ScheduleError> {
     let schedule = run_to_completion(app)?;
-    let reasoning = app
-        .world()
-        .resource::<StepReasoningLog>()
-        .0
-        .clone();
-    Ok(ScheduleWithReasoning { schedule, reasoning })
+    let reasoning = app.world().resource::<StepReasoningLog>().0.clone();
+    Ok(ScheduleWithReasoning {
+        schedule,
+        reasoning,
+    })
 }

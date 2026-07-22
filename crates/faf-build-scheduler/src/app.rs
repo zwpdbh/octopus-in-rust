@@ -10,9 +10,9 @@ use faf_sim_shared::EcoSnapshot;
 
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
+use crate::plugins::apply::StepReasoningLog;
 use crate::plugins::eco::decide_direction::{DirectionScores, PriorityTable};
 use crate::plugins::eco::observe::Observation;
-use crate::plugins::apply::StepReasoningLog;
 use crate::plugins::lifecycle::{
     run_to_completion, run_to_completion_with_reasoning, SchedulerLifecyclePlugin, SchedulerResult,
 };

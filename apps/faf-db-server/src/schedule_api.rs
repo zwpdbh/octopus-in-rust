@@ -104,19 +104,21 @@ pub async fn schedule(
                 mass_production: MassRate::from_raw(*target_mass_production),
                 tolerance: *tolerance,
             };
-            state.scheduler.schedule_eco_with_reasoning(&EcoScheduleRequest {
-                initial_eco: *initial_eco,
-                initial_inventory: initial_inventory.clone(),
-                target,
-                options: options.clone(),
-                config: SchedulerConfig {
-                    max_mex_count: *max_mex_count,
-                },
-            })
-            .map(|r| ScheduleResponse {
-                schedule: r.schedule,
-                reasoning: r.reasoning,
-            })
+            state
+                .scheduler
+                .schedule_eco_with_reasoning(&EcoScheduleRequest {
+                    initial_eco: *initial_eco,
+                    initial_inventory: initial_inventory.clone(),
+                    target,
+                    options: options.clone(),
+                    config: SchedulerConfig {
+                        max_mex_count: *max_mex_count,
+                    },
+                })
+                .map(|r| ScheduleResponse {
+                    schedule: r.schedule,
+                    reasoning: r.reasoning,
+                })
         }
         ScheduleApiRequest::Unit {
             initial_eco,
@@ -127,8 +129,8 @@ pub async fn schedule(
         } => state
             .scheduler
             .schedule_unit_with_reasoning(&UnitScheduleRequest {
-            initial_eco: *initial_eco,
-            initial_inventory: initial_inventory.clone(),
+                initial_eco: *initial_eco,
+                initial_inventory: initial_inventory.clone(),
                 target: target.clone(),
                 options: options.clone(),
                 config: SchedulerConfig {

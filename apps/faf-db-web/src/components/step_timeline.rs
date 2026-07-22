@@ -47,7 +47,14 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-6 shrink-0 text-right", "#{idx + 1}" }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-14 text-right", "t+{step.finish_time_seconds:.0}s" }
+                                    {
+                                        let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
+                                        let end_seconds = step.finish_time_seconds;
+                                        let time_label = format!("{} -> {}", format_duration(start_seconds), format_duration(end_seconds));
+                                        rsx! {
+                                            span { class: "text-xs font-mono text-sky-300 shrink-0 w-36 text-right", "{time_label}" }
+                                        }
+                                    }
                                     span { class: "flex-1 text-sm text-neutral-200 truncate", "{description}" }
                                 }
                                 if is_selected {
@@ -113,7 +120,6 @@ fn StepDetails(
     }
 }
 
-
 fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {
     if idx == 0 {
         initial_eco.clone()
@@ -125,19 +131,35 @@ fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> 
     }
 }
 
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u32;
+    let mins = total / 60;
+    let secs = total % 60;
+    format!("{:02}:{:02}", mins, secs)
+}
+
 fn describe_step(action: &Action) -> String {
     match action {
         Action::Build { target, builder } => {
             let builder_text = describe_builders(builder);
             format!("{} build {}", builder_text, kind_label(target))
         }
-        Action::Upgrade { from, to, assisted_by } => {
+        Action::Upgrade {
+            from,
+            to,
+            assisted_by,
+        } => {
             let assist_text = if assisted_by.is_empty() {
                 String::new()
             } else {
                 format!(" (assisted by {})", describe_builders(assisted_by))
             };
-            format!("{} upgrade to {}{}", kind_label(from), kind_label(to), assist_text)
+            format!(
+                "{} upgrade to {}{}",
+                kind_label(from),
+                kind_label(to),
+                assist_text
+            )
         }
     }
 }

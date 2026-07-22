@@ -215,10 +215,16 @@ mod tests {
                 "chosen action in reasoning should match the committed step"
             );
             assert!(
-                reasoning.top_candidates.iter().any(|c| c.action == reasoning.chosen),
+                reasoning
+                    .top_candidates
+                    .iter()
+                    .any(|c| c.action == reasoning.chosen),
                 "chosen action should appear among the top candidates"
             );
-            assert!(reasoning.top_candidates.len() <= 10, "reasoning capped at top 10");
+            assert!(
+                reasoning.top_candidates.len() <= 10,
+                "reasoning capped at top 10"
+            );
         }
     }
 }

@@ -13,7 +13,11 @@ pub fn EcoSnapshotView(snapshot: EcoSnapshot, #[props(default = false)] compact:
     let show_pct = use_signal(|| false);
     let padding = if compact { "p-2" } else { "p-3" };
     let gap = if compact { "gap-1.5" } else { "gap-2" };
-    let icon_size = if compact { "w-6 h-6 text-xs" } else { "w-7 h-7 text-sm" };
+    let icon_size = if compact {
+        "w-6 h-6 text-xs"
+    } else {
+        "w-7 h-7 text-sm"
+    };
 
     rsx! {
         div { class: "rounded border border-neutral-700 bg-neutral-900/80 {padding} flex flex-col {gap} select-none",
@@ -78,7 +82,11 @@ fn ResourceRow(
         format!("{:+.1}/s", net)
     };
 
-    let net_color = if negative { "text-red-400" } else { positive_class };
+    let net_color = if negative {
+        "text-red-400"
+    } else {
+        positive_class
+    };
     let storage_text = format!("{:.0}/{:.0}", storage, cap);
     let text_size = if compact { "text-xs" } else { "text-sm" };
     let bar_height = if compact { "h-2.5" } else { "h-3.5" };
