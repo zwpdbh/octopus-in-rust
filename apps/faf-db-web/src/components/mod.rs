@@ -1,6 +1,7 @@
 pub mod app_header;
 pub mod blueprint_graph;
 pub mod category_grid;
+pub mod eco_snapshot;
 pub mod construction_item_card;
 pub mod eco_panel;
 pub mod filter_bar;
@@ -20,6 +21,7 @@ pub mod unit_selector_modal;
 pub use app_header::AppHeader;
 pub use blueprint_graph::BlueprintGraph;
 pub use category_grid::CategoryGrid;
+pub use eco_snapshot::EcoSnapshotView;
 pub use construction_item_card::ConstructionItemCard;
 pub use eco_panel::EcoPanel;
 pub use filter_bar::FilterBar;

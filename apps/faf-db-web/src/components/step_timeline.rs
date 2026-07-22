@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::components::EcoSnapshotView;
 use crate::types::{Action, EcoSnapshot, StepReasoning, StepResult, UnitKind};
 use crate::utils::kind_label;
 
@@ -74,17 +75,9 @@ fn StepDetails(
     rsx! {
         div { class: "mt-1 ml-6 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col lg:flex-row gap-4",
             // Economy snapshot before the decision.
-            div { class: "flex flex-col gap-1 lg:w-64 shrink-0",
+            div { class: "flex flex-col gap-1 lg:w-96 shrink-0",
                 h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Economy before decision" }
-                div { class: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs",
-                    EcoRow { label: "Time", value: format!("{:.1}s", pre_eco.time.value()) }
-                    EcoRow { label: "Mass income", value: format!("{:.1}/s", pre_eco.production_per_second_mass.value()) }
-                    EcoRow { label: "Energy income", value: format!("{:.1}/s", pre_eco.production_per_second_energy.value()) }
-                    EcoRow { label: "Mass storage", value: format!("{:.0} / {:.0}", pre_eco.mass_storage.value(), pre_eco.mass_storage_cap.value()) }
-                    EcoRow { label: "Energy storage", value: format!("{:.0} / {:.0}", pre_eco.energy_storage.value(), pre_eco.energy_storage_cap.value()) }
-                    EcoRow { label: "Mass drain", value: format!("{:.1}/s", pre_eco.mass_drain.value()) }
-                    EcoRow { label: "Energy drain", value: format!("{:.1}/s", pre_eco.energy_drain.value()) }
-                }
+                EcoSnapshotView { snapshot: pre_eco }
             }
 
             // Candidate reasoning.
@@ -120,15 +113,6 @@ fn StepDetails(
     }
 }
 
-#[component]
-fn EcoRow(label: &'static str, value: String) -> Element {
-    rsx! {
-        div { class: "flex justify-between items-center py-0.5 border-b border-neutral-800/60",
-            span { class: "text-neutral-500", "{label}" }
-            span { class: "font-mono text-neutral-300", "{value}" }
-        }
-    }
-}
 
 fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {
     if idx == 0 {
