@@ -4,4 +4,7 @@
 //! frontend share a single serialized format. This module re-exports them for
 //! convenience.
 
-pub use faf_sim_shared::{Action, Schedule, ScheduleError, StepResult};
+pub use faf_sim_shared::{
+    Action, CandidateReasoning, Schedule, ScheduleError, ScheduleWithReasoning, StepReasoning,
+    StepResult,
+};

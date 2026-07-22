@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::components::{ScheduleFormState, ScheduleModeTab, StepTimeline};
-use crate::types::{ConstructionPlan, ScheduleUiState, UnitKind};
+use crate::types::{ConstructionPlan, ScheduleUiState, StepReasoning};
 use crate::utils::kind_label;
 
 /// Center column: scheduling result — summary, timeline, actions.
@@ -9,7 +9,8 @@ use crate::utils::kind_label;
 pub fn ScheduleResultPanel(
     state: Signal<ScheduleUiState>,
     form: Signal<ScheduleFormState>,
-    on_step_click: EventHandler<UnitKind>,
+    selected_step: Signal<Option<usize>>,
+    reasoning: Vec<StepReasoning>,
     on_open_map: EventHandler<()>,
     on_send_to_simulate: EventHandler<()>,
 ) -> Element {
@@ -44,7 +45,7 @@ pub fn ScheduleResultPanel(
                         p { class: "text-neutral-400 text-sm", "{message}" }
                     }
                 },
-                ScheduleUiState::Success(schedule) => {
+                ScheduleUiState::Success(schedule, reasoning) => {
                     let step_count = schedule.steps.len();
                     let total = schedule.total_time_seconds;
                     let form_state = form.read();
@@ -84,7 +85,12 @@ pub fn ScheduleResultPanel(
                             }
 
                             // Timeline.
-                            StepTimeline { steps: schedule.steps.clone(), on_click: on_step_click }
+                            StepTimeline {
+                                steps: schedule.steps.clone(),
+                                reasoning: reasoning.clone(),
+                                initial_eco: form.read().initial_snapshot(),
+                                selected_step,
+                            }
 
                             // Actions.
                             div { class: "flex items-center gap-2 shrink-0",

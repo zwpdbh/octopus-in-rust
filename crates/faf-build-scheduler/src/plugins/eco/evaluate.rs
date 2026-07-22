@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use super::decide_direction::CurrentEcoDirection;
+use super::decide_direction::{DirectionScores, PriorityTable};
 use crate::algorithms::greedy;
 use crate::components::CandidateAssignment;
 use crate::request::SearchOptions;
@@ -21,7 +21,8 @@ pub(crate) fn evaluate_eco_candidates_system(
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
-    direction: Res<CurrentEcoDirection>,
+    scores: Res<DirectionScores>,
+    priorities: Res<PriorityTable>,
     candidates: Query<(Entity, &CandidateAction, &CandidateAssignment)>,
 ) {
     if progress.done {
@@ -42,7 +43,8 @@ pub(crate) fn evaluate_eco_candidates_system(
             &action.0,
             &assignment.0,
             library,
-            direction.0,
+            &scores,
+            &priorities,
         );
         commands.entity(entity).insert(CandidateScore(score));
     }

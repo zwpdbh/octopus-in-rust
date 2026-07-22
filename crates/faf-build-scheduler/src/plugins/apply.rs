@@ -12,11 +12,15 @@ use crate::request::SearchOptions;
 use crate::resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
-use crate::result::{Action, ScheduleError, StepResult};
+use crate::result::{Action, CandidateReasoning, ScheduleError, StepReasoning, StepResult};
 use crate::search::{
     build_schedule, build_task_for_action, compute_current_tech_level, BlueprintLibraryRef,
     CandidateAction, CandidateScore, SearchTarget,
 };
+
+/// Log of per-step candidate reasoning captured during the search.
+#[derive(Resource, Default)]
+pub(crate) struct StepReasoningLog(pub Vec<StepReasoning>);
 
 /// Apply the best-scored candidate by committing it and updating the search state.
 pub(crate) fn apply_best_system(
@@ -27,6 +31,7 @@ pub(crate) fn apply_best_system(
     mut progress: ResMut<SearchProgress>,
     mut task_log: ResMut<TaskLog>,
     mut step_log: ResMut<StepLog>,
+    mut reasoning_log: ResMut<StepReasoningLog>,
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
@@ -180,6 +185,26 @@ pub(crate) fn apply_best_system(
         finish_time_seconds: finish_time.value(),
         builder_count: assigned.len(),
         economy: final_task.economy.clone(),
+    });
+
+    // Capture the top-scoring candidates considered for this step.
+    let mut top_candidates: Vec<CandidateReasoning> = candidates
+        .iter()
+        .map(|(_, action, _, score)| CandidateReasoning {
+            action: action.0.clone(),
+            score: score.0,
+        })
+        .collect();
+    top_candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_candidates.truncate(10);
+    reasoning_log.0.push(StepReasoning {
+        step_id: task_id,
+        chosen: best_action.0.clone(),
+        top_candidates,
     });
 
     progress.next_id += 1;

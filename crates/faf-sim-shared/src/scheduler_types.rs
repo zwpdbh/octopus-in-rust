@@ -45,6 +45,34 @@ pub struct Schedule {
     pub steps: Vec<StepResult>,
 }
 
+/// A candidate action that was considered for a scheduling step, together with
+/// the score it received.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateReasoning {
+    pub action: Action,
+    pub score: f64,
+}
+
+/// Reasoning data for a single committed scheduling step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepReasoning {
+    /// Identifier of the committed step (matches the task id assigned during
+    /// search).
+    pub step_id: u32,
+    /// The action that was actually chosen.
+    pub chosen: Action,
+    /// Highest-scoring candidates considered for this step, sorted from best to
+    /// worst.
+    pub top_candidates: Vec<CandidateReasoning>,
+}
+
+/// A schedule plus the per-step candidate reasoning used to produce it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleWithReasoning {
+    pub schedule: Schedule,
+    pub reasoning: Vec<StepReasoning>,
+}
+
 /// Errors that can be returned by the scheduler.
 #[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 pub enum ScheduleError {

@@ -3,17 +3,17 @@ use dioxus_router::use_navigator;
 use gloo_net::http::Request;
 
 use crate::components::{
-    AppHeader, GraphPopup, ScheduleFormState, ScheduleRequestPanel, ScheduleResultPanel, UnitDetail,
+    AppHeader, GraphPopup, ScheduleFormState, ScheduleRequestPanel, ScheduleResultPanel,
 };
 use crate::route::Route;
 use crate::state::save_plan_to_storage;
 use crate::types::{
-    BlueprintGraphResponse, Schedule, ScheduleApiError, ScheduleUiState, UnitKind, UnitSummary,
+    BlueprintGraphResponse, ScheduleApiError, ScheduleUiState, ScheduleWithReasoning, UnitSummary,
 };
 
 #[component]
 pub fn Scheduler() -> Element {
-    // Dependency map data: picker list, popup, and step-click summaries.
+    // Dependency map data: picker list, popup, and unit summaries.
     let graph = use_resource(|| async move {
         Request::get("/api/blueprint-graph")
             .send()
@@ -27,13 +27,14 @@ pub fn Scheduler() -> Element {
     let form = use_signal(ScheduleFormState::default);
     let mut state = use_signal(|| ScheduleUiState::Idle);
     let mut show_map = use_signal(|| false);
-    let mut selected = use_signal(|| None::<UnitSummary>);
+    let mut selected_step = use_signal(|| None::<usize>);
 
     let navigator = use_navigator();
 
     let on_compute = move |_| {
         let request = form.read().to_request();
         state.set(ScheduleUiState::Computing);
+        selected_step.set(None);
         spawn(async move {
             let response = match Request::post("/api/schedule").json(&request) {
                 Ok(builder) => builder.send().await,
@@ -43,8 +44,10 @@ pub fn Scheduler() -> Element {
                 }
             };
             match response {
-                Ok(resp) if resp.ok() => match resp.json::<Schedule>().await {
-                    Ok(schedule) => state.set(ScheduleUiState::Success(schedule)),
+                Ok(resp) if resp.ok() => match resp.json::<ScheduleWithReasoning>().await {
+                    Ok(payload) => {
+                        state.set(ScheduleUiState::Success(payload.schedule, payload.reasoning));
+                    }
                     Err(e) => state.set(ScheduleUiState::Failed(format!("Invalid response: {e}"))),
                 },
                 Ok(resp) => {
@@ -81,33 +84,13 @@ pub fn Scheduler() -> Element {
         })
         .unwrap_or_default();
 
-    // Timeline step clicks carry an abstract `UnitKind`; map it to a display
-    // summary, preferring UEF nodes as the canonical representative.
-    let kind_to_summary = graph_data
-        .as_ref()
-        .map(|data| {
-            let mut map = std::collections::HashMap::<UnitKind, UnitSummary>::new();
-            for node in data.nodes.iter().rev() {
-                if let Some(summary) = data.summaries.get(&node.id) {
-                    let entry = map
-                        .entry(node.kind.clone())
-                        .or_insert_with(|| summary.clone());
-                    if node.faction == "UEF" {
-                        *entry = summary.clone();
-                    }
-                }
-            }
-            map
-        })
-        .unwrap_or_default();
-    let on_step_click = move |kind: UnitKind| {
-        if let Some(summary) = kind_to_summary.get(&kind) {
-            selected.set(Some(summary.clone()));
-        }
+    let reasoning = match &*state.read() {
+        ScheduleUiState::Success(_, reasoning) => reasoning.clone(),
+        _ => Vec::new(),
     };
 
     let on_send_to_simulate = move |_| {
-        if let ScheduleUiState::Success(schedule) = &*state.read() {
+        if let ScheduleUiState::Success(schedule, _) = &*state.read() {
             save_plan_to_storage(&schedule.plan);
             navigator.push(Route::SimulateBuild {});
         }
@@ -122,24 +105,20 @@ pub fn Scheduler() -> Element {
             main { class: "flex-1 overflow-hidden p-6 flex flex-col",
                 h2 { class: "text-xl font-semibold mb-4 flex-shrink-0", "Scheduler" }
 
-                div { class: "flex gap-4 flex-1 min-h-0",
+                div { class: "flex gap-4 flex-1 min-h-0 min-w-0",
                     // Left: request form.
                     div { class: "w-[340px] flex-shrink-0 overflow-auto",
                         ScheduleRequestPanel { form, candidates, id_to_kind, computing, on_compute }
                     }
 
-                    // Center: result.
+                    // Center: result with inline step details.
                     ScheduleResultPanel {
                         state,
                         form,
-                        on_step_click,
+                        selected_step,
+                        reasoning,
                         on_open_map: move |_| show_map.set(true),
                         on_send_to_simulate,
-                    }
-
-                    // Right: details of the clicked unit/step/graph node.
-                    div { class: "w-96 flex-shrink-0 border border-neutral-800 rounded bg-neutral-900 p-4 overflow-auto",
-                        UnitDetail { selected }
                     }
                 }
             }
@@ -149,7 +128,7 @@ pub fn Scheduler() -> Element {
                     open: *show_map.read(),
                     data,
                     focus: None,
-                    on_node_click: move |summary: UnitSummary| selected.set(Some(summary)),
+                    on_node_click: move |_summary: UnitSummary| {},
                     on_close: move |_| show_map.set(false),
                 }
             }

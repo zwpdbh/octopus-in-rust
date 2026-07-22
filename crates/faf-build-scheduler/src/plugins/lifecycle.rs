@@ -5,8 +5,9 @@ use bevy_ecs::prelude::*;
 use bevy_state::app::StatesPlugin;
 use bevy_state::prelude::*;
 
+use crate::plugins::apply::StepReasoningLog;
 use crate::resources::SearchProgress;
-use crate::result::{Schedule, ScheduleError};
+use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 
 /// Lifecycle states of a scheduling search.
 ///
@@ -119,4 +120,18 @@ pub fn run_to_completion(app: &mut App) -> Result<Schedule, ScheduleError> {
         .result
         .clone()
         .unwrap_or(Err(ScheduleError::GoalUnreachable))
+}
+
+/// Run `app` until the search has produced a result, returning both the schedule
+/// and the per-step candidate reasoning captured during the search.
+pub fn run_to_completion_with_reasoning(
+    app: &mut App,
+) -> Result<ScheduleWithReasoning, ScheduleError> {
+    let schedule = run_to_completion(app)?;
+    let reasoning = app
+        .world()
+        .resource::<StepReasoningLog>()
+        .0
+        .clone();
+    Ok(ScheduleWithReasoning { schedule, reasoning })
 }

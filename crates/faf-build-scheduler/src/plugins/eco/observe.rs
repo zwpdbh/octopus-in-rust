@@ -27,6 +27,56 @@ pub(crate) const TECH2_PRIORITY_MASS_THRESHOLD: f64 = 35.0;
 /// Mass income threshold above which T3 tech upgrades become viable.
 pub(crate) const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
 
+/// Compute the energy margin for a snapshot without needing unit state.
+pub(crate) fn compute_energy_margin(eco: &EcoSnapshot) -> EnergyMargin {
+    let energy_demand = eco.maintenance_consumption_per_second_energy + eco.energy_drain;
+    let net_energy = eco.production_per_second_energy - energy_demand;
+
+    if eco.energy_storage.value() <= 0.0 && net_energy.value() < 0.0 {
+        EnergyMargin::Stalled
+    } else if net_energy.value() < 0.0 {
+        let seconds_to_empty = eco.energy_storage.value() / -net_energy.value();
+        if seconds_to_empty <= THIN_SECONDS_THRESHOLD {
+            EnergyMargin::Thin
+        } else {
+            EnergyMargin::Unhealthy
+        }
+    } else {
+        let production_ratio = if energy_demand.value() > 0.0 {
+            eco.production_per_second_energy.value() / energy_demand.value()
+        } else {
+            f64::INFINITY
+        };
+        if production_ratio > SURPLUS_PRODUCTION_RATIO {
+            EnergyMargin::Surplus
+        } else {
+            EnergyMargin::Healthy
+        }
+    }
+}
+
+/// Compute the mass margin for a snapshot without needing unit state.
+pub(crate) fn compute_mass_margin(eco: &EcoSnapshot) -> MassMargin {
+    let net_mass = eco.production_per_second_mass - eco.mass_drain;
+    let mass_storage_ratio = if eco.mass_storage_cap.value() > 0.0 {
+        eco.mass_storage.value() / eco.mass_storage_cap.value()
+    } else {
+        0.0
+    };
+
+    if eco.mass_storage.value() <= 0.0 && net_mass.value() < 0.0 {
+        MassMargin::Stall
+    } else if mass_storage_ratio >= 1.0 && net_mass.value() > 0.0 {
+        MassMargin::Overflow
+    } else if mass_storage_ratio > MASS_NEED_TO_SPEND_THRESHOLD {
+        MassMargin::NeedToSpend
+    } else if mass_storage_ratio < MASS_GOOD_THRESHOLD {
+        MassMargin::Good
+    } else {
+        MassMargin::Normal
+    }
+}
+
 /// Symbolic observation of the current scheduler state.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct Observation {
@@ -157,51 +207,8 @@ fn observe(
 ) -> Observation {
     use faf_blueprints::{TechLevel, UnitKind};
 
-    let energy_demand = eco.maintenance_consumption_per_second_energy + eco.energy_drain;
-    let net_energy = eco.production_per_second_energy - energy_demand;
-
-    // Classify by how soon the economy will stall, then by how much production
-    // exceeds demand when there is no stall risk.
-    let energy_margin = if eco.energy_storage.value() <= 0.0 && net_energy.value() < 0.0 {
-        EnergyMargin::Stalled
-    } else if net_energy.value() < 0.0 {
-        let seconds_to_empty = eco.energy_storage.value() / -net_energy.value();
-        if seconds_to_empty <= THIN_SECONDS_THRESHOLD {
-            EnergyMargin::Thin
-        } else {
-            EnergyMargin::Unhealthy
-        }
-    } else {
-        let production_ratio = if energy_demand.value() > 0.0 {
-            eco.production_per_second_energy.value() / energy_demand.value()
-        } else {
-            f64::INFINITY
-        };
-        if production_ratio > SURPLUS_PRODUCTION_RATIO {
-            EnergyMargin::Surplus
-        } else {
-            EnergyMargin::Healthy
-        }
-    };
-
-    let net_mass = eco.production_per_second_mass - eco.mass_drain;
-    let mass_storage_ratio = if eco.mass_storage_cap.value() > 0.0 {
-        eco.mass_storage.value() / eco.mass_storage_cap.value()
-    } else {
-        0.0
-    };
-
-    let mass_margin = if eco.mass_storage.value() <= 0.0 && net_mass.value() < 0.0 {
-        MassMargin::Stall
-    } else if mass_storage_ratio >= 1.0 && net_mass.value() > 0.0 {
-        MassMargin::Overflow
-    } else if mass_storage_ratio > MASS_NEED_TO_SPEND_THRESHOLD {
-        MassMargin::NeedToSpend
-    } else if mass_storage_ratio < MASS_GOOD_THRESHOLD {
-        MassMargin::Good
-    } else {
-        MassMargin::Normal
-    };
+    let energy_margin = compute_energy_margin(eco);
+    let mass_margin = compute_mass_margin(eco);
 
     let mass_income_vs_target = if goal.is_reached(eco) {
         MassIncomeVsTarget::Reached

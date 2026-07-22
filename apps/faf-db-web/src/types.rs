@@ -7,7 +7,9 @@ pub use faf_dioxus_ui::components::GraphData;
 pub use faf_sim_shared::plan_types::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
-pub use faf_sim_shared::{Action, EcoSnapshot, Schedule, StepResult};
+pub use faf_sim_shared::{
+    Action, EcoSnapshot, Schedule, ScheduleWithReasoning, StepReasoning, StepResult,
+};
 
 // ---------------------------------------------------------------------------
 // Scheduling wire types (from faf-sim-shared's /api/schedule protocol).
@@ -71,7 +73,7 @@ pub struct ScheduleApiError {
 pub enum ScheduleUiState {
     Idle,
     Computing,
-    Success(Schedule),
+    Success(Schedule, Vec<StepReasoning>),
     Failed(String),
 }
 

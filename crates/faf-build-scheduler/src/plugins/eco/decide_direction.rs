@@ -1,132 +1,156 @@
 //! Decide-direction lifecycle step.
 //!
-//! Applies a rule engine to the symbolic [`Observation`] and chooses an economic
-//! direction for the current scheduling step.
+//! Computes per-direction confidence scores from the symbolic [`Observation`].
 
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::TechLevel;
 
-use super::observe::{EnergyMargin, MassIncomeVsTarget, MassMargin, MassProductionTier, Observation};
+use super::observe::{
+    EnergyMargin, MassIncomeVsTarget, MassMargin, MassProductionTier, Observation,
+};
 
-/// The currently chosen economic direction.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CurrentEcoDirection(pub EcoDirection);
+/// Confidence scores (0–100) for each economic direction.
+///
+/// Higher scores mean the observation suggests that direction is more urgent or
+/// more appropriate right now.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DirectionScores {
+    /// Confidence that the next step should increase energy income.
+    pub energy: u8,
+    /// Confidence that the next step should increase mass income.
+    pub mass_income: u8,
+    /// Confidence that the next step should increase build power (engineers).
+    pub build_power: u8,
+    /// Confidence that the next step should advance to T2 tech.
+    pub tech_t2: u8,
+    /// Confidence that the next step should advance to T3 tech.
+    pub tech_t3: u8,
+}
 
-impl Default for CurrentEcoDirection {
-    fn default() -> Self {
-        Self(EcoDirection::MassIncome)
+/// Compute confidence scores from the current observation.
+pub(crate) fn compute_direction_scores(obs: &Observation) -> DirectionScores {
+    DirectionScores {
+        energy: energy_score(obs),
+        mass_income: mass_income_score(obs),
+        build_power: build_power_score(obs),
+        tech_t2: tech_score(obs, TechLevel::T2),
+        tech_t3: tech_score(obs, TechLevel::T3),
     }
 }
 
-/// Economic direction the scheduler should emphasize for the current step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EcoDirection {
-    /// Advance tech by upgrading to the given tier.
-    Tech(TechLevel),
-    /// Increase mass income as efficiently as possible.
-    MassIncome,
-    /// Increase available build power.
-    BuildPower,
-    /// Increase energy income to avoid stalls.
-    Energy,
+fn energy_score(obs: &Observation) -> u8 {
+    match obs.energy_margin {
+        EnergyMargin::Stalled => 100,
+        EnergyMargin::Thin => 90,
+        EnergyMargin::Unhealthy => 70,
+        EnergyMargin::Healthy => 20,
+        EnergyMargin::Surplus => 0,
+    }
 }
 
-/// A single condition → consequence rule.
-pub(crate) struct Rule<Consequence> {
-    #[allow(dead_code)]
-    pub name: &'static str,
-    pub condition: fn(&Observation) -> bool,
-    pub consequence: Consequence,
+fn mass_income_score(obs: &Observation) -> u8 {
+    match obs.mass_margin {
+        MassMargin::Stall => 100,
+        _ if obs.mass_income_vs_target == MassIncomeVsTarget::Below => 100,
+        _ => 0,
+    }
 }
 
-/// The default eco rule engine.
-pub(crate) fn eco_rules() -> Vec<Rule<EcoDirection>> {
-    vec![
-        Rule {
-            name: "prevent energy stall or deficit",
-            condition: |obs| {
-                matches!(
-                    obs.energy_margin,
-                    EnergyMargin::Thin | EnergyMargin::Unhealthy | EnergyMargin::Stalled
-                )
-            },
-            consequence: EcoDirection::Energy,
-        },
-        Rule {
-            name: "tech to T3 when mass is high",
-            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech3,
-            consequence: EcoDirection::Tech(TechLevel::T3),
-        },
-        Rule {
-            name: "tech to T2 when mass is moderate",
-            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech2,
-            consequence: EcoDirection::Tech(TechLevel::T2),
-        },
-        Rule {
-            name: "recover from mass stall",
-            condition: |obs| obs.mass_margin == MassMargin::Stall,
-            consequence: EcoDirection::MassIncome,
-        },
-        Rule {
-            name: "tech to T3 when mass is high",
-            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech3,
-            consequence: EcoDirection::Tech(TechLevel::T3),
-        },
-        Rule {
-            name: "tech to T2 when mass is moderate",
-            condition: |obs| obs.mass_production_tier == MassProductionTier::AtTech2,
-            consequence: EcoDirection::Tech(TechLevel::T2),
-        },
-        Rule {
-            name: "increase mass income until target reached",
-            condition: |obs| obs.mass_income_vs_target == MassIncomeVsTarget::Below,
-            consequence: EcoDirection::MassIncome,
-        },
-        Rule {
-            name: "spend excess mass",
-            condition: |obs| {
-                matches!(
-                    obs.mass_margin,
-                    MassMargin::Overflow | MassMargin::NeedToSpend
-                )
-            },
-            consequence: EcoDirection::BuildPower,
-        },
-        Rule {
-            name: "maintain a minimum idle build power pool",
-            condition: |obs| {
-                obs.idle_engineers.t1 + obs.idle_engineers.t2 + obs.idle_engineers.t3 < 2
-            },
-            consequence: EcoDirection::BuildPower,
-        },
-        Rule {
-            name: "default to build power",
-            condition: |_| true,
-            consequence: EcoDirection::BuildPower,
-        },
-    ]
+fn build_power_score(obs: &Observation) -> u8 {
+    let idle = obs.idle_engineers.t1 + obs.idle_engineers.t2 + obs.idle_engineers.t3;
+    if idle < 2 {
+        30
+    } else {
+        0
+    }
 }
 
-/// Apply the first matching rule from `rules` to `observation`.
-fn decide<Consequence: Clone>(
-    rules: &[Rule<Consequence>],
-    observation: &Observation,
-) -> Option<Consequence> {
-    rules
-        .iter()
-        .find(|rule| (rule.condition)(observation))
-        .map(|rule| rule.consequence.clone())
+fn tech_score(obs: &Observation, desired: TechLevel) -> u8 {
+    let tier_reached = match desired {
+        TechLevel::T2 => obs.mass_production_tier == MassProductionTier::AtTech2,
+        TechLevel::T3 => obs.mass_production_tier == MassProductionTier::AtTech3,
+        _ => false,
+    };
+    if tier_reached && obs.mass_income_vs_target != MassIncomeVsTarget::Below {
+        match desired {
+            TechLevel::T3 => 100,
+            TechLevel::T2 => 80,
+            _ => 0,
+        }
+    } else {
+        0
+    }
 }
 
-/// Decide the eco direction from the current observation and write it to the
-/// [`CurrentEcoDirection`] resource.
+/// Priority multipliers (1–10) for the three resource categories.
+///
+/// A higher value means actions that produce that resource are more favored.
+/// The default is 5 (neutral). Scoring normalizes by dividing by 5, so the
+/// default multiplier is 1.0.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PriorityTable {
+    /// Priority for mass-income actions.
+    pub mass: u8,
+    /// Priority for energy-income actions.
+    pub energy: u8,
+    /// Priority for build-power (engineer) actions.
+    pub build_power: u8,
+}
+
+/// Compute priority weights from the current observation.
+///
+/// * Mass is boosted when storage is low/`Stall` and reduced when it is high.
+/// * Energy is boosted when the margin is thin/stalling and reduced when
+///   strongly positive.
+/// * Build power is boosted when mass is overflowing (so we spend mass on
+///   engineers) and reduced when mass is scarce.
+///
+/// The priority is applied to the whole score, so the values are kept within a
+/// range that cannot flip a higher-confidence direction behind a lower one.
+pub(crate) fn compute_priority_table(obs: &Observation) -> PriorityTable {
+    let mass = match obs.mass_margin {
+        MassMargin::Stall => 10,
+        MassMargin::Good => 7,
+        MassMargin::Normal => 5,
+        MassMargin::NeedToSpend => 3,
+        MassMargin::Overflow => 1,
+    };
+
+    let energy = match obs.energy_margin {
+        EnergyMargin::Stalled => 10,
+        EnergyMargin::Thin => 9,
+        EnergyMargin::Unhealthy => 7,
+        EnergyMargin::Healthy => 4,
+        EnergyMargin::Surplus => 1,
+    };
+
+    // Build-power priority is driven by mass storage: when mass is overflowing
+    // we want to spend it on engineers; when mass is scarce we cannot afford
+    // more build power.
+    let build_power = match obs.mass_margin {
+        MassMargin::Overflow => 10,
+        MassMargin::NeedToSpend => 8,
+        MassMargin::Normal => 5,
+        MassMargin::Good => 3,
+        MassMargin::Stall => 1,
+    };
+
+    PriorityTable {
+        mass,
+        energy,
+        build_power,
+    }
+}
+
+/// Compute per-direction confidence scores and priority weights from the
+/// current observation and write them to the [`DirectionScores`] and
+/// [`PriorityTable`] resources.
 pub(crate) fn decide_eco_direction_system(
     observation: Res<Observation>,
-    mut direction: ResMut<CurrentEcoDirection>,
+    mut scores: ResMut<DirectionScores>,
+    mut priorities: ResMut<PriorityTable>,
 ) {
-    let rules = eco_rules();
-    if let Some(chosen) = decide(&rules, &observation) {
-        direction.0 = chosen;
-    }
+    *scores = compute_direction_scores(&observation);
+    *priorities = compute_priority_table(&observation);
 }

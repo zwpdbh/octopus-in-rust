@@ -10,7 +10,7 @@ use axum::Json;
 use faf_blueprints::UnitKind;
 use faf_build_scheduler::{
     EcoScheduleRequest, EcoTarget, Schedule, ScheduleError, SchedulerConfig, SearchOptions,
-    UnitScheduleRequest,
+    StepReasoning, UnitScheduleRequest,
 };
 use faf_quantities::MassRate;
 use faf_sim_shared::EcoSnapshot;
@@ -64,7 +64,14 @@ pub struct ScheduleApiError {
     pub error: String,
 }
 
-type ApiResult = Result<Json<Schedule>, (StatusCode, Json<ScheduleApiError>)>;
+/// Scheduling response with the computed build order and per-step reasoning.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduleResponse {
+    pub schedule: Schedule,
+    pub reasoning: Vec<StepReasoning>,
+}
+
+type ApiResult = Result<Json<ScheduleResponse>, (StatusCode, Json<ScheduleApiError>)>;
 
 fn api_error(
     status: StatusCode,
@@ -97,7 +104,7 @@ pub async fn schedule(
                 mass_production: MassRate::from_raw(*target_mass_production),
                 tolerance: *tolerance,
             };
-            state.scheduler.schedule_eco(&EcoScheduleRequest {
+            state.scheduler.schedule_eco_with_reasoning(&EcoScheduleRequest {
                 initial_eco: *initial_eco,
                 initial_inventory: initial_inventory.clone(),
                 target,
@@ -106,6 +113,10 @@ pub async fn schedule(
                     max_mex_count: *max_mex_count,
                 },
             })
+            .map(|r| ScheduleResponse {
+                schedule: r.schedule,
+                reasoning: r.reasoning,
+            })
         }
         ScheduleApiRequest::Unit {
             initial_eco,
@@ -113,19 +124,25 @@ pub async fn schedule(
             target,
             options,
             max_mex_count,
-        } => state.scheduler.schedule_unit(&UnitScheduleRequest {
+        } => state
+            .scheduler
+            .schedule_unit_with_reasoning(&UnitScheduleRequest {
             initial_eco: *initial_eco,
             initial_inventory: initial_inventory.clone(),
-            target: target.clone(),
-            options: options.clone(),
-            config: SchedulerConfig {
-                max_mex_count: *max_mex_count,
-            },
-        }),
+                target: target.clone(),
+                options: options.clone(),
+                config: SchedulerConfig {
+                    max_mex_count: *max_mex_count,
+                },
+            })
+            .map(|r| ScheduleResponse {
+                schedule: r.schedule,
+                reasoning: r.reasoning,
+            }),
     }));
 
     match result {
-        Ok(Ok(schedule)) => Ok(Json(schedule)),
+        Ok(Ok(response)) => Ok(Json(response)),
         Ok(Err(err)) => Err(api_error(status_for(&err), err.to_string())),
         Err(_) => Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,

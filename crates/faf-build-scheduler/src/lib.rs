@@ -20,7 +20,7 @@ pub mod util;
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use config::SchedulerConfig;
 pub use plugins::{
-    eco::decide_direction::{CurrentEcoDirection, EcoDirection},
+    eco::decide_direction::{DirectionScores, PriorityTable},
     eco::observe::{EngineerCounts, FactoryTier, Observation},
     run_to_completion, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
     SchedulerSet, SchedulerState, UnitSchedulingPlugin,
@@ -32,7 +32,10 @@ pub use request::{
 pub use resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
-pub use result::{Action, Schedule, ScheduleError, StepResult};
+pub use result::{
+    Action, CandidateReasoning, Schedule, ScheduleError, ScheduleWithReasoning, StepReasoning,
+    StepResult,
+};
 pub use scheduler::Scheduler;
 
 #[cfg(test)]
@@ -175,5 +178,47 @@ mod tests {
             schedule.final_eco.production_per_second_mass >= 15.0,
             "final mass production should meet target"
         );
+    }
+
+    #[test]
+    fn greedy_eco_schedule_with_reasoning_matches_schedule() {
+        let library = test_library();
+        let scheduler = Scheduler::new(library);
+        let request = EcoScheduleRequest {
+            initial_eco: default_eco(),
+            initial_inventory: vec![UnitKind::Commander],
+            target: EcoTarget {
+                mass_production: MassRate::from_raw(7.0),
+                tolerance: 1.0,
+            },
+            options: SearchOptions::default(),
+            config: SchedulerConfig::default(),
+        };
+
+        let result = scheduler
+            .schedule_eco_with_reasoning(&request)
+            .expect("schedule with reasoning should succeed");
+
+        assert_eq!(
+            result.reasoning.len(),
+            result.schedule.steps.len(),
+            "every committed step should have reasoning"
+        );
+
+        for (step, reasoning) in result.schedule.steps.iter().zip(result.reasoning.iter()) {
+            assert!(
+                !reasoning.top_candidates.is_empty(),
+                "reasoning should list at least one candidate"
+            );
+            assert_eq!(
+                reasoning.chosen, step.action,
+                "chosen action in reasoning should match the committed step"
+            );
+            assert!(
+                reasoning.top_candidates.iter().any(|c| c.action == reasoning.chosen),
+                "chosen action should appear among the top candidates"
+            );
+            assert!(reasoning.top_candidates.len() <= 10, "reasoning capped at top 10");
+        }
     }
 }

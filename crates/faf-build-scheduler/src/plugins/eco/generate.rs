@@ -2,16 +2,15 @@
 
 use bevy_ecs::prelude::*;
 
-use super::decide_direction::CurrentEcoDirection;
 use crate::algorithms::greedy;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, IdleBuilderQuery};
 
-/// Spawn candidate actions for increasing mass income.
+/// Spawn all candidate eco actions.
 ///
-/// The actual greedy decision-making lives in
+/// The actual decision-making lives in
 /// [`greedy::spawn_eco_candidates`](crate::algorithms::greedy::spawn_eco_candidates);
 /// this system is only ECS glue.
 pub(crate) fn generate_eco_candidates_system(
@@ -21,7 +20,6 @@ pub(crate) fn generate_eco_candidates_system(
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
-    direction: Res<CurrentEcoDirection>,
     units: Query<&UnitKindComp>,
     idle_builders: IdleBuilderQuery,
 ) {
@@ -35,12 +33,5 @@ pub(crate) fn generate_eco_candidates_system(
     }
 
     let library = &*library.0;
-    greedy::spawn_eco_candidates(
-        &mut commands,
-        library,
-        &config,
-        direction.0,
-        &units,
-        &idle_builders,
-    );
+    greedy::spawn_eco_candidates(&mut commands, library, &config, &units, &idle_builders);
 }

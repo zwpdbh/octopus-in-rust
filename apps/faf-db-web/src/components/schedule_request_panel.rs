@@ -22,7 +22,7 @@ pub enum ScheduleModeTab {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleFormState {
     pub mode: ScheduleModeTab,
-    /// Eco mode: target mass income in /s (slider range 100–900).
+    /// Eco mode: target mass income in /s (positive integer, stepper ±20).
     pub target_mass_production: f64,
     /// Eco mode: target tolerance.
     pub tolerance: f64,
@@ -41,7 +41,7 @@ impl Default for ScheduleFormState {
     fn default() -> Self {
         Self {
             mode: ScheduleModeTab::Eco,
-            target_mass_production: 240.0,
+            target_mass_production: 50.0,
             tolerance: 1.0,
             unit_target: None,
             initial_mass_production: 1.0,
@@ -56,7 +56,7 @@ impl Default for ScheduleFormState {
 }
 
 impl ScheduleFormState {
-    fn initial_snapshot(&self) -> EcoSnapshot {
+    pub fn initial_snapshot(&self) -> EcoSnapshot {
         use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
 
         EcoSnapshot {
@@ -185,14 +185,12 @@ pub fn ScheduleRequestPanel(
 
             match mode {
                 ScheduleModeTab::Eco => rsx! {
-                    SliderField {
+                    IntegerStepper {
                         label: "Target mass income",
                         value: form.read().target_mass_production,
-                        min: 100.0,
-                        max: 900.0,
-                        unit: "/s",
+                        step: 20.0,
                         disabled: computing,
-                        on_change: move |v: f64| form.write().target_mass_production = v.clamp(100.0, 900.0),
+                        on_change: move |v: f64| form.write().target_mass_production = v.max(1.0),
                     }
                     NumberField {
                         label: "Tolerance",
@@ -324,6 +322,52 @@ fn ModeTab(label: &'static str, active: bool, onclick: EventHandler<MouseEvent>)
             },
             onclick: move |e| onclick.call(e),
             "{label}"
+        }
+    }
+}
+
+/// A compact labelled integer input with up/down stepper buttons.
+#[component]
+fn IntegerStepper(
+    label: &'static str,
+    value: f64,
+    #[props(default = 20.0)] step: f64,
+    #[props(default = false)] disabled: bool,
+    on_change: EventHandler<f64>,
+) -> Element {
+    let display = format!("{:.0}", value.max(1.0));
+    rsx! {
+        label { class: "flex items-center justify-between gap-2 text-sm",
+            span { class: "text-neutral-400", "{label}" }
+            div { class: "flex items-stretch",
+                input {
+                    r#type: "text",
+                    inputmode: "numeric",
+                    pattern: "[0-9]*",
+                    class: "w-20 px-2 py-1 text-xs font-mono rounded-l bg-neutral-950 border border-neutral-700 text-neutral-200 focus:outline-none focus:border-blue-500",
+                    value: "{display}",
+                    disabled: disabled,
+                    oninput: move |e| {
+                        if let Ok(v) = e.value().parse::<i64>() {
+                            on_change.call(v.max(1) as f64);
+                        }
+                    },
+                }
+                div { class: "flex flex-col border border-l-0 border-neutral-700 rounded-r overflow-hidden",
+                    button {
+                        class: "flex-1 px-1.5 text-[10px] leading-none bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed",
+                        disabled: disabled,
+                        onclick: move |_| on_change.call((value + step).max(1.0)),
+                        "▲"
+                    }
+                    button {
+                        class: "flex-1 px-1.5 text-[10px] leading-none bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed",
+                        disabled: disabled,
+                        onclick: move |_| on_change.call((value - step).max(1.0)),
+                        "▼"
+                    }
+                }
+            }
         }
     }
 }

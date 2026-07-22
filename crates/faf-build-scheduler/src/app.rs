@@ -10,14 +10,17 @@ use faf_sim_shared::EcoSnapshot;
 
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
-use crate::plugins::eco::decide_direction::CurrentEcoDirection;
+use crate::plugins::eco::decide_direction::{DirectionScores, PriorityTable};
 use crate::plugins::eco::observe::Observation;
-use crate::plugins::lifecycle::{run_to_completion, SchedulerLifecyclePlugin, SchedulerResult};
+use crate::plugins::apply::StepReasoningLog;
+use crate::plugins::lifecycle::{
+    run_to_completion, run_to_completion_with_reasoning, SchedulerLifecyclePlugin, SchedulerResult,
+};
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
-use crate::result::{Schedule, ScheduleError};
+use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarget};
 
 /// A Bevy `App` configured for scheduling.
@@ -121,8 +124,10 @@ impl SchedulerApp {
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
         .init_resource::<Observation>()
-        .init_resource::<CurrentEcoDirection>()
-        .init_resource::<SchedulerResult>();
+        .init_resource::<DirectionScores>()
+        .init_resource::<PriorityTable>()
+        .init_resource::<SchedulerResult>()
+        .init_resource::<StepReasoningLog>();
     }
 
     /// Add an arbitrary plugin (e.g. a scheduling mode or an algorithm).
@@ -148,11 +153,23 @@ impl SchedulerApp {
         run_to_completion(&mut self.app)
     }
 
+    /// Run the app until an eco scheduling result is produced, including
+    /// per-step candidate reasoning.
+    pub fn run_eco_with_reasoning(&mut self) -> Result<ScheduleWithReasoning, ScheduleError> {
+        run_to_completion_with_reasoning(&mut self.app)
+    }
+
     /// Run the app until a unit scheduling result is produced.
     ///
     /// The app must have a mode plugin registered that generates candidates
     /// and an algorithm plugin that selects them.
     pub fn run_unit(&mut self) -> Result<Schedule, ScheduleError> {
         run_to_completion(&mut self.app)
+    }
+
+    /// Run the app until a unit scheduling result is produced, including
+    /// per-step candidate reasoning.
+    pub fn run_unit_with_reasoning(&mut self) -> Result<ScheduleWithReasoning, ScheduleError> {
+        run_to_completion_with_reasoning(&mut self.app)
     }
 }
