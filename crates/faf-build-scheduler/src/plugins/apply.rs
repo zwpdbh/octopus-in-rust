@@ -8,15 +8,17 @@ use crate::components::{
     BuildPowerComp, BuilderState, CandidateAssignment, ScheduledTask, UnitKindComp,
 };
 use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes};
+use crate::plugins::eco::observe::Observation;
+use crate::plugins::events::SchedulerStepEvent;
 use crate::plugins::lifecycle::SchedulerResult;
 use crate::request::SearchOptions;
 use crate::resources::{
-    CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
+    EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
 use crate::result::{Action, CandidateReasoning, ScheduleError, StepReasoning, StepResult};
 use crate::search::{
-    build_schedule, build_task_for_action, compute_current_tech_level, BlueprintLibraryRef,
-    CandidateAction, CandidateScore, SearchTarget,
+    build_schedule, build_task_for_action, BlueprintLibraryRef, CandidateAction, CandidateScore,
+    SearchTarget,
 };
 
 /// Log of per-step candidate reasoning captured during the search.
@@ -28,7 +30,6 @@ pub(crate) fn apply_best_system(
     mut commands: Commands,
     mut economy: ResMut<EconomyState>,
     mut clock: ResMut<SchedulerClock>,
-    mut tech_level: ResMut<CurrentTechLevel>,
     mut progress: ResMut<SearchProgress>,
     mut task_log: ResMut<TaskLog>,
     mut step_log: ResMut<StepLog>,
@@ -37,6 +38,7 @@ pub(crate) fn apply_best_system(
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
     mut result: ResMut<SchedulerResult>,
+    observation: Res<Observation>,
     scores: Res<DirectionScoresRes>,
     priorities: Res<PriorityTableRes>,
     candidates: Query<(
@@ -212,21 +214,8 @@ pub(crate) fn apply_best_system(
         priority_table: priorities.0,
     });
 
-    progress.next_id += 1;
-    tech_level.0 = compute_current_tech_level(
-        units
-            .iter()
-            .map(|(_, kind, _, _)| kind.0.clone())
-            .collect::<Vec<_>>()
-            .into_iter(),
-    );
-
-    commands.entity(best_entity).despawn();
-
-    // Check whether this committed action already satisfies the goal. The newly
-    // spawned unit entity is not visible in the query until commands are flushed
-    // at the end of the update, so for unit goals we compare the action's result
-    // directly rather than scanning entities.
+    // Notify any observers that a step has been committed. This decouples trace
+    // output, web streaming, and metrics from the apply system.
     let reached = match &goal.0 {
         SearchTarget::Eco(target) => target.is_reached(&economy.current),
         SearchTarget::Unit(target) => {
@@ -237,6 +226,23 @@ pub(crate) fn apply_best_system(
             resulting == *target
         }
     };
+    commands.trigger(SchedulerStepEvent {
+        step: step_log.0.last().cloned().expect("step just pushed"),
+        observation: observation.clone(),
+        reasoning: reasoning_log
+            .0
+            .last()
+            .cloned()
+            .expect("reasoning just pushed"),
+        goal_reached: reached,
+    });
+
+    progress.next_id += 1;
+
+    commands.entity(best_entity).despawn();
+
+    // The goal-reached check was already done before notifying observers; reuse
+    // the result here to terminate the search.
     if reached {
         progress.done = true;
         result.result = Some(build_schedule(&economy, &task_log, &step_log));

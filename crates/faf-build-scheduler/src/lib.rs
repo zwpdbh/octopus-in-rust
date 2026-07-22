@@ -23,15 +23,13 @@ pub use plugins::{
     eco::decide_direction::{DirectionScores, PriorityTable},
     eco::observe::{EngineerCounts, FactoryTier, Observation},
     run_to_completion, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
-    SchedulerSet, SchedulerState, UnitSchedulingPlugin,
+    SchedulerSet, SchedulerState, SchedulerStepEvent, UnitSchedulingPlugin,
 };
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
     UnitScheduleRequest,
 };
-pub use resources::{
-    CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
-};
+pub use resources::{EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog};
 pub use result::{
     Action, CandidateReasoning, Schedule, ScheduleError, ScheduleWithReasoning, StepReasoning,
     StepResult,

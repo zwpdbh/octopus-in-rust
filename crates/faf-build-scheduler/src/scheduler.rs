@@ -7,7 +7,9 @@ use faf_blueprints::{BlueprintLibrary, UnitKind};
 
 use crate::algorithms::{algorithm_by_kind, AlgorithmKind, SchedulingAlgorithm};
 use crate::app::SchedulerApp;
-use crate::plugins::{EcoSchedulingPlugin, SchedulerTracePlugin, UnitSchedulingPlugin};
+use bevy_app::Plugin;
+
+use crate::plugins::{EcoSchedulingPlugin, UnitSchedulingPlugin};
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 
@@ -156,10 +158,16 @@ impl Scheduler {
         app.run_unit_best_effort()
     }
 
-    /// Run an eco schedule with per-cycle debug tracing printed to stdout.
-    /// Returns the resulting schedule (or partial schedule if the goal is
-    /// unreachable) together with per-step reasoning.
-    pub fn schedule_eco_trace(&self, request: &EcoScheduleRequest) -> ScheduleWithReasoning {
+    /// Run an eco schedule with an arbitrary user-provided plugin installed.
+    ///
+    /// This is the integration point for external observers: the CLI uses it to
+    /// attach a trace-printing observer, and the web service can use it to
+    /// stream or record [`SchedulerStepEvent`]s.
+    pub fn schedule_eco_with_plugin<P: Plugin>(
+        &self,
+        request: &EcoScheduleRequest,
+        plugin: P,
+    ) -> ScheduleWithReasoning {
         let inventory = count_inventory(&request.initial_inventory);
         let mut app = SchedulerApp::new_for_eco(
             Arc::clone(&self.library),
@@ -171,7 +179,7 @@ impl Scheduler {
         );
         app = app
             .with_plugin(EcoSchedulingPlugin)
-            .with_plugin(SchedulerTracePlugin)
+            .with_plugin(plugin)
             .configure(|app| self.algorithm.configure_app(app));
         app.run_eco_best_effort()
     }

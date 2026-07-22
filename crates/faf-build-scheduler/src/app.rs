@@ -19,10 +19,10 @@ use crate::plugins::lifecycle::{
 };
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
-    CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
+    EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
-use crate::search::{compute_current_tech_level, BlueprintLibraryRef, SearchTarget};
+use crate::search::{BlueprintLibraryRef, SearchTarget};
 
 /// A Bevy `App` configured for scheduling.
 ///
@@ -91,8 +91,6 @@ impl SchedulerApp {
         options: SearchOptions,
         config: SchedulerConfig,
     ) {
-        let tech_level = compute_current_tech_level(inventory.keys().cloned());
-
         let mut commands = app.world_mut().commands();
         for (kind, count) in inventory {
             for _ in 0..count {
@@ -112,7 +110,6 @@ impl SchedulerApp {
         .insert_resource(SchedulerClock {
             now: initial_eco.time,
         })
-        .insert_resource(CurrentTechLevel(tech_level))
         .insert_resource(SearchGoal(target))
         .insert_resource(options)
         .insert_resource(SearchProgress {

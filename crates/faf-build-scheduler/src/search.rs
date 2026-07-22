@@ -64,26 +64,6 @@ impl SearchTarget {
     }
 }
 
-/// Compute the highest technology tier available from the current inventory.
-///
-/// The tier is determined by the highest engineer owned. If no engineer is
-/// present, the tier defaults to [`TechLevel::T1`].
-pub(crate) fn compute_current_tech_level<I>(inventory: I) -> faf_blueprints::TechLevel
-where
-    I: IntoIterator<Item = UnitKind>,
-{
-    use faf_blueprints::TechLevel;
-
-    inventory
-        .into_iter()
-        .filter_map(|kind| match kind {
-            UnitKind::Engineer(tech) => Some(tech),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(TechLevel::T1)
-}
-
 /// Convert the chosen actions into a final `Schedule`.
 pub(crate) fn build_schedule(
     economy_state: &EconomyState,

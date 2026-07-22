@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+bevy_app = "0.19"
+bevy_ecs = "0.19"
 clap = { workspace = true }
 faf-blueprints = { workspace = true }
 faf-build-prediction = { workspace = true }

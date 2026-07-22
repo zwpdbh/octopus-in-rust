@@ -6,7 +6,6 @@
 
 use bevy_ecs::prelude::Resource;
 
-use faf_blueprints::TechLevel;
 use faf_quantities::Time;
 use faf_sim_shared::{BuildTask, EcoSnapshot};
 
@@ -33,12 +32,6 @@ pub struct EconomyState {
 pub struct SchedulerClock {
     pub now: Time,
 }
-
-/// Highest technology tier currently available, derived from owned engineers.
-///
-/// If no engineer is owned the tier defaults to [`TechLevel::T1`].
-#[derive(Resource)]
-pub struct CurrentTechLevel(pub TechLevel);
 
 /// The search goal.
 #[derive(Resource)]

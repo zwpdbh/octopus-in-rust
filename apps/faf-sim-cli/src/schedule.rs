@@ -3,10 +3,12 @@
 use std::fs;
 use std::path::Path;
 
+use bevy_app::{App, Plugin};
+use bevy_ecs::observer::On;
 use faf_blueprints::{TechLevel, UnitId, UnitKind};
 use faf_build_scheduler::{
-    EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, SchedulerConfig, UnitScheduleInput,
-    UnitScheduleRequest,
+    EcoScheduleInput, EcoScheduleRequest, EcoTarget, Scheduler, SchedulerConfig,
+    SchedulerStepEvent, UnitScheduleInput, UnitScheduleRequest,
 };
 use faf_quantities::MassRate;
 use faf_sim_shared::plan_types::EcoInitialSettings;
@@ -57,9 +59,9 @@ fn run_eco(args: ScheduleEcoArgs) {
         config,
     };
 
-    // Run with trace output so every scheduling cycle is visible. The trace
-    // version returns the partial plan even if the goal is unreachable.
-    let result = scheduler.schedule_eco_trace(&request);
+    // Run with a CLI trace observer so every scheduling cycle is visible. The
+    // best-effort run returns the partial plan even if the goal is unreachable.
+    let result = scheduler.schedule_eco_with_plugin(&request, CliTracePlugin);
     let schedule = result.schedule;
     let reached = request.target.is_reached(&schedule.final_eco);
 
@@ -123,6 +125,54 @@ fn run_unit(args: ScheduleUnitArgs) {
         schedule.total_time_seconds,
         schedule.steps.len(),
     );
+}
+
+/// CLI plugin that prints each [`SchedulerStepEvent`] to stderr as it happens.
+///
+/// Keeping this in the CLI crate means `faf-build-scheduler` does not need to
+/// know how its reasoning log is rendered.
+struct CliTracePlugin;
+
+impl Plugin for CliTracePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(print_step_trace);
+    }
+}
+
+fn print_step_trace(event: On<SchedulerStepEvent>) {
+    let event = event.event();
+    let eco = &event.step.economy;
+
+    eprintln!("\n=== Scheduler cycle #{} ===", event.reasoning.step_id);
+    eprintln!("Observation: {:?}", event.observation);
+    eprintln!("DirectionScores: {:?}", event.reasoning.direction_scores);
+    eprintln!("PriorityTable: {:?}", event.reasoning.priority_table);
+    eprintln!("Chosen action: {:?}", event.reasoning.chosen);
+    eprintln!("Top candidates:");
+    for candidate in event.reasoning.top_candidates.iter().take(5) {
+        let marker = if candidate.action == event.reasoning.chosen {
+            " <- chosen"
+        } else {
+            ""
+        };
+        eprintln!(
+            "  {:>8.2}  {:?}{}",
+            candidate.score, candidate.action, marker
+        );
+    }
+    eprintln!(
+        "Result economy: mass {:>5.1}/s | energy {:>5.1}/s | mass_storage {:>6.0}/{:<6.0} | energy_storage {:>6.0}/{:<6.0} | time {:.1}s",
+        eco.production_per_second_mass.value(),
+        eco.production_per_second_energy.value(),
+        eco.mass_storage.value(),
+        eco.mass_storage_cap.value(),
+        eco.energy_storage.value(),
+        eco.energy_storage_cap.value(),
+        eco.time.value(),
+    );
+    if event.goal_reached {
+        eprintln!("Goal reached.");
+    }
 }
 
 fn default_eco_input() -> EcoScheduleInput {
