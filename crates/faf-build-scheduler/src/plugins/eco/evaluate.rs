@@ -2,9 +2,9 @@
 
 use bevy_ecs::prelude::*;
 
+use super::decide_direction::CurrentEcoDirection;
 use crate::algorithms::greedy;
 use crate::components::CandidateAssignment;
-use crate::plugins::decide_direction::CurrentEcoDirection;
 use crate::request::SearchOptions;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};

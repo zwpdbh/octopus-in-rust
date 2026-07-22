@@ -20,8 +20,8 @@ pub mod util;
 pub use algorithms::{algorithm_by_kind, AlgorithmKind, Greedy, SchedulingAlgorithm};
 pub use config::SchedulerConfig;
 pub use plugins::{
-    decide_direction::{CurrentEcoDirection, EcoDirection},
-    observe::Observation,
+    eco::decide_direction::{CurrentEcoDirection, EcoDirection},
+    eco::observe::{EngineerCounts, FactoryTier, Observation},
     run_to_completion, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
     SchedulerSet, SchedulerState, UnitSchedulingPlugin,
 };

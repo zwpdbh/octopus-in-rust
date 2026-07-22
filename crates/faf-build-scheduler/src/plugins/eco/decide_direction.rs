@@ -7,7 +7,7 @@ use bevy_ecs::prelude::*;
 
 use faf_blueprints::TechLevel;
 
-use crate::plugins::observe::{EnergyMargin, MassIncomeVsTarget, MassProductionTier, Observation};
+use super::observe::{EnergyMargin, MassIncomeVsTarget, MassProductionTier, Observation};
 
 /// The currently chosen economic direction.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +44,11 @@ pub(crate) struct Rule<Consequence> {
 pub(crate) fn eco_rules() -> Vec<Rule<EcoDirection>> {
     vec![
         Rule {
-            name: "prevent energy stall",
+            name: "prevent energy stall or deficit",
             condition: |obs| {
                 matches!(
                     obs.energy_margin,
-                    EnergyMargin::Thin | EnergyMargin::Stalled
+                    EnergyMargin::Thin | EnergyMargin::Unhealthy | EnergyMargin::Stalled
                 )
             },
             consequence: EcoDirection::Energy,
@@ -77,7 +77,7 @@ pub(crate) fn eco_rules() -> Vec<Rule<EcoDirection>> {
 }
 
 /// Apply the first matching rule from `rules` to `observation`.
-pub(crate) fn decide<Consequence: Clone>(
+fn decide<Consequence: Clone>(
     rules: &[Rule<Consequence>],
     observation: &Observation,
 ) -> Option<Consequence> {

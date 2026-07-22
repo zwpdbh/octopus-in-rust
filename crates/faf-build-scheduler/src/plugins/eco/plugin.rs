@@ -3,13 +3,13 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+use super::decide_direction::decide_eco_direction_system;
+use super::observe::observe_eco_system;
 use crate::plugins::apply::apply_best_system;
-use crate::plugins::decide_direction::decide_eco_direction_system;
 use crate::plugins::eco::{
     evaluate::evaluate_eco_candidates_system, generate::generate_eco_candidates_system,
 };
 use crate::plugins::lifecycle::SchedulerSet;
-use crate::plugins::observe::observe_eco_system;
 
 /// Plugin that registers the full eco scheduling lifecycle.
 pub struct EcoSchedulingPlugin;

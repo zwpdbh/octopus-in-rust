@@ -12,7 +12,7 @@ use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::plugins::decide_direction::EcoDirection;
+use crate::plugins::eco::decide_direction::EcoDirection;
 use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{

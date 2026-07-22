@@ -2,10 +2,10 @@
 
 use bevy_ecs::prelude::*;
 
+use super::decide_direction::CurrentEcoDirection;
 use crate::algorithms::greedy;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::plugins::decide_direction::CurrentEcoDirection;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, IdleBuilderQuery};
 
