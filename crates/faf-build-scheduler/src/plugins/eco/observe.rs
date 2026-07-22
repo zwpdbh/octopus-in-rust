@@ -33,19 +33,19 @@ pub(crate) const TECH2_PRIORITY_MASS_THRESHOLD: f64 = 35.0;
 pub(crate) const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
 
 /// Compute the energy margin for a snapshot without needing unit state.
+///
+/// The margin is driven by net energy income versus demand, not by the storage
+/// buffer. Storage health is reported separately by [`compute_energy_storage_level`];
+/// conflating the two produced a catch-22 where building power generators was
+/// rejected because the post-build buffer was not yet full.
 pub(crate) fn compute_energy_margin(eco: &EcoSnapshot) -> EnergyMargin {
-    // Treat any non-full energy storage as a stall indicator. Energy is the
-    // limiting resource in FAF; if the buffer has been touched, the next build
-    // can easily stall, so we aggressively prioritize refilling it.
-    let storage_full = eco.energy_storage.value() >= eco.energy_storage_cap.value();
-    if !storage_full {
-        return EnergyMargin::Stalled;
-    }
-
     let energy_demand = eco.maintenance_consumption_per_second_energy + eco.energy_drain;
     let net_energy = eco.production_per_second_energy - energy_demand;
 
     if net_energy.value() < 0.0 {
+        if eco.energy_storage.value() <= 0.0 {
+            return EnergyMargin::Stalled;
+        }
         let seconds_to_empty = eco.energy_storage.value() / -net_energy.value();
         if seconds_to_empty <= THIN_SECONDS_THRESHOLD {
             EnergyMargin::Thin

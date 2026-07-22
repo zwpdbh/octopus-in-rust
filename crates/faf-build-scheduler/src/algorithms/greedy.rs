@@ -13,9 +13,7 @@ use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
 use crate::plugins::eco::decide_direction::{DirectionScores, PriorityTable};
-use crate::plugins::eco::observe::{
-    compute_energy_margin, compute_mass_margin, EnergyMargin, MassMargin,
-};
+use crate::plugins::eco::observe::{compute_mass_margin, MassMargin};
 use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{
@@ -30,11 +28,13 @@ pub(crate) type CandidateBuilders = Vec<(
     UnitEcoStats,
 )>;
 
-/// Minimum energy storage ratio allowed after committing a candidate. If a build
-/// would drop the buffer below this, the candidate is rejected.
-const POST_ACTION_ENERGY_STORAGE_THRESHOLD: f64 = 0.30;
-/// Minimum mass storage ratio allowed after committing a candidate.
-const POST_ACTION_MASS_STORAGE_THRESHOLD: f64 = 0.20;
+/// Minimum energy storage ratio allowed after committing a candidate. A small
+/// buffer is enough because the solver already verified the build can finish
+/// without stalling; requiring a large buffer rejected every mass/energy build.
+const POST_ACTION_ENERGY_STORAGE_THRESHOLD: f64 = 0.05;
+/// Minimum mass storage ratio allowed after committing a candidate. Mass is
+/// meant to be spent, so only a literal empty buffer is forbidden here.
+const POST_ACTION_MASS_STORAGE_THRESHOLD: f64 = 0.0;
 
 fn storage_ratio(current: f64, cap: f64) -> f64 {
     if cap > 0.0 {
@@ -178,22 +178,20 @@ pub(crate) fn score_eco_candidate(
     };
     let completion = result.tasks.last().cloned().unwrap_or(result.total);
 
-    // Lookahead guard: reject actions that would leave the economy in a bad
-    // state. This is where we "try the next action" until a healthy one is
-    // found — bad candidates simply score zero and are ignored by apply.
-    let energy_after = compute_energy_margin(&completion.economy);
+    // Lookahead guard: reject actions that would leave mass storage empty and
+    // mass income negative (a true mass stall). Energy health is intentionally
+    // not rejected here — if energy is stalled, building a power generator is
+    // the correct response, and the solver already verified the build can finish.
     let mass_after = compute_mass_margin(&completion.economy);
-    if matches!(
-        energy_after,
-        EnergyMargin::Stalled | EnergyMargin::Thin | EnergyMargin::Unhealthy
-    ) || matches!(mass_after, MassMargin::Stall)
-    {
+    if matches!(mass_after, MassMargin::Stall) {
         return 0.0;
     }
 
     // Storage-buffer guard: reject actions that would leave storage too low,
     // because the schedule cannot predict intermediate drain and a low buffer
-    // risks an in-flight stall.
+    // risks an in-flight stall. Actions that increase the corresponding income
+    // are exempt: a power generator that leaves the buffer empty still fixes the
+    // underlying energy deficit, and the solver already verified it finishes.
     let post_energy_ratio = storage_ratio(
         completion.economy.energy_storage.value(),
         completion.economy.energy_storage_cap.value(),
@@ -202,8 +200,12 @@ pub(crate) fn score_eco_candidate(
         completion.economy.mass_storage.value(),
         completion.economy.mass_storage_cap.value(),
     );
-    if post_energy_ratio < POST_ACTION_ENERGY_STORAGE_THRESHOLD
-        || post_mass_ratio < POST_ACTION_MASS_STORAGE_THRESHOLD
+    let improves_energy = completion.economy.production_per_second_energy.value()
+        > current_economy.production_per_second_energy.value();
+    let improves_mass = completion.economy.production_per_second_mass.value()
+        > current_economy.production_per_second_mass.value();
+    if (post_energy_ratio < POST_ACTION_ENERGY_STORAGE_THRESHOLD && !improves_energy)
+        || (post_mass_ratio < POST_ACTION_MASS_STORAGE_THRESHOLD && !improves_mass)
     {
         return 0.0;
     }

@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::components::EcoSnapshotView;
-use crate::types::{Action, DirectionScores, EcoSnapshot, PriorityTable, StepReasoning, StepResult, UnitKind};
+use crate::types::{
+    Action, DirectionScores, EcoSnapshot, PriorityTable, StepReasoning, StepResult, UnitKind,
+};
 use crate::utils::kind_label;
 
 /// Ordered list of scheduled steps rendered as a todo list. Each row shows the
@@ -175,10 +177,7 @@ fn StepDetails(
 }
 
 #[component]
-fn ScoreBlock(
-    label: &'static str,
-    #[props(into)] scores: ScoreValues,
-) -> Element {
+fn ScoreBlock(label: &'static str, #[props(into)] scores: ScoreValues) -> Element {
     rsx! {
         div { class: "flex flex-col gap-1 rounded border border-neutral-800 bg-neutral-900/50 p-2",
             span { class: "text-[10px] text-neutral-500", "{label}" }
@@ -252,10 +251,20 @@ fn format_duration_range(start_seconds: f64, end_seconds: f64) -> String {
         if secs == 0 {
             format!("{} {}", mins, if mins == 1 { "min" } else { "mins" })
         } else {
-            format!("{} {} {}s", mins, if mins == 1 { "min" } else { "mins" }, secs)
+            format!(
+                "{} {} {}s",
+                mins,
+                if mins == 1 { "min" } else { "mins" },
+                secs
+            )
         }
     };
-    format!("{} -> {} ({})", format_duration(start_seconds), format_duration(end_seconds), duration_text)
+    format!(
+        "{} -> {} ({})",
+        format_duration(start_seconds),
+        format_duration(end_seconds),
+        duration_text
+    )
 }
 
 fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {

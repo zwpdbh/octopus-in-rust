@@ -7,12 +7,12 @@ use faf_quantities::Time;
 use crate::components::{
     BuildPowerComp, BuilderState, CandidateAssignment, ScheduledTask, UnitKindComp,
 };
+use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes};
 use crate::plugins::lifecycle::SchedulerResult;
 use crate::request::SearchOptions;
 use crate::resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
-use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes};
 use crate::result::{Action, CandidateReasoning, ScheduleError, StepReasoning, StepResult};
 use crate::search::{
     build_schedule, build_task_for_action, compute_current_tech_level, BlueprintLibraryRef,

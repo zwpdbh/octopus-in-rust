@@ -6,8 +6,9 @@ use bevy_state::app::StatesPlugin;
 use bevy_state::prelude::*;
 
 use crate::plugins::apply::StepReasoningLog;
-use crate::resources::SearchProgress;
+use crate::resources::{EconomyState, SearchProgress, StepLog, TaskLog};
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
+use crate::search::build_schedule;
 
 /// Lifecycle states of a scheduling search.
 ///
@@ -133,4 +134,40 @@ pub fn run_to_completion_with_reasoning(
         schedule,
         reasoning,
     })
+}
+
+/// Run `app` until the search terminates and return whatever schedule was built,
+/// even if the goal was not reached.
+///
+/// This is useful for debugging why a target is unreachable: it gives you the
+/// partial plan and the per-step reasoning instead of discarding everything.
+pub fn run_to_completion_best_effort(app: &mut App) -> ScheduleWithReasoning {
+    // Safety guard: cap the number of update loops so we never hang.
+    let mut loops = 0;
+    const MAX_LOOPS: usize = 100_000;
+
+    while !app.world().resource::<SearchProgress>().done {
+        app.update();
+        loops += 1;
+        if loops >= MAX_LOOPS {
+            break;
+        }
+    }
+
+    let schedule = match app.world().resource::<SchedulerResult>().result.clone() {
+        Some(Ok(schedule)) => schedule,
+        _ => {
+            let economy = app.world().resource::<EconomyState>();
+            let task_log = app.world().resource::<TaskLog>();
+            let step_log = app.world().resource::<StepLog>();
+            build_schedule(&economy, &task_log, &step_log)
+                .expect("partial schedule should be buildable")
+        }
+    };
+
+    let reasoning = app.world().resource::<StepReasoningLog>().0.clone();
+    ScheduleWithReasoning {
+        schedule,
+        reasoning,
+    }
 }

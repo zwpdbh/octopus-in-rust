@@ -57,17 +57,29 @@ fn run_eco(args: ScheduleEcoArgs) {
         config,
     };
 
-    let schedule = scheduler.schedule_eco(&request).unwrap_or_else(|e| {
-        eprintln!("Scheduling failed: {e}");
-        std::process::exit(1);
-    });
+    // Run with trace output so every scheduling cycle is visible. The trace
+    // version returns the partial plan even if the goal is unreachable.
+    let result = scheduler.schedule_eco_trace(&request);
+    let schedule = result.schedule;
+    let reached = request.target.is_reached(&schedule.final_eco);
 
     write_output(args.output.as_deref(), &schedule.plan);
-    eprintln!(
-        "Scheduled eco target in {:.2}s ({} steps).",
-        schedule.total_time_seconds,
-        schedule.steps.len(),
-    );
+
+    if reached {
+        eprintln!(
+            "Scheduled eco target in {:.2}s ({} steps).",
+            schedule.total_time_seconds,
+            schedule.steps.len(),
+        );
+    } else {
+        eprintln!(
+            "Goal not reached. Partial schedule: {:.2}s ({} steps), final mass income {:.1}/s (target {:.1}/s).",
+            schedule.total_time_seconds,
+            schedule.steps.len(),
+            schedule.final_eco.production_per_second_mass.value(),
+            request.target.mass_production.value(),
+        );
+    }
 }
 
 fn run_unit(args: ScheduleUnitArgs) {

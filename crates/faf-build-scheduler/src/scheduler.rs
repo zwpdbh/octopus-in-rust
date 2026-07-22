@@ -7,7 +7,7 @@ use faf_blueprints::{BlueprintLibrary, UnitKind};
 
 use crate::algorithms::{algorithm_by_kind, AlgorithmKind, SchedulingAlgorithm};
 use crate::app::SchedulerApp;
-use crate::plugins::{EcoSchedulingPlugin, UnitSchedulingPlugin};
+use crate::plugins::{EcoSchedulingPlugin, SchedulerTracePlugin, UnitSchedulingPlugin};
 use crate::request::{EcoScheduleRequest, UnitScheduleRequest};
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 
@@ -115,6 +115,65 @@ impl Scheduler {
             .with_plugin(UnitSchedulingPlugin)
             .configure(|app| self.algorithm.configure_app(app));
         app.run_unit_with_reasoning()
+    }
+
+    /// Plan the fastest way to reach the eco target, returning the partial plan
+    /// even if the goal is unreachable.
+    pub fn schedule_eco_best_effort(&self, request: &EcoScheduleRequest) -> ScheduleWithReasoning {
+        let inventory = count_inventory(&request.initial_inventory);
+        let mut app = SchedulerApp::new_for_eco(
+            Arc::clone(&self.library),
+            request.initial_eco,
+            inventory,
+            request.target.clone(),
+            request.options.clone(),
+            request.config,
+        );
+        app = app
+            .with_plugin(EcoSchedulingPlugin)
+            .configure(|app| self.algorithm.configure_app(app));
+        app.run_eco_best_effort()
+    }
+
+    /// Plan the fastest way to build the target unit, returning the partial plan
+    /// even if the goal is unreachable.
+    pub fn schedule_unit_best_effort(
+        &self,
+        request: &UnitScheduleRequest,
+    ) -> ScheduleWithReasoning {
+        let inventory = count_inventory(&request.initial_inventory);
+        let mut app = SchedulerApp::new_for_unit(
+            Arc::clone(&self.library),
+            request.initial_eco,
+            inventory,
+            request.target.clone(),
+            request.options.clone(),
+            request.config,
+        );
+        app = app
+            .with_plugin(UnitSchedulingPlugin)
+            .configure(|app| self.algorithm.configure_app(app));
+        app.run_unit_best_effort()
+    }
+
+    /// Run an eco schedule with per-cycle debug tracing printed to stdout.
+    /// Returns the resulting schedule (or partial schedule if the goal is
+    /// unreachable) together with per-step reasoning.
+    pub fn schedule_eco_trace(&self, request: &EcoScheduleRequest) -> ScheduleWithReasoning {
+        let inventory = count_inventory(&request.initial_inventory);
+        let mut app = SchedulerApp::new_for_eco(
+            Arc::clone(&self.library),
+            request.initial_eco,
+            inventory,
+            request.target.clone(),
+            request.options.clone(),
+            request.config,
+        );
+        app = app
+            .with_plugin(EcoSchedulingPlugin)
+            .with_plugin(SchedulerTracePlugin)
+            .configure(|app| self.algorithm.configure_app(app));
+        app.run_eco_best_effort()
     }
 }
 

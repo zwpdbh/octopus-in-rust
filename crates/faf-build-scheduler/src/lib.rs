@@ -112,6 +112,30 @@ mod tests {
     }
 
     #[test]
+    fn greedy_eco_schedule_reaches_ten_mass_per_second() {
+        let library = test_library();
+        let scheduler = Scheduler::new(library);
+        let request = EcoScheduleRequest {
+            initial_eco: default_eco(),
+            initial_inventory: vec![UnitKind::Commander],
+            target: EcoTarget {
+                mass_production: MassRate::from_raw(10.0),
+                tolerance: 0.0,
+            },
+            options: SearchOptions::default(),
+            config: SchedulerConfig::default(),
+        };
+
+        let schedule = scheduler
+            .schedule_eco(&request)
+            .expect("schedule should succeed");
+        assert!(
+            schedule.final_eco.production_per_second_mass >= 10.0,
+            "final mass production should meet 10/s target"
+        );
+    }
+
+    #[test]
     fn greedy_eco_schedule_respects_max_mex_count() {
         let library = test_library();
         let scheduler = Scheduler::new(library);
