@@ -5,28 +5,20 @@
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::TechLevel;
+pub use faf_sim_shared::{DirectionScores, PriorityTable};
 
 use super::observe::{
-    EnergyMargin, MassIncomeVsTarget, MassMargin, MassProductionTier, Observation,
+    EnergyMargin, EnergyStorageLevel, MassIncomeVsTarget, MassMargin, MassProductionTier,
+    Observation,
 };
 
-/// Confidence scores (0–100) for each economic direction.
-///
-/// Higher scores mean the observation suggests that direction is more urgent or
-/// more appropriate right now.
+/// Bevy resource wrapper for [`DirectionScores`].
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DirectionScores {
-    /// Confidence that the next step should increase energy income.
-    pub energy: u8,
-    /// Confidence that the next step should increase mass income.
-    pub mass_income: u8,
-    /// Confidence that the next step should increase build power (engineers).
-    pub build_power: u8,
-    /// Confidence that the next step should advance to T2 tech.
-    pub tech_t2: u8,
-    /// Confidence that the next step should advance to T3 tech.
-    pub tech_t3: u8,
-}
+pub struct DirectionScoresRes(pub DirectionScores);
+
+/// Bevy resource wrapper for [`PriorityTable`].
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PriorityTableRes(pub PriorityTable);
 
 /// Compute confidence scores from the current observation.
 pub(crate) fn compute_direction_scores(obs: &Observation) -> DirectionScores {
@@ -40,13 +32,24 @@ pub(crate) fn compute_direction_scores(obs: &Observation) -> DirectionScores {
 }
 
 fn energy_score(obs: &Observation) -> u8 {
-    match obs.energy_margin {
+    let base = match obs.energy_margin {
         EnergyMargin::Stalled => 100,
         EnergyMargin::Thin => 90,
         EnergyMargin::Unhealthy => 70,
         EnergyMargin::Healthy => 20,
         EnergyMargin::Surplus => 0,
-    }
+    };
+
+    // Even with healthy net income, a low storage buffer is dangerous because
+    // the next build can stall during construction.
+    let buffer_bonus = match obs.energy_storage_level {
+        EnergyStorageLevel::Critical => 90,
+        EnergyStorageLevel::Low => 60,
+        EnergyStorageLevel::Medium => 10,
+        EnergyStorageLevel::High => 0,
+    };
+
+    (base + buffer_bonus).min(100)
 }
 
 fn mass_income_score(obs: &Observation) -> u8 {
@@ -83,21 +86,6 @@ fn tech_score(obs: &Observation, desired: TechLevel) -> u8 {
     }
 }
 
-/// Priority multipliers (1–10) for the three resource categories.
-///
-/// A higher value means actions that produce that resource are more favored.
-/// The default is 5 (neutral). Scoring normalizes by dividing by 5, so the
-/// default multiplier is 1.0.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PriorityTable {
-    /// Priority for mass-income actions.
-    pub mass: u8,
-    /// Priority for energy-income actions.
-    pub energy: u8,
-    /// Priority for build-power (engineer) actions.
-    pub build_power: u8,
-}
-
 /// Compute priority weights from the current observation.
 ///
 /// * Mass is boosted when storage is low/`Stall` and reduced when it is high.
@@ -117,12 +105,14 @@ pub(crate) fn compute_priority_table(obs: &Observation) -> PriorityTable {
         MassMargin::Overflow => 1,
     };
 
-    let energy = match obs.energy_margin {
-        EnergyMargin::Stalled => 10,
-        EnergyMargin::Thin => 9,
-        EnergyMargin::Unhealthy => 7,
-        EnergyMargin::Healthy => 4,
-        EnergyMargin::Surplus => 1,
+    let energy = match (obs.energy_margin, obs.energy_storage_level) {
+        (_, EnergyStorageLevel::Critical) => 10,
+        (_, EnergyStorageLevel::Low) => 8,
+        (EnergyMargin::Stalled, _) => 10,
+        (EnergyMargin::Thin, _) => 9,
+        (EnergyMargin::Unhealthy, _) => 7,
+        (EnergyMargin::Healthy, _) => 4,
+        (EnergyMargin::Surplus, _) => 1,
     };
 
     // Build-power priority is driven by mass storage: when mass is overflowing
@@ -144,13 +134,12 @@ pub(crate) fn compute_priority_table(obs: &Observation) -> PriorityTable {
 }
 
 /// Compute per-direction confidence scores and priority weights from the
-/// current observation and write them to the [`DirectionScores`] and
-/// [`PriorityTable`] resources.
+/// current observation and write them to the resource wrappers.
 pub(crate) fn decide_eco_direction_system(
     observation: Res<Observation>,
-    mut scores: ResMut<DirectionScores>,
-    mut priorities: ResMut<PriorityTable>,
+    mut scores: ResMut<DirectionScoresRes>,
+    mut priorities: ResMut<PriorityTableRes>,
 ) {
-    *scores = compute_direction_scores(&observation);
-    *priorities = compute_priority_table(&observation);
+    scores.0 = compute_direction_scores(&observation);
+    priorities.0 = compute_priority_table(&observation);
 }

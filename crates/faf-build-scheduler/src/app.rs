@@ -11,7 +11,7 @@ use faf_sim_shared::EcoSnapshot;
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
 use crate::plugins::apply::StepReasoningLog;
-use crate::plugins::eco::decide_direction::{DirectionScores, PriorityTable};
+use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes};
 use crate::plugins::eco::observe::Observation;
 use crate::plugins::lifecycle::{
     run_to_completion, run_to_completion_with_reasoning, SchedulerLifecyclePlugin, SchedulerResult,
@@ -124,8 +124,8 @@ impl SchedulerApp {
         .insert_resource(BlueprintLibraryRef(library))
         .insert_resource(config)
         .init_resource::<Observation>()
-        .init_resource::<DirectionScores>()
-        .init_resource::<PriorityTable>()
+        .init_resource::<DirectionScoresRes>()
+        .init_resource::<PriorityTableRes>()
         .init_resource::<SchedulerResult>()
         .init_resource::<StepReasoningLog>();
     }

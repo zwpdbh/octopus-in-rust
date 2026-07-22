@@ -11,6 +11,6 @@ pub mod scheduler_types;
 pub use economy_types::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
 pub use plan_types::{ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary};
 pub use scheduler_types::{
-    Action, CandidateReasoning, Schedule, ScheduleError, ScheduleWithReasoning, StepReasoning,
-    StepResult,
+    Action, CandidateReasoning, DirectionScores, PriorityTable, Schedule, ScheduleError,
+    ScheduleWithReasoning, StepReasoning, StepResult,
 };

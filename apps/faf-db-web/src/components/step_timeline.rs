@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::components::EcoSnapshotView;
-use crate::types::{Action, EcoSnapshot, StepReasoning, StepResult, UnitKind};
+use crate::types::{Action, DirectionScores, EcoSnapshot, PriorityTable, StepReasoning, StepResult, UnitKind};
 use crate::utils::kind_label;
 
 /// Ordered list of scheduled steps rendered as a todo list. Each row shows the
@@ -121,6 +121,11 @@ fn StepDetails(
     reasoning: Option<StepReasoning>,
     pre_eco: EcoSnapshot,
 ) -> Element {
+    let (scores, priorities) = reasoning
+        .as_ref()
+        .map(|r| (r.direction_scores, r.priority_table))
+        .unwrap_or_default();
+
     rsx! {
         div { class: "mt-2 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col lg:flex-row gap-4",
             // Economy snapshot before the decision.
@@ -158,7 +163,75 @@ fn StepDetails(
                     p { class: "text-xs text-neutral-500", "No reasoning available for this step." }
                 }
             }
+
+            // Direction scores and priorities used for this decision.
+            div { class: "flex flex-col gap-2 lg:w-48 shrink-0",
+                h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Decision scores" }
+                ScoreBlock { label: "Direction confidence", scores }
+                ScoreBlock { label: "Priority weights", scores: priorities }
+            }
         }
+    }
+}
+
+#[component]
+fn ScoreBlock(
+    label: &'static str,
+    #[props(into)] scores: ScoreValues,
+) -> Element {
+    rsx! {
+        div { class: "flex flex-col gap-1 rounded border border-neutral-800 bg-neutral-900/50 p-2",
+            span { class: "text-[10px] text-neutral-500", "{label}" }
+            div { class: "grid grid-cols-[1fr_auto] gap-x-3 text-xs",
+                for (name, value) in scores.rows() {
+                    span { class: "text-neutral-400", "{name}" }
+                    span { class: "font-mono text-neutral-200 text-right", "{value}" }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ScoreValues {
+    Directions(DirectionScores),
+    Priorities(PriorityTable),
+}
+
+impl Default for ScoreValues {
+    fn default() -> Self {
+        ScoreValues::Directions(DirectionScores::default())
+    }
+}
+
+impl ScoreValues {
+    fn rows(&self) -> Vec<(&'static str, u8)> {
+        match self {
+            ScoreValues::Directions(s) => vec![
+                ("Energy", s.energy),
+                ("Mass income", s.mass_income),
+                ("Build power", s.build_power),
+                ("Tech T2", s.tech_t2),
+                ("Tech T3", s.tech_t3),
+            ],
+            ScoreValues::Priorities(p) => vec![
+                ("Mass", p.mass),
+                ("Energy", p.energy),
+                ("Build power", p.build_power),
+            ],
+        }
+    }
+}
+
+impl From<DirectionScores> for ScoreValues {
+    fn from(value: DirectionScores) -> Self {
+        ScoreValues::Directions(value)
+    }
+}
+
+impl From<PriorityTable> for ScoreValues {
+    fn from(value: PriorityTable) -> Self {
+        ScoreValues::Priorities(value)
     }
 }
 

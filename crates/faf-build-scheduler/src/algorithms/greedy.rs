@@ -30,6 +30,20 @@ pub(crate) type CandidateBuilders = Vec<(
     UnitEcoStats,
 )>;
 
+/// Minimum energy storage ratio allowed after committing a candidate. If a build
+/// would drop the buffer below this, the candidate is rejected.
+const POST_ACTION_ENERGY_STORAGE_THRESHOLD: f64 = 0.30;
+/// Minimum mass storage ratio allowed after committing a candidate.
+const POST_ACTION_MASS_STORAGE_THRESHOLD: f64 = 0.20;
+
+fn storage_ratio(current: f64, cap: f64) -> f64 {
+    if cap > 0.0 {
+        current / cap
+    } else {
+        0.0
+    }
+}
+
 /// Greedy search: at each iteration, generate candidates, simulate them, and
 /// commit the lowest-scoring candidate.
 #[derive(Debug, Default, Clone, Copy)]
@@ -173,6 +187,23 @@ pub(crate) fn score_eco_candidate(
         energy_after,
         EnergyMargin::Stalled | EnergyMargin::Thin | EnergyMargin::Unhealthy
     ) || matches!(mass_after, MassMargin::Stall)
+    {
+        return 0.0;
+    }
+
+    // Storage-buffer guard: reject actions that would leave storage too low,
+    // because the schedule cannot predict intermediate drain and a low buffer
+    // risks an in-flight stall.
+    let post_energy_ratio = storage_ratio(
+        completion.economy.energy_storage.value(),
+        completion.economy.energy_storage_cap.value(),
+    );
+    let post_mass_ratio = storage_ratio(
+        completion.economy.mass_storage.value(),
+        completion.economy.mass_storage_cap.value(),
+    );
+    if post_energy_ratio < POST_ACTION_ENERGY_STORAGE_THRESHOLD
+        || post_mass_ratio < POST_ACTION_MASS_STORAGE_THRESHOLD
     {
         return 0.0;
     }

@@ -18,6 +18,11 @@ const THIN_SECONDS_THRESHOLD: f64 = 5.0;
 /// Production-to-demand ratio above which the economy is considered strongly
 /// positive.
 const SURPLUS_PRODUCTION_RATIO: f64 = 1.2;
+/// Energy storage ratio thresholds for classifying the buffer level.
+const ENERGY_HIGH_THRESHOLD: f64 = 0.75;
+const ENERGY_MEDIUM_THRESHOLD: f64 = 0.50;
+const ENERGY_LOW_THRESHOLD: f64 = 0.25;
+
 /// Mass storage ratio below which mass is considered comfortably low.
 const MASS_GOOD_THRESHOLD: f64 = 0.20;
 /// Mass storage ratio above which the scheduler should prioritize spending mass.
@@ -29,12 +34,18 @@ pub(crate) const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
 
 /// Compute the energy margin for a snapshot without needing unit state.
 pub(crate) fn compute_energy_margin(eco: &EcoSnapshot) -> EnergyMargin {
+    // Treat any non-full energy storage as a stall indicator. Energy is the
+    // limiting resource in FAF; if the buffer has been touched, the next build
+    // can easily stall, so we aggressively prioritize refilling it.
+    let storage_full = eco.energy_storage.value() >= eco.energy_storage_cap.value();
+    if !storage_full {
+        return EnergyMargin::Stalled;
+    }
+
     let energy_demand = eco.maintenance_consumption_per_second_energy + eco.energy_drain;
     let net_energy = eco.production_per_second_energy - energy_demand;
 
-    if eco.energy_storage.value() <= 0.0 && net_energy.value() < 0.0 {
-        EnergyMargin::Stalled
-    } else if net_energy.value() < 0.0 {
+    if net_energy.value() < 0.0 {
         let seconds_to_empty = eco.energy_storage.value() / -net_energy.value();
         if seconds_to_empty <= THIN_SECONDS_THRESHOLD {
             EnergyMargin::Thin
@@ -77,12 +88,34 @@ pub(crate) fn compute_mass_margin(eco: &EcoSnapshot) -> MassMargin {
     }
 }
 
+/// Compute the energy-storage buffer level from a snapshot.
+pub(crate) fn compute_energy_storage_level(eco: &EcoSnapshot) -> EnergyStorageLevel {
+    let ratio = if eco.energy_storage_cap.value() > 0.0 {
+        eco.energy_storage.value() / eco.energy_storage_cap.value()
+    } else {
+        0.0
+    };
+
+    if ratio >= ENERGY_HIGH_THRESHOLD {
+        EnergyStorageLevel::High
+    } else if ratio >= ENERGY_MEDIUM_THRESHOLD {
+        EnergyStorageLevel::Medium
+    } else if ratio >= ENERGY_LOW_THRESHOLD {
+        EnergyStorageLevel::Low
+    } else {
+        EnergyStorageLevel::Critical
+    }
+}
+
 /// Symbolic observation of the current scheduler state.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct Observation {
     /// Net energy health, used by the eco rule engine to decide when to prioritize
     /// building power generation (e.g. when stalled, thin, or unhealthy).
     pub energy_margin: EnergyMargin,
+    /// Energy storage buffer level. Even when net energy is healthy, a low buffer
+    /// means a single expensive build can stall energy during construction.
+    pub energy_storage_level: EnergyStorageLevel,
     /// Mass storage health, intended for future rules that decide when to spend
     /// mass aggressively (`NeedToSpend` / `Overflow`) or conserve it (`Stall`).
     pub mass_margin: MassMargin,
@@ -104,6 +137,7 @@ impl Default for Observation {
     fn default() -> Self {
         Self {
             energy_margin: EnergyMargin::Healthy,
+            energy_storage_level: EnergyStorageLevel::Medium,
             mass_margin: MassMargin::Normal,
             mass_income_vs_target: MassIncomeVsTarget::Below,
             mass_production_tier: MassProductionTier::BelowTech2,
@@ -125,6 +159,19 @@ pub enum EnergyMargin {
     Unhealthy,
     /// Storage is empty/negative and production cannot meet demand.
     Stalled,
+}
+
+/// Energy storage buffer level, independent of net income.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnergyStorageLevel {
+    /// Storage is nearly full; can afford expensive builds.
+    High,
+    /// Storage is comfortable.
+    Medium,
+    /// Storage is low; risky to start expensive builds without more energy income.
+    Low,
+    /// Storage is critically low; prioritize energy income immediately.
+    Critical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +255,7 @@ fn observe(
     use faf_blueprints::{TechLevel, UnitKind};
 
     let energy_margin = compute_energy_margin(eco);
+    let energy_storage_level = compute_energy_storage_level(eco);
     let mass_margin = compute_mass_margin(eco);
 
     let mass_income_vs_target = if goal.is_reached(eco) {
@@ -259,6 +307,7 @@ fn observe(
 
     Observation {
         energy_margin,
+        energy_storage_level,
         mass_margin,
         mass_income_vs_target,
         mass_production_tier,

@@ -53,6 +53,32 @@ pub struct CandidateReasoning {
     pub score: f64,
 }
 
+/// Confidence scores (0–100) for each economic direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DirectionScores {
+    /// Confidence that the next step should increase energy income.
+    pub energy: u8,
+    /// Confidence that the next step should increase mass income.
+    pub mass_income: u8,
+    /// Confidence that the next step should increase build power (engineers).
+    pub build_power: u8,
+    /// Confidence that the next step should advance to T2 tech.
+    pub tech_t2: u8,
+    /// Confidence that the next step should advance to T3 tech.
+    pub tech_t3: u8,
+}
+
+/// Priority multipliers (1–10) for the three resource categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PriorityTable {
+    /// Priority for mass-income actions.
+    pub mass: u8,
+    /// Priority for energy-income actions.
+    pub energy: u8,
+    /// Priority for build-power (engineer) actions.
+    pub build_power: u8,
+}
+
 /// Reasoning data for a single committed scheduling step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepReasoning {
@@ -64,6 +90,10 @@ pub struct StepReasoning {
     /// Highest-scoring candidates considered for this step, sorted from best to
     /// worst.
     pub top_candidates: Vec<CandidateReasoning>,
+    /// Direction confidence scores that led to this decision.
+    pub direction_scores: DirectionScores,
+    /// Priority weights used to scale the direction scores.
+    pub priority_table: PriorityTable,
 }
 
 /// A schedule plus the per-step candidate reasoning used to produce it.

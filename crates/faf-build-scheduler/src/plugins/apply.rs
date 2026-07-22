@@ -12,6 +12,7 @@ use crate::request::SearchOptions;
 use crate::resources::{
     CurrentTechLevel, EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
 };
+use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes};
 use crate::result::{Action, CandidateReasoning, ScheduleError, StepReasoning, StepResult};
 use crate::search::{
     build_schedule, build_task_for_action, compute_current_tech_level, BlueprintLibraryRef,
@@ -36,6 +37,8 @@ pub(crate) fn apply_best_system(
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
     mut result: ResMut<SchedulerResult>,
+    scores: Res<DirectionScoresRes>,
+    priorities: Res<PriorityTableRes>,
     candidates: Query<(
         Entity,
         &CandidateAction,
@@ -205,6 +208,8 @@ pub(crate) fn apply_best_system(
         step_id: task_id,
         chosen: best_action.0.clone(),
         top_candidates,
+        direction_scores: scores.0,
+        priority_table: priorities.0,
     });
 
     progress.next_id += 1;
