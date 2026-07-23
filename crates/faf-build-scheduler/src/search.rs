@@ -258,10 +258,7 @@ pub(crate) fn simulate_action(
 /// This is used when the unit is about to be replaced by an upgrade: the source
 /// stops producing and its storage capacity is removed, while the new unit's
 /// contributions are added by the solver at completion.
-fn subtract_source_contributions(
-    snapshot: &EcoSnapshot,
-    source: &UnitEcoStats,
-) -> EcoSnapshot {
+fn subtract_source_contributions(snapshot: &EcoSnapshot, source: &UnitEcoStats) -> EcoSnapshot {
     EcoSnapshot {
         production_per_second_mass: snapshot.production_per_second_mass
             - MassRate::from_raw(
@@ -272,7 +269,8 @@ fn subtract_source_contributions(
                 source.production_per_second_energy
                     * source.adjacency.energy_production_multiplier(),
             ),
-        maintenance_consumption_per_second_energy: snapshot.maintenance_consumption_per_second_energy
+        maintenance_consumption_per_second_energy: snapshot
+            .maintenance_consumption_per_second_energy
             - EnergyRate::from_raw(source.maintenance_consumption_per_second_energy),
         mass_storage_cap: snapshot.mass_storage_cap - Mass::from_raw(source.mass_storage),
         energy_storage_cap: snapshot.energy_storage_cap - Energy::from_raw(source.energy_storage),

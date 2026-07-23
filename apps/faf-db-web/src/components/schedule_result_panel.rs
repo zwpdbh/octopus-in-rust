@@ -1,11 +1,19 @@
 use dioxus::prelude::*;
 
 use crate::components::{
-    inventory_after_steps, CurrentUnits, EcoSnapshotView, ScheduleFormState, ScheduleModeTab,
-    StepTimeline,
+    inventory_after_steps, AxisSide, ChartMetric, CurrentUnits, DualAxisSeries, DualAxisUplotChart,
+    EcoSnapshotView, RGBColor, ScheduleFormState, ScheduleModeTab, StepTimeline,
 };
 use crate::types::{ConstructionPlan, EcoSnapshot, Schedule, ScheduleUiState, StepReasoning};
 use crate::utils::kind_label;
+
+/// Single data point for the dual-axis net-income chart.
+#[derive(Clone, PartialEq)]
+struct IncomePoint {
+    time: f64,
+    mass: f64,
+    energy: f64,
+}
 
 /// Center column: scheduling result.
 ///
@@ -178,13 +186,18 @@ fn ResultStatusHeader(status: ResultStatus, form: Signal<ScheduleFormState>) -> 
 /// This is the counterpart to [`step_timeline::EconomyBeforeDecision`]; it shows
 /// the economy once every step has been applied rather than the initial state.
 #[component]
-fn EconomyAfterFinalStep(eco: EcoSnapshot) -> Element {
+fn EconomyAfterFinalStep(
+    eco: EcoSnapshot,
+    #[props(default = "flex flex-col gap-1 min-w-0")] class: &'static str,
+) -> Element {
     rsx! {
-        div { class: "flex flex-col gap-1 flex-1 min-w-0 max-w-2xl",
+        div { class: "{class}",
             h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
                 "Economy after final step"
             }
-            EcoSnapshotView { snapshot: eco, compact: true }
+            div { class: "max-w-2xl",
+                EcoSnapshotView { snapshot: eco, compact: true }
+            }
         }
     }
 }
@@ -223,8 +236,23 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
     };
     let final_units = inventory_after_steps(&form_state.initial_inventory, &schedule.steps);
 
+    let income_data: Vec<IncomePoint> = std::iter::once(IncomePoint {
+        time: 0.0,
+        mass: form_state.initial_mass_production,
+        energy: form_state.initial_energy_production,
+    })
+    .chain(schedule.steps.iter().map(|s| IncomePoint {
+        time: s.finish_time_seconds,
+        mass: s.economy.production_per_second_mass.value() - s.economy.mass_drain.value(),
+        energy: s.economy.production_per_second_energy.value()
+            - s.economy.energy_drain.value()
+            - s.economy.maintenance_consumption_per_second_energy.value(),
+    }))
+    .collect();
+    let income_signal = use_signal(|| income_data);
+
     rsx! {
-        div { class: "shrink-0 rounded border border-emerald-800 bg-emerald-950/40 p-3 flex flex-col gap-3 xl:max-w-[50%]",
+        div { class: "shrink-0 rounded border border-emerald-800 bg-emerald-950/40 p-3 flex flex-col gap-3",
             // Headline and meta.
             div { class: "flex items-center justify-between gap-2",
                 p { class: "text-sm font-semibold text-emerald-300", "✓ {headline}" }
@@ -250,14 +278,41 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
                 }
             }
 
-            // Composite body: final economy + final units.
-            // The economy view is capped so its storage bars do not stretch
-            // absurdly wide on large monitors; the unit list fills the rest.
-            div { class: "flex flex-col lg:flex-row gap-3 items-stretch",
-                EconomyAfterFinalStep { eco: schedule.final_eco }
-                CurrentUnits {
-                    units: final_units,
-                    class: "flex flex-col gap-1 flex-1 min-w-0",
+            // 2-column dashboard layout:
+            //   left: economy and units stacked
+            //   right: one big dual-axis chart for mass + energy net income
+            div { class: "grid grid-cols-1 lg:grid-cols-[minmax(300px,1fr)_2fr] gap-3 items-stretch",
+                div { class: "flex flex-col gap-3",
+                    EconomyAfterFinalStep { eco: schedule.final_eco }
+                    CurrentUnits {
+                        units: final_units,
+                        class: "flex flex-col gap-1 flex-1 min-w-0",
+                    }
+                }
+                div { class: "flex flex-col gap-1 min-w-0 h-full",
+                    h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                        "Net income over time"
+                    }
+                    DualAxisUplotChart {
+                        data: income_signal,
+                        x_extractor: ChartMetric::new(|p: &IncomePoint| p.time),
+                        series: vec![
+                            DualAxisSeries::new(
+                                "Mass",
+                                RGBColor(52, 211, 153),
+                                AxisSide::Left,
+                                ChartMetric::new(|p: &IncomePoint| p.mass),
+                            ),
+                            DualAxisSeries::new(
+                                "Energy",
+                                RGBColor(251, 191, 36),
+                                AxisSide::Right,
+                                ChartMetric::new(|p: &IncomePoint| p.energy),
+                            ),
+                        ],
+                        left_axis_label: "Mass net income (/s)",
+                        right_axis_label: "Energy net income (/s)",
+                    }
                 }
             }
         }

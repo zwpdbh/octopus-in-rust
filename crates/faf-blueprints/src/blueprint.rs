@@ -814,8 +814,7 @@ mod tests {
                 < 1e-9
         );
         assert!(
-            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T2)) - 9.0).abs()
-                < 1e-9
+            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T2)) - 9.0).abs() < 1e-9
         );
 
         assert!(units.mass_storage(&UnitKind::CapMex(TechLevel::T3)) > 0.0);

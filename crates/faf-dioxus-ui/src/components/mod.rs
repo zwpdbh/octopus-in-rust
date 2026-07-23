@@ -8,4 +8,7 @@ pub use count_slider::CountSlider;
 pub use graph_view::{GraphData, GraphEdgeData, GraphNodeData, GraphView};
 pub use slider_field::SliderField;
 pub use stat::Stat;
-pub use uplot_chart::{ChartMetric, ChartSeries, ChartTab, UplotChart};
+pub use uplot_chart::{
+    AxisSide, ChartMetric, ChartSeries, ChartTab, DualAxisSeries, DualAxisUplotChart, RGBColor,
+    UplotChart,
+};

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dioxus::prelude::*;
 use js_sys::{Array, Function, Object, Reflect};
-use plotters::prelude::RGBColor;
+pub use plotters::prelude::RGBColor;
 use wasm_bindgen::prelude::*;
 use web_sys::window;
 
@@ -367,6 +367,10 @@ fn build_opts<T: Clone>(
     axes.push(&axis_opts());
     Reflect::set(&opts, &"axes".into(), &axes).unwrap();
 
+    let legend = Object::new();
+    Reflect::set(&legend, &"show".into(), &JsValue::from_bool(false)).unwrap();
+    Reflect::set(&opts, &"legend".into(), &legend).unwrap();
+
     let hooks = Object::new();
     let set_cursor_arr = Array::new();
     set_cursor_arr.push(set_cursor.as_ref());
@@ -486,4 +490,345 @@ fn format_time(seconds: f64) -> String {
 
 fn rgb_to_hex(color: plotters::prelude::RGBColor) -> String {
     format!("#{:02x}{:02x}{:02x}", color.0, color.1, color.2)
+}
+
+/// Which Y-axis a series should be plotted against in a dual-axis chart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisSide {
+    Left,
+    Right,
+}
+
+/// Configuration for one series in a dual-axis chart.
+#[derive(Clone, PartialEq)]
+pub struct DualAxisSeries<T> {
+    /// Label shown in the legend and tooltip.
+    pub label: String,
+    /// Color used for the line.
+    pub color: RGBColor,
+    /// Which Y-axis this series uses.
+    pub side: AxisSide,
+    /// Extracts the y value for a data point.
+    pub y_extractor: ChartMetric<T>,
+}
+
+impl<T> DualAxisSeries<T> {
+    pub fn new(
+        label: impl Into<String>,
+        color: RGBColor,
+        side: AxisSide,
+        y_extractor: ChartMetric<T>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            color,
+            side,
+            y_extractor,
+        }
+    }
+}
+
+/// High-performance dual-axis time-series chart backed by uPlot.
+///
+/// This is a specialized variant of [`UplotChart`] that always renders a single
+/// chart with two Y-axes: one on the left and one on the right. Each series is
+/// assigned to a side via [`AxisSide`].
+#[component]
+pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
+    data: Signal<Vec<T>>,
+    x_extractor: ChartMetric<T>,
+    series: Vec<DualAxisSeries<T>>,
+    #[props(default = "Left axis")] left_axis_label: &'static str,
+    #[props(default = "Right axis")] right_axis_label: &'static str,
+) -> Element {
+    let chart_id = use_hook(|| {
+        let id = CHART_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("uplot-dual-axis-chart-{id}")
+    });
+    let chart_state: Rc<RefCell<Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)>>> =
+        use_hook(|| Rc::new(RefCell::new(None)));
+    let chart_state_for_effect = chart_state.clone();
+    let chart_state_for_cleanup = chart_state.clone();
+
+    let tooltip = use_signal(|| None::<(String, Vec<(String, String)>)>);
+    let tooltip_pos = use_signal(|| (0.0_f64, 0.0_f64));
+
+    use_drop(move || {
+        if let Some((chart, _)) = chart_state_for_cleanup.borrow_mut().take() {
+            let _ = destroy_chart(&chart);
+        }
+    });
+
+    let chart_id_for_effect = chart_id.clone();
+    let series_for_effect = series.clone();
+    use_effect(move || {
+        let points = data.read();
+        let mut state = chart_state_for_effect.borrow_mut();
+        let should_create = state.is_none();
+        if should_create {
+            match create_dual_axis_chart(
+                &chart_id_for_effect,
+                data,
+                x_extractor,
+                &series_for_effect,
+                tooltip,
+                tooltip_pos,
+                left_axis_label,
+                right_axis_label,
+            ) {
+                Some((chart, hooks)) => {
+                    *state = Some((chart, hooks));
+                }
+                None => {}
+            }
+        } else if let Some((chart, _)) = state.as_ref() {
+            let _ = update_dual_axis_chart(chart, &points, x_extractor, &series_for_effect);
+        }
+    });
+
+    rsx! {
+        document::Style {
+            r#"
+            .uplot-chart-container .uplot {{
+                width: 100% !important;
+                height: 100% !important;
+            }}
+            .uplot-chart-container .uplot .title {{
+                color: #ffffff;
+            }}
+            .uplot-chart-container .uplot .u-axis {{
+                color: #a3a3a3;
+            }}
+            "#
+        }
+        div { class: "flex-1 flex flex-col min-h-0",
+            div { class: "flex items-center justify-center gap-4 mb-1 shrink-0",
+                for s in series.iter() {
+                    LegendItem {
+                        color: rgb_to_hex(s.color),
+                        label: s.label.clone(),
+                    }
+                }
+            }
+            div { class: "flex-1 rounded-lg border border-neutral-800 bg-[#171717] p-2 min-h-0 overflow-hidden flex flex-col",
+                div { class: "flex-1 min-h-0 relative",
+                    div {
+                        id: "{chart_id}",
+                        class: "absolute inset-0 uplot-chart-container",
+                    }
+                    if let Some((time, values)) = tooltip.read().as_ref() {
+                        div {
+                            class: "absolute z-10 px-2 py-1 rounded bg-neutral-900 border border-neutral-700 text-xs text-white shadow pointer-events-none",
+                            style: "left: {tooltip_pos.read().0 + 12.0}px; top: {tooltip_pos.read().1 - 64.0}px;",
+                            div { "{time}" }
+                            for (label , value) in values.iter() {
+                                div { "{label}: {value}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn create_dual_axis_chart<T: Clone + 'static>(
+    element_id: &str,
+    data: Signal<Vec<T>>,
+    x_extractor: ChartMetric<T>,
+    series: &[DualAxisSeries<T>],
+    tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
+    tooltip_pos: Signal<(f64, f64)>,
+    left_axis_label: &'static str,
+    right_axis_label: &'static str,
+) -> Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)> {
+    let window = window()?;
+    let document = window.document()?;
+    let container = document.get_element_by_id(element_id)?;
+
+    let points = data.read();
+    let series_data = build_dual_axis_series_data(&points, x_extractor, series);
+    let width = container.client_width().max(1) as f64;
+    let height = container.client_height().max(1) as f64;
+
+    let set_cursor =
+        build_dual_axis_set_cursor_closure(data, x_extractor, series, tooltip, tooltip_pos);
+    let opts = build_dual_axis_opts(
+        series,
+        width,
+        height,
+        &set_cursor,
+        left_axis_label,
+        right_axis_label,
+    );
+
+    let uplot = Reflect::get(&window, &"uPlot".into()).ok()?;
+    let uplot_fn = Function::from(uplot);
+    let args = Array::new();
+    args.push(&opts);
+    args.push(&series_data);
+    args.push(&container);
+    let chart = Reflect::construct(&uplot_fn, &args).ok()?;
+
+    let hooks = vec![set_cursor];
+    Some((chart, hooks))
+}
+
+fn update_dual_axis_chart<T: Clone>(
+    chart: &JsValue,
+    data: &[T],
+    x_extractor: ChartMetric<T>,
+    series: &[DualAxisSeries<T>],
+) -> Result<(), JsValue> {
+    let series_data = build_dual_axis_series_data(data, x_extractor, series);
+    let set_data = Reflect::get(chart, &"setData".into())?;
+    let set_data_fn = Function::from(set_data);
+    Reflect::apply(&set_data_fn, chart, &Array::of1(&series_data))?;
+    Ok(())
+}
+
+fn build_dual_axis_series_data<T: Clone>(
+    data: &[T],
+    x_extractor: ChartMetric<T>,
+    series: &[DualAxisSeries<T>],
+) -> Array {
+    let xs = Array::new();
+    let ys_list: Vec<Array> = series.iter().map(|_| Array::new()).collect();
+    for point in data {
+        xs.push(&JsValue::from_f64(x_extractor.extract(point)));
+        for (i, s) in series.iter().enumerate() {
+            ys_list[i].push(&JsValue::from_f64(s.y_extractor.extract(point)));
+        }
+    }
+    let series_data = Array::new();
+    series_data.push(&xs);
+    for ys in ys_list {
+        series_data.push(&ys);
+    }
+    series_data
+}
+
+fn build_dual_axis_opts<T: Clone>(
+    series: &[DualAxisSeries<T>],
+    width: f64,
+    height: f64,
+    set_cursor: &Closure<dyn FnMut(JsValue)>,
+    left_axis_label: &'static str,
+    right_axis_label: &'static str,
+) -> Object {
+    let opts = Object::new();
+    Reflect::set(&opts, &"width".into(), &JsValue::from_f64(width)).unwrap();
+    Reflect::set(&opts, &"height".into(), &JsValue::from_f64(height)).unwrap();
+
+    let series_arr = Array::new();
+    series_arr.push(&Object::new()); // x-axis series placeholder
+    for s in series {
+        let y_series = Object::new();
+        Reflect::set(&y_series, &"label".into(), &s.label.as_str().into()).unwrap();
+        Reflect::set(&y_series, &"stroke".into(), &rgb_to_hex(s.color).into()).unwrap();
+        Reflect::set(&y_series, &"width".into(), &JsValue::from_f64(2.0)).unwrap();
+        let scale_name = match s.side {
+            AxisSide::Left => "left",
+            AxisSide::Right => "right",
+        };
+        Reflect::set(&y_series, &"scale".into(), &scale_name.into()).unwrap();
+        series_arr.push(&y_series);
+    }
+    Reflect::set(&opts, &"series".into(), &series_arr).unwrap();
+
+    let axes = Array::new();
+    axes.push(&x_axis_opts());
+
+    let left_axis = axis_opts();
+    Reflect::set(&left_axis, &"scale".into(), &"left".into()).unwrap();
+    Reflect::set(&left_axis, &"label".into(), &left_axis_label.into()).unwrap();
+    axes.push(&left_axis);
+
+    let right_axis = axis_opts();
+    Reflect::set(&right_axis, &"scale".into(), &"right".into()).unwrap();
+    Reflect::set(&right_axis, &"side".into(), &JsValue::from_f64(1.0)).unwrap();
+    Reflect::set(&right_axis, &"label".into(), &right_axis_label.into()).unwrap();
+    axes.push(&right_axis);
+
+    Reflect::set(&opts, &"axes".into(), &axes).unwrap();
+
+    let hooks = Object::new();
+    let set_cursor_arr = Array::new();
+    set_cursor_arr.push(set_cursor.as_ref());
+    Reflect::set(&hooks, &"setCursor".into(), &set_cursor_arr).unwrap();
+    Reflect::set(&opts, &"hooks".into(), &hooks).unwrap();
+
+    let scales = Object::new();
+    let x_scale = Object::new();
+    Reflect::set(&x_scale, &"auto".into(), &JsValue::from_bool(true)).unwrap();
+    Reflect::set(&x_scale, &"time".into(), &JsValue::from_bool(false)).unwrap();
+    Reflect::set(&scales, &"x".into(), &x_scale).unwrap();
+
+    let left_scale = Object::new();
+    Reflect::set(&left_scale, &"auto".into(), &JsValue::from_bool(true)).unwrap();
+    Reflect::set(&scales, &"left".into(), &left_scale).unwrap();
+
+    let right_scale = Object::new();
+    Reflect::set(&right_scale, &"auto".into(), &JsValue::from_bool(true)).unwrap();
+    Reflect::set(&scales, &"right".into(), &right_scale).unwrap();
+
+    Reflect::set(&opts, &"scales".into(), &scales).unwrap();
+
+    opts
+}
+
+fn build_dual_axis_set_cursor_closure<T: Clone + 'static>(
+    data: Signal<Vec<T>>,
+    x_extractor: ChartMetric<T>,
+    series: &[DualAxisSeries<T>],
+    mut tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
+    mut tooltip_pos: Signal<(f64, f64)>,
+) -> Closure<dyn FnMut(JsValue)> {
+    let series = series.to_vec();
+    Closure::wrap(Box::new(move |u: JsValue| {
+        let Ok(cursor) = Reflect::get(&u, &"cursor".into()) else {
+            tooltip.set(None);
+            return;
+        };
+        let Ok(idx_val) = Reflect::get(&cursor, &"idx".into()) else {
+            tooltip.set(None);
+            return;
+        };
+        let Some(idx) = idx_val.as_f64() else {
+            tooltip.set(None);
+            return;
+        };
+        if idx < 0.0 {
+            tooltip.set(None);
+            return;
+        }
+
+        let idx = idx as usize;
+        let points = data.read();
+        let Some(point) = points.get(idx) else {
+            tooltip.set(None);
+            return;
+        };
+
+        let x = x_extractor.extract(point);
+        let values = series
+            .iter()
+            .map(|s| {
+                let y = s.y_extractor.extract(point);
+                (s.label.clone(), format!("{:.2}", y))
+            })
+            .collect();
+        tooltip.set(Some((format_time(x), values)));
+
+        if let (Some(left), Some(top)) = (
+            Reflect::get(&cursor, &"left".into())
+                .ok()
+                .and_then(|v| v.as_f64()),
+            Reflect::get(&cursor, &"top".into())
+                .ok()
+                .and_then(|v| v.as_f64()),
+        ) {
+            tooltip_pos.set((left, top));
+        }
+    }) as Box<dyn FnMut(JsValue)>)
 }
