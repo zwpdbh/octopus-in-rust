@@ -1,7 +1,10 @@
 use dioxus::prelude::*;
 
-use crate::components::{ScheduleFormState, ScheduleModeTab, StepTimeline};
-use crate::types::{ConstructionPlan, Schedule, ScheduleUiState, StepReasoning};
+use crate::components::{
+    inventory_after_steps, CurrentUnits, EcoSnapshotView, ScheduleFormState, ScheduleModeTab,
+    StepTimeline,
+};
+use crate::types::{ConstructionPlan, EcoSnapshot, Schedule, ScheduleUiState, StepReasoning};
 use crate::utils::kind_label;
 
 /// Center column: scheduling result.
@@ -101,6 +104,7 @@ fn ResultStreaming(
                 steps,
                 reasoning,
                 initial_eco: form.read().initial_snapshot(),
+                initial_inventory: form.read().initial_inventory.clone(),
                 selected_step,
             }
         }
@@ -141,6 +145,7 @@ fn ResultSuccess(
                 steps: schedule.steps.clone(),
                 reasoning,
                 initial_eco: form.read().initial_snapshot(),
+                initial_inventory: form.read().initial_inventory.clone(),
                 selected_step,
             }
 
@@ -168,42 +173,93 @@ fn ResultStatusHeader(status: ResultStatus, form: Signal<ScheduleFormState>) -> 
     }
 }
 
-/// Green banner summarizing a successful schedule.
+/// Economy state after the schedule's final committed step.
+///
+/// This is the counterpart to [`step_timeline::EconomyBeforeDecision`]; it shows
+/// the economy once every step has been applied rather than the initial state.
+#[component]
+fn EconomyAfterFinalStep(eco: EcoSnapshot) -> Element {
+    rsx! {
+        div { class: "flex flex-col gap-1 flex-1 min-w-0 max-w-2xl",
+            h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                "Economy after final step"
+            }
+            EcoSnapshotView { snapshot: eco, compact: true }
+        }
+    }
+}
+
+/// Green card summarizing a successful schedule.
+///
+/// The card composites the final economy snapshot with the final unit
+/// inventory, mirroring the per-step detail panels in the timeline.
 #[component]
 fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> Element {
     let form_state = form.read();
     let step_count = schedule.steps.len();
     let total = schedule.total_time_seconds;
     let initial_mass = form_state.initial_mass_production;
+    let initial_energy = form_state.initial_energy_production;
     let final_mass = schedule.final_eco.production_per_second_mass.value();
     let final_energy = schedule.final_eco.production_per_second_energy.value();
     let is_eco = form_state.mode == ScheduleModeTab::Eco;
     let target_met = final_mass + form_state.tolerance >= form_state.target_mass_production;
     let headline = match form_state.mode {
-        ScheduleModeTab::Eco => format!("Reached eco target in {total:.1}s"),
+        ScheduleModeTab::Eco => "Reached eco target".to_string(),
         ScheduleModeTab::Unit => {
             let name = form_state
                 .unit_target
                 .as_ref()
                 .map(kind_label)
                 .unwrap_or_else(|| "unit".to_string());
-            format!("Built {name} in {total:.1}s")
+            format!("Built {name}")
         }
     };
+    let target_mark = if target_met { "✓" } else { "✗" };
+    let target_class = if target_met {
+        "text-emerald-400"
+    } else {
+        "text-red-400"
+    };
+    let final_units = inventory_after_steps(&form_state.initial_inventory, &schedule.steps);
 
     rsx! {
-        div { class: "shrink-0 rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2",
-            p { class: "text-sm font-semibold text-emerald-300", "✓ {headline} ({step_count} steps)" }
-            p { class: "text-xs text-neutral-300 mt-1",
-                "Mass income {initial_mass:.0}/s → {final_mass:.0}/s"
-                if is_eco {
-                    {
-                        let mark = if target_met { "✓" } else { "✗" };
-                        rsx! { " (target {form_state.target_mass_production:.0}/s {mark})" }
+        div { class: "shrink-0 rounded border border-emerald-800 bg-emerald-950/40 p-3 flex flex-col gap-3 xl:max-w-[50%]",
+            // Headline and meta.
+            div { class: "flex items-center justify-between gap-2",
+                p { class: "text-sm font-semibold text-emerald-300", "✓ {headline}" }
+                span { class: "text-xs font-mono text-neutral-400", "{total:.1}s · {step_count} steps" }
+            }
+
+            // Compact transition summary as readable stat blocks.
+            div { class: "flex flex-wrap items-center gap-x-4 gap-y-1 text-xs",
+                div { class: "flex items-center gap-1.5",
+                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide", "Mass" }
+                    span { class: "font-mono text-neutral-300", "{initial_mass:.0}/s" }
+                    span { class: "text-neutral-500", "→" }
+                    span { class: "font-mono text-emerald-300", "{final_mass:.0}/s" }
+                    if is_eco {
+                        span { class: "text-[10px] {target_class}", "(target {form_state.target_mass_production:.0}/s {target_mark})" }
                     }
                 }
+                div { class: "flex items-center gap-1.5",
+                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide", "Energy" }
+                    span { class: "font-mono text-neutral-300", "{initial_energy:.0}/s" }
+                    span { class: "text-neutral-500", "→" }
+                    span { class: "font-mono text-amber-300", "{final_energy:.0}/s" }
+                }
             }
-            p { class: "text-xs text-neutral-300", "Energy income → {final_energy:.0}/s" }
+
+            // Composite body: final economy + final units.
+            // The economy view is capped so its storage bars do not stretch
+            // absurdly wide on large monitors; the unit list fills the rest.
+            div { class: "flex flex-col lg:flex-row gap-3 items-stretch",
+                EconomyAfterFinalStep { eco: schedule.final_eco }
+                CurrentUnits {
+                    units: final_units,
+                    class: "flex flex-col gap-1 flex-1 min-w-0",
+                }
+            }
         }
     }
 }

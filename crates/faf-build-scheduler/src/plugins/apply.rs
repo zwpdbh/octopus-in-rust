@@ -17,8 +17,8 @@ use crate::resources::{
 };
 use crate::result::{Action, CandidateReasoning, ScheduleError, StepReasoning, StepResult};
 use crate::search::{
-    build_schedule, build_task_for_action, BlueprintLibraryRef, CandidateAction, CandidateScore,
-    SearchTarget,
+    build_schedule, build_task_for_action, simulate_action, BlueprintLibraryRef, CandidateAction,
+    CandidateScore, SearchTarget,
 };
 
 /// Log of per-step candidate reasoning captured during the search.
@@ -124,9 +124,11 @@ pub(crate) fn apply_best_system(
     };
 
     // Simulate the task in isolation to get its finish time and resulting economy.
-    let completion = faf_solver::plan_completion_with_tasks(
+    let completion = simulate_action(
         &economy.current,
-        &[task.clone()],
+        &best_action.0,
+        &task,
+        library,
         options.simulation_max_time_seconds,
     );
     let final_task = completion.tasks.last().cloned().unwrap_or(completion.total);

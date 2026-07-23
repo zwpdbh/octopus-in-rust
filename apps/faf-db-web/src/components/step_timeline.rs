@@ -17,6 +17,7 @@ pub fn StepTimeline(
     steps: Vec<StepResult>,
     reasoning: Vec<StepReasoning>,
     initial_eco: EcoSnapshot,
+    initial_inventory: Vec<UnitKind>,
     mut selected_step: Signal<Option<usize>>,
 ) -> Element {
     rsx! {
@@ -48,7 +49,16 @@ pub fn StepTimeline(
                         let end_seconds = step.finish_time_seconds;
                         let time_label = format_duration_range(start_seconds, end_seconds);
                         let pre_eco = pre_step_eco(&steps, &initial_eco, idx);
+                        let mass_net = pre_eco.production_per_second_mass.value()
+                            - pre_eco.mass_drain.value();
+                        let mass_net_class = if mass_net >= 0.0 {
+                            "text-emerald-300"
+                        } else {
+                            "text-red-300"
+                        };
+                        let mass_net_sign = if mass_net >= 0.0 { "+" } else { "" };
                         let step_reasoning = reasoning.get(idx).cloned();
+                        let current_units = inventory_after_step(&initial_inventory, &steps, idx);
                         rsx! {
                             div { class: "flex flex-col",
                                 div {
@@ -63,10 +73,13 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-8 shrink-0 text-right", "#{idx + 1}" }
+                                    span { class: "text-xs font-mono {mass_net_class} w-16 shrink-0 text-right whitespace-nowrap",
+                                        "{mass_net_sign}{mass_net:.1}/s"
+                                    }
                                     span { class: "w-14 shrink-0 inline-flex items-center justify-center px-1 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide {tag_class}",
                                         "{tag_label}"
                                     }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-56 whitespace-nowrap text-right",
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-48 whitespace-nowrap text-right",
                                         "{time_label}"
                                     }
                                     span { class: "flex-1 min-w-0 text-sm {accent_text} truncate", "{description}" }
@@ -80,7 +93,12 @@ pub fn StepTimeline(
                                     }
                                 }
                                 if is_selected {
-                                    StepDetails { step: step.clone(), reasoning: step_reasoning, pre_eco }
+                                    StepDetails {
+                                        step: step.clone(),
+                                        reasoning: step_reasoning,
+                                        pre_eco,
+                                        current_units,
+                                    }
                                 }
                             }
                         }
@@ -126,6 +144,7 @@ fn StepDetails(
     step: StepResult,
     reasoning: Option<StepReasoning>,
     pre_eco: EcoSnapshot,
+    current_units: Vec<UnitKind>,
 ) -> Element {
     let (scores, priorities) = reasoning
         .as_ref()
@@ -134,9 +153,10 @@ fn StepDetails(
 
     rsx! {
         div { class: "mt-2 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col gap-4",
-            // Top row: economy snapshot next to decision scores.
+            // Top row: economy snapshot and current units next to decision scores.
             div { class: "flex flex-col lg:flex-row gap-4",
                 EconomyBeforeDecision { pre_eco }
+                CurrentUnits { units: current_units }
                 DecisionScores { scores, priorities }
             }
 
@@ -157,6 +177,87 @@ fn EconomyBeforeDecision(pre_eco: EcoSnapshot) -> Element {
             EcoSnapshotView { snapshot: pre_eco }
         }
     }
+}
+
+/// Units that exist after this step has been committed, grouped by kind.
+#[component]
+pub fn CurrentUnits(
+    units: Vec<UnitKind>,
+    #[props(default = "Units after step")] title: &'static str,
+    #[props(default = "flex flex-col gap-1 lg:w-[260px] shrink-0")] class: &'static str,
+) -> Element {
+    let grouped = group_unit_counts(&units);
+    rsx! {
+        div { class: "{class}",
+            h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                "{title}"
+            }
+            div { class: "flex-1 rounded border border-neutral-800 bg-neutral-900/50 p-2 overflow-auto",
+                if grouped.is_empty() {
+                    p { class: "text-xs text-neutral-500", "No units." }
+                } else {
+                    div { class: "flex flex-col gap-1",
+                        for (kind , count) in grouped {
+                            div { class: "flex items-center justify-between gap-2",
+                                span { class: "text-xs text-neutral-300 truncate", "{kind_label(&kind)}" }
+                                span { class: "text-xs font-mono text-neutral-200 shrink-0", "× {count}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compute the inventory after committing step `idx`.
+fn inventory_after_step(
+    initial_inventory: &[UnitKind],
+    steps: &[StepResult],
+    idx: usize,
+) -> Vec<UnitKind> {
+    let mut inventory = initial_inventory.to_vec();
+    for step in steps.iter().take(idx + 1) {
+        apply_step_to_inventory(&mut inventory, step);
+    }
+    inventory
+}
+
+/// Compute the inventory after all steps have been committed.
+pub fn inventory_after_steps(
+    initial_inventory: &[UnitKind],
+    steps: &[StepResult],
+) -> Vec<UnitKind> {
+    let mut inventory = initial_inventory.to_vec();
+    for step in steps {
+        apply_step_to_inventory(&mut inventory, step);
+    }
+    inventory
+}
+
+fn apply_step_to_inventory(inventory: &mut Vec<UnitKind>, step: &StepResult) {
+    match &step.action {
+        Action::Build { target, .. } => {
+            inventory.push(target.clone());
+        }
+        Action::Upgrade { from, to, .. } => {
+            if let Some(pos) = inventory.iter().position(|u| u == from) {
+                inventory.remove(pos);
+            }
+            inventory.push(to.clone());
+        }
+    }
+}
+
+/// Group a unit list into (kind, count) pairs sorted by display label.
+fn group_unit_counts(units: &[UnitKind]) -> Vec<(UnitKind, usize)> {
+    let mut counts: std::collections::HashMap<UnitKind, usize> = std::collections::HashMap::new();
+    for unit in units {
+        *counts.entry(unit.clone()).or_insert(0) += 1;
+    }
+    let mut grouped: Vec<_> = counts.into_iter().collect();
+    grouped.sort_by(|a, b| kind_label(&a.0).cmp(&kind_label(&b.0)));
+    grouped
 }
 
 /// Direction-confidence and priority-weight tables used for this decision.

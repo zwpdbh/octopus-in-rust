@@ -32,7 +32,7 @@ pub use queue_item_list::QueueItemList;
 pub use schedule_request_panel::{ScheduleFormState, ScheduleModeTab, ScheduleRequestPanel};
 pub use schedule_result_panel::ScheduleResultPanel;
 pub use simulation_panel::SimulationPanel;
-pub use step_timeline::StepTimeline;
+pub use step_timeline::{inventory_after_steps, CurrentUnits, StepTimeline};
 pub use unit_block::UnitBlock;
 pub use unit_detail::UnitDetail;
 pub use unit_selector::UnitSelector;

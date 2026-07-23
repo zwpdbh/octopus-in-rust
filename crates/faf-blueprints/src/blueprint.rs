@@ -797,6 +797,14 @@ mod tests {
     fn storage_and_capped_mex_units_are_defined() {
         let units = load_library();
 
+        // Base mass-extractor outputs (these are the canonical FAF values).
+        assert!(
+            (units.production_per_second_mass(&UnitKind::Mex(TechLevel::T2)) - 6.0).abs() < 1e-9
+        );
+        assert!(
+            (units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)) - 18.0).abs() < 1e-9
+        );
+
         assert!(units.mass_storage(&UnitKind::CapMex(TechLevel::T2)) > 0.0);
         // A capped mex produces 1.5x the base output (4 storages * +12.5%).
         assert!(
@@ -805,12 +813,20 @@ mod tests {
             .abs()
                 < 1e-9
         );
+        assert!(
+            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T2)) - 9.0).abs()
+                < 1e-9
+        );
 
         assert!(units.mass_storage(&UnitKind::CapMex(TechLevel::T3)) > 0.0);
         assert!(
             (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T3))
                 - 1.5 * units.production_per_second_mass(&UnitKind::Mex(TechLevel::T3)))
             .abs()
+                < 1e-9
+        );
+        assert!(
+            (units.production_per_second_mass(&UnitKind::CapMex(TechLevel::T3)) - 27.0).abs()
                 < 1e-9
         );
 
