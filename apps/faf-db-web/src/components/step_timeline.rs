@@ -494,12 +494,21 @@ fn describe_step(action: &Action) -> String {
 /// Short label and badge classes for a step row based on what the step builds
 /// or upgrades.
 fn step_tag(action: &Action) -> (&'static str, &'static str) {
+    if is_mex_related(action) {
+        return (
+            "Mass",
+            "bg-emerald-900/50 text-emerald-300 border border-emerald-700/50",
+        );
+    }
+    if is_upgrade(action) {
+        let label = upgrade_label(action);
+        return (
+            label,
+            "bg-purple-900/50 text-purple-300 border border-purple-700/50",
+        );
+    }
     match action {
         Action::Build { target, .. } => match target {
-            UnitKind::Mex(_) | UnitKind::CapMex(_) => (
-                "Mass",
-                "bg-emerald-900/50 text-emerald-300 border border-emerald-700/50",
-            ),
             UnitKind::Pgen(_) => (
                 "Power",
                 "bg-yellow-900/30 text-yellow-300 border border-yellow-600/40",
@@ -509,29 +518,45 @@ fn step_tag(action: &Action) -> (&'static str, &'static str) {
                 "bg-sky-900/30 text-sky-300 border border-sky-700/40",
             ),
         },
-        Action::Upgrade { .. } => (
-            "Upgrade",
-            "bg-red-900/30 text-red-300 border border-red-700/40",
-        ),
+        Action::Upgrade { .. } => unreachable!(),
+    }
+}
+
+fn upgrade_label(action: &Action) -> &'static str {
+    match action {
+        Action::Upgrade { to: target, .. } => match target {
+            UnitKind::Pgen(_) => "Power",
+            UnitKind::Factory(_) => "Tech",
+            _ => "Upgrade",
+        },
+        _ => "Upgrade",
     }
 }
 
 /// Border and text colour classes for a step row based on what the step builds
 /// or upgrades.
 fn step_accent(action: &Action) -> (&'static str, &'static str) {
+    if is_mex_related(action) {
+        return (
+            "border-emerald-700 hover:border-emerald-600",
+            "text-emerald-300",
+        );
+    }
+    if is_upgrade(action) {
+        return (
+            "border-purple-700 hover:border-purple-600",
+            "text-purple-300",
+        );
+    }
     match action {
         Action::Build { target, .. } => match target {
-            UnitKind::Mex(_) | UnitKind::CapMex(_) => (
-                "border-emerald-700 hover:border-emerald-600",
-                "text-emerald-300",
-            ),
             UnitKind::Pgen(_) => (
                 "border-yellow-600 hover:border-yellow-500",
                 "text-yellow-300",
             ),
             _ => ("border-sky-700 hover:border-sky-600", "text-sky-300"),
         },
-        Action::Upgrade { .. } => ("border-red-700 hover:border-red-600", "text-red-300"),
+        Action::Upgrade { .. } => unreachable!(),
     }
 }
 
@@ -541,32 +566,56 @@ fn candidate_row_class(action: &Action, is_chosen: bool) -> &'static str {
     if !is_chosen {
         return "flex items-start gap-3 px-2 py-1.5 rounded bg-neutral-900/40 border border-neutral-800";
     }
+    if is_mex_related(action) {
+        return "flex items-start gap-3 px-2 py-1.5 rounded bg-emerald-900/20 border border-emerald-700/50";
+    }
+    if is_upgrade(action) {
+        return "flex items-start gap-3 px-2 py-1.5 rounded bg-purple-900/20 border border-purple-700/50";
+    }
     match action {
         Action::Build { target, .. } => match target {
-            UnitKind::Mex(_) | UnitKind::CapMex(_) => {
-                "flex items-start gap-3 px-2 py-1.5 rounded bg-emerald-900/20 border border-emerald-700/50"
-            }
             UnitKind::Pgen(_) => {
                 "flex items-start gap-3 px-2 py-1.5 rounded bg-yellow-900/20 border border-yellow-700/50"
             }
             _ => "flex items-start gap-3 px-2 py-1.5 rounded bg-sky-900/20 border border-sky-700/50",
         },
-        Action::Upgrade { .. } => {
-            "flex items-start gap-3 px-2 py-1.5 rounded bg-red-900/20 border border-red-700/50"
-        }
+        Action::Upgrade { .. } => unreachable!(),
     }
 }
 
 /// Score text colour for a chosen candidate row, matching its category.
 fn candidate_score_color(action: &Action) -> &'static str {
+    if is_mex_related(action) {
+        return "text-emerald-300";
+    }
+    if is_upgrade(action) {
+        return "text-purple-300";
+    }
     match action {
         Action::Build { target, .. } => match target {
-            UnitKind::Mex(_) | UnitKind::CapMex(_) => "text-emerald-300",
             UnitKind::Pgen(_) => "text-yellow-300",
             _ => "text-sky-300",
         },
-        Action::Upgrade { .. } => "text-red-300",
+        Action::Upgrade { .. } => unreachable!(),
     }
+}
+
+/// True when the action involves mass extractors (Mex or CapMex) in either the
+/// source or target unit.
+fn is_mex_related(action: &Action) -> bool {
+    match action {
+        Action::Build { target, .. } => is_mex_kind(target),
+        Action::Upgrade { from, to, .. } => is_mex_kind(from) || is_mex_kind(to),
+    }
+}
+
+fn is_mex_kind(kind: &UnitKind) -> bool {
+    matches!(kind, UnitKind::Mex(_) | UnitKind::CapMex(_))
+}
+
+/// True when the action is any upgrade (e.g. mex cap, factory tech, etc.).
+fn is_upgrade(action: &Action) -> bool {
+    matches!(action, Action::Upgrade { .. })
 }
 
 /// Summarise a list of builders as a count + kind string. Identical consecutive
