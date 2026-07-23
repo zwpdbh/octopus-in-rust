@@ -9,7 +9,6 @@ members = [
     "crates/faf-sim",
     "crates/faf-sim-service",
     "crates/faf-solver",
-    "crates/faf-build-prediction",
     "crates/faf-blueprints",
     "crates/faf-build-scheduler",
     "crates/faf-sim-shared",
@@ -33,7 +32,6 @@ resolver = "3"
 faf-dioxus-ui = { path = "crates/faf-dioxus-ui" }
 faf-sim = { path = "crates/faf-sim", default-features = false }
 faf-sim-service = { path = "crates/faf-sim-service" }
-faf-build-prediction = { path = "crates/faf-build-prediction" }
 faf-blueprints = { path = "crates/faf-blueprints" }
 faf-build-scheduler = { path = "crates/faf-build-scheduler" }
 faf-quantities = { path = "crates/faf-quantities" }

@@ -1,15 +1,12 @@
-//! CLI for the FAF build-queue simulator and build-time predictor.
+//! CLI for the FAF build-queue simulator and build-order scheduler.
 //!
 //! This binary dispatches to focused modules in `src/*.rs`. Most commands are
-//! thin wrappers over the `faf-sim`, `faf-sim-service`, and
-//! `faf-build-prediction` crates.
+//! thin wrappers over the `faf-sim` and `faf-sim-service` crates.
 
 mod build;
 mod command_line;
-mod dataset;
 mod predict;
 mod schedule;
-mod train;
 mod util;
 
 use clap::Parser;
@@ -19,8 +16,6 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Build { mode } => build::run(mode),
-        Command::Dataset { mode } => dataset::run(mode),
-        Command::Train(args) => train::run(args),
         Command::Predict { mode } => predict::run(mode),
         Command::Schedule { mode } => schedule::run(mode),
     }

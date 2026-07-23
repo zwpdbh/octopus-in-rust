@@ -1,40 +1,15 @@
-//! The `predict` command: estimate completion time with a model or the solver.
+//! The `predict` command: estimate completion time with the analytical solver.
 
-use faf_build_prediction::{predict as predict_model, Prediction};
 use faf_sim_shared::{BuildQueue, EcoSnapshot};
 use faf_solver::plan_completion_with_tasks;
 
-use crate::command_line::{PredictMode, PredictNnArgs, PredictShared, PredictSolverArgs};
+use crate::command_line::{PredictMode, PredictShared, PredictSolverArgs};
 use crate::util::{eco_snapshot_from_runtime_state, read_json};
 
 /// Entry point for the `predict` command.
 pub fn run(mode: PredictMode) {
-    match mode {
-        PredictMode::Nn(args) => run_nn(args),
-        PredictMode::Solver(args) => run_solver(args),
-    }
-}
-
-fn run_nn(args: PredictNnArgs) {
-    let (eco, queue) = load_plan_and_eco(&args.shared);
-
-    match predict_model(args.model_dir.as_ref(), &eco, &queue.tasks) {
-        Ok(Prediction {
-            predicted_time_seconds,
-        }) => {
-            println!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "predicted_time_seconds": predicted_time_seconds.round() as u64,
-                }))
-                .expect("serialize prediction")
-            );
-        }
-        Err(e) => {
-            eprintln!("Prediction failed: {e}");
-            std::process::exit(1);
-        }
-    }
+    let PredictMode::Solver(args) = mode;
+    run_solver(args);
 }
 
 fn run_solver(args: PredictSolverArgs) {
