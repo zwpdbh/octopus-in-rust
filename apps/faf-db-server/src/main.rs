@@ -1,5 +1,6 @@
 mod blueprint_graph;
 mod schedule_api;
+mod schedule_ws;
 
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
@@ -74,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/schedule", post(schedule_api::schedule))
         .route("/api/portraits/:id", get(get_portrait))
         .route("/ws/simulate", get(simulate_ws_handler))
+        .route("/ws/schedule", get(schedule_ws_handler))
         .nest_service("/assets", ServeDir::new(assets_path))
         .with_state(state);
 
@@ -353,6 +355,15 @@ async fn simulate_ws_handler(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_simulation_socket(state.sim_service.clone(), socket))
+}
+
+async fn schedule_ws_handler(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| {
+        schedule_ws::handle_schedule_socket(state.scheduler.clone(), socket)
+    })
 }
 
 async fn handle_simulation_socket(

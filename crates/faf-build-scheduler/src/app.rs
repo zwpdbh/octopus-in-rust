@@ -15,7 +15,7 @@ use crate::plugins::eco::decide_direction::{DirectionScoresRes, PriorityTableRes
 use crate::plugins::eco::observe::Observation;
 use crate::plugins::lifecycle::{
     run_to_completion, run_to_completion_best_effort, run_to_completion_with_reasoning,
-    SchedulerLifecyclePlugin, SchedulerResult,
+    run_to_completion_with_reasoning_cancellable, SchedulerLifecyclePlugin, SchedulerResult,
 };
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{
@@ -175,6 +175,24 @@ impl SchedulerApp {
     /// per-step candidate reasoning.
     pub fn run_unit_with_reasoning(&mut self) -> Result<ScheduleWithReasoning, ScheduleError> {
         run_to_completion_with_reasoning(&mut self.app)
+    }
+
+    /// Run the app until an eco scheduling result is produced or the caller
+    /// cancels it, including per-step candidate reasoning.
+    pub fn run_eco_with_reasoning_cancellable(
+        &mut self,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<ScheduleWithReasoning, ScheduleError> {
+        run_to_completion_with_reasoning_cancellable(&mut self.app, cancelled)
+    }
+
+    /// Run the app until a unit scheduling result is produced or the caller
+    /// cancels it, including per-step candidate reasoning.
+    pub fn run_unit_with_reasoning_cancellable(
+        &mut self,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<ScheduleWithReasoning, ScheduleError> {
+        run_to_completion_with_reasoning_cancellable(&mut self.app, cancelled)
     }
 
     /// Run the app until a unit scheduling result is produced, returning the

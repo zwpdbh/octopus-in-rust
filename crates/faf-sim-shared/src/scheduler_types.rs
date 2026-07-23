@@ -166,6 +166,8 @@ pub enum ScheduleError {
     SimulationStalled,
     #[error("the search timed out")]
     SearchTimeout,
+    #[error("the search was cancelled")]
+    Cancelled,
 }
 
 #[cfg(test)]

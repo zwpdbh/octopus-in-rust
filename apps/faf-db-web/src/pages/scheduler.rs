@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use gloo_net::http::Request;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::components::{
     AppHeader, GraphPopup, ScheduleFormState, ScheduleRequestPanel, ScheduleResultPanel,
@@ -8,8 +10,27 @@ use crate::components::{
 use crate::route::Route;
 use crate::state::save_plan_to_storage;
 use crate::types::{
-    BlueprintGraphResponse, ScheduleApiError, ScheduleUiState, ScheduleWithReasoning, UnitSummary,
+    BlueprintGraphResponse, ScheduleUiState, ScheduleWsClientMessage, ScheduleWsServerMessage,
+    UnitSummary,
 };
+
+/// Handle to an in-flight scheduling WebSocket, allowing the user to cancel it.
+#[derive(Clone)]
+pub struct ScheduleController {
+    cancel: std::rc::Rc<dyn Fn()>,
+}
+
+impl PartialEq for ScheduleController {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.cancel, &other.cancel)
+    }
+}
+
+impl ScheduleController {
+    pub fn cancel(&self) {
+        (self.cancel)();
+    }
+}
 
 #[component]
 pub fn Scheduler() -> Element {
@@ -26,6 +47,7 @@ pub fn Scheduler() -> Element {
 
     let form = use_signal(ScheduleFormState::default);
     let mut state = use_signal(|| ScheduleUiState::Idle);
+    let mut controller = use_signal(|| None::<ScheduleController>);
     let mut show_map = use_signal(|| false);
     let mut selected_step = use_signal(|| None::<usize>);
 
@@ -33,36 +55,131 @@ pub fn Scheduler() -> Element {
 
     let on_compute = move |_| {
         let request = form.read().to_request();
-        state.set(ScheduleUiState::Computing);
-        selected_step.set(None);
-        spawn(async move {
-            let response = match Request::post("/api/schedule").json(&request) {
-                Ok(builder) => builder.send().await,
-                Err(e) => {
-                    state.set(ScheduleUiState::Failed(format!("Invalid request: {e}")));
-                    return;
-                }
-            };
-            match response {
-                Ok(resp) if resp.ok() => match resp.json::<ScheduleWithReasoning>().await {
-                    Ok(payload) => {
-                        state.set(ScheduleUiState::Success(
-                            payload.schedule,
-                            payload.reasoning,
-                        ));
-                    }
-                    Err(e) => state.set(ScheduleUiState::Failed(format!("Invalid response: {e}"))),
-                },
-                Ok(resp) => {
-                    let message = match resp.json::<ScheduleApiError>().await {
-                        Ok(err) => err.error,
-                        Err(_) => format!("HTTP {}", resp.status()),
-                    };
-                    state.set(ScheduleUiState::Failed(message));
-                }
-                Err(e) => state.set(ScheduleUiState::Failed(format!("Request failed: {e}"))),
-            }
+        state.set(ScheduleUiState::Streaming {
+            steps: Vec::new(),
+            reasoning: Vec::new(),
         });
+        selected_step.set(None);
+
+        let ws = match web_sys::WebSocket::new("/ws/schedule") {
+            Ok(ws) => ws,
+            Err(e) => {
+                state.set(ScheduleUiState::Failed(format!(
+                    "Failed to open WebSocket: {e:?}"
+                )));
+                return;
+            }
+        };
+        ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+
+        let cancel_ws = ws.clone();
+        let cancel = std::rc::Rc::new(move || {
+            if cancel_ws.ready_state() == web_sys::WebSocket::OPEN {
+                let cancel_msg = ScheduleWsClientMessage::Cancel;
+                let text = serde_json::to_string(&cancel_msg).unwrap_or_default();
+                let _ = cancel_ws.send_with_str(&text);
+                let _ = cancel_ws.close();
+            }
+        }) as std::rc::Rc<dyn Fn()>;
+        controller.set(Some(ScheduleController {
+            cancel: cancel.clone(),
+        }));
+
+        let mut state_for_message = state.clone();
+        let mut state_for_close = state.clone();
+        let mut state_for_error = state.clone();
+        let mut controller_for_close = controller.clone();
+
+        let onmessage = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
+            if let Some(text) = e.data().as_string() {
+                match serde_json::from_str::<ScheduleWsServerMessage>(&text) {
+                    Ok(ScheduleWsServerMessage::Step {
+                        step, reasoning, ..
+                    }) => {
+                        let mut steps = match state_for_message.read().clone() {
+                            ScheduleUiState::Streaming { steps, .. } => steps,
+                            _ => Vec::new(),
+                        };
+                        let mut reasoning_list = match state_for_message.read().clone() {
+                            ScheduleUiState::Streaming { reasoning, .. } => reasoning,
+                            _ => Vec::new(),
+                        };
+                        steps.push(step);
+                        reasoning_list.push(reasoning);
+                        state_for_message.set(ScheduleUiState::Streaming {
+                            steps,
+                            reasoning: reasoning_list,
+                        });
+                    }
+                    Ok(ScheduleWsServerMessage::Done {
+                        schedule,
+                        reasoning,
+                    }) => {
+                        state_for_message.set(ScheduleUiState::Success(schedule, reasoning));
+                        controller_for_close.set(None);
+                    }
+                    Ok(ScheduleWsServerMessage::Error { message }) => {
+                        state_for_message.set(ScheduleUiState::Failed(message));
+                        controller_for_close.set(None);
+                    }
+                    Err(e) => {
+                        state_for_message.set(ScheduleUiState::Failed(format!(
+                            "Invalid server message: {e}"
+                        )));
+                        controller_for_close.set(None);
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        onmessage.forget();
+
+        let onerror = Closure::wrap(Box::new(move |_e: web_sys::Event| {
+            state_for_error.set(ScheduleUiState::Failed(
+                "WebSocket error while scheduling".to_string(),
+            ));
+        }) as Box<dyn FnMut(_)>);
+        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+        onerror.forget();
+
+        let onclose = Closure::wrap(Box::new(move |_e: web_sys::CloseEvent| {
+            // If the socket closes and we are still streaming, treat it as a
+            // cancellation/failure unless a final state has already been set.
+            let still_streaming = matches!(
+                state_for_close.read().clone(),
+                ScheduleUiState::Streaming { .. }
+            );
+            if still_streaming {
+                state_for_close.set(ScheduleUiState::Failed(
+                    "Scheduling connection closed unexpectedly".to_string(),
+                ));
+            }
+            controller_for_close.set(None);
+        }) as Box<dyn FnMut(_)>);
+        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+        onclose.forget();
+
+        let ws_for_open = ws.clone();
+        let onopen = Closure::wrap(Box::new(move |_e: web_sys::Event| {
+            let start_msg = ScheduleWsClientMessage::Start {
+                request: request.clone(),
+            };
+            let text = serde_json::to_string(&start_msg).unwrap_or_default();
+            let _ = ws_for_open.send_with_str(&text);
+        }) as Box<dyn FnMut(_)>);
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        onopen.forget();
+    };
+
+    let on_cancel = move |_| {
+        let ctrl = controller.read().clone();
+        if let Some(ctrl) = ctrl {
+            ctrl.cancel();
+            controller.set(None);
+            if matches!(state.read().clone(), ScheduleUiState::Streaming { .. }) {
+                state.set(ScheduleUiState::Failed("Scheduling cancelled".to_string()));
+            }
+        }
     };
 
     let graph_data = graph.read().clone().flatten();
@@ -89,6 +206,7 @@ pub fn Scheduler() -> Element {
 
     let reasoning = match &*state.read() {
         ScheduleUiState::Success(_, reasoning) => reasoning.clone(),
+        ScheduleUiState::Streaming { reasoning, .. } => reasoning.clone(),
         _ => Vec::new(),
     };
 
@@ -99,7 +217,7 @@ pub fn Scheduler() -> Element {
         }
     };
 
-    let computing = matches!(*state.read(), ScheduleUiState::Computing);
+    let computing = matches!(*state.read(), ScheduleUiState::Streaming { .. });
 
     rsx! {
         div { class: "flex flex-col h-screen bg-neutral-950 text-neutral-100",
@@ -111,7 +229,14 @@ pub fn Scheduler() -> Element {
                 div { class: "flex gap-4 flex-1 min-h-0 min-w-0",
                     // Left: request form.
                     div { class: "w-[340px] flex-shrink-0 overflow-auto",
-                        ScheduleRequestPanel { form, candidates, id_to_kind, computing, on_compute }
+                        ScheduleRequestPanel {
+                            form,
+                            candidates,
+                            id_to_kind,
+                            computing,
+                            on_compute,
+                            on_cancel,
+                        }
                     }
 
                     // Center: result with inline step details.

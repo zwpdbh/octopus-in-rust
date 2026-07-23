@@ -9,7 +9,7 @@ pub use faf_sim_shared::plan_types::{
 };
 pub use faf_sim_shared::{
     Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, EcoSnapshot,
-    PriorityTable, Schedule, ScheduleWithReasoning, ScoreCategory, StepReasoning, StepResult,
+    PriorityTable, Schedule, ScoreCategory, StepReasoning, StepResult,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,17 +63,40 @@ pub enum ScheduleApiRequest {
     },
 }
 
-/// Error envelope returned when scheduling fails.
+/// Messages sent from the frontend to the scheduling WebSocket.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScheduleWsClientMessage {
+    Start { request: ScheduleApiRequest },
+    Cancel,
+}
+
+/// Messages received from the scheduling WebSocket.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct ScheduleApiError {
-    pub error: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScheduleWsServerMessage {
+    Step {
+        step_number: usize,
+        step: StepResult,
+        reasoning: StepReasoning,
+    },
+    Done {
+        schedule: Schedule,
+        reasoning: Vec<StepReasoning>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Runtime state of the scheduling panel on the scheduler page.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScheduleUiState {
     Idle,
-    Computing,
+    Streaming {
+        steps: Vec<StepResult>,
+        reasoning: Vec<StepReasoning>,
+    },
     Success(Schedule, Vec<StepReasoning>),
     Failed(String),
 }

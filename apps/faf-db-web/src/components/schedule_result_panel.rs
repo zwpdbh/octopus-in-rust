@@ -34,9 +34,24 @@ pub fn ScheduleResultPanel(
                         "Configure a target on the left and hit Compute."
                     }
                 },
-                ScheduleUiState::Computing => rsx! {
-                    div { class: "flex-1 flex items-center justify-center text-neutral-400 text-sm",
-                        "⚡ Searching for a build order..."
+                ScheduleUiState::Streaming { steps, .. } => {
+                    let step_count = steps.len();
+                    rsx! {
+                        div { class: "flex flex-col gap-3 flex-1 min-h-0",
+                            // Streaming progress banner.
+                            div { class: "shrink-0 rounded border border-blue-800 bg-blue-950/40 px-3 py-2",
+                                p { class: "text-sm font-semibold text-blue-300", "⚡ Scheduling in progress..." }
+                                p { class: "text-xs text-neutral-300 mt-1", "{step_count} step(s) committed so far" }
+                            }
+
+                            // Partial timeline.
+                            StepTimeline {
+                                steps: steps.clone(),
+                                reasoning: reasoning.clone(),
+                                initial_eco: form.read().initial_snapshot(),
+                                selected_step,
+                            }
+                        }
                     }
                 },
                 ScheduleUiState::Failed(message) => rsx! {

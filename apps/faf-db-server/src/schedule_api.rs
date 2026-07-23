@@ -160,5 +160,6 @@ fn status_for(err: &ScheduleError) -> StatusCode {
         | ScheduleError::SimulationStalled
         | ScheduleError::SearchTimeout => StatusCode::UNPROCESSABLE_ENTITY,
         ScheduleError::AlgorithmNotImplemented(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        ScheduleError::Cancelled => StatusCode::UNPROCESSABLE_ENTITY,
     }
 }

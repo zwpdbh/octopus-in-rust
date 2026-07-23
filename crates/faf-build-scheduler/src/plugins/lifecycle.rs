@@ -136,6 +136,52 @@ pub fn run_to_completion_with_reasoning(
     })
 }
 
+/// Run `app` until the search has produced a result or the caller sets the
+/// cancellation flag.
+pub fn run_to_completion_cancellable(
+    app: &mut App,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<Schedule, ScheduleError> {
+    use std::sync::atomic::Ordering;
+
+    let mut loops = 0;
+    const MAX_LOOPS: usize = 100_000;
+
+    while !app.world().resource::<SearchProgress>().done {
+        if cancelled.load(Ordering::Relaxed) {
+            app.world_mut().resource_mut::<SearchProgress>().done = true;
+            app.world_mut().resource_mut::<SchedulerResult>().result =
+                Some(Err(ScheduleError::Cancelled));
+            return Err(ScheduleError::Cancelled);
+        }
+        app.update();
+        loops += 1;
+        if loops >= MAX_LOOPS {
+            return Err(ScheduleError::SearchTimeout);
+        }
+    }
+
+    app.world()
+        .resource::<SchedulerResult>()
+        .result
+        .clone()
+        .unwrap_or(Err(ScheduleError::GoalUnreachable))
+}
+
+/// Run `app` until the search finishes or is cancelled, returning the schedule
+/// and per-step candidate reasoning.
+pub fn run_to_completion_with_reasoning_cancellable(
+    app: &mut App,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<ScheduleWithReasoning, ScheduleError> {
+    let schedule = run_to_completion_cancellable(app, cancelled)?;
+    let reasoning = app.world().resource::<StepReasoningLog>().0.clone();
+    Ok(ScheduleWithReasoning {
+        schedule,
+        reasoning,
+    })
+}
+
 /// Run `app` until the search terminates and return whatever schedule was built,
 /// even if the goal was not reached.
 ///

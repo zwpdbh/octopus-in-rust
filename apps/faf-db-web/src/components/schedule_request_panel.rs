@@ -126,9 +126,10 @@ pub fn ScheduleRequestPanel(
     candidates: Vec<UnitSummary>,
     /// Lookup from a candidate's blueprint id to its abstract unit kind.
     id_to_kind: HashMap<String, UnitKind>,
-    /// True while a request is in flight.
+    /// True while a schedule is being computed.
     computing: bool,
     on_compute: EventHandler<()>,
+    on_cancel: EventHandler<()>,
 ) -> Element {
     let mut pending_slot = use_signal(|| None::<PendingSlot>);
 
@@ -289,15 +290,25 @@ pub fn ScheduleRequestPanel(
                 }
             }
 
-            button {
-                class: if valid && !computing {
-                    "mt-1 px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors"
-                } else {
-                    "mt-1 px-3 py-2 rounded bg-neutral-700 text-neutral-400 text-sm font-semibold cursor-not-allowed"
-                },
-                disabled: !valid || computing,
-                onclick: move |_| on_compute.call(()),
-                if computing { "⚡ Computing..." } else { "⚡ Compute Schedule" }
+            if computing {
+                div { class: "flex gap-2 mt-1",
+                    button {
+                        class: "flex-1 px-3 py-2 rounded bg-red-600 hover:bg-red-500 text-white text-sm font-semibold transition-colors",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                }
+            } else {
+                button {
+                    class: if valid {
+                        "mt-1 px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors"
+                    } else {
+                        "mt-1 px-3 py-2 rounded bg-neutral-700 text-neutral-400 text-sm font-semibold cursor-not-allowed"
+                    },
+                    disabled: !valid,
+                    onclick: move |_| on_compute.call(()),
+                    "⚡ Compute Schedule"
+                }
             }
         }
 

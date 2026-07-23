@@ -22,8 +22,9 @@ pub use config::SchedulerConfig;
 pub use plugins::{
     eco::decide_direction::{DirectionScores, PriorityTable},
     eco::observe::{EngineerCounts, FactoryTier, Observation},
-    run_to_completion, EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult,
-    SchedulerSet, SchedulerState, SchedulerStepEvent, UnitSchedulingPlugin,
+    run_to_completion, run_to_completion_cancellable, run_to_completion_with_reasoning_cancellable,
+    EcoSchedulingPlugin, SchedulerLifecyclePlugin, SchedulerResult, SchedulerSet, SchedulerState,
+    SchedulerStepEvent, UnitSchedulingPlugin,
 };
 pub use request::{
     EcoScheduleInput, EcoScheduleRequest, EcoTarget, SearchOptions, UnitScheduleInput,
@@ -34,7 +35,7 @@ pub use result::{
     Action, CandidateReasoning, Schedule, ScheduleError, ScheduleWithReasoning, StepReasoning,
     StepResult,
 };
-pub use scheduler::Scheduler;
+pub use scheduler::{ScheduleStreamEvent, Scheduler};
 
 #[cfg(test)]
 mod tests {
