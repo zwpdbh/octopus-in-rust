@@ -223,38 +223,43 @@ pub(crate) fn score_eco_candidate(
 
     // Categorize the action and look up the corresponding confidence score and
     // resource priority.
-    let (category, confidence, efficiency, priority) = if let Some(mass) =
-        heuristic::mass_income_efficiency(current_economy, &completion, action, library)
-    {
-        (
-            ScoreCategory::MassIncome,
-            scores.mass_income,
-            mass,
-            priorities.mass,
-        )
-    } else if let Some(energy) =
-        heuristic::energy_income_efficiency(current_economy, &completion, action, library)
-    {
-        (
-            ScoreCategory::Energy,
-            scores.energy,
-            energy,
-            priorities.energy,
-        )
-    } else if let Some(tier) = heuristic::engineer_tier(action) {
-        (
-            ScoreCategory::BuildPower,
-            scores.build_power,
-            (tier as i32 + 1) as f64,
-            priorities.build_power,
-        )
-    } else if heuristic::is_tech_upgrade_to(action, TechLevel::T3) {
-        (ScoreCategory::TechT3, scores.tech_t3, 0.0, 5)
-    } else if heuristic::is_tech_upgrade_to(action, TechLevel::T2) {
-        (ScoreCategory::TechT2, scores.tech_t2, 0.0, 5)
-    } else {
-        (ScoreCategory::Other, 0, 0.0, 5)
-    };
+    //
+    // Tech upgrades (factory upgrades that unlock higher tiers) are checked first
+    // so they are not shadowed by incidental mass/energy deltas or engineer
+    // classification.
+    let (category, confidence, efficiency, priority) =
+        if heuristic::is_tech_upgrade_to(action, TechLevel::T3) {
+            (ScoreCategory::TechT3, scores.tech_t3, 0.0, 10)
+        } else if heuristic::is_tech_upgrade_to(action, TechLevel::T2) {
+            (ScoreCategory::TechT2, scores.tech_t2, 0.0, 10)
+        } else if let Some(mass) =
+            heuristic::mass_income_efficiency(current_economy, &completion, action, library)
+        {
+            (
+                ScoreCategory::MassIncome,
+                scores.mass_income,
+                mass,
+                priorities.mass,
+            )
+        } else if let Some(energy) =
+            heuristic::energy_income_efficiency(current_economy, &completion, action, library)
+        {
+            (
+                ScoreCategory::Energy,
+                scores.energy,
+                energy,
+                priorities.energy,
+            )
+        } else if let Some(tier) = heuristic::engineer_tier(action) {
+            (
+                ScoreCategory::BuildPower,
+                scores.build_power,
+                (tier as i32 + 1) as f64,
+                priorities.build_power,
+            )
+        } else {
+            (ScoreCategory::Other, 0, 0.0, 5)
+        };
 
     if confidence == 0 {
         return CandidateScore {

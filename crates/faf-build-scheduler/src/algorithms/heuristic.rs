@@ -19,12 +19,12 @@ pub(crate) fn resulting_unit(action: &Action) -> UnitKind {
     }
 }
 
-/// True if the action is an upgrade whose target is exactly `desired_tech`.
+/// True if the action is a factory upgrade that unlocks `desired_tech`.
 pub(crate) fn is_tech_upgrade_to(action: &Action, desired_tech: TechLevel) -> bool {
     let Action::Upgrade { to, .. } = action else {
         return false;
     };
-    faf_blueprints::tech_level_of(to) == Some(desired_tech)
+    matches!(to, UnitKind::Factory(t) if *t == desired_tech)
 }
 
 /// Mass income efficiency: additional mass produced per mass spent on the
