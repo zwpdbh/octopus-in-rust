@@ -37,7 +37,9 @@ pub fn ScheduleResultPanel(
             ResultHeader { on_open_map }
 
             match current {
-                ScheduleUiState::Idle => rsx! { ResultIdle {} },
+                ScheduleUiState::Idle => rsx! {
+                    ResultIdle {}
+                },
                 ScheduleUiState::Streaming { steps, .. } => rsx! {
                     ResultStreaming {
                         steps,
@@ -124,10 +126,7 @@ fn ResultStreaming(
 fn ResultFailed(message: String, form: Signal<ScheduleFormState>) -> Element {
     rsx! {
         div { class: "flex flex-col gap-3 flex-1 min-h-0",
-            ResultStatusHeader {
-                status: ResultStatus::Failed,
-                form,
-            }
+            ResultStatusHeader { status: ResultStatus::Failed, form }
             ResultFailureBody { message }
         }
     }
@@ -144,10 +143,7 @@ fn ResultSuccess(
 ) -> Element {
     rsx! {
         div { class: "flex flex-col gap-3 flex-1 min-h-0",
-            ResultStatusHeader {
-                status: ResultStatus::Success(schedule.clone()),
-                form,
-            }
+            ResultStatusHeader { status: ResultStatus::Success(schedule.clone()), form }
 
             StepTimeline {
                 steps: schedule.steps.clone(),
@@ -157,10 +153,7 @@ fn ResultSuccess(
                 selected_step,
             }
 
-            ResultActionsFooter {
-                plan: schedule.plan.clone(),
-                on_send_to_simulate,
-            }
+            ResultActionsFooter { plan: schedule.plan.clone(), on_send_to_simulate }
         }
     }
 }
@@ -176,8 +169,12 @@ enum ResultStatus {
 #[component]
 fn ResultStatusHeader(status: ResultStatus, form: Signal<ScheduleFormState>) -> Element {
     match status {
-        ResultStatus::Success(schedule) => rsx! { ResultSuccessBanner { schedule, form } },
-        ResultStatus::Failed => rsx! { ResultFailureBanner {} },
+        ResultStatus::Success(schedule) => rsx! {
+            ResultSuccessBanner { schedule, form }
+        },
+        ResultStatus::Failed => rsx! {
+            ResultFailureBanner {}
+        },
     }
 }
 
@@ -262,16 +259,22 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
             // Compact transition summary as readable stat blocks.
             div { class: "flex flex-wrap items-center gap-x-4 gap-y-1 text-xs",
                 div { class: "flex items-center gap-1.5",
-                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide", "Mass" }
+                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide",
+                        "Mass"
+                    }
                     span { class: "font-mono text-neutral-300", "{initial_mass:.0}/s" }
                     span { class: "text-neutral-500", "→" }
                     span { class: "font-mono text-emerald-300", "{final_mass:.0}/s" }
                     if is_eco {
-                        span { class: "text-[10px] {target_class}", "(target {form_state.target_mass_production:.0}/s {target_mark})" }
+                        span { class: "text-[10px] {target_class}",
+                            "(target {form_state.target_mass_production:.0}/s {target_mark})"
+                        }
                     }
                 }
                 div { class: "flex items-center gap-1.5",
-                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide", "Energy" }
+                    span { class: "text-[10px] font-semibold text-neutral-500 uppercase tracking-wide",
+                        "Energy"
+                    }
                     span { class: "font-mono text-neutral-300", "{initial_energy:.0}/s" }
                     span { class: "text-neutral-500", "→" }
                     span { class: "font-mono text-amber-300", "{final_energy:.0}/s" }
@@ -370,7 +373,11 @@ fn CopyPlanButton(plan: ConstructionPlan) -> Element {
                 }
                 copied.set(true);
             },
-            if *copied.read() { "Copied!" } else { "Copy JSON" }
+            if *copied.read() {
+                "Copied!"
+            } else {
+                "Copy JSON"
+            }
         }
     }
 }
