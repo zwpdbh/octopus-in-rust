@@ -12,16 +12,8 @@ use crate::request::EcoTarget;
 use crate::resources::{EconomyState, SearchGoal};
 use crate::search::SearchTarget;
 
-/// Time-to-empty threshold (seconds) below which an energy deficit is considered
-/// thin/imminent.
-const THIN_SECONDS_THRESHOLD: f64 = 5.0;
-/// Production-to-demand ratio above which the economy is considered strongly
-/// positive.
-const SURPLUS_PRODUCTION_RATIO: f64 = 1.2;
 /// Energy storage ratio thresholds for classifying the buffer level.
-const ENERGY_HIGH_THRESHOLD: f64 = 0.75;
-const ENERGY_MEDIUM_THRESHOLD: f64 = 0.50;
-const ENERGY_LOW_THRESHOLD: f64 = 0.25;
+const ENERGY_STORAGE_FULL_THRESHOLD: f64 = 0.95;
 
 /// Mass storage ratio below which mass is considered comfortably low.
 const MASS_GOOD_THRESHOLD: f64 = 0.20;
@@ -40,29 +32,15 @@ pub(crate) const TECH3_PRIORITY_MASS_THRESHOLD: f64 = 80.0;
 /// rejected because the post-build buffer was not yet full.
 pub(crate) fn compute_energy_margin(eco: &EcoSnapshot) -> EnergyMargin {
     let energy_demand = eco.maintenance_consumption_per_second_energy + eco.energy_drain;
-    let net_energy = eco.production_per_second_energy - energy_demand;
 
-    if net_energy.value() < 0.0 {
-        if eco.energy_storage.value() <= 0.0 {
-            return EnergyMargin::Stalled;
-        }
-        let seconds_to_empty = eco.energy_storage.value() / -net_energy.value();
-        if seconds_to_empty <= THIN_SECONDS_THRESHOLD {
-            EnergyMargin::Thin
-        } else {
-            EnergyMargin::Unhealthy
-        }
+    if eco.production_per_second_energy / energy_demand > 1.2 {
+        EnergyMargin::MoreThanNeed
+    } else if eco.production_per_second_energy / energy_demand > 1.0
+        && eco.production_per_second_energy / energy_demand <= 1.2
+    {
+        EnergyMargin::JustEnough
     } else {
-        let production_ratio = if energy_demand.value() > 0.0 {
-            eco.production_per_second_energy.value() / energy_demand.value()
-        } else {
-            f64::INFINITY
-        };
-        if production_ratio > SURPLUS_PRODUCTION_RATIO {
-            EnergyMargin::Surplus
-        } else {
-            EnergyMargin::Healthy
-        }
+        EnergyMargin::NeedMorePower
     }
 }
 
@@ -96,14 +74,10 @@ pub(crate) fn compute_energy_storage_level(eco: &EcoSnapshot) -> EnergyStorageLe
         0.0
     };
 
-    if ratio >= ENERGY_HIGH_THRESHOLD {
-        EnergyStorageLevel::High
-    } else if ratio >= ENERGY_MEDIUM_THRESHOLD {
-        EnergyStorageLevel::Medium
-    } else if ratio >= ENERGY_LOW_THRESHOLD {
-        EnergyStorageLevel::Low
+    if ratio >= ENERGY_STORAGE_FULL_THRESHOLD {
+        EnergyStorageLevel::Full
     } else {
-        EnergyStorageLevel::Critical
+        EnergyStorageLevel::NotFull
     }
 }
 
@@ -136,8 +110,8 @@ pub struct Observation {
 impl Default for Observation {
     fn default() -> Self {
         Self {
-            energy_margin: EnergyMargin::Healthy,
-            energy_storage_level: EnergyStorageLevel::Medium,
+            energy_margin: EnergyMargin::JustEnough,
+            energy_storage_level: EnergyStorageLevel::Full,
             mass_margin: MassMargin::Normal,
             mass_income_vs_target: MassIncomeVsTarget::Below,
             mass_production_tier: MassProductionTier::BelowTech2,
@@ -149,29 +123,16 @@ impl Default for Observation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnergyMargin {
-    /// Production exceeds demand by more than the healthy threshold.
-    Surplus,
-    /// Production exceeds demand, but only by a comfortable amount.
-    Healthy,
-    /// Production is below demand and storage will empty within seconds.
-    Thin,
-    /// Production is below demand; storage is buffered but draining.
-    Unhealthy,
-    /// Storage is empty/negative and production cannot meet demand.
-    Stalled,
+    MoreThanNeed,
+    JustEnough,
+    NeedMorePower,
 }
 
 /// Energy storage buffer level, independent of net income.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnergyStorageLevel {
-    /// Storage is nearly full; can afford expensive builds.
-    High,
-    /// Storage is comfortable.
-    Medium,
-    /// Storage is low; risky to start expensive builds without more energy income.
-    Low,
-    /// Storage is critically low; prioritize energy income immediately.
-    Critical,
+    NotFull,
+    Full,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

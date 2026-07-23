@@ -32,24 +32,14 @@ pub(crate) fn compute_direction_scores(obs: &Observation) -> DirectionScores {
 }
 
 fn energy_score(obs: &Observation) -> u8 {
-    let base = match obs.energy_margin {
-        EnergyMargin::Stalled => 100,
-        EnergyMargin::Thin => 90,
-        EnergyMargin::Unhealthy => 70,
-        EnergyMargin::Healthy => 20,
-        EnergyMargin::Surplus => 0,
-    };
-
-    // Even with healthy net income, a low storage buffer is dangerous because
-    // the next build can stall during construction.
-    let buffer_bonus = match obs.energy_storage_level {
-        EnergyStorageLevel::Critical => 90,
-        EnergyStorageLevel::Low => 60,
-        EnergyStorageLevel::Medium => 10,
-        EnergyStorageLevel::High => 0,
-    };
-
-    (base + buffer_bonus).min(100)
+    match (obs.energy_margin, obs.energy_storage_level) {
+        (EnergyMargin::MoreThanNeed, EnergyStorageLevel::Full) => 10,
+        (EnergyMargin::JustEnough, EnergyStorageLevel::Full) => 20,
+        (EnergyMargin::NeedMorePower, EnergyStorageLevel::Full) => 30,
+        (EnergyMargin::MoreThanNeed, EnergyStorageLevel::NotFull) => 60,
+        (EnergyMargin::JustEnough, EnergyStorageLevel::NotFull) => 80,
+        (EnergyMargin::NeedMorePower, EnergyStorageLevel::NotFull) => 100,
+    }
 }
 
 fn mass_income_score(obs: &Observation) -> u8 {
@@ -106,13 +96,12 @@ pub(crate) fn compute_priority_table(obs: &Observation) -> PriorityTable {
     };
 
     let energy = match (obs.energy_margin, obs.energy_storage_level) {
-        (_, EnergyStorageLevel::Critical) => 10,
-        (_, EnergyStorageLevel::Low) => 8,
-        (EnergyMargin::Stalled, _) => 10,
-        (EnergyMargin::Thin, _) => 9,
-        (EnergyMargin::Unhealthy, _) => 7,
-        (EnergyMargin::Healthy, _) => 4,
-        (EnergyMargin::Surplus, _) => 1,
+        (EnergyMargin::MoreThanNeed, EnergyStorageLevel::Full) => 1,
+        (EnergyMargin::JustEnough, EnergyStorageLevel::Full) => 2,
+        (EnergyMargin::NeedMorePower, EnergyStorageLevel::Full) => 3,
+        (EnergyMargin::MoreThanNeed, EnergyStorageLevel::NotFull) => 6,
+        (EnergyMargin::JustEnough, EnergyStorageLevel::NotFull) => 8,
+        (EnergyMargin::NeedMorePower, EnergyStorageLevel::NotFull) => 10,
     };
 
     // Build-power priority is driven by mass storage: when mass is overflowing
