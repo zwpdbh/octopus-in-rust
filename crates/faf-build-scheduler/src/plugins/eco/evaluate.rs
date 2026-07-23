@@ -7,7 +7,7 @@ use crate::algorithms::greedy;
 use crate::components::CandidateAssignment;
 use crate::request::SearchOptions;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
-use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
+use crate::search::{BlueprintLibraryRef, CandidateAction, SearchTarget};
 
 /// Evaluate every spawned [`CandidateAction`] for eco scheduling and attach a
 /// [`CandidateScore`].
@@ -46,6 +46,6 @@ pub(crate) fn evaluate_eco_candidates_system(
             &scores.0,
             &priorities.0,
         );
-        commands.entity(entity).insert(CandidateScore(score));
+        commands.entity(entity).insert(score);
     }
 }

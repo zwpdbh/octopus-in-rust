@@ -2,7 +2,8 @@ use dioxus::prelude::*;
 
 use crate::components::EcoSnapshotView;
 use crate::types::{
-    Action, DirectionScores, EcoSnapshot, PriorityTable, StepReasoning, StepResult, UnitKind,
+    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, EcoSnapshot,
+    PriorityTable, ScoreCategory, StepReasoning, StepResult, UnitKind,
 };
 use crate::utils::kind_label;
 
@@ -24,23 +25,30 @@ pub fn StepTimeline(
                 div { class: "text-neutral-500 text-sm text-center py-8", "No steps in the schedule." }
             }
             div { class: "flex flex-col gap-1",
-                for (idx, step) in steps.iter().enumerate() {
+                for (idx , step) in steps.iter().enumerate() {
                     {
                         let is_selected = *selected_step.read() == Some(idx);
                         let (accent_border, accent_text) = step_accent(&step.action);
                         let (tag_label, tag_class) = step_tag(&step.action);
                         let description = describe_step(&step.action);
                         let row_class = if is_selected {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-800 transition-colors cursor-pointer")
+                            format!(
+                                "flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-800 transition-colors cursor-pointer",
+                            )
                         } else {
-                            format!("flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors cursor-pointer")
+                            format!(
+                                "flex items-center gap-3 w-full text-left px-3 py-2 rounded border {accent_border} bg-neutral-900/60 hover:bg-neutral-800/80 transition-colors cursor-pointer",
+                            )
                         };
-                        let start_seconds = if idx == 0 { 0.0 } else { steps[idx - 1].finish_time_seconds };
+                        let start_seconds = if idx == 0 {
+                            0.0
+                        } else {
+                            steps[idx - 1].finish_time_seconds
+                        };
                         let end_seconds = step.finish_time_seconds;
                         let time_label = format_duration_range(start_seconds, end_seconds);
                         let pre_eco = pre_step_eco(&steps, &initial_eco, idx);
                         let step_reasoning = reasoning.get(idx).cloned();
-
                         rsx! {
                             div { class: "flex flex-col",
                                 div {
@@ -55,8 +63,12 @@ pub fn StepTimeline(
                                         }
                                     },
                                     span { class: "text-xs font-mono text-neutral-500 w-8 shrink-0 text-right", "#{idx + 1}" }
-                                    span { class: "w-14 shrink-0 inline-flex items-center justify-center px-1 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide {tag_class}", "{tag_label}" }
-                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-56 whitespace-nowrap text-right", "{time_label}" }
+                                    span { class: "w-14 shrink-0 inline-flex items-center justify-center px-1 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide {tag_class}",
+                                        "{tag_label}"
+                                    }
+                                    span { class: "text-xs font-mono text-sky-300 shrink-0 w-56 whitespace-nowrap text-right",
+                                        "{time_label}"
+                                    }
                                     span { class: "flex-1 min-w-0 text-sm {accent_text} truncate", "{description}" }
                                     CopyStepButton {
                                         idx,
@@ -68,11 +80,7 @@ pub fn StepTimeline(
                                     }
                                 }
                                 if is_selected {
-                                    StepDetails {
-                                        step: step.clone(),
-                                        reasoning: step_reasoning,
-                                        pre_eco,
-                                    }
+                                    StepDetails { step: step.clone(), reasoning: step_reasoning, pre_eco }
                                 }
                             }
                         }
@@ -98,14 +106,11 @@ fn CopyStepButton(
             title: "Copy step details for debug",
             onclick: move |e: MouseEvent| {
                 e.stop_propagation();
-                let payload = serde_json::json!({
-                    "step_number": idx + 1,
-                    "start_seconds": start_seconds,
-                    "end_seconds": end_seconds,
-                    "action": step.action,
-                    "economy_before_decision": pre_eco,
-                    "reasoning": reasoning,
-                });
+                let payload = serde_json::json!(
+                    { "step_number" : idx + 1, "start_seconds" : start_seconds, "end_seconds" :
+                    end_seconds, "action" : step.action, "economy_before_decision" : pre_eco,
+                    "reasoning" : reasoning, }
+                );
                 let text = serde_json::to_string_pretty(&payload).unwrap_or_default();
                 if let Some(window) = web_sys::window() {
                     let _ = window.navigator().clipboard().write_text(&text);
@@ -128,46 +133,41 @@ fn StepDetails(
         .unwrap_or_default();
 
     rsx! {
-        div { class: "mt-2 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col lg:flex-row gap-4",
-            // Economy snapshot before the decision.
-            div { class: "flex flex-col gap-1 lg:w-96 shrink-0",
-                h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Economy before decision" }
-                EcoSnapshotView { snapshot: pre_eco }
+        div { class: "mt-2 rounded border border-neutral-700 bg-neutral-950/60 p-3 flex flex-col gap-4",
+            // Top row: economy snapshot next to decision scores.
+            div { class: "flex flex-col lg:flex-row gap-4",
+                EconomyBeforeDecision { pre_eco }
+                DecisionScores { scores, priorities }
             }
 
-            // Candidate reasoning.
-            div { class: "flex flex-col gap-1 flex-1 min-w-0",
-                h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Top candidates" }
-                if let Some(reasoning) = reasoning {
-                    if reasoning.top_candidates.is_empty() {
-                        p { class: "text-xs text-neutral-500", "No candidate data recorded." }
-                    } else {
-                        for candidate in reasoning.top_candidates.iter() {
-                            {
-                                let is_chosen = candidate.action == step.action;
-                                let row_class = if is_chosen {
-                                    "flex items-center gap-2 px-2 py-1 rounded bg-emerald-900/30 border border-emerald-700/50"
-                                } else {
-                                    "flex items-center gap-2 px-2 py-1 rounded bg-neutral-900/50 border border-neutral-800"
-                                };
-                                let score_class = if is_chosen { "text-xs font-mono text-emerald-300 w-12 text-right" } else { "text-xs font-mono text-neutral-400 w-12 text-right" };
-                                rsx! {
-                                    div { class: "{row_class}",
-                                        span { class: "{score_class}", "{candidate.score:.1}" }
-                                        span { class: "text-xs text-neutral-200 truncate", "{describe_step(&candidate.action)}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    p { class: "text-xs text-neutral-500", "No reasoning available for this step." }
-                }
-            }
+            // Bottom row: candidate reasoning with relative score bars.
+            TopCandidates { step, reasoning }
+        }
+    }
+}
 
-            // Direction scores and priorities used for this decision.
-            div { class: "flex flex-col gap-2 lg:w-48 shrink-0",
-                h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide", "Decision scores" }
+/// Economy state just before the scheduler committed this step.
+#[component]
+fn EconomyBeforeDecision(pre_eco: EcoSnapshot) -> Element {
+    rsx! {
+        div { class: "flex flex-col gap-1 lg:w-[420px] shrink-0",
+            h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                "Economy before decision"
+            }
+            EcoSnapshotView { snapshot: pre_eco }
+        }
+    }
+}
+
+/// Direction-confidence and priority-weight tables used for this decision.
+#[component]
+fn DecisionScores(scores: DirectionScores, priorities: PriorityTable) -> Element {
+    rsx! {
+        div { class: "flex flex-col gap-2 flex-1 min-w-0",
+            h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                "Decision scores"
+            }
+            div { class: "flex flex-col sm:flex-row gap-2",
                 ScoreBlock { label: "Direction confidence", scores }
                 ScoreBlock { label: "Priority weights", scores: priorities }
             }
@@ -175,15 +175,203 @@ fn StepDetails(
     }
 }
 
+/// Highest-scoring candidate actions considered for this step, with a per-candidate
+/// score breakdown.
+#[component]
+fn TopCandidates(step: StepResult, reasoning: Option<StepReasoning>) -> Element {
+    let max_score = reasoning
+        .as_ref()
+        .and_then(|r| {
+            r.top_candidates
+                .iter()
+                .map(|c| c.score)
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        })
+        .unwrap_or(1.0)
+        .max(0.001);
+
+    rsx! {
+        div { class: "flex flex-col gap-1",
+            h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
+                "Top candidates"
+            }
+            if let Some(reasoning) = reasoning {
+                if reasoning.top_candidates.is_empty() {
+                    p { class: "text-xs text-neutral-500", "No candidate data recorded." }
+                } else {
+                    div { class: "flex flex-col gap-1",
+                        for candidate in reasoning.top_candidates.iter() {
+                            CandidateRow {
+                                candidate: candidate.clone(),
+                                is_chosen: candidate.action == step.action,
+                                max_score,
+                            }
+                        }
+                    }
+                }
+            } else {
+                p { class: "text-xs text-neutral-500", "No reasoning available for this step." }
+            }
+        }
+    }
+}
+
+/// Single candidate row showing its absolute score, action description, and a
+/// compact score-computation breakdown. The chosen candidate is highlighted by
+/// a category-coloured background that matches the step timeline.
+#[component]
+fn CandidateRow(candidate: CandidateReasoning, is_chosen: bool, max_score: f64) -> Element {
+    let ratio = (candidate.score / max_score).clamp(0.0, 1.0);
+    let pct = ratio * 100.0;
+    let row_class = candidate_row_class(&candidate.action, is_chosen);
+    let score_color = if is_chosen {
+        candidate_score_color(&candidate.action)
+    } else {
+        "text-neutral-300"
+    };
+    rsx! {
+        div { class: "{row_class}",
+            // Absolute score and relative percentage.
+            div { class: "flex flex-col items-end w-16 shrink-0 pt-0.5",
+                span { class: "text-xs font-mono {score_color}", "{candidate.score:.1}" }
+                span { class: "text-[10px] text-neutral-500", "{pct:.0}%" }
+            }
+
+            // Action description and computation breakdown.
+            div { class: "flex-1 min-w-0 flex flex-col gap-1",
+                span { class: "text-xs text-neutral-200 truncate", "{describe_step(&candidate.action)}" }
+                if let Some(ref breakdown) = candidate.breakdown {
+                    CandidateBreakdown { breakdown: breakdown.clone(), score: candidate.score }
+                }
+            }
+        }
+    }
+}
+
+/// Dispatcher that renders the appropriate score-computation breakdown for a
+/// candidate.
+#[component]
+fn CandidateBreakdown(breakdown: CandidateScoreBreakdown, score: f64) -> Element {
+    rsx! {
+        div { class: "text-xs font-mono text-neutral-500",
+            match breakdown {
+                CandidateScoreBreakdown::Eco {
+                    category,
+                    confidence,
+                    efficiency,
+                    time_penalty,
+                    priority,
+                    priority_multiplier,
+                    base,
+                    ..
+                } => rsx! {
+                    EcoBreakdown {
+                        category,
+                        confidence,
+                        efficiency,
+                        time_penalty,
+                        priority,
+                        priority_multiplier,
+                        base,
+                        score,
+                    }
+                },
+                CandidateScoreBreakdown::Unit {
+                    time_seconds,
+                    distance_to_target,
+                    ..
+                } => rsx! {
+                    UnitBreakdown { time_seconds, distance_to_target }
+                },
+            }
+        }
+    }
+}
+
+/// Eco-score formula terms: direction confidence, efficiency, time penalty,
+/// priority multiplier, base score, and final score.
+#[component]
+fn EcoBreakdown(
+    category: ScoreCategory,
+    confidence: u8,
+    efficiency: f64,
+    time_penalty: f64,
+    priority: u8,
+    priority_multiplier: f64,
+    base: f64,
+    score: f64,
+) -> Element {
+    rsx! {
+        div { class: "flex flex-col gap-0.5",
+            div { class: "flex flex-wrap gap-x-2",
+                ScoreCategoryLabel { category }
+                span { "conf={confidence}" }
+                span { "eff={efficiency:.4}" }
+                span { "time_penalty={time_penalty:.6}" }
+            }
+            div { class: "flex flex-wrap gap-x-2",
+                span { "base = {base:.4}" }
+                span { "priority = {priority} (x{priority_multiplier:.2})" }
+                span { class: "text-neutral-300", "score = {score:.4}" }
+            }
+        }
+    }
+}
+
+/// Unit-score terms: graph distance to target and simulated completion time.
+#[component]
+fn UnitBreakdown(time_seconds: f64, distance_to_target: Option<u32>) -> Element {
+    rsx! {
+        div { class: "flex flex-wrap gap-x-2",
+            if let Some(distance) = distance_to_target {
+                span { "distance to target = {distance}," }
+            } else {
+                span { "direct build," }
+            }
+            span { "time = {time_seconds:.1}s" }
+        }
+    }
+}
+
+/// Human-readable label for a score category.
+#[component]
+fn ScoreCategoryLabel(category: ScoreCategory) -> Element {
+    let label = match category {
+        ScoreCategory::MassIncome => "mass income",
+        ScoreCategory::Energy => "energy",
+        ScoreCategory::BuildPower => "build power",
+        ScoreCategory::TechT2 => "tech T2",
+        ScoreCategory::TechT3 => "tech T3",
+        ScoreCategory::Other => "other",
+    };
+    rsx! {
+        span { class: "text-neutral-400", "{label}" }
+    }
+}
+
 #[component]
 fn ScoreBlock(label: &'static str, #[props(into)] scores: ScoreValues) -> Element {
     rsx! {
-        div { class: "flex flex-col gap-1 rounded border border-neutral-800 bg-neutral-900/50 p-2",
-            span { class: "text-[10px] text-neutral-500", "{label}" }
-            div { class: "grid grid-cols-[1fr_auto] gap-x-3 text-xs",
-                for (name, value) in scores.rows() {
-                    span { class: "text-neutral-400", "{name}" }
-                    span { class: "font-mono text-neutral-200 text-right", "{value}" }
+        div { class: "flex-1 rounded border border-neutral-800 bg-neutral-900/50 p-2",
+            span { class: "text-[10px] text-neutral-500 block mb-1", "{label}" }
+            div { class: "flex flex-col gap-1",
+                for (name , value , max) in scores.rows() {
+                    div {
+                        class: "grid items-center gap-2",
+                        style: "grid-template-columns: 1fr auto",
+                        span { class: "text-xs text-neutral-400", "{name}" }
+                        div { class: "flex items-center gap-2",
+                            div { class: "w-16 h-1.5 rounded bg-neutral-800 overflow-hidden",
+                                div {
+                                    class: "h-full bg-blue-500",
+                                    style: "width: {(value as f64 / max as f64 * 100.0):.1}%",
+                                }
+                            }
+                            span { class: "font-mono text-neutral-200 text-xs w-5 text-right",
+                                "{value}"
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -203,19 +391,19 @@ impl Default for ScoreValues {
 }
 
 impl ScoreValues {
-    fn rows(&self) -> Vec<(&'static str, u8)> {
+    fn rows(&self) -> Vec<(&'static str, u8, u8)> {
         match self {
             ScoreValues::Directions(s) => vec![
-                ("Energy", s.energy),
-                ("Mass income", s.mass_income),
-                ("Build power", s.build_power),
-                ("Tech T2", s.tech_t2),
-                ("Tech T3", s.tech_t3),
+                ("Energy", s.energy, 100),
+                ("Mass income", s.mass_income, 100),
+                ("Build power", s.build_power, 100),
+                ("Tech T2", s.tech_t2, 100),
+                ("Tech T3", s.tech_t3, 100),
             ],
             ScoreValues::Priorities(p) => vec![
-                ("Mass", p.mass),
-                ("Energy", p.energy),
-                ("Build power", p.build_power),
+                ("Mass", p.mass, 10),
+                ("Energy", p.energy, 10),
+                ("Build power", p.build_power, 10),
             ],
         }
     }
@@ -344,6 +532,40 @@ fn step_accent(action: &Action) -> (&'static str, &'static str) {
             _ => ("border-sky-700 hover:border-sky-600", "text-sky-300"),
         },
         Action::Upgrade { .. } => ("border-red-700 hover:border-red-600", "text-red-300"),
+    }
+}
+
+/// Background and border classes for a candidate row. The chosen candidate uses
+/// a category colour matching the step timeline; non-chosen rows stay neutral.
+fn candidate_row_class(action: &Action, is_chosen: bool) -> &'static str {
+    if !is_chosen {
+        return "flex items-start gap-3 px-2 py-1.5 rounded bg-neutral-900/40 border border-neutral-800";
+    }
+    match action {
+        Action::Build { target, .. } => match target {
+            UnitKind::Mex(_) | UnitKind::CapMex(_) => {
+                "flex items-start gap-3 px-2 py-1.5 rounded bg-emerald-900/20 border border-emerald-700/50"
+            }
+            UnitKind::Pgen(_) => {
+                "flex items-start gap-3 px-2 py-1.5 rounded bg-yellow-900/20 border border-yellow-700/50"
+            }
+            _ => "flex items-start gap-3 px-2 py-1.5 rounded bg-sky-900/20 border border-sky-700/50",
+        },
+        Action::Upgrade { .. } => {
+            "flex items-start gap-3 px-2 py-1.5 rounded bg-red-900/20 border border-red-700/50"
+        }
+    }
+}
+
+/// Score text colour for a chosen candidate row, matching its category.
+fn candidate_score_color(action: &Action) -> &'static str {
+    match action {
+        Action::Build { target, .. } => match target {
+            UnitKind::Mex(_) | UnitKind::CapMex(_) => "text-emerald-300",
+            UnitKind::Pgen(_) => "text-yellow-300",
+            _ => "text-sky-300",
+        },
+        Action::Upgrade { .. } => "text-red-300",
     }
 }
 

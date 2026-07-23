@@ -8,8 +8,8 @@ pub use faf_sim_shared::plan_types::{
     ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
 };
 pub use faf_sim_shared::{
-    Action, DirectionScores, EcoSnapshot, PriorityTable, Schedule, ScheduleWithReasoning,
-    StepReasoning, StepResult,
+    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, EcoSnapshot,
+    PriorityTable, Schedule, ScheduleWithReasoning, ScoreCategory, StepReasoning, StepResult,
 };
 
 // ---------------------------------------------------------------------------

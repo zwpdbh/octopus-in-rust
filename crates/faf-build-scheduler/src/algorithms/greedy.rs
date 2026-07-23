@@ -17,9 +17,11 @@ use crate::plugins::eco::observe::{compute_mass_margin, MassMargin};
 use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{
-    solve_action, spawn_build_candidates, spawn_upgrade_candidates, IdleBuilderQuery,
+    solve_action, spawn_build_candidates, spawn_upgrade_candidates, CandidateScore,
+    IdleBuilderQuery,
 };
 use crate::util::{count_mex_from_iter, is_mex};
+use faf_sim_shared::{CandidateScoreBreakdown, ScoreCategory};
 
 /// Assignment of concrete builders to a candidate action.
 pub(crate) type CandidateBuilders = Vec<(
@@ -165,7 +167,7 @@ pub(crate) fn score_eco_candidate(
     library: &BlueprintLibrary,
     scores: &DirectionScores,
     priorities: &PriorityTable,
-) -> f64 {
+) -> CandidateScore {
     let Some(result) = solve_action(
         current_economy,
         next_id,
@@ -174,7 +176,10 @@ pub(crate) fn score_eco_candidate(
         assigned_builders,
         library,
     ) else {
-        return 0.0;
+        return CandidateScore {
+            total: 0.0,
+            breakdown: None,
+        };
     };
     let completion = result.tasks.last().cloned().unwrap_or(result.total);
 
@@ -184,7 +189,10 @@ pub(crate) fn score_eco_candidate(
     // the correct response, and the solver already verified the build can finish.
     let mass_after = compute_mass_margin(&completion.economy);
     if matches!(mass_after, MassMargin::Stall) {
-        return 0.0;
+        return CandidateScore {
+            total: 0.0,
+            breakdown: None,
+        };
     }
 
     // Storage-buffer guard: reject actions that would leave storage too low,
@@ -207,41 +215,74 @@ pub(crate) fn score_eco_candidate(
     if (post_energy_ratio < POST_ACTION_ENERGY_STORAGE_THRESHOLD && !improves_energy)
         || (post_mass_ratio < POST_ACTION_MASS_STORAGE_THRESHOLD && !improves_mass)
     {
-        return 0.0;
+        return CandidateScore {
+            total: 0.0,
+            breakdown: None,
+        };
     }
 
     // Categorize the action and look up the corresponding confidence score and
     // resource priority.
-    let (confidence, efficiency, priority) = if let Some(mass) =
+    let (category, confidence, efficiency, priority) = if let Some(mass) =
         heuristic::mass_income_efficiency(current_economy, &completion, action, library)
     {
-        (scores.mass_income, mass, priorities.mass)
+        (
+            ScoreCategory::MassIncome,
+            scores.mass_income,
+            mass,
+            priorities.mass,
+        )
     } else if let Some(energy) =
         heuristic::energy_income_efficiency(current_economy, &completion, action, library)
     {
-        (scores.energy, energy, priorities.energy)
+        (
+            ScoreCategory::Energy,
+            scores.energy,
+            energy,
+            priorities.energy,
+        )
     } else if let Some(tier) = heuristic::engineer_tier(action) {
         (
+            ScoreCategory::BuildPower,
             scores.build_power,
             (tier as i32 + 1) as f64,
             priorities.build_power,
         )
     } else if heuristic::is_tech_upgrade_to(action, TechLevel::T3) {
-        (scores.tech_t3, 0.0, 5)
+        (ScoreCategory::TechT3, scores.tech_t3, 0.0, 5)
     } else if heuristic::is_tech_upgrade_to(action, TechLevel::T2) {
-        (scores.tech_t2, 0.0, 5)
+        (ScoreCategory::TechT2, scores.tech_t2, 0.0, 5)
     } else {
-        (0, 0.0, 5)
+        (ScoreCategory::Other, 0, 0.0, 5)
     };
 
     if confidence == 0 {
-        return 0.0;
+        return CandidateScore {
+            total: 0.0,
+            breakdown: None,
+        };
     }
 
     // Confidence drives which direction wins and the priority table scales the
     // whole score up or down based on current resource health.
-    let base = confidence as f64 * 100.0 + efficiency - completion.time_seconds * 1e-9;
-    base * (priority as f64 / 5.0)
+    let time_penalty = completion.time_seconds * 1e-9;
+    let base = confidence as f64 * 100.0 + efficiency - time_penalty;
+    let priority_multiplier = priority as f64 / 5.0;
+    let total = base * priority_multiplier;
+
+    CandidateScore {
+        total,
+        breakdown: Some(CandidateScoreBreakdown::Eco {
+            category,
+            confidence,
+            efficiency,
+            time_seconds: completion.time_seconds,
+            time_penalty,
+            priority,
+            priority_multiplier,
+            base,
+        }),
+    }
 }
 
 /// Score a unit candidate by symbolic distance to the target unit.
@@ -257,7 +298,9 @@ pub(crate) fn score_unit_candidate(
     assigned_builders: &CandidateBuilders,
     library: &BlueprintLibrary,
     target: &UnitKind,
-) -> f64 {
+) -> CandidateScore {
+    use faf_sim_shared::CandidateScoreBreakdown;
+
     let graph = library.build_graph();
     let max_time = options.simulation_max_time_seconds;
     let resulting_unit = heuristic::resulting_unit(action);
@@ -272,14 +315,34 @@ pub(crate) fn score_unit_candidate(
             library,
         ) {
             let completion = result.tasks.last().cloned().unwrap_or(result.total);
-            -completion.time_seconds
+            CandidateScore {
+                total: -completion.time_seconds,
+                breakdown: Some(CandidateScoreBreakdown::Unit {
+                    resulting_unit: resulting_unit.clone(),
+                    time_seconds: completion.time_seconds,
+                    distance_to_target: None,
+                }),
+            }
         } else {
-            f64::NEG_INFINITY
+            CandidateScore {
+                total: f64::NEG_INFINITY,
+                breakdown: None,
+            }
         }
     } else {
         match distance_to_target(&graph, &resulting_unit, target) {
-            Some(distance) => -(max_time + distance as f64),
-            None => f64::NEG_INFINITY,
+            Some(distance) => CandidateScore {
+                total: -(max_time + distance as f64),
+                breakdown: Some(CandidateScoreBreakdown::Unit {
+                    resulting_unit: resulting_unit.clone(),
+                    time_seconds: 0.0,
+                    distance_to_target: Some(distance as u32),
+                }),
+            },
+            None => CandidateScore {
+                total: f64::NEG_INFINITY,
+                breakdown: None,
+            },
         }
     }
 }

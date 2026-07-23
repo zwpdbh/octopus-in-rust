@@ -63,7 +63,9 @@ pub(crate) fn apply_best_system(
     let library = &*library.0;
 
     let best = candidates.iter().max_by(|(_, _, _, a), (_, _, _, b)| {
-        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+        a.total
+            .partial_cmp(&b.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let Some((best_entity, best_action, best_assignment, _score)) = best else {
@@ -197,7 +199,8 @@ pub(crate) fn apply_best_system(
         .iter()
         .map(|(_, action, _, score)| CandidateReasoning {
             action: action.0.clone(),
-            score: score.0,
+            score: score.total,
+            breakdown: score.breakdown.clone(),
         })
         .collect();
     top_candidates.sort_by(|a, b| {

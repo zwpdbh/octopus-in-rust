@@ -6,7 +6,7 @@ use crate::algorithms::greedy::score_unit_candidate;
 use crate::components::CandidateAssignment;
 use crate::request::SearchOptions;
 use crate::resources::{EconomyState, SearchGoal, SearchProgress};
-use crate::search::{BlueprintLibraryRef, CandidateAction, CandidateScore, SearchTarget};
+use crate::search::{BlueprintLibraryRef, CandidateAction, SearchTarget};
 
 /// Evaluate every spawned [`CandidateAction`] for unit scheduling and attach a
 /// [`CandidateScore`].
@@ -42,6 +42,6 @@ pub(crate) fn evaluate_unit_candidates_system(
             library,
             target,
         );
-        commands.entity(entity).insert(CandidateScore(score));
+        commands.entity(entity).insert(score);
     }
 }

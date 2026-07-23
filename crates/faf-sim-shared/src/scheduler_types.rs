@@ -45,12 +45,62 @@ pub struct Schedule {
     pub steps: Vec<StepResult>,
 }
 
+/// Which economic direction a candidate score belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreCategory {
+    MassIncome,
+    Energy,
+    BuildPower,
+    TechT2,
+    TechT3,
+    Other,
+}
+
+/// Per-candidate score computation breakdown.
+///
+/// This explains how the final `score` in [`CandidateReasoning`] was derived so
+/// the UI can show the user why one candidate outranked another.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CandidateScoreBreakdown {
+    /// Eco scheduling score terms.
+    Eco {
+        category: ScoreCategory,
+        /// Direction confidence used for this candidate (0–100).
+        confidence: u8,
+        /// Efficiency term: income delta per mass spent, engineer tier + 1, or 0.
+        efficiency: f64,
+        /// Simulated time to finish the action in seconds.
+        time_seconds: f64,
+        /// Time penalty subtracted from the base score.
+        time_penalty: f64,
+        /// Resource priority used as the multiplier (1–10).
+        priority: u8,
+        /// `priority / 5.0`, the actual multiplier applied to the base score.
+        priority_multiplier: f64,
+        /// Base score before the priority multiplier.
+        base: f64,
+    },
+    /// Unit scheduling score terms.
+    Unit {
+        resulting_unit: faf_blueprints::UnitKind,
+        /// Simulated time to finish the action in seconds.
+        time_seconds: f64,
+        /// Graph distance from the resulting unit to the target, if not the
+        /// target itself.
+        distance_to_target: Option<u32>,
+    },
+}
+
 /// A candidate action that was considered for a scheduling step, together with
-/// the score it received.
+/// the score it received and an optional breakdown of how that score was
+/// computed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateReasoning {
     pub action: Action,
     pub score: f64,
+    #[serde(default)]
+    pub breakdown: Option<CandidateScoreBreakdown>,
 }
 
 /// Confidence scores (0–100) for each economic direction.

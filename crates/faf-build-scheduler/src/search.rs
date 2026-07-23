@@ -16,6 +16,7 @@ use crate::components::{BuildPowerComp, BuilderState, CandidateAssignment, UnitK
 use crate::request::{EcoTarget, SearchOptions};
 use crate::resources::{EconomyState, StepLog, TaskLog};
 use crate::result::{Action, Schedule, ScheduleError};
+use faf_sim_shared::CandidateScoreBreakdown;
 
 /// Resource wrapper so the `BlueprintLibrary` can be inserted into a Bevy
 /// `World`.
@@ -26,9 +27,12 @@ pub(crate) struct BlueprintLibraryRef(pub std::sync::Arc<BlueprintLibrary>);
 #[derive(Component)]
 pub(crate) struct CandidateAction(pub Action);
 
-/// Score attached to a candidate after evaluation. Lower is better.
-#[derive(Component)]
-pub(crate) struct CandidateScore(pub f64);
+/// Score attached to a candidate after evaluation. Higher is better.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct CandidateScore {
+    pub total: f64,
+    pub breakdown: Option<CandidateScoreBreakdown>,
+}
 
 /// The search goal.
 #[derive(Debug, Clone, PartialEq)]
