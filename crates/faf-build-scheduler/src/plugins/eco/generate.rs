@@ -33,5 +33,12 @@ pub(crate) fn generate_eco_candidates_system(
     }
 
     let library = &*library.0;
-    greedy::spawn_eco_candidates(&mut commands, library, &config, &units, &idle_builders);
+    greedy::spawn_eco_candidates(
+        &mut commands,
+        library,
+        &config,
+        &units,
+        &idle_builders,
+        &economy.current,
+    );
 }

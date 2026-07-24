@@ -46,7 +46,14 @@ pub(crate) fn generate_unit_candidates_system(
             if is_mex(library, &target) && current_mex_count >= mex_cap {
                 continue;
             }
-            spawn_build_candidates(&mut commands, library, builder, target, &idle_builders);
+            spawn_build_candidates(
+                &mut commands,
+                library,
+                builder,
+                target,
+                &idle_builders,
+                &economy.current,
+            );
         }
     }
 

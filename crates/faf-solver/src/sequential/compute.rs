@@ -233,3 +233,33 @@ fn solve_target(
 
     true
 }
+
+/// Given current eco situation and the target to build
+/// What is the maximum build power it could hold.
+/// It means during the build progress there should be no energy stall
+pub fn solve_approriate_builder_power(
+    eco_snapshot: &EcoSnapshot,
+    target_mass: f64,
+    target_energy: f64,
+    target_build_time: f64,
+) -> f64 {
+    let mut bp = 20.0;
+    let net_energy_income = eco_snapshot.production_per_second_energy
+        - eco_snapshot.maintenance_consumption_per_second_energy
+        - eco_snapshot.energy_drain;
+
+    let net_mass_income = eco_snapshot.production_per_second_mass - eco_snapshot.mass_drain;
+
+    loop {
+        let rate = target_build_time / bp;
+        let mass_drain = target_mass / rate;
+        let energy_drain = target_energy / rate;
+
+        if (mass_drain >= net_mass_income.value()) || (energy_drain >= net_energy_income.value()) {
+            break;
+        }
+        bp += 10.0;
+    }
+    // println!("appropriate bp is: {}", bp);
+    return bp;
+}

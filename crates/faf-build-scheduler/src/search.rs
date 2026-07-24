@@ -299,6 +299,7 @@ pub(crate) fn spawn_build_candidates(
     builder: &UnitKind,
     target: UnitKind,
     idle_builders: &IdleBuilderQuery,
+    eco_snapshot: &EcoSnapshot,
 ) {
     let available: Vec<(Entity, UnitKind, UnitEcoStats)> = idle_builders
         .iter()
@@ -313,22 +314,32 @@ pub(crate) fn spawn_build_candidates(
     if available.is_empty() {
         return;
     }
-    let mut counts = std::collections::BTreeSet::new();
-    counts.insert(1usize);
-    counts.insert(2.min(available.len()));
-    counts.insert(4.min(available.len()));
-    counts.insert(available.len());
-    for count in counts {
-        let assigned: Vec<(Entity, UnitKind, UnitEcoStats)> =
-            available.iter().take(count).cloned().collect();
-        commands.spawn((
-            CandidateAction(Action::Build {
-                builder: vec![builder.clone(); count],
-                target: target.clone(),
-            }),
-            CandidateAssignment(assigned),
-        ));
-    }
+
+    let target_unit_cost = library.build_cost(&target).unwrap();
+
+    let max_bp = faf_solver::solve_approriate_builder_power(
+        eco_snapshot,
+        target_unit_cost.mass,
+        target_unit_cost.energy,
+        target_unit_cost.build_time,
+    );
+    let builder_bp = library.build_power(builder);
+    let max_number_builder = max_bp as usize / builder_bp as usize;
+    let number_of_builder = max_number_builder.min(available.len());
+    // println!(
+    //     "number_of_builder : {}, builder_bp: {}, max_number_builder: {}",
+    //     number_of_builder, builder_bp, max_number_builder
+    // );
+
+    let assigned: Vec<(Entity, UnitKind, UnitEcoStats)> =
+        available.iter().take(number_of_builder).cloned().collect();
+    commands.spawn((
+        CandidateAction(Action::Build {
+            builder: vec![builder.clone(); number_of_builder],
+            target: target.clone(),
+        }),
+        CandidateAssignment(assigned),
+    ));
 }
 
 /// Spawn upgrade/cap candidates without assistance and with 1, 2, or 4

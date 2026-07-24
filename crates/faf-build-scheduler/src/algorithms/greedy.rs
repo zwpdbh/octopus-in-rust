@@ -73,6 +73,7 @@ pub(crate) fn spawn_eco_candidates(
     config: &SchedulerConfig,
     units: &Query<&UnitKindComp>,
     idle_builders: &IdleBuilderQuery,
+    eco_snapshot: &EcoSnapshot,
 ) {
     let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
     let current_mex_count = count_mex_from_iter(&owned_kinds, library);
@@ -104,6 +105,7 @@ pub(crate) fn spawn_eco_candidates(
                     &UnitKind::Commander,
                     target,
                     idle_builders,
+                    eco_snapshot,
                 );
             }
         }
@@ -125,7 +127,14 @@ pub(crate) fn spawn_eco_candidates(
                 .into_iter()
                 .find(|t| matches!(t, UnitKind::Engineer(_)))
             {
-                spawn_build_candidates(commands, library, kind, target, idle_builders);
+                spawn_build_candidates(
+                    commands,
+                    library,
+                    kind,
+                    target,
+                    idle_builders,
+                    eco_snapshot,
+                );
             }
         }
         return;
@@ -140,7 +149,7 @@ pub(crate) fn spawn_eco_candidates(
             if is_mex(library, &target) && current_mex_count >= mex_cap {
                 continue;
             }
-            spawn_build_candidates(commands, library, kind, target, idle_builders);
+            spawn_build_candidates(commands, library, kind, target, idle_builders, eco_snapshot);
         }
         if let Some(target) = library.upgrade_target(kind) {
             spawn_upgrade_candidates(commands, library, kind, target, idle_builders);

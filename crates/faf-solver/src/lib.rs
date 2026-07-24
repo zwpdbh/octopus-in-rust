@@ -8,5 +8,6 @@ mod sequential;
 
 pub use sequential::{
     plan_completion_result, plan_completion_time, plan_completion_with_tasks,
-    single_task_completion_result, single_task_completion_time, CompletionResult, PlanResult,
+    single_task_completion_result, single_task_completion_time, solve_approriate_builder_power,
+    CompletionResult, PlanResult,
 };

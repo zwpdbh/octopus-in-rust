@@ -43,7 +43,7 @@ pub struct BlueprintLibrary {
     /// This table is the boundary between the symbolic blueprint world and the
     /// numeric simulation runtime. It is populated once during construction and
     /// then treated as read-only.
-    eco_table: HashMap<UnitKind, UnitEcoStats>,
+    blueprint_stats_table: HashMap<UnitKind, UnitEcoStats>,
 }
 
 impl BlueprintLibrary {
@@ -67,7 +67,7 @@ impl BlueprintLibrary {
     fn from_index(index: DataIndex) -> Self {
         let mut world = World::new();
         let mut kind_to_entity: HashMap<UnitKind, Entity> = HashMap::new();
-        let mut eco_table: HashMap<UnitKind, UnitEcoStats> = HashMap::new();
+        let mut blueprint_stats_table: HashMap<UnitKind, UnitEcoStats> = HashMap::new();
         let builds = Self::hardcoded_builds();
         let upgrades = Self::hardcoded_upgrades();
         let caps = Self::hardcoded_caps();
@@ -108,7 +108,7 @@ impl BlueprintLibrary {
             }
             let stats = build::unit_eco_stats(unit, &kind);
             kind_to_entity.insert(kind.clone(), entity);
-            eco_table.insert(kind, stats);
+            blueprint_stats_table.insert(kind, stats);
         }
 
         // Synthetic definitions for capped mass extractors. These do not exist
@@ -132,7 +132,7 @@ impl BlueprintLibrary {
                 54.0,
             ),
         ] {
-            let base_mass = eco_table
+            let base_mass = blueprint_stats_table
                 .get(&base_mex)
                 .map(|s| s.production_per_second_mass)
                 .unwrap_or(0.0);
@@ -164,7 +164,7 @@ impl BlueprintLibrary {
                 })
                 .id();
             kind_to_entity.insert(kind.clone(), entity);
-            eco_table.insert(kind, stats);
+            blueprint_stats_table.insert(kind, stats);
         }
 
         // Synthetic definition for the T4 experimental tier.
@@ -181,7 +181,7 @@ impl BlueprintLibrary {
                 })
                 .id();
             kind_to_entity.insert(UnitKind::Experimental, experimental_entity);
-            eco_table.insert(UnitKind::Experimental, experimental_stats);
+            blueprint_stats_table.insert(UnitKind::Experimental, experimental_stats);
         }
 
         // Attach build, upgrade, and cap rules to their source/target entities.
@@ -227,7 +227,7 @@ impl BlueprintLibrary {
         Self {
             world,
             kind_to_entity,
-            eco_table,
+            blueprint_stats_table,
         }
     }
 
@@ -289,7 +289,7 @@ impl BlueprintLibrary {
 
     /// Build cost for a unit kind, if it can be built at all.
     pub fn build_cost(&self, kind: &UnitKind) -> Option<UnitCost> {
-        self.eco_table.get(kind).map(|stats| UnitCost {
+        self.blueprint_stats_table.get(kind).map(|stats| UnitCost {
             mass: stats.mass_cost,
             energy: stats.energy_cost,
             build_time: stats.build_time,
@@ -374,7 +374,7 @@ impl BlueprintLibrary {
 
     /// All unit kinds that can act as builders, optionally filtered to a tech tier.
     pub fn builder_blueprints(&self, tech: Option<TechLevel>) -> HashSet<UnitKind> {
-        self.eco_table
+        self.blueprint_stats_table
             .iter()
             .filter(|(kind, stats)| {
                 stats.build_power > 0.0 && tech.map_or(true, |t| matches_tech_level(kind, t))
@@ -385,7 +385,7 @@ impl BlueprintLibrary {
 
     /// Build power for a unit kind.
     pub fn build_power(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.build_power)
             .unwrap_or(0.0)
@@ -393,7 +393,7 @@ impl BlueprintLibrary {
 
     /// Mass production per second for a unit kind, including adjacency bonuses.
     pub fn production_per_second_mass(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.production_per_second_mass * s.adjacency.mass_production_multiplier())
             .unwrap_or(0.0)
@@ -401,7 +401,7 @@ impl BlueprintLibrary {
 
     /// Energy production per second for a unit kind, including adjacency bonuses.
     pub fn production_per_second_energy(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.production_per_second_energy * s.adjacency.energy_production_multiplier())
             .unwrap_or(0.0)
@@ -409,7 +409,7 @@ impl BlueprintLibrary {
 
     /// Energy maintenance consumption per second for a unit kind.
     pub fn maintenance_consumption_per_second_energy(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.maintenance_consumption_per_second_energy)
             .unwrap_or(0.0)
@@ -417,7 +417,7 @@ impl BlueprintLibrary {
 
     /// Mass storage capacity for a unit kind.
     pub fn mass_storage(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.mass_storage)
             .unwrap_or(0.0)
@@ -425,7 +425,7 @@ impl BlueprintLibrary {
 
     /// Energy storage capacity for a unit kind.
     pub fn energy_storage(&self, kind: &UnitKind) -> f64 {
-        self.eco_table
+        self.blueprint_stats_table
             .get(kind)
             .map(|s| s.energy_storage)
             .unwrap_or(0.0)
@@ -437,7 +437,7 @@ impl BlueprintLibrary {
     /// and adjacency metadata. It is the same shape used by the runtime for
     /// build-task targets and builders.
     pub fn unit_eco_stats(&self, kind: &UnitKind) -> Option<UnitEcoStats> {
-        self.eco_table.get(kind).cloned()
+        self.blueprint_stats_table.get(kind).cloned()
     }
 
     /// Convert a blueprint into the flat runtime economic representation.
@@ -445,7 +445,7 @@ impl BlueprintLibrary {
     /// `as_builder` controls whether cost/storage fields are zeroed out, matching
     /// the old `unit_as_builder` / `unit_as_target` split.
     pub fn to_unit_eco_stats(&self, kind: &UnitKind, as_builder: bool) -> Option<UnitEcoStats> {
-        let mut stats = self.eco_table.get(kind).cloned()?;
+        let mut stats = self.blueprint_stats_table.get(kind).cloned()?;
 
         if as_builder {
             stats.mass_cost = 0.0;
