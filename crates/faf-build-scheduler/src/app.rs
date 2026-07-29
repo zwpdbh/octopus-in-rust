@@ -6,7 +6,8 @@ use std::sync::Arc;
 use bevy_app::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind};
-use faf_sim_shared::EcoSnapshot;
+use faf_quantities::Time;
+use faf_sim_shared::GameEcoParameters;
 
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
@@ -18,9 +19,7 @@ use crate::plugins::lifecycle::{
     run_to_completion_with_reasoning_cancellable, SchedulerLifecyclePlugin, SchedulerResult,
 };
 use crate::request::{EcoTarget, SearchOptions};
-use crate::resources::{
-    EconomyState, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog,
-};
+use crate::resources::{GameEco, SchedulerClock, SearchGoal, SearchProgress, StepLog, TaskLog};
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 use crate::search::{BlueprintLibraryRef, SearchTarget};
 
@@ -39,7 +38,7 @@ impl SchedulerApp {
     /// Create a scheduler app for eco scheduling.
     pub fn new_for_eco(
         library: Arc<BlueprintLibrary>,
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         inventory: HashMap<UnitKind, u32>,
         target: EcoTarget,
         options: SearchOptions,
@@ -62,7 +61,7 @@ impl SchedulerApp {
     /// Create a scheduler app for unit scheduling.
     pub fn new_for_unit(
         library: Arc<BlueprintLibrary>,
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         inventory: HashMap<UnitKind, u32>,
         target: UnitKind,
         options: SearchOptions,
@@ -85,7 +84,7 @@ impl SchedulerApp {
     fn insert_shared_resources(
         app: &mut App,
         library: Arc<BlueprintLibrary>,
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         inventory: HashMap<UnitKind, u32>,
         target: SearchTarget,
         options: SearchOptions,
@@ -103,29 +102,24 @@ impl SchedulerApp {
             }
         }
 
-        app.insert_resource(EconomyState {
-            initial: initial_eco,
-            current: initial_eco,
-        })
-        .insert_resource(SchedulerClock {
-            now: initial_eco.time,
-        })
-        .insert_resource(SearchGoal(target))
-        .insert_resource(options)
-        .insert_resource(SearchProgress {
-            iteration: 0,
-            next_id: 1,
-            done: false,
-        })
-        .init_resource::<TaskLog>()
-        .init_resource::<StepLog>()
-        .insert_resource(BlueprintLibraryRef(library))
-        .insert_resource(config)
-        .init_resource::<Observation>()
-        .init_resource::<DirectionScoresRes>()
-        .init_resource::<PriorityTableRes>()
-        .init_resource::<SchedulerResult>()
-        .init_resource::<StepReasoningLog>();
+        app.insert_resource(GameEco { eco: initial_eco })
+            .insert_resource(SchedulerClock { now: Time::zero() })
+            .insert_resource(SearchGoal(target))
+            .insert_resource(options)
+            .insert_resource(SearchProgress {
+                iteration: 0,
+                next_id: 1,
+                done: false,
+            })
+            .init_resource::<TaskLog>()
+            .init_resource::<StepLog>()
+            .insert_resource(BlueprintLibraryRef(library))
+            .insert_resource(config)
+            .init_resource::<Observation>()
+            .init_resource::<DirectionScoresRes>()
+            .init_resource::<PriorityTableRes>()
+            .init_resource::<SchedulerResult>()
+            .init_resource::<StepReasoningLog>();
     }
 
     /// Add an arbitrary plugin (e.g. a scheduling mode or an algorithm).

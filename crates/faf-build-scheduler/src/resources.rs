@@ -7,21 +7,15 @@
 use bevy_ecs::prelude::Resource;
 
 use faf_quantities::Time;
-use faf_sim_shared::{BuildTask, EcoSnapshot};
+use faf_sim_shared::{BuildTask, GameEcoParameters};
 
 use crate::request::SearchOptions;
 use crate::result::StepResult;
 use crate::search::SearchTarget;
 
-/// Economy snapshots for the current scheduling run.
-///
-/// `initial` is the snapshot the search started from and is used to build the
-/// final construction plan. `current` is the snapshot after the steps committed
-/// so far and is what candidate generation and simulation operate on.
 #[derive(Resource)]
-pub struct EconomyState {
-    pub initial: EcoSnapshot,
-    pub current: EcoSnapshot,
+pub struct GameEco {
+    pub eco: GameEcoParameters,
 }
 
 /// Global simulation clock for the scheduler.

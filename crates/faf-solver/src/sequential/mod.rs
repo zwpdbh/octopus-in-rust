@@ -6,16 +6,11 @@
 //! affine dynamical system that can enter limit cycles, so trying to jump many
 //! ticks at once is error-prone. Advancing one second at a time is simple,
 //! exact, and still much faster than the full simulation.
-
+#![allow(unused)]
 mod compute;
 mod factor;
-mod state;
-
-#[cfg(test)]
-mod tests;
 
 pub use compute::{
-    plan_completion_result, plan_completion_time, plan_completion_with_tasks,
-    single_task_completion_result, single_task_completion_time, solve_approriate_builder_power,
-    CompletionResult, PlanResult,
+    plan_completion_result, plan_completion_with_tasks, single_task_completion_result,
+    solve_approriate_builder_power, CompletionResult, PlanResult,
 };

@@ -228,7 +228,7 @@ impl<'a> ResourceProducer<'a> {
     /// Returns `None` if the unit has no definition, zero mass cost, or no
     /// resource production.
     pub fn new(library: &'a BlueprintLibrary, kind: &'a UnitKind) -> Option<Self> {
-        let cost = library.build_cost(kind)?;
+        let cost = library.unit_build_cost(kind)?;
         if cost.mass <= 0.0 {
             return None;
         }
@@ -326,7 +326,7 @@ pub fn summarize_economy(
 ///
 /// For the public, point-in-time record that is emitted to consumers (UI,
 /// WebSocket, ML models), see [`EcoSnapshot`](crate::runtime::EcoSnapshot).
-pub use faf_sim_shared::EconomyRuntimeState;
+pub use faf_sim_shared::GameEcoParameters;
 
 /// Result of applying a drain to an economy state for one second.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -353,7 +353,7 @@ pub struct TickResult {
 /// FAF stalls when storage would go negative. The effective build power is
 /// reduced to the largest fraction of the requested power that keeps both
 /// resources non-negative.
-pub fn apply_tick(requested: &BuildDrain, state: &EconomyRuntimeState, dt: f64) -> TickResult {
+pub fn apply_tick(requested: &BuildDrain, state: &GameEcoParameters, dt: f64) -> TickResult {
     let dt = Time::from_raw(dt);
 
     // Gross income during this tick, ignoring the drain.
@@ -485,7 +485,7 @@ impl BuildProject {
     ///
     /// Returns `None` if the unit has no definition or zero build time.
     pub fn new(target: UnitKind, library: &BlueprintLibrary) -> Option<Self> {
-        let cost = library.build_cost(&target)?;
+        let cost = library.unit_build_cost(&target)?;
         if cost.build_time <= 0.0 {
             return None;
         }
@@ -510,7 +510,7 @@ impl BuildProject {
     }
 
     /// Advance the project by `dt` seconds, consuming resources from `state`.
-    pub fn tick(&mut self, state: &mut EconomyRuntimeState, dt: f64) -> TickOutcome {
+    pub fn tick(&mut self, state: &mut GameEcoParameters, dt: f64) -> TickOutcome {
         let Some(drain) = compute_drain(&self.target.to_target_stats(), self.assigned_build_power)
         else {
             return TickOutcome::InProgress {
@@ -562,7 +562,9 @@ mod tests {
     fn monkeylord_drain_at_base_build_power() {
         let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
-        let cost = units.build_cost(&monkeylord).expect("Monkeylord exists");
+        let cost = units
+            .unit_build_cost(&monkeylord)
+            .expect("Monkeylord exists");
 
         // Base build time means build power = 1.0 (the implicit reference rate).
         let drain =
@@ -585,7 +587,10 @@ mod tests {
         let build_power = RequestedBuildPower(units.build_power(&t3_eng));
 
         let drain = compute_drain(
-            &units.build_cost(&monkeylord).unwrap().to_target_stats(),
+            &units
+                .unit_build_cost(&monkeylord)
+                .unwrap()
+                .to_target_stats(),
             build_power,
         )
         .expect("valid drain");
@@ -617,12 +622,15 @@ mod tests {
         let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
-            &units.build_cost(&monkeylord).unwrap().to_target_stats(),
+            &units
+                .unit_build_cost(&monkeylord)
+                .unwrap()
+                .to_target_stats(),
             RequestedBuildPower(10.0),
         )
         .expect("valid drain");
 
-        let state = EconomyRuntimeState {
+        let state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
@@ -647,13 +655,16 @@ mod tests {
         let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
-            &units.build_cost(&monkeylord).unwrap().to_target_stats(),
+            &units
+                .unit_build_cost(&monkeylord)
+                .unwrap()
+                .to_target_stats(),
             RequestedBuildPower(10.0),
         )
         .expect("valid drain");
 
         // Very little `ProductionPerSecondEnergy` and storage, plenty of mass.
-        let state = EconomyRuntimeState {
+        let state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
@@ -679,13 +690,16 @@ mod tests {
         let units = load_library();
         let monkeylord = UnitKind::Unique(UnitId("URL0402".to_string()));
         let drain = compute_drain(
-            &units.build_cost(&monkeylord).unwrap().to_target_stats(),
+            &units
+                .unit_build_cost(&monkeylord)
+                .unwrap()
+                .to_target_stats(),
             RequestedBuildPower(10.0),
         )
         .expect("valid drain");
 
         // Very little `ProductionPerSecondMass` and storage, plenty of energy.
-        let state = EconomyRuntimeState {
+        let state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(
@@ -716,7 +730,7 @@ mod tests {
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         project.assigned_build_power = build_power;
 
-        let mut state = EconomyRuntimeState {
+        let mut state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
@@ -748,7 +762,7 @@ mod tests {
         let build_time = project.target.build_time;
         project.assigned_build_power = build_power;
 
-        let mut state = EconomyRuntimeState {
+        let mut state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
@@ -786,7 +800,7 @@ mod tests {
         project.assigned_build_power = build_power;
 
         // No `ProductionPerSecondEnergy` and tiny storage: will stall.
-        let mut state = EconomyRuntimeState {
+        let mut state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
@@ -819,12 +833,12 @@ mod tests {
         let units = load_library();
         let t1_eng = UnitKind::Engineer(TechLevel::T1);
         let drain = compute_drain(
-            &units.build_cost(&t1_eng).unwrap().to_target_stats(),
+            &units.unit_build_cost(&t1_eng).unwrap().to_target_stats(),
             RequestedBuildPower(1.0),
         )
         .expect("valid drain");
 
-        let mut state = EconomyRuntimeState {
+        let mut state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
@@ -878,7 +892,7 @@ mod tests {
         project.assigned_build_power = build_power;
 
         // No income, but enough storage to pay the full cost.
-        let mut state = EconomyRuntimeState {
+        let mut state = GameEcoParameters {
             production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
             production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
@@ -957,7 +971,7 @@ mod tests {
                 continue;
             }
 
-            let cost = units.build_cost(&kind).expect("producer has a cost");
+            let cost = units.unit_build_cost(&kind).expect("producer has a cost");
             checked += 1;
             assert!(cost.mass > 0.0, "{:?} has no mass cost", kind);
             assert!(cost.energy > 0.0, "{:?} has no energy cost", kind);

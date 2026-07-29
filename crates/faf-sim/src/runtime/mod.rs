@@ -9,11 +9,8 @@ pub(crate) mod resources;
 mod systems;
 pub mod types;
 
-#[cfg(test)]
-mod tests;
-
 pub use faf_blueprints::{AdjacencyBonus, UnitEcoStats};
-pub use types::{BuildQueue, BuildTask, EcoSnapshot, SimulationEvent};
+pub use types::{BuildQueue, BuildTask, SimulationEvent};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;

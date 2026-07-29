@@ -1,17 +1,16 @@
 //! Top-level completion-time computation for single-task and sequential plans.
 
 use faf_blueprints::UnitEcoStats;
-use faf_sim_shared::{BuildTask, EcoSnapshot};
+use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoParameters, EPS};
 
 use crate::sequential::factor::effective_factor;
-use crate::sequential::state::{SolverState, EPS};
 
 /// Result of solving a plan: when it finishes and what the economy looks like at
 /// that point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompletionResult {
-    pub time_seconds: f64,
-    pub economy: EcoSnapshot,
+    pub finished_on_time: bool,
+    pub eco_snapshot: EcoSnapshot,
 }
 
 /// Result of solving a multi-task plan, including a per-task breakdown.
@@ -25,20 +24,10 @@ pub struct PlanResult {
 }
 
 impl CompletionResult {
-    /// Natural completion (or a clean max-time cap).
-    fn finished(state: &SolverState, max_time_seconds: f64) -> Self {
+    fn new(state: &EcoSnapshot, max_time_seconds: f64) -> Self {
         Self {
-            time_seconds: state.time.min(max_time_seconds),
-            economy: state.to_snapshot(),
-        }
-    }
-
-    /// The plan cannot finish: zero build power, a permanent stall, or the
-    /// solver ran out of time. Report the cap as the completion time.
-    fn stalled(state: &SolverState, max_time_seconds: f64) -> Self {
-        Self {
-            time_seconds: max_time_seconds,
-            economy: state.to_snapshot(),
+            eco_snapshot: *state,
+            finished_on_time: state.time < max_time_seconds,
         }
     }
 }
@@ -48,23 +37,11 @@ impl CompletionResult {
 /// This is a convenience wrapper around [`plan_completion_result`] for the
 /// common case of exactly one task.
 pub fn single_task_completion_result(
-    initial_eco: &EcoSnapshot,
+    initial_eco: &GameEcoParameters,
     task: &BuildTask,
     max_time_seconds: f64,
 ) -> CompletionResult {
     plan_completion_result(initial_eco, std::slice::from_ref(task), max_time_seconds)
-}
-
-/// Compute the completion time of a single task.
-///
-/// Convenience wrapper that returns only the wall-clock time. Use
-/// [`single_task_completion_result`] if you also need the final economy.
-pub fn single_task_completion_time(
-    initial_eco: &EcoSnapshot,
-    task: &BuildTask,
-    max_time_seconds: f64,
-) -> f64 {
-    single_task_completion_result(initial_eco, task, max_time_seconds).time_seconds
 }
 
 /// Compute the completion time and final economy of a sequence of tasks.
@@ -73,42 +50,28 @@ pub fn single_task_completion_time(
 /// contributions of every target it built are folded into the running state
 /// before the next task's `start_after` delay is applied.
 pub fn plan_completion_result(
-    initial_eco: &EcoSnapshot,
+    initial_eco: &GameEcoParameters,
     tasks: &[BuildTask],
     max_time_seconds: f64,
 ) -> CompletionResult {
     plan_completion_with_tasks(initial_eco, tasks, max_time_seconds).total
 }
 
-/// Compute the completion time of a sequence of tasks.
-///
-/// Convenience wrapper that returns only the wall-clock time. Use
-/// [`plan_completion_with_tasks`] if you also need the per-task breakdown.
-pub fn plan_completion_time(
-    initial_eco: &EcoSnapshot,
-    tasks: &[BuildTask],
-    max_time_seconds: f64,
-) -> f64 {
-    plan_completion_with_tasks(initial_eco, tasks, max_time_seconds)
-        .total
-        .time_seconds
-}
-
 /// Compute the completion time and final economy of a sequence of tasks,
 /// returning a per-task breakdown.
 pub fn plan_completion_with_tasks(
-    initial_eco: &EcoSnapshot,
+    initial_eco: &GameEcoParameters,
     tasks: &[BuildTask],
     max_time_seconds: f64,
 ) -> PlanResult {
-    let mut state = SolverState::from_snapshot(initial_eco);
+    let mut state = EcoSnapshot::init_with_eco_parameters(initial_eco);
     let mut task_results = Vec::with_capacity(tasks.len());
 
     for task in tasks {
         if state.time >= max_time_seconds - EPS {
-            task_results.push(CompletionResult::finished(&state, max_time_seconds));
+            task_results.push(CompletionResult::new(&state, max_time_seconds));
             return PlanResult {
-                total: CompletionResult::finished(&state, max_time_seconds),
+                total: CompletionResult::new(&state, max_time_seconds),
                 tasks: task_results,
             };
         }
@@ -119,9 +82,9 @@ pub fn plan_completion_with_tasks(
         let idle_ticks = task.start_after.value().ceil() as usize;
         for _ in 0..idle_ticks {
             if state.time >= max_time_seconds {
-                task_results.push(CompletionResult::finished(&state, max_time_seconds));
+                task_results.push(CompletionResult::new(&state, max_time_seconds));
                 return PlanResult {
-                    total: CompletionResult::finished(&state, max_time_seconds),
+                    total: CompletionResult::new(&state, max_time_seconds),
                     tasks: task_results,
                 };
             }
@@ -130,9 +93,9 @@ pub fn plan_completion_with_tasks(
 
         let power: f64 = task.builders.iter().map(|b| b.build_power).sum();
         if power <= EPS {
-            task_results.push(CompletionResult::stalled(&state, max_time_seconds));
+            task_results.push(CompletionResult::new(&state, max_time_seconds));
             return PlanResult {
-                total: CompletionResult::stalled(&state, max_time_seconds),
+                total: CompletionResult::new(&state, max_time_seconds),
                 tasks: task_results,
             };
         }
@@ -142,13 +105,13 @@ pub fn plan_completion_with_tasks(
             .iter()
             .map(|b| b.maintenance_consumption_per_second_energy)
             .sum();
-        state.maintenance += builder_maintenance;
+        state.maintenance_consumption_per_second_energy += builder_maintenance;
 
         for target in &task.targets {
             if state.time >= max_time_seconds - EPS {
-                task_results.push(CompletionResult::finished(&state, max_time_seconds));
+                task_results.push(CompletionResult::new(&state, max_time_seconds));
                 return PlanResult {
-                    total: CompletionResult::finished(&state, max_time_seconds),
+                    total: CompletionResult::new(&state, max_time_seconds),
                     tasks: task_results,
                 };
             }
@@ -169,9 +132,9 @@ pub fn plan_completion_with_tasks(
                 energy_drain,
                 max_time_seconds,
             ) {
-                task_results.push(CompletionResult::stalled(&state, max_time_seconds));
+                task_results.push(CompletionResult::new(&state, max_time_seconds));
                 return PlanResult {
-                    total: CompletionResult::stalled(&state, max_time_seconds),
+                    total: CompletionResult::new(&state, max_time_seconds),
                     tasks: task_results,
                 };
             }
@@ -179,11 +142,11 @@ pub fn plan_completion_with_tasks(
             state.add_target_contributions(target);
         }
 
-        task_results.push(CompletionResult::finished(&state, max_time_seconds));
+        task_results.push(CompletionResult::new(&state, max_time_seconds));
     }
 
     PlanResult {
-        total: CompletionResult::finished(&state, max_time_seconds),
+        total: CompletionResult::new(&state, max_time_seconds),
         tasks: task_results,
     }
 }
@@ -193,7 +156,7 @@ pub fn plan_completion_with_tasks(
 /// Returns `false` if the target cannot finish before `max_time_seconds` or if
 /// progress stalls (`effective_factor == 0`).
 fn solve_target(
-    state: &mut SolverState,
+    state: &mut EcoSnapshot,
     target: &UnitEcoStats,
     power: f64,
     mass_drain: f64,
@@ -238,28 +201,33 @@ fn solve_target(
 /// What is the maximum build power it could hold.
 /// It means during the build progress there should be no energy stall
 pub fn solve_approriate_builder_power(
-    eco_snapshot: &EcoSnapshot,
+    eco_snapshot: &GameEcoParameters,
     target_mass: f64,
     target_energy: f64,
     target_build_time: f64,
 ) -> f64 {
-    let mut bp = 20.0;
-    let net_energy_income = eco_snapshot.production_per_second_energy
-        - eco_snapshot.maintenance_consumption_per_second_energy
-        - eco_snapshot.energy_drain;
+    todo!("not implemented")
+    // let mut bp = 20.0;
+    // let drain_ratio = target_build_time / bp;
+    // let energy_drain = target_energy / drain_ratio;
+    // let mass_drain = target_mass / drain_ratio;
 
-    let net_mass_income = eco_snapshot.production_per_second_mass - eco_snapshot.mass_drain;
+    // let net_energy_income = eco_snapshot.production_per_second_energy
+    //     - eco_snapshot.maintenance_consumption_per_second_energy
+    //     - energy_drain;
 
-    loop {
-        let rate = target_build_time / bp;
-        let mass_drain = target_mass / rate;
-        let energy_drain = target_energy / rate;
+    // let net_mass_income = eco_snapshot.production_per_second_mass - mass_drain;
 
-        if (mass_drain >= net_mass_income.value()) || (energy_drain >= net_energy_income.value()) {
-            break;
-        }
-        bp += 10.0;
-    }
-    // println!("appropriate bp is: {}", bp);
-    return bp;
+    // loop {
+    //     let rate = target_build_time / bp;
+    //     let mass_drain = target_mass / rate;
+    //     let energy_drain = target_energy / rate;
+
+    //     if (mass_drain >= net_mass_income) || (energy_drain >= net_energy_income) {
+    //         break;
+    //     }
+    //     bp += 10.0;
+    // }
+    // // println!("appropriate bp is: {}", bp);
+    // return bp;
 }

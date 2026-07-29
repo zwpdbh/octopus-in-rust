@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::economy::EconomyRuntimeState;
+use crate::economy::GameEcoParameters;
 use crate::quantities::Time;
 use crate::runtime::types::{BuildTask, ScheduledTask, SimulationEvent};
 
@@ -59,7 +59,7 @@ pub(crate) struct FinishedFlag(pub(crate) bool);
 
 /// Current economy state, mirrored from [`EconomyRuntimeState`].
 #[derive(Resource)]
-pub(crate) struct EcoState(pub(crate) EconomyRuntimeState);
+pub(crate) struct EcoState(pub(crate) GameEcoParameters);
 
 /// Cumulative resources spent on construction.
 #[derive(Resource)]

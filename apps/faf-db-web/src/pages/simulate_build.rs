@@ -114,8 +114,7 @@ pub fn SimulateBuild() -> Element {
                 div { class: "flex flex-1 overflow-hidden",
                     // Left sidebar: Eco Settings + new item creator
                     div { class: "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30",
-                        div {
-                            class: if plan_locked(simulation_state) { "pointer-events-none opacity-60" } else { "" },
+                        div { class: if plan_locked(simulation_state) { "pointer-events-none opacity-60" } else { "" },
                             EcoPanel {
                                 plan,
                                 disabled: plan_locked(simulation_state),
@@ -142,13 +141,10 @@ pub fn SimulateBuild() -> Element {
                                     class: "px-2 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500 text-white transition-colors font-mono shadow-sm",
                                     title: "Estimate plan impact",
                                     onclick: move |_| {
-                                        let snapshot = plan.read().eco.to_snapshot();
+                                        let snapshot = plan.read().eco;
                                         let queue = plan.read().to_build_queue();
-                                        plan_estimate.set(Some(plan_completion_with_tasks(
-                                            &snapshot,
-                                            &queue.tasks,
-                                            6000.0,
-                                        )));
+                                        plan_estimate
+                                            .set(Some(plan_completion_with_tasks(&snapshot, &queue.tasks, 6000.0)));
                                     },
                                     "⚡"
                                 }
@@ -159,7 +155,11 @@ pub fn SimulateBuild() -> Element {
                                         let current = *show_json_editor.read();
                                         show_json_editor.set(!current);
                                     },
-                                    if *show_json_editor.read() { "☰" } else { "{{ }}" }
+                                    if *show_json_editor.read() {
+                                        "☰"
+                                    } else {
+                                        "{{ }}"
+                                    }
                                 }
                                 button {
                                     class: "px-2 py-1 text-xs rounded bg-neutral-800 text-neutral-300 hover:bg-neutral-700 border border-neutral-700 transition-colors shadow-sm",
@@ -171,11 +171,7 @@ pub fn SimulateBuild() -> Element {
                                     let locked = plan_locked(simulation_state);
                                     rsx! {
                                         button {
-                                            class: if locked {
-                                                "px-2 py-1 text-xs rounded bg-red-900/50 text-red-300/50 cursor-not-allowed shadow-sm"
-                                            } else {
-                                                "px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors shadow-sm"
-                                            },
+                                            class: if locked { "px-2 py-1 text-xs rounded bg-red-900/50 text-red-300/50 cursor-not-allowed shadow-sm" } else { "px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors shadow-sm" },
                                             title: if locked { "Cannot clear while simulating" } else { "Clear construction plan" },
                                             disabled: locked,
                                             onclick: move |_| {
@@ -200,10 +196,7 @@ pub fn SimulateBuild() -> Element {
                             }
                         }
                         div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
-                            SimulationPanel {
-                                plan,
-                                state: simulation_state,
-                            }
+                            SimulationPanel { plan, state: simulation_state }
                         }
                     }
                 }
@@ -254,7 +247,11 @@ fn JsonPlanEditor(mut plan: Signal<ConstructionPlan>, units: Vec<UnitSummary>) -
                         copy_to_clipboard(&text);
                         copied.set(true);
                     },
-                    if *copied.read() { "Copied!" } else { "Copy" }
+                    if *copied.read() {
+                        "Copied!"
+                    } else {
+                        "Copy"
+                    }
                 }
             }
             textarea {
@@ -266,7 +263,9 @@ fn JsonPlanEditor(mut plan: Signal<ConstructionPlan>, units: Vec<UnitSummary>) -
                     json_text.set(text.clone());
                     match serde_json::from_str::<BuildQueue>(&text) {
                         Ok(queue) => {
-                            plan.set(ConstructionPlan::from_build_queue_with_units(queue, &units.read()));
+                            plan.set(
+                                ConstructionPlan::from_build_queue_with_units(queue, &units.read()),
+                            );
                             error.set(String::new());
                         }
                         Err(err) => {

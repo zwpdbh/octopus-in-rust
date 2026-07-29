@@ -6,7 +6,7 @@ use bevy_state::app::StatesPlugin;
 use bevy_state::prelude::*;
 
 use crate::plugins::apply::StepReasoningLog;
-use crate::resources::{EconomyState, SearchProgress, StepLog, TaskLog};
+use crate::resources::{GameEco, SearchProgress, StepLog, TaskLog};
 use crate::result::{Schedule, ScheduleError, ScheduleWithReasoning};
 use crate::search::build_schedule;
 
@@ -203,10 +203,10 @@ pub fn run_to_completion_best_effort(app: &mut App) -> ScheduleWithReasoning {
     let schedule = match app.world().resource::<SchedulerResult>().result.clone() {
         Some(Ok(schedule)) => schedule,
         _ => {
-            let economy = app.world().resource::<EconomyState>();
+            let eco_comp = app.world().resource::<GameEco>();
             let task_log = app.world().resource::<TaskLog>();
             let step_log = app.world().resource::<StepLog>();
-            build_schedule(&economy, &task_log, &step_log)
+            build_schedule(&eco_comp.eco, &task_log, &step_log)
                 .expect("partial schedule should be buildable")
         }
     };

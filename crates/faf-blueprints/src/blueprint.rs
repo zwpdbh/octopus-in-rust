@@ -288,7 +288,7 @@ impl BlueprintLibrary {
     }
 
     /// Build cost for a unit kind, if it can be built at all.
-    pub fn build_cost(&self, kind: &UnitKind) -> Option<UnitCost> {
+    pub fn unit_build_cost(&self, kind: &UnitKind) -> Option<UnitCost> {
         self.blueprint_stats_table.get(kind).map(|stats| UnitCost {
             mass: stats.mass_cost,
             energy: stats.energy_cost,

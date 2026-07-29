@@ -6,7 +6,7 @@ use faf_blueprints::UnitKind;
 
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::resources::{EconomyState, SearchGoal, SearchProgress};
+use crate::resources::{GameEco, SearchGoal, SearchProgress};
 use crate::search::{
     spawn_build_candidates, spawn_upgrade_candidates, BlueprintLibraryRef, IdleBuilderQuery,
 };
@@ -19,7 +19,7 @@ use crate::util::{count_mex_from_iter, is_mex};
 pub(crate) fn generate_unit_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
-    economy: Res<EconomyState>,
+    economy: Res<GameEco>,
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
@@ -30,7 +30,7 @@ pub(crate) fn generate_unit_candidates_system(
         return;
     }
 
-    if goal.0.is_reached_from_entities(&economy.current, &units) {
+    if goal.0.is_reached_from_entities(&economy.eco, &units) {
         return;
     }
 
@@ -52,7 +52,7 @@ pub(crate) fn generate_unit_candidates_system(
                 builder,
                 target,
                 &idle_builders,
-                &economy.current,
+                &economy.eco,
             );
         }
     }

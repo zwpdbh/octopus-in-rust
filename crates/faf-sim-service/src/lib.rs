@@ -512,10 +512,10 @@ mod tests {
     use super::*;
     use faf_quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
     use faf_sim::sim::{SimulationEvent, UnitEcoStats};
-    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
+    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, GameEcoParameters};
 
-    fn rich_eco() -> EconomyRuntimeState {
-        EconomyRuntimeState {
+    fn rich_eco() -> GameEcoParameters {
+        GameEcoParameters {
             production_per_second_mass: MassRate::from_raw(1000.0),
             production_per_second_energy: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
@@ -596,8 +596,8 @@ mod tests {
         // We should receive at least one Ticked event with time == 2.0.
         let mut found = false;
         while let Ok(event) = rx.recv() {
-            if let SimServiceEvent::Simulation(SimulationEvent::Ticked(snapshot)) = event {
-                assert!((snapshot.time.value() - 2.0).abs() < 1e-9);
+            if let SimServiceEvent::Simulation(SimulationEvent::Ticking(snapshot)) = event {
+                assert!((snapshot.time - 2.0).abs() < 1e-9);
                 found = true;
                 break;
             }
@@ -636,7 +636,7 @@ mod tests {
         // manual advance (a TaskStarted event is emitted first).
         fn recv_ticked(rx: &Receiver<SimServiceEvent>) -> EcoSnapshot {
             while let Ok(event) = rx.recv() {
-                if let SimServiceEvent::Simulation(SimulationEvent::Ticked(snapshot)) = event {
+                if let SimServiceEvent::Simulation(SimulationEvent::Ticking(snapshot)) = event {
                     return snapshot;
                 }
             }
@@ -645,8 +645,8 @@ mod tests {
         let s1 = recv_ticked(&rx1);
         let s2 = recv_ticked(&rx2);
 
-        assert!((s1.time.value() - 2.0).abs() < 1e-9);
-        assert!((s2.time.value() - 2.0).abs() < 1e-9);
+        assert!((s1.time - 2.0).abs() < 1e-9);
+        assert!((s2.time - 2.0).abs() < 1e-9);
 
         service.stop(id).unwrap();
     }

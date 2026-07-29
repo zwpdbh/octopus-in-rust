@@ -1,9 +1,10 @@
 use dioxus::prelude::*;
+use faf_sim::GameEcoParameters;
 
 use crate::components::EcoSnapshotView;
 use crate::types::{
-    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, EcoSnapshot,
-    PriorityTable, ScoreCategory, StepReasoning, StepResult, UnitKind,
+    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, PriorityTable,
+    ScoreCategory, StepReasoning, StepResult, UnitKind,
 };
 use crate::utils::kind_label;
 
@@ -16,7 +17,7 @@ use crate::utils::kind_label;
 pub fn StepTimeline(
     steps: Vec<StepResult>,
     reasoning: Vec<StepReasoning>,
-    initial_eco: EcoSnapshot,
+    initial_eco: GameEcoParameters,
     initial_inventory: Vec<UnitKind>,
     mut selected_step: Signal<Option<usize>>,
 ) -> Element {
@@ -49,13 +50,8 @@ pub fn StepTimeline(
                         let end_seconds = step.finish_time_seconds;
                         let time_label = format_duration_range(start_seconds, end_seconds);
                         let pre_eco = pre_step_eco(&steps, &initial_eco, idx);
-                        let mass_net = pre_eco.production_per_second_mass.value()
-                            - pre_eco.mass_drain.value();
-                        let mass_net_class = if mass_net >= 0.0 {
-                            "text-emerald-300"
-                        } else {
-                            "text-red-300"
-                        };
+                        let mass_net = pre_eco.production_per_second_mass.value();
+                        let mass_net_class = "text-emerald-300";
                         let mass_net_sign = if mass_net >= 0.0 { "+" } else { "" };
                         let step_reasoning = reasoning.get(idx).cloned();
                         let current_units = inventory_after_step(&initial_inventory, &steps, idx);
@@ -116,7 +112,7 @@ fn CopyStepButton(
     end_seconds: f64,
     step: StepResult,
     reasoning: Option<StepReasoning>,
-    pre_eco: EcoSnapshot,
+    pre_eco: GameEcoParameters,
 ) -> Element {
     rsx! {
         button {
@@ -143,7 +139,7 @@ fn CopyStepButton(
 fn StepDetails(
     step: StepResult,
     reasoning: Option<StepReasoning>,
-    pre_eco: EcoSnapshot,
+    pre_eco: GameEcoParameters,
     current_units: Vec<UnitKind>,
 ) -> Element {
     let (scores, priorities) = reasoning
@@ -168,7 +164,7 @@ fn StepDetails(
 
 /// Economy state just before the scheduler committed this step.
 #[component]
-fn EconomyBeforeDecision(pre_eco: EcoSnapshot) -> Element {
+fn EconomyBeforeDecision(pre_eco: GameEcoParameters) -> Element {
     rsx! {
         div { class: "flex flex-col gap-1 lg:w-[420px] shrink-0",
             h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
@@ -200,7 +196,9 @@ pub fn CurrentUnits(
                         for (kind , count) in grouped {
                             div { class: "flex items-center justify-between gap-2",
                                 span { class: "text-xs text-neutral-300 truncate", "{kind_label(&kind)}" }
-                                span { class: "text-xs font-mono text-neutral-200 shrink-0", "× {count}" }
+                                span { class: "text-xs font-mono text-neutral-200 shrink-0",
+                                    "× {count}"
+                                }
                             }
                         }
                     }
@@ -377,13 +375,11 @@ fn CandidateBreakdown(breakdown: CandidateScoreBreakdown, score: f64) -> Element
                         score,
                     }
                 },
-                CandidateScoreBreakdown::Unit {
-                    time_seconds,
-                    distance_to_target,
-                    ..
-                } => rsx! {
-                    UnitBreakdown { time_seconds, distance_to_target }
-                },
+                CandidateScoreBreakdown::Unit { time_seconds, distance_to_target, .. } => {
+                    rsx! {
+                        UnitBreakdown { time_seconds, distance_to_target }
+                    }
+                }
             }
         }
     }
@@ -555,7 +551,11 @@ fn format_duration_range(start_seconds: f64, end_seconds: f64) -> String {
     )
 }
 
-fn pre_step_eco(steps: &[StepResult], initial_eco: &EcoSnapshot, idx: usize) -> EcoSnapshot {
+fn pre_step_eco(
+    steps: &[StepResult],
+    initial_eco: &GameEcoParameters,
+    idx: usize,
+) -> GameEcoParameters {
     if idx == 0 {
         initial_eco.clone()
     } else {

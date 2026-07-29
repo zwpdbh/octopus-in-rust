@@ -6,9 +6,10 @@
 //! runtime-specific `SimulationEvent`.
 
 use faf_quantities::Time;
+use faf_sim_shared::EcoSnapshot;
 use serde::{Deserialize, Serialize};
 
-pub use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot};
+pub use faf_sim_shared::{BuildQueue, BuildTask};
 
 /// A pending task together with the absolute simulation time at which it is
 /// allowed to start. The scheduler updates `ready_at` when the preceding task
@@ -29,7 +30,8 @@ impl ScheduledTask {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SimulationEvent {
     /// A tick happened and the economy is in the given state.
-    Ticked(EcoSnapshot),
+    // Ticked { time: f64, eco: GameEcoParameters },
+    Ticking(EcoSnapshot),
     /// A task has become active.
     TaskStarted { task_id: u32, time: f64 },
     /// A task has finished.

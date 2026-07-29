@@ -1,19 +1,19 @@
 //! Greedy best-first scheduling algorithm.
-
+#![allow(unused)]
 use std::collections::{HashSet, VecDeque};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use faf_blueprints::UnitEcoStats;
 use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
-use faf_sim_shared::EcoSnapshot;
+use faf_sim_shared::{EcoSnapshot, GameEcoParameters};
 
 use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
 use crate::plugins::eco::decide_direction::{DirectionScores, PriorityTable};
-use crate::plugins::eco::observe::{compute_mass_margin, MassMargin};
+use crate::plugins::eco::observe::MassMargin;
 use crate::request::SearchOptions;
 use crate::result::Action;
 use crate::search::{
@@ -73,7 +73,7 @@ pub(crate) fn spawn_eco_candidates(
     config: &SchedulerConfig,
     units: &Query<&UnitKindComp>,
     idle_builders: &IdleBuilderQuery,
-    eco_snapshot: &EcoSnapshot,
+    eco_snapshot: &GameEcoParameters,
 ) {
     let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
     let current_mex_count = count_mex_from_iter(&owned_kinds, library);
@@ -168,7 +168,7 @@ pub(crate) fn spawn_eco_candidates(
 /// the score combines the direction confidence (0–100) with the action’s
 /// efficiency.
 pub(crate) fn score_eco_candidate(
-    current_economy: &EcoSnapshot,
+    current_economy: &GameEcoParameters,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
@@ -177,126 +177,7 @@ pub(crate) fn score_eco_candidate(
     scores: &DirectionScores,
     priorities: &PriorityTable,
 ) -> CandidateScore {
-    let Some(result) = solve_action(
-        current_economy,
-        next_id,
-        options,
-        action,
-        assigned_builders,
-        library,
-    ) else {
-        return CandidateScore {
-            total: 0.0,
-            breakdown: None,
-        };
-    };
-    let completion = result.tasks.last().cloned().unwrap_or(result.total);
-
-    // Lookahead guard: reject actions that would leave mass storage empty and
-    // mass income negative (a true mass stall). Energy health is intentionally
-    // not rejected here — if energy is stalled, building a power generator is
-    // the correct response, and the solver already verified the build can finish.
-    let mass_after = compute_mass_margin(&completion.economy);
-    if matches!(mass_after, MassMargin::Stall) {
-        return CandidateScore {
-            total: 0.0,
-            breakdown: None,
-        };
-    }
-
-    // Storage-buffer guard: reject actions that would leave storage too low,
-    // because the schedule cannot predict intermediate drain and a low buffer
-    // risks an in-flight stall. Actions that increase the corresponding income
-    // are exempt: a power generator that leaves the buffer empty still fixes the
-    // underlying energy deficit, and the solver already verified it finishes.
-    let post_energy_ratio = storage_ratio(
-        completion.economy.energy_storage.value(),
-        completion.economy.energy_storage_cap.value(),
-    );
-    let post_mass_ratio = storage_ratio(
-        completion.economy.mass_storage.value(),
-        completion.economy.mass_storage_cap.value(),
-    );
-    let improves_energy = completion.economy.production_per_second_energy.value()
-        > current_economy.production_per_second_energy.value();
-    let improves_mass = completion.economy.production_per_second_mass.value()
-        > current_economy.production_per_second_mass.value();
-    if (post_energy_ratio < POST_ACTION_ENERGY_STORAGE_THRESHOLD && !improves_energy)
-        || (post_mass_ratio < POST_ACTION_MASS_STORAGE_THRESHOLD && !improves_mass)
-    {
-        return CandidateScore {
-            total: 0.0,
-            breakdown: None,
-        };
-    }
-
-    // Categorize the action and look up the corresponding confidence score and
-    // resource priority.
-    //
-    // Tech upgrades (factory upgrades that unlock higher tiers) are checked first
-    // so they are not shadowed by incidental mass/energy deltas or engineer
-    // classification.
-    let (category, confidence, efficiency, priority) =
-        if heuristic::is_tech_upgrade_to(action, TechLevel::T3) {
-            (ScoreCategory::TechT3, scores.tech_t3, 0.0, 10)
-        } else if heuristic::is_tech_upgrade_to(action, TechLevel::T2) {
-            (ScoreCategory::TechT2, scores.tech_t2, 0.0, 10)
-        } else if let Some(mass) =
-            heuristic::mass_income_efficiency(current_economy, &completion, action, library)
-        {
-            (
-                ScoreCategory::MassIncome,
-                scores.mass_income,
-                mass,
-                priorities.mass,
-            )
-        } else if let Some(energy) =
-            heuristic::energy_income_efficiency(current_economy, &completion, action, library)
-        {
-            (
-                ScoreCategory::Energy,
-                scores.energy,
-                energy,
-                priorities.energy,
-            )
-        } else if let Some(tier) = heuristic::engineer_tier(action) {
-            (
-                ScoreCategory::BuildPower,
-                scores.build_power,
-                (tier as i32 + 1) as f64,
-                priorities.build_power,
-            )
-        } else {
-            (ScoreCategory::Other, 0, 0.0, 5)
-        };
-
-    if confidence == 0 {
-        return CandidateScore {
-            total: 0.0,
-            breakdown: None,
-        };
-    }
-
-    // Confidence drives which direction wins and the priority table scales the
-    // whole score up or down based on current resource health.
-    let time_penalty = completion.time_seconds * 1e-9;
-    let base = confidence as f64 * 100.0 + efficiency - time_penalty;
-    let priority_multiplier = priority as f64 / 5.0;
-    let total = base * priority_multiplier;
-
-    CandidateScore {
-        total,
-        breakdown: Some(CandidateScoreBreakdown::Eco {
-            category,
-            confidence,
-            efficiency,
-            time_seconds: completion.time_seconds,
-            time_penalty,
-            priority,
-            priority_multiplier,
-            base,
-        }),
-    }
+    todo!("not implemented")
 }
 
 /// Score a unit candidate by symbolic distance to the target unit.
@@ -305,7 +186,7 @@ pub(crate) fn score_eco_candidate(
 /// all others are ranked by how many build/upgrade edges separate their result
 /// from the goal. Higher scores are better.
 pub(crate) fn score_unit_candidate(
-    current_economy: &EcoSnapshot,
+    current_economy: &GameEcoParameters,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
@@ -313,52 +194,7 @@ pub(crate) fn score_unit_candidate(
     library: &BlueprintLibrary,
     target: &UnitKind,
 ) -> CandidateScore {
-    use faf_sim_shared::CandidateScoreBreakdown;
-
-    let graph = library.build_graph();
-    let max_time = options.simulation_max_time_seconds;
-    let resulting_unit = heuristic::resulting_unit(action);
-
-    if resulting_unit == *target {
-        if let Some(result) = solve_action(
-            current_economy,
-            next_id,
-            options,
-            action,
-            assigned_builders,
-            library,
-        ) {
-            let completion = result.tasks.last().cloned().unwrap_or(result.total);
-            CandidateScore {
-                total: -completion.time_seconds,
-                breakdown: Some(CandidateScoreBreakdown::Unit {
-                    resulting_unit: resulting_unit.clone(),
-                    time_seconds: completion.time_seconds,
-                    distance_to_target: None,
-                }),
-            }
-        } else {
-            CandidateScore {
-                total: f64::NEG_INFINITY,
-                breakdown: None,
-            }
-        }
-    } else {
-        match distance_to_target(&graph, &resulting_unit, target) {
-            Some(distance) => CandidateScore {
-                total: -(max_time + distance as f64),
-                breakdown: Some(CandidateScoreBreakdown::Unit {
-                    resulting_unit: resulting_unit.clone(),
-                    time_seconds: 0.0,
-                    distance_to_target: Some(distance as u32),
-                }),
-            },
-            None => CandidateScore {
-                total: f64::NEG_INFINITY,
-                breakdown: None,
-            },
-        }
-    }
+    todo!("not implemented")
 }
 
 /// Shortest number of build/upgrade steps from `from` to `target` in the

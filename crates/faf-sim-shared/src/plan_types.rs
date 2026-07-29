@@ -1,9 +1,9 @@
 //! Shared plan types that bridge the simulator and UI/tooling.
 
 use faf_blueprints::UnitEcoStats;
-use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
+use faf_quantities::Time;
 
-use crate::{BuildQueue, BuildTask, EcoSnapshot, EconomyRuntimeState};
+use crate::{BuildQueue, BuildTask, GameEcoParameters};
 use serde::{Deserialize, Serialize};
 
 /// Frontend-facing unit descriptor.
@@ -85,71 +85,6 @@ impl UnitSummary {
     }
 }
 
-/// Initial economy settings, serializable wrapper around the runtime state.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EcoInitialSettings {
-    pub production_per_second_mass: MassRate,
-    pub production_per_second_energy: EnergyRate,
-    #[serde(default)]
-    pub maintenance_consumption_per_second_energy: EnergyRate,
-    pub mass_storage: Storage<Mass>,
-    pub energy_storage: Storage<Energy>,
-}
-
-impl Default for EcoInitialSettings {
-    fn default() -> Self {
-        Self {
-            production_per_second_mass: MassRate::from_raw(1.0),
-            production_per_second_energy: EnergyRate::from_raw(20.0),
-            maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
-            mass_storage: Storage::new(Mass::from_raw(650.0), Mass::from_raw(650.0)),
-            energy_storage: Storage::new(Energy::from_raw(4000.0), Energy::from_raw(4000.0)),
-        }
-    }
-}
-
-impl EcoInitialSettings {
-    pub fn to_runtime_state(&self) -> EconomyRuntimeState {
-        EconomyRuntimeState {
-            production_per_second_mass: self.production_per_second_mass,
-            production_per_second_energy: self.production_per_second_energy,
-            maintenance_consumption_per_second_energy: self
-                .maintenance_consumption_per_second_energy,
-            mass_storage: self.mass_storage,
-            energy_storage: self.energy_storage,
-        }
-    }
-
-    pub fn to_snapshot(&self) -> EcoSnapshot {
-        EcoSnapshot {
-            time: Time::from_raw(0.0),
-            production_per_second_mass: self.production_per_second_mass,
-            production_per_second_energy: self.production_per_second_energy,
-            maintenance_consumption_per_second_energy: self
-                .maintenance_consumption_per_second_energy,
-            mass_drain: MassRate::from_raw(0.0),
-            energy_drain: EnergyRate::from_raw(0.0),
-            total_mass_spent: Mass::from_raw(0.0),
-            total_energy_spent: Energy::from_raw(0.0),
-            mass_storage: self.mass_storage.current,
-            mass_storage_cap: self.mass_storage.cap,
-            energy_storage: self.energy_storage.current,
-            energy_storage_cap: self.energy_storage.cap,
-        }
-    }
-
-    pub fn from_runtime_state(state: &EconomyRuntimeState) -> Self {
-        Self {
-            production_per_second_mass: state.production_per_second_mass,
-            production_per_second_energy: state.production_per_second_energy,
-            maintenance_consumption_per_second_energy: state
-                .maintenance_consumption_per_second_energy,
-            mass_storage: state.mass_storage,
-            energy_storage: state.energy_storage,
-        }
-    }
-}
-
 /// One item in a construction plan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConstructionItem {
@@ -169,7 +104,7 @@ impl ConstructionItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConstructionPlan {
     #[serde(rename = "initial_eco", alias = "eco")]
-    pub eco: EcoInitialSettings,
+    pub eco: GameEcoParameters,
     pub items: Vec<ConstructionItem>,
 }
 
@@ -217,7 +152,7 @@ impl ConstructionPlan {
             .collect();
 
         BuildQueue {
-            initial_eco: self.eco.to_runtime_state(),
+            initial_eco: self.eco,
             tasks,
         }
     }
@@ -258,7 +193,7 @@ impl ConstructionPlan {
             .collect();
 
         Self {
-            eco: EcoInitialSettings::from_runtime_state(&queue.initial_eco),
+            eco: queue.initial_eco,
             items,
         }
     }
@@ -288,7 +223,7 @@ impl ConstructionPlan {
             .collect();
 
         Self {
-            eco: EcoInitialSettings::from_runtime_state(&queue.initial_eco),
+            eco: queue.initial_eco,
             items,
         }
     }

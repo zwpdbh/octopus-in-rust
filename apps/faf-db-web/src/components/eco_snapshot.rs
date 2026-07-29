@@ -1,6 +1,5 @@
 use dioxus::prelude::*;
-
-use crate::types::EcoSnapshot;
+use faf_sim::{EnergyRate, GameEcoParameters, MassRate};
 
 /// Game-style economy panel showing mass and energy storage, net rate, and
 /// income/expense breakdown.
@@ -9,7 +8,12 @@ use crate::types::EcoSnapshot;
 /// net rate (e.g. `+5.0/s`) and an efficiency percentage
 /// (`income / expense * 100`, e.g. `125%`).
 #[component]
-pub fn EcoSnapshotView(snapshot: EcoSnapshot, #[props(default = false)] compact: bool) -> Element {
+pub fn EcoSnapshotView(
+    snapshot: GameEcoParameters,
+    #[props(default = false)] compact: bool,
+    #[props(default = MassRate::zero())] mass_drain: MassRate,
+    #[props(default = EnergyRate::zero())] energy_drain: EnergyRate,
+) -> Element {
     let show_pct = use_signal(|| false);
     let padding = if compact { "p-2" } else { "p-3" };
     let gap = if compact { "gap-1.5" } else { "gap-2" };
@@ -29,9 +33,9 @@ pub fn EcoSnapshotView(snapshot: EcoSnapshot, #[props(default = false)] compact:
                 icon_size,
                 compact,
                 income: snapshot.production_per_second_mass.value(),
-                expense: snapshot.mass_drain.value(),
-                storage: snapshot.mass_storage.value(),
-                cap: snapshot.mass_storage_cap.value(),
+                expense: mass_drain.value(),
+                storage: snapshot.mass_storage.current.value(),
+                cap: snapshot.mass_storage.cap.value(),
                 show_pct,
             }
             ResourceRow {
@@ -42,9 +46,10 @@ pub fn EcoSnapshotView(snapshot: EcoSnapshot, #[props(default = false)] compact:
                 icon_size,
                 compact,
                 income: snapshot.production_per_second_energy.value(),
-                expense: snapshot.energy_drain.value() + snapshot.maintenance_consumption_per_second_energy.value(),
-                storage: snapshot.energy_storage.value(),
-                cap: snapshot.energy_storage_cap.value(),
+                expense: energy_drain.value()
+                                                                    + snapshot.maintenance_consumption_per_second_energy.value(),
+                storage: snapshot.energy_storage.current.value(),
+                cap: snapshot.energy_storage.cap.value(),
                 show_pct,
             }
         }
@@ -93,7 +98,8 @@ fn ResourceRow(
     let number_width = if compact { "w-16" } else { "w-20" };
 
     rsx! {
-        div { class: "grid items-center gap-3",
+        div {
+            class: "grid items-center gap-3",
             style: "grid-template-columns: auto 1fr auto auto",
             // Resource icon.
             div { class: "{icon_size} flex items-center justify-center rounded font-bold {label_class}",

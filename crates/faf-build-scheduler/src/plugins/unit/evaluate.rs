@@ -5,7 +5,7 @@ use bevy_ecs::prelude::*;
 use crate::algorithms::greedy::score_unit_candidate;
 use crate::components::CandidateAssignment;
 use crate::request::SearchOptions;
-use crate::resources::{EconomyState, SearchGoal, SearchProgress};
+use crate::resources::{GameEco, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, CandidateAction, SearchTarget};
 
 /// Evaluate every spawned [`CandidateAction`] for unit scheduling and attach a
@@ -16,7 +16,7 @@ use crate::search::{BlueprintLibraryRef, CandidateAction, SearchTarget};
 pub(crate) fn evaluate_unit_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
-    economy: Res<EconomyState>,
+    economy: Res<GameEco>,
     goal: Res<SearchGoal>,
     options: Res<SearchOptions>,
     library: Res<BlueprintLibraryRef>,
@@ -34,7 +34,7 @@ pub(crate) fn evaluate_unit_candidates_system(
 
     for (entity, action, assignment) in candidates.iter() {
         let score = score_unit_candidate(
-            &economy.current,
+            &economy.eco,
             progress.next_id,
             &options,
             &action.0,

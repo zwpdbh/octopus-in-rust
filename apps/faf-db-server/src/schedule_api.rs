@@ -13,7 +13,7 @@ use faf_build_scheduler::{
     StepReasoning, UnitScheduleRequest,
 };
 use faf_quantities::MassRate;
-use faf_sim_shared::EcoSnapshot;
+use faf_sim::GameEcoParameters;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -23,7 +23,7 @@ use crate::AppState;
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ScheduleApiRequest {
     Eco {
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         #[serde(default = "default_inventory")]
         initial_inventory: Vec<UnitKind>,
         target_mass_production: f64,
@@ -35,7 +35,7 @@ pub enum ScheduleApiRequest {
         max_mex_count: u32,
     },
     Unit {
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         #[serde(default = "default_inventory")]
         initial_inventory: Vec<UnitKind>,
         target: UnitKind,
