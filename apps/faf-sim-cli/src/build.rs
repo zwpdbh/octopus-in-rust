@@ -12,12 +12,12 @@ use std::time::Duration;
 
 use faf_quantities::{StepTime, Time};
 use faf_sim::sim::{Simulation, SimulationEvent};
-use faf_sim::snapshot::{
-    energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
-    scaled_mass_income,
-};
+// use faf_sim::snapshot::{
+//     energy_available, energy_efficiency, energy_net, mass_net, mass_scaling_active,
+//     scaled_mass_income,
+// };
 use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
-use faf_sim_shared::BuildQueue;
+use faf_sim_shared::{BuildQueue, EcoSnapshot};
 
 use crate::command_line::{BuildMode, BuildShared, OutputFormat};
 
@@ -82,18 +82,18 @@ fn subscribe(service: &SimulationService, id: SimulationId) -> SimulationReceive
 /// `--tail-seconds 0` is passed so final-only runs are as fast as possible.
 fn run_direct(queue: BuildQueue, dt: StepTime, max_time: Option<Time>, format: OutputFormat) {
     let mut sim = Simulation::new(queue, dt, max_time, None);
-    let mut last_tick: Option<faf_sim::sim::EcoSnapshot> = None;
+    let mut last_tick: Option<EcoSnapshot> = None;
 
     while !sim.is_finished() {
         for event in sim.step() {
-            if let SimulationEvent::Ticked(snapshot) = event {
+            if let SimulationEvent::Ticking(snapshot) = event {
                 last_tick = Some(*snapshot);
             }
         }
     }
 
     if let Some(snapshot) = last_tick {
-        print_event(&SimulationEvent::Ticked(snapshot), format);
+        print_event(&&SimulationEvent::Ticking(snapshot), format);
     }
 }
 
@@ -165,7 +165,7 @@ fn consume_events(rx: SimulationReceiver, is_finished: &Arc<AtomicBool>, format:
 
 fn print_event(event: &SimulationEvent, format: OutputFormat) {
     match event {
-        SimulationEvent::Ticked(snapshot) if format == OutputFormat::Grouped => {
+        SimulationEvent::Ticking(snapshot) if format == OutputFormat::Grouped => {
             let grouped = grouped_tick_json(snapshot);
             println!(
                 "{}",
@@ -178,7 +178,7 @@ fn print_event(event: &SimulationEvent, format: OutputFormat) {
     }
 }
 
-fn grouped_tick_json(s: &faf_sim::sim::EcoSnapshot) -> serde_json::Value {
+fn grouped_tick_json(s: &EcoSnapshot) -> serde_json::Value {
     serde_json::json!({
         "Ticked": {
             "time": s.time,
@@ -186,27 +186,13 @@ fn grouped_tick_json(s: &faf_sim::sim::EcoSnapshot) -> serde_json::Value {
                 "production_per_second_mass": s.production_per_second_mass,
                 "production_per_second_energy": s.production_per_second_energy,
                 "maintenance_consumption_per_second_energy": s.maintenance_consumption_per_second_energy,
-                "mass_drain": s.mass_drain,
-                "energy_drain": s.energy_drain,
             },
             "storage": {
-                "mass_storage": s.mass_storage,
+                "mass_storage": s.mass_storage_current,
                 "mass_storage_cap": s.mass_storage_cap,
-                "energy_storage": s.energy_storage,
+                "energy_storage": s.energy_storage_current,
                 "energy_storage_cap": s.energy_storage_cap,
             },
-            "totals": {
-                "total_mass_spent": s.total_mass_spent,
-                "total_energy_spent": s.total_energy_spent,
-            },
-            "derived": {
-                "energy_available": energy_available(s),
-                "energy_net": energy_net(s),
-                "scaled_mass_income": scaled_mass_income(s),
-                "mass_net": mass_net(s),
-                "energy_efficiency": energy_efficiency(s),
-                "mass_scaling_active": mass_scaling_active(s),
-            }
         }
     })
 }

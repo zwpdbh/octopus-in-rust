@@ -15,8 +15,8 @@ use crate::runtime::resources::{
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 pub use crate::runtime::{
-    AdjacencyBonus, BuildQueue, BuildQueueSimulationPlugin, BuildTask, EcoSnapshot,
-    SimulationEvent, UnitEcoStats,
+    AdjacencyBonus, BuildQueue, BuildQueueSimulationPlugin, BuildTask, SimulationEvent,
+    UnitEcoStats,
 };
 
 /// Steppable economy simulation.

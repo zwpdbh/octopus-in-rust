@@ -7,7 +7,7 @@
 
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 
-use super::rules::EconomyRuntimeState;
+use super::rules::GameEcoParameters;
 
 /// Result of applying a *global* drain to an economy state for one tick.
 ///
@@ -48,7 +48,7 @@ pub struct GraphTickResult {
 pub fn apply_tick_graph(
     total_mass_drain: f64,
     total_energy_drain: f64,
-    state: &EconomyRuntimeState,
+    state: &GameEcoParameters,
     dt: f64,
 ) -> GraphTickResult {
     EconomyTick::new(state, total_mass_drain, total_energy_drain, dt).run()
@@ -61,14 +61,14 @@ pub fn apply_tick_graph(
 /// follow and unit-test in isolation.
 #[derive(Debug, Clone, Copy)]
 struct EconomyTick<'a> {
-    state: &'a EconomyRuntimeState,
+    state: &'a GameEcoParameters,
     mass_drain: f64,
     energy_drain: f64,
     dt: Time,
 }
 
 impl<'a> EconomyTick<'a> {
-    fn new(state: &'a EconomyRuntimeState, mass_drain: f64, energy_drain: f64, dt: f64) -> Self {
+    fn new(state: &'a GameEcoParameters, mass_drain: f64, energy_drain: f64, dt: f64) -> Self {
         Self {
             state,
             mass_drain,
@@ -229,8 +229,8 @@ mod tests {
         maintenance_consumption_per_second_energy: f64,
         mass_storage: f64,
         energy_storage: f64,
-    ) -> EconomyRuntimeState {
-        EconomyRuntimeState {
+    ) -> GameEcoParameters {
+        GameEcoParameters {
             production_per_second_mass: MassRate::from_raw(production_per_second_mass),
             production_per_second_energy: EnergyRate::from_raw(production_per_second_energy),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(
@@ -282,7 +282,7 @@ mod tests {
     fn maintenance_is_subtracted_from_energy_storage() {
         // Gross income (2) is lower than maintenance (5). Even with no
         // construction, storage should drain by the net deficit each tick.
-        let state = EconomyRuntimeState {
+        let state = GameEcoParameters {
             production_per_second_energy: EnergyRate::from_raw(2.0),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(5.0),
             energy_storage: Storage::new(Energy::from_raw(4000.0), Energy::from_raw(5000.0)),

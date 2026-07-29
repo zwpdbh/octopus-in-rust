@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use faf_quantities::Time;
-use faf_solver::{CompletionResult, PlanResult};
+use faf_solver::PlanResult;
 
 use crate::components::UnitBlock;
 use crate::types::{AssignmentTarget, ConstructionItem, ConstructionPlan};
@@ -56,55 +56,54 @@ pub fn ConstructionItemCard(
     };
 
     // Pull this card's slice out of the plan-level solver result.
-    let estimate = use_memo(move || {
-        let plan = plan.read();
-        let index = plan.items.iter().position(|i| i.id == item_id)?;
-        let initial_eco = plan.eco.to_snapshot();
-        let result = plan_estimate.read().as_ref()?.clone();
+    // let estimate = use_memo(move || {
+    //     let plan = plan.read();
+    //     let index = plan.items.iter().position(|i| i.id == item_id)?;
+    //     let initial_eco = plan.eco.to_snapshot();
+    //     let result = plan_estimate.read().as_ref()?.clone();
 
-        let current = *result.tasks.get(index)?;
-        let previous = if index == 0 {
-            CompletionResult {
-                time_seconds: 0.0,
-                economy: initial_eco,
-            }
-        } else {
-            *result.tasks.get(index - 1)?
-        };
-        Some((current, previous))
-    });
+    //     let current = *result.tasks.get(index)?;
+    //     let previous = if index == 0 {
+    //         CompletionResult {
+    //             time_seconds: 0.0,
+    //             eco: initial_eco,
+    //         }
+    //     } else {
+    //         *result.tasks.get(index - 1)?
+    //     };
+    //     Some((current, previous))
+    // });
 
-    let (finish_time, duration, delta) = estimate.read().as_ref().map_or(
-        (None, None, EcoDelta::default()),
-        |(current, previous)| {
-            let finish = current.time_seconds;
-            let duration = finish - previous.time_seconds;
-            let delta = EcoDelta {
-                mass_prod: current.economy.production_per_second_mass.value()
-                    - previous.economy.production_per_second_mass.value(),
-                energy_prod: current.economy.production_per_second_energy.value()
-                    - previous.economy.production_per_second_energy.value(),
-                mass_storage: current.economy.mass_storage.value()
-                    - previous.economy.mass_storage.value(),
-                energy_storage: current.economy.energy_storage.value()
-                    - previous.economy.energy_storage.value(),
-                maintenance: current
-                    .economy
-                    .maintenance_consumption_per_second_energy
-                    .value()
-                    - previous
-                        .economy
-                        .maintenance_consumption_per_second_energy
-                        .value(),
-            };
-            (Some(finish), Some(duration), delta)
-        },
-    );
-
+    // let (finish_time, duration, delta) = estimate.read().as_ref().map_or(
+    //     (None, None, EcoDelta::default()),
+    //     |(current, previous)| {
+    //         let finish = current.time_seconds;
+    //         let duration = finish - previous.time_seconds;
+    //         let delta = EcoDelta {
+    //             mass_prod: current.eco.production_per_second_mass.value()
+    //                 - previous.eco.production_per_second_mass.value(),
+    //             energy_prod: current.eco.production_per_second_energy.value()
+    //                 - previous.eco.production_per_second_energy.value(),
+    //             mass_storage: current.eco.mass_storage.value() - previous.eco.mass_storage.value(),
+    //             energy_storage: current.eco.energy_storage.value()
+    //                 - previous.eco.energy_storage.value(),
+    //             maintenance: current
+    //                 .eco
+    //                 .maintenance_consumption_per_second_energy
+    //                 .value()
+    //                 - previous
+    //                     .eco
+    //                     .maintenance_consumption_per_second_energy
+    //                     .value(),
+    //         };
+    //         (Some(finish), Some(duration), delta)
+    //     },
+    // );
+    let finish_time = Some(0.0);
     let finish_text = finish_time
         .map(|t| format!("{:.0}s", t))
         .unwrap_or_else(|| "-".to_string());
-    let duration_text = duration
+    let duration_text = Some(100)
         .map(|t| format!("{:.0}s", t))
         .unwrap_or_else(|| "-".to_string());
     let stalled = finish_time.is_some_and(|t| (t - MAX_SOLVER_TIME).abs() < 1e-6);
@@ -183,7 +182,8 @@ pub fn ConstructionItemCard(
                                 "Estimated time: ≥{MAX_SOLVER_TIME as u32}s (won’t finish with current economy)"
                             }
                         } else {
-                            div { class: "grid grid-cols-2 gap-x-3 gap-y-1 text-xs",
+                            div {
+                                class: "grid grid-cols-2 gap-x-3 gap-y-1 text-xs",
                                 div { class: "text-neutral-400",
                                     "Finish:"
                                     span { class: "text-neutral-200 ml-1", "{finish_text}" }
@@ -192,31 +192,47 @@ pub fn ConstructionItemCard(
                                     "Duration:"
                                     span { class: "text-neutral-200 ml-1", "{duration_text}" }
                                 }
-                                DeltaLine {
-                                    label: "Mass",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_mass.value()),
-                                    delta: delta.mass_prod,
-                                }
-                                DeltaLine {
-                                    label: "Energy",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.production_per_second_energy.value()),
-                                    delta: delta.energy_prod,
-                                }
-                                DeltaLine {
-                                    label: "Mass cap",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.mass_storage.value()),
-                                    delta: delta.mass_storage,
-                                }
-                                DeltaLine {
-                                    label: "Energy cap",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.energy_storage.value()),
-                                    delta: delta.energy_storage,
-                                }
-                                DeltaLine {
-                                    label: "Maint",
-                                    after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.economy.maintenance_consumption_per_second_energy.value()),
-                                    delta: delta.maintenance,
-                                }
+                                                        // DeltaLine {
+                            //     label: "Mass",
+                            //     after: finish_time
+                            //         .map(|_| {
+                            //             estimate.read().as_ref().unwrap().0.eco.production_per_second_mass.value()
+                            //         }),
+                            //     delta: delta.mass_prod,
+                            // }
+                            // DeltaLine {
+                            //     label: "Energy",
+                            //     after: finish_time
+                            //         .map(|_| {
+                            //             estimate.read().as_ref().unwrap().0.eco.production_per_second_energy.value()
+                            //         }),
+                            //     delta: delta.energy_prod,
+                            // }
+                            // DeltaLine {
+                            //     label: "Mass cap",
+                            //     after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.eco.mass_storage.value()),
+                            //     delta: delta.mass_storage,
+                            // }
+                            // DeltaLine {
+                            //     label: "Energy cap",
+                            //     after: finish_time.map(|_| estimate.read().as_ref().unwrap().0.eco.energy_storage.value()),
+                            //     delta: delta.energy_storage,
+                            // }
+                            // DeltaLine {
+                            //     label: "Maint",
+                            //     after: finish_time
+                            //         .map(|_| {
+                            //             estimate
+                            //                 .read()
+                            //                 .as_ref()
+                            //                 .unwrap()
+                            //                 .0
+                            //                 .eco
+                            //                 .maintenance_consumption_per_second_energy
+                            //                 .value()
+                            //         }),
+                            //     delta: delta.maintenance,
+                            // }
                             }
                         }
                     } else {
@@ -230,14 +246,14 @@ pub fn ConstructionItemCard(
     }
 }
 
-#[derive(Clone, Copy, Default)]
-struct EcoDelta {
-    mass_prod: f64,
-    energy_prod: f64,
-    mass_storage: f64,
-    energy_storage: f64,
-    maintenance: f64,
-}
+// #[derive(Clone, Copy, Default)]
+// struct EcoDelta {
+//     mass_prod: f64,
+//     energy_prod: f64,
+//     mass_storage: f64,
+//     energy_storage: f64,
+//     maintenance: f64,
+// }
 
 #[component]
 fn DeltaLine(label: &'static str, after: Option<f64>, delta: f64) -> Element {
@@ -248,8 +264,8 @@ fn DeltaLine(label: &'static str, after: Option<f64>, delta: f64) -> Element {
             "{label}:"
             if let Some(range) = range {
                 span { class: "text-neutral-200 ml-1", "{range}" }
-                span { class: if delta >= 0.0 { "text-emerald-400 ml-1" } else { "text-red-400 ml-1" } },
-                    "({sign}{delta:.1})"
+                span { class: if delta >= 0.0 { "text-emerald-400 ml-1" } else { "text-red-400 ml-1" } }
+                "({sign}{delta:.1})"
             } else {
                 span { class: "text-neutral-500 ml-1", "—" }
             }

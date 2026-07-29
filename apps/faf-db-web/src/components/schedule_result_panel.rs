@@ -1,10 +1,11 @@
 use dioxus::prelude::*;
+use faf_sim::GameEcoParameters;
 
 use crate::components::{
     inventory_after_steps, AxisSide, ChartMetric, CurrentUnits, DualAxisSeries, DualAxisUplotChart,
     EcoSnapshotView, RGBColor, ScheduleFormState, ScheduleModeTab, StepTimeline,
 };
-use crate::types::{ConstructionPlan, EcoSnapshot, Schedule, ScheduleUiState, StepReasoning};
+use crate::types::{ConstructionPlan, Schedule, ScheduleUiState, StepReasoning};
 use crate::utils::kind_label;
 
 /// Single data point for the dual-axis net-income chart.
@@ -113,7 +114,7 @@ fn ResultStreaming(
             StepTimeline {
                 steps,
                 reasoning,
-                initial_eco: form.read().initial_snapshot(),
+                initial_eco: form.read().init_eco(),
                 initial_inventory: form.read().initial_inventory.clone(),
                 selected_step,
             }
@@ -148,7 +149,7 @@ fn ResultSuccess(
             StepTimeline {
                 steps: schedule.steps.clone(),
                 reasoning,
-                initial_eco: form.read().initial_snapshot(),
+                initial_eco: form.read().init_eco(),
                 initial_inventory: form.read().initial_inventory.clone(),
                 selected_step,
             }
@@ -184,7 +185,7 @@ fn ResultStatusHeader(status: ResultStatus, form: Signal<ScheduleFormState>) -> 
 /// the economy once every step has been applied rather than the initial state.
 #[component]
 fn EconomyAfterFinalStep(
-    eco: EcoSnapshot,
+    eco: GameEcoParameters,
     #[props(default = "flex flex-col gap-1 min-w-0")] class: &'static str,
 ) -> Element {
     rsx! {
@@ -240,9 +241,8 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
     })
     .chain(schedule.steps.iter().map(|s| IncomePoint {
         time: s.finish_time_seconds,
-        mass: s.economy.production_per_second_mass.value() - s.economy.mass_drain.value(),
+        mass: s.economy.production_per_second_mass.value(),
         energy: s.economy.production_per_second_energy.value()
-            - s.economy.energy_drain.value()
             - s.economy.maintenance_consumption_per_second_energy.value(),
     }))
     .collect();

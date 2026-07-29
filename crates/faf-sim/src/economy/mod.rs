@@ -11,7 +11,7 @@ pub mod tick;
 
 pub use rules::{
     apply_tick, compute_drain, total_build_power, BuildDrain, BuildProject, EcoConsumer, EcoFlow,
-    EcoProducer, EconomyRuntimeState, EffectiveBuildPower, RequestedBuildPower, ResourceProducer,
+    EcoProducer, EffectiveBuildPower, GameEcoParameters, RequestedBuildPower, ResourceProducer,
     TickOutcome, TickResult,
 };
 pub use tick::{apply_tick_graph, GraphTickResult};

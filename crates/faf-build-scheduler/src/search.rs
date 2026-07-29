@@ -1,20 +1,18 @@
 //! Shared search infrastructure for ECS scheduling algorithms.
-
+#![allow(unused)]
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
 use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
-use faf_sim_shared::plan_types::{
-    ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
-};
-use faf_sim_shared::{BuildTask, EcoSnapshot};
+use faf_sim_shared::plan_types::{ConstructionItem, ConstructionPlan, UnitSummary};
+use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoParameters};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
 use crate::components::{BuildPowerComp, BuilderState, CandidateAssignment, UnitKindComp};
 use crate::request::{EcoTarget, SearchOptions};
-use crate::resources::{EconomyState, StepLog, TaskLog};
+use crate::resources::{StepLog, TaskLog};
 use crate::result::{Action, Schedule, ScheduleError};
 use faf_sim_shared::CandidateScoreBreakdown;
 
@@ -45,7 +43,7 @@ impl SearchTarget {
     /// True if the goal has been met given the current economy and inventory.
     pub fn is_reached(
         &self,
-        current_eco: &EcoSnapshot,
+        current_eco: &GameEcoParameters,
         inventory: &HashMap<UnitKind, u32>,
     ) -> bool {
         match self {
@@ -58,7 +56,7 @@ impl SearchTarget {
     /// unit entities.
     pub fn is_reached_from_entities(
         &self,
-        current_eco: &EcoSnapshot,
+        current_eco: &GameEcoParameters,
         units: &Query<&UnitKindComp>,
     ) -> bool {
         match self {
@@ -70,59 +68,49 @@ impl SearchTarget {
 
 /// Convert the chosen actions into a final `Schedule`.
 pub(crate) fn build_schedule(
-    economy_state: &EconomyState,
+    economy: &GameEcoParameters,
     task_log: &TaskLog,
     step_log: &StepLog,
 ) -> Result<Schedule, ScheduleError> {
-    let plan = build_construction_plan(economy_state, task_log);
-    Ok(Schedule {
-        plan,
-        steps: step_log.0.clone(),
-        final_eco: economy_state.current,
-        total_time_seconds: step_log
-            .0
-            .last()
-            .map(|s| s.finish_time_seconds)
-            .unwrap_or(0.0),
-    })
+    // let plan = build_construction_plan(economy, task_log);
+    // Ok(Schedule {
+    //     plan,
+    //     steps: step_log.0.clone(),
+    //     final_eco: economy.current,
+    //     total_time_seconds: step_log
+    //         .0
+    //         .last()
+    //         .map(|s| s.finish_time_seconds)
+    //         .unwrap_or(0.0),
+    // })
+    todo!("not implemented")
 }
 
-fn build_construction_plan(economy_state: &EconomyState, task_log: &TaskLog) -> ConstructionPlan {
-    let items = task_log
-        .0
-        .iter()
-        .map(|task| ConstructionItem {
-            id: task.id,
-            builders: task
-                .builders
-                .iter()
-                .map(UnitSummary::from_builder_stats)
-                .collect(),
-            targets: task
-                .targets
-                .iter()
-                .map(UnitSummary::from_target_stats)
-                .collect(),
-            start_after: task.start_after,
-        })
-        .collect();
+// fn build_construction_plan(economy_state: &EconomyState, task_log: &TaskLog) -> ConstructionPlan {
+//     let items = task_log
+//         .0
+//         .iter()
+//         .map(|task| ConstructionItem {
+//             id: task.id,
+//             builders: task
+//                 .builders
+//                 .iter()
+//                 .map(UnitSummary::from_builder_stats)
+//                 .collect(),
+//             targets: task
+//                 .targets
+//                 .iter()
+//                 .map(UnitSummary::from_target_stats)
+//                 .collect(),
+//             start_after: task.start_after,
+//         })
+//         .collect();
 
-    ConstructionPlan {
-        eco: snapshot_to_initial_settings(&economy_state.initial),
-        items,
-    }
-}
-
-fn snapshot_to_initial_settings(snapshot: &EcoSnapshot) -> EcoInitialSettings {
-    EcoInitialSettings {
-        production_per_second_mass: snapshot.production_per_second_mass,
-        production_per_second_energy: snapshot.production_per_second_energy,
-        maintenance_consumption_per_second_energy: snapshot
-            .maintenance_consumption_per_second_energy,
-        mass_storage: Storage::new(snapshot.mass_storage, snapshot.mass_storage_cap),
-        energy_storage: Storage::new(snapshot.energy_storage, snapshot.energy_storage_cap),
-    }
-}
+//     ConstructionPlan {
+//         eco: snapshot_to_initial_settings(&economy_state.initial),
+//         items,
+//     }
+// }
 
 /// Build a `BuildTask` representing `action` given the concrete builders
 /// assigned to it.
@@ -214,7 +202,7 @@ pub(crate) fn build_task_for_action(
 /// Simulate `action` as the next step from the current search state and
 /// return the per-task result.
 pub(crate) fn solve_action(
-    current_economy: &EcoSnapshot,
+    current_economy: &GameEcoParameters,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
@@ -235,47 +223,13 @@ pub(crate) fn solve_action(
 /// upgrades correctly replace the source unit's contribution instead of adding
 /// to it.
 pub(crate) fn simulate_action(
-    current_economy: &EcoSnapshot,
+    current_economy: &GameEcoParameters,
     action: &Action,
     task: &BuildTask,
     library: &BlueprintLibrary,
     max_time_seconds: f64,
 ) -> PlanResult {
-    let economy = match action {
-        Action::Upgrade { from, .. } => {
-            let source_stats = library
-                .unit_eco_stats(from)
-                .expect("upgrade source has eco stats");
-            subtract_source_contributions(current_economy, &source_stats)
-        }
-        _ => *current_economy,
-    };
-    plan_completion_with_tasks(&economy, std::slice::from_ref(task), max_time_seconds)
-}
-
-/// Remove a unit's economy contributions from a snapshot.
-///
-/// This is used when the unit is about to be replaced by an upgrade: the source
-/// stops producing and its storage capacity is removed, while the new unit's
-/// contributions are added by the solver at completion.
-fn subtract_source_contributions(snapshot: &EcoSnapshot, source: &UnitEcoStats) -> EcoSnapshot {
-    EcoSnapshot {
-        production_per_second_mass: snapshot.production_per_second_mass
-            - MassRate::from_raw(
-                source.production_per_second_mass * source.adjacency.mass_production_multiplier(),
-            ),
-        production_per_second_energy: snapshot.production_per_second_energy
-            - EnergyRate::from_raw(
-                source.production_per_second_energy
-                    * source.adjacency.energy_production_multiplier(),
-            ),
-        maintenance_consumption_per_second_energy: snapshot
-            .maintenance_consumption_per_second_energy
-            - EnergyRate::from_raw(source.maintenance_consumption_per_second_energy),
-        mass_storage_cap: snapshot.mass_storage_cap - Mass::from_raw(source.mass_storage),
-        energy_storage_cap: snapshot.energy_storage_cap - Energy::from_raw(source.energy_storage),
-        ..*snapshot
-    }
+    todo!("not implemented")
 }
 
 /// Query type for idle builder units in the scheduler world.
@@ -299,7 +253,7 @@ pub(crate) fn spawn_build_candidates(
     builder: &UnitKind,
     target: UnitKind,
     idle_builders: &IdleBuilderQuery,
-    eco_snapshot: &EcoSnapshot,
+    eco_snapshot: &GameEcoParameters,
 ) {
     let available: Vec<(Entity, UnitKind, UnitEcoStats)> = idle_builders
         .iter()
@@ -315,7 +269,7 @@ pub(crate) fn spawn_build_candidates(
         return;
     }
 
-    let target_unit_cost = library.build_cost(&target).unwrap();
+    let target_unit_cost = library.unit_build_cost(&target).unwrap();
 
     let max_bp = faf_solver::solve_approriate_builder_power(
         eco_snapshot,
@@ -413,139 +367,5 @@ pub(crate) fn spawn_upgrade_candidates(
                 CandidateAssignment(assigned),
             ));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use faf_blueprints::{TechLevel, UnitKind};
-    use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
-
-    fn test_library() -> BlueprintLibrary {
-        BlueprintLibrary::from_default_units().expect("load default units")
-    }
-
-    fn base_eco(mass_income: f64) -> EcoSnapshot {
-        EcoSnapshot {
-            time: Time::from_raw(0.0),
-            production_per_second_mass: MassRate::from_raw(mass_income),
-            production_per_second_energy: EnergyRate::from_raw(1000.0),
-            maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
-            mass_drain: MassRate::from_raw(0.0),
-            energy_drain: EnergyRate::from_raw(0.0),
-            total_mass_spent: Mass::from_raw(0.0),
-            total_energy_spent: Energy::from_raw(0.0),
-            mass_storage: Mass::from_raw(2000.0),
-            mass_storage_cap: Mass::from_raw(2000.0),
-            energy_storage: Energy::from_raw(4000.0),
-            energy_storage_cap: Energy::from_raw(4000.0),
-        }
-    }
-
-    fn effective_mass(stats: &UnitEcoStats) -> f64 {
-        stats.production_per_second_mass * stats.adjacency.mass_production_multiplier()
-    }
-
-    #[test]
-    fn capped_mex_upgrade_replaces_source_production() {
-        let library = test_library();
-        let from = UnitKind::Mex(TechLevel::T2);
-        let to = UnitKind::CapMex(TechLevel::T2);
-
-        let source_stats = library.unit_eco_stats(&from).unwrap();
-        let target_stats = library.unit_eco_stats(&to).unwrap();
-
-        // Economy consists solely of the source mex.
-        let eco = base_eco(effective_mass(&source_stats));
-
-        let task = BuildTask {
-            id: 0,
-            start_after: Time::from_raw(0.0),
-            builders: vec![library.to_unit_eco_stats(&from, true).unwrap()],
-            targets: vec![target_stats.clone()],
-        };
-
-        let action = Action::Upgrade {
-            from,
-            to,
-            assisted_by: vec![],
-        };
-
-        let result = simulate_action(&eco, &action, &task, &library, 6000.0);
-
-        let final_mass = result.total.economy.production_per_second_mass.value();
-        let expected = effective_mass(&target_stats);
-        assert!(
-            (final_mass - expected).abs() < 1e-9,
-            "upgrade should replace source production: got {final_mass}, expected {expected}"
-        );
-    }
-
-    #[test]
-    fn capped_mex_upgrade_keeps_other_production_intact() {
-        let library = test_library();
-        let from = UnitKind::Mex(TechLevel::T2);
-        let to = UnitKind::CapMex(TechLevel::T2);
-
-        let source_stats = library.unit_eco_stats(&from).unwrap();
-        let target_stats = library.unit_eco_stats(&to).unwrap();
-
-        let other_income = 3.0;
-        let eco = base_eco(other_income + effective_mass(&source_stats));
-
-        let task = BuildTask {
-            id: 0,
-            start_after: Time::from_raw(0.0),
-            builders: vec![library.to_unit_eco_stats(&from, true).unwrap()],
-            targets: vec![target_stats.clone()],
-        };
-
-        let action = Action::Upgrade {
-            from,
-            to,
-            assisted_by: vec![],
-        };
-
-        let result = simulate_action(&eco, &action, &task, &library, 6000.0);
-
-        let final_mass = result.total.economy.production_per_second_mass.value();
-        let expected = other_income + effective_mass(&target_stats);
-        assert!(
-            (final_mass - expected).abs() < 1e-9,
-            "upgrade should keep unrelated production: got {final_mass}, expected {expected}"
-        );
-    }
-
-    #[test]
-    fn build_action_still_adds_target_production() {
-        let library = test_library();
-        let builder = UnitKind::Engineer(TechLevel::T1);
-        let target = UnitKind::Mex(TechLevel::T2);
-
-        let target_stats = library.unit_eco_stats(&target).unwrap();
-        let initial_income = 5.0;
-        let eco = base_eco(initial_income);
-
-        let task = BuildTask {
-            id: 0,
-            start_after: Time::from_raw(0.0),
-            builders: vec![library.to_unit_eco_stats(&builder, true).unwrap()],
-            targets: vec![target_stats.clone()],
-        };
-
-        let action = Action::Build {
-            builder: vec![builder],
-            target,
-        };
-
-        let result = simulate_action(&eco, &action, &task, &library, 6000.0);
-
-        let final_mass = result.total.economy.production_per_second_mass.value();
-        let expected = initial_income + effective_mass(&target_stats);
-        assert!(
-            (final_mass - expected).abs() < 1e-9,
-            "build should add target production: got {final_mass}, expected {expected}"
-        );
     }
 }

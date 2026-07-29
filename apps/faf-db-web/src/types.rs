@@ -1,15 +1,14 @@
 use faf_quantities::MassRate;
+use faf_sim::GameEcoParameters;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub use faf_blueprints::UnitKind;
 pub use faf_dioxus_ui::components::GraphData;
-pub use faf_sim_shared::plan_types::{
-    ConstructionItem, ConstructionPlan, EcoInitialSettings, UnitSummary,
-};
+pub use faf_sim_shared::plan_types::{ConstructionItem, ConstructionPlan, UnitSummary};
 pub use faf_sim_shared::{
-    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, EcoSnapshot,
-    PriorityTable, Schedule, ScoreCategory, StepReasoning, StepResult,
+    Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, PriorityTable, Schedule,
+    ScoreCategory, StepReasoning, StepResult,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ fn default_max_mex_count() -> u32 {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ScheduleApiRequest {
     Eco {
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         initial_inventory: Vec<UnitKind>,
         target_mass_production: MassRate,
         tolerance: f64,
@@ -54,7 +53,7 @@ pub enum ScheduleApiRequest {
         max_mex_count: u32,
     },
     Unit {
-        initial_eco: EcoSnapshot,
+        initial_eco: GameEcoParameters,
         initial_inventory: Vec<UnitKind>,
         target: UnitKind,
         options: SearchOptions,
@@ -193,7 +192,7 @@ pub struct UnitDetailData {
     #[serde(default)]
     pub general: Option<GeneralDetail>,
     #[serde(default)]
-    pub economy: Option<EconomyDetail>,
+    pub economy: Option<UnitBuildCost>,
     #[serde(default)]
     pub defense: Option<DefenseDetail>,
 }
@@ -211,7 +210,7 @@ pub struct GeneralDetail {
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
-pub struct EconomyDetail {
+pub struct UnitBuildCost {
     #[serde(default)]
     pub build_cost_energy: Option<f64>,
     #[serde(default)]

@@ -1,12 +1,11 @@
 //! Candidate generation for eco scheduling.
 
-use bevy_ecs::prelude::*;
-
 use crate::algorithms::greedy;
 use crate::components::UnitKindComp;
 use crate::config::SchedulerConfig;
-use crate::resources::{EconomyState, SearchGoal, SearchProgress};
+use crate::resources::{GameEco, SearchGoal, SearchProgress};
 use crate::search::{BlueprintLibraryRef, IdleBuilderQuery};
+use bevy_ecs::prelude::*;
 
 /// Spawn all candidate eco actions.
 ///
@@ -16,7 +15,7 @@ use crate::search::{BlueprintLibraryRef, IdleBuilderQuery};
 pub(crate) fn generate_eco_candidates_system(
     mut commands: Commands,
     progress: Res<SearchProgress>,
-    economy: Res<EconomyState>,
+    economy: Res<GameEco>,
     goal: Res<SearchGoal>,
     library: Res<BlueprintLibraryRef>,
     config: Res<SchedulerConfig>,
@@ -28,7 +27,7 @@ pub(crate) fn generate_eco_candidates_system(
     }
 
     // If the target is already reached, stop generating candidates.
-    if goal.0.is_reached_from_entities(&economy.current, &units) {
+    if goal.0.is_reached_from_entities(&economy.eco, &units) {
         return;
     }
 
@@ -39,6 +38,6 @@ pub(crate) fn generate_eco_candidates_system(
         &config,
         &units,
         &idle_builders,
-        &economy.current,
+        &economy.eco,
     );
 }

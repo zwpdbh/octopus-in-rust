@@ -2,11 +2,10 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use faf_quantities::MassRate;
+use faf_sim::{GameEcoParameters, Storage};
 
 use crate::components::{SliderField, UnitSelectorModal};
-use crate::types::{
-    AssignmentTarget, EcoSnapshot, ScheduleApiRequest, SearchOptions, UnitKind, UnitSummary,
-};
+use crate::types::{AssignmentTarget, ScheduleApiRequest, SearchOptions, UnitKind, UnitSummary};
 use crate::utils::kind_label;
 
 /// Which scheduling mode the form is configured for; mirrors the CLI's
@@ -56,22 +55,23 @@ impl Default for ScheduleFormState {
 }
 
 impl ScheduleFormState {
-    pub fn initial_snapshot(&self) -> EcoSnapshot {
-        use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Time};
+    pub fn init_eco(&self) -> GameEcoParameters {
+        use faf_quantities::{Energy, EnergyRate, Mass, MassRate};
 
-        EcoSnapshot {
-            time: Time::from_raw(0.0),
+        let mass_current = Mass::from_raw(self.initial_mass_storage);
+        let mass_cap = Mass::from_raw(self.initial_mass_storage);
+        let mass_storage = Storage::new(mass_current, mass_cap);
+
+        let energy_current = Energy::from_raw(self.initial_energy_storage);
+        let energy_cap = Energy::from_raw(self.initial_energy_storage);
+        let energy_storage = Storage::new(energy_current, energy_cap);
+
+        GameEcoParameters {
             production_per_second_mass: MassRate::from_raw(self.initial_mass_production),
             production_per_second_energy: EnergyRate::from_raw(self.initial_energy_production),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
-            mass_drain: MassRate::from_raw(0.0),
-            energy_drain: EnergyRate::from_raw(0.0),
-            total_mass_spent: Mass::from_raw(0.0),
-            total_energy_spent: Energy::from_raw(0.0),
-            mass_storage: Mass::from_raw(self.initial_mass_storage),
-            mass_storage_cap: Mass::from_raw(self.initial_mass_storage),
-            energy_storage: Energy::from_raw(self.initial_energy_storage),
-            energy_storage_cap: Energy::from_raw(self.initial_energy_storage),
+            energy_storage,
+            mass_storage,
         }
     }
 
@@ -85,7 +85,7 @@ impl ScheduleFormState {
 
     /// Build the API request payload for the current form state.
     pub fn to_request(&self) -> ScheduleApiRequest {
-        let initial_eco = self.initial_snapshot();
+        let initial_eco = self.init_eco();
         let initial_inventory = self.initial_inventory.clone();
         let options = self.options.clone();
         match self.mode {
@@ -181,7 +181,9 @@ pub fn ScheduleRequestPanel(
             // Algorithm (only greedy exists today).
             div { class: "flex items-center justify-between gap-2 text-sm",
                 span { class: "text-neutral-400", "Algorithm" }
-                span { class: "text-neutral-300 font-mono text-xs px-2 py-1 rounded bg-neutral-800 border border-neutral-700", "Greedy" }
+                span { class: "text-neutral-300 font-mono text-xs px-2 py-1 rounded bg-neutral-800 border border-neutral-700",
+                    "Greedy"
+                }
             }
 
             match mode {
@@ -214,7 +216,9 @@ pub fn ScheduleRequestPanel(
 
             // Initial conditions (collapsible).
             details { class: "rounded border border-neutral-800 bg-neutral-950/60",
-                summary { class: "px-3 py-2 text-xs font-semibold text-neutral-300 cursor-pointer select-none", "Initial conditions" }
+                summary { class: "px-3 py-2 text-xs font-semibold text-neutral-300 cursor-pointer select-none",
+                    "Initial conditions"
+                }
                 div { class: "px-3 pb-3 flex flex-col gap-3",
                     SliderField {
                         label: "Mass production",
@@ -264,7 +268,9 @@ pub fn ScheduleRequestPanel(
 
             // Advanced options (collapsed by default).
             details { class: "rounded border border-neutral-800 bg-neutral-950/60",
-                summary { class: "px-3 py-2 text-xs font-semibold text-neutral-300 cursor-pointer select-none", "Advanced" }
+                summary { class: "px-3 py-2 text-xs font-semibold text-neutral-300 cursor-pointer select-none",
+                    "Advanced"
+                }
                 div { class: "px-3 pb-3 flex flex-col gap-3",
                     NumberField {
                         label: "Max search time (s)",
@@ -300,11 +306,7 @@ pub fn ScheduleRequestPanel(
                 }
             } else {
                 button {
-                    class: if valid {
-                        "mt-1 px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors"
-                    } else {
-                        "mt-1 px-3 py-2 rounded bg-neutral-700 text-neutral-400 text-sm font-semibold cursor-not-allowed"
-                    },
+                    class: if valid { "mt-1 px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors" } else { "mt-1 px-3 py-2 rounded bg-neutral-700 text-neutral-400 text-sm font-semibold cursor-not-allowed" },
                     disabled: !valid,
                     onclick: move |_| on_compute.call(()),
                     "⚡ Compute Schedule"
@@ -326,11 +328,7 @@ pub fn ScheduleRequestPanel(
 fn ModeTab(label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
     rsx! {
         button {
-            class: if active {
-                "px-2 py-1.5 text-xs font-semibold rounded bg-blue-700 text-white transition-colors"
-            } else {
-                "px-2 py-1.5 text-xs font-semibold rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors"
-            },
+            class: if active { "px-2 py-1.5 text-xs font-semibold rounded bg-blue-700 text-white transition-colors" } else { "px-2 py-1.5 text-xs font-semibold rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors" },
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -357,7 +355,7 @@ fn IntegerStepper(
                     pattern: "[0-9]*",
                     class: "w-20 px-2 py-1 text-xs font-mono rounded-l bg-neutral-950 border border-neutral-700 text-neutral-200 focus:outline-none focus:border-blue-500",
                     value: "{display}",
-                    disabled: disabled,
+                    disabled,
                     oninput: move |e| {
                         if let Ok(v) = e.value().parse::<i64>() {
                             on_change.call(v.max(1) as f64);
@@ -367,13 +365,13 @@ fn IntegerStepper(
                 div { class: "flex flex-col border border-l-0 border-neutral-700 rounded-r overflow-hidden",
                     button {
                         class: "flex-1 px-1.5 text-[10px] leading-none bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed",
-                        disabled: disabled,
+                        disabled,
                         onclick: move |_| on_change.call((value + step).max(1.0)),
                         "▲"
                     }
                     button {
                         class: "flex-1 px-1.5 text-[10px] leading-none bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed",
-                        disabled: disabled,
+                        disabled,
                         onclick: move |_| on_change.call((value - step).max(1.0)),
                         "▼"
                     }
@@ -400,7 +398,7 @@ fn NumberField(
                 class: "w-24 px-2 py-1 text-xs font-mono rounded bg-neutral-950 border border-neutral-700 text-neutral-200 focus:outline-none focus:border-blue-500",
                 value: "{value}",
                 step: "{step}",
-                disabled: disabled,
+                disabled,
                 oninput: move |e| {
                     if let Ok(v) = e.value().parse::<f64>() {
                         on_change.call(v);
@@ -431,7 +429,7 @@ fn UnitSlot(
             span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
             button {
                 class: "{button_class}",
-                disabled: disabled,
+                disabled,
                 onclick: move |_| {
                     if !disabled {
                         on_click.call(());
@@ -492,7 +490,7 @@ fn InventoryEditor(
                                 "{kind_label(kind)}"
                                 button {
                                     class: "text-neutral-500 hover:text-red-400 leading-none",
-                                    disabled: disabled,
+                                    disabled,
                                     onclick: move |_| {
                                         form.write().initial_inventory.retain(|x| x != &k);
                                     },
@@ -504,7 +502,7 @@ fn InventoryEditor(
                 }
                 button {
                     class: "w-7 h-7 rounded bg-black border border-neutral-600 flex items-center justify-center text-neutral-500 hover:text-neutral-200 hover:border-neutral-400 transition-colors text-lg leading-none",
-                    disabled: disabled,
+                    disabled,
                     title: "Add unit to inventory",
                     onclick: move |_| {
                         if !disabled {

@@ -24,7 +24,7 @@ use crate::runtime::resources::{
     CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
-use crate::runtime::types::{EcoSnapshot, SimulationEvent};
+use crate::runtime::types::SimulationEvent;
 
 /// Spawn the initial economy entities from the [`EcoState`] resource.
 ///
@@ -140,7 +140,7 @@ pub(crate) fn eco_system(
     mut eco: ResMut<EcoState>,
     mut clock: ResMut<SimClock>,
     mut factor: ResMut<EffectiveFactor>,
-    mut journal: ResMut<EventJournal>,
+    mut _journal: ResMut<EventJournal>,
     mut totals: ResMut<TotalsSpent>,
 ) {
     if let Some(max_time) = clock.max_time {
@@ -178,21 +178,8 @@ pub(crate) fn eco_system(
     totals.energy += result.energy_consumed.value();
 
     clock.time = clock.time + dt;
-
-    journal.0.push(SimulationEvent::Ticked(EcoSnapshot {
-        time: clock.time,
-        production_per_second_mass: eco.production_per_second_mass,
-        production_per_second_energy: eco.production_per_second_energy,
-        maintenance_consumption_per_second_energy: eco.maintenance_consumption_per_second_energy,
-        mass_drain: MassRate::from_raw(total_mass_drain),
-        energy_drain: EnergyRate::from_raw(total_energy_drain),
-        total_mass_spent: Mass::from_raw(totals.mass),
-        total_energy_spent: Energy::from_raw(totals.energy),
-        mass_storage: eco.mass_storage.current,
-        mass_storage_cap: eco.mass_storage.cap,
-        energy_storage: eco.energy_storage.current,
-        energy_storage_cap: eco.energy_storage.cap,
-    }));
+    todo!("finish the event system for tick")
+    // journal.0.push(SimulationEvent::Ticket(EcoSnapshot::new));
 }
 
 pub(crate) fn progress_system(
