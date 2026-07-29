@@ -7,7 +7,7 @@
 
 use crate::quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 
-use super::rules::GameEcoParameters;
+use super::rules::GameEcoMetrics;
 
 /// Result of applying a *global* drain to an economy state for one tick.
 ///
@@ -48,7 +48,7 @@ pub struct GraphTickResult {
 pub fn apply_tick_graph(
     total_mass_drain: f64,
     total_energy_drain: f64,
-    state: &GameEcoParameters,
+    state: &GameEcoMetrics,
     dt: f64,
 ) -> GraphTickResult {
     EconomyTick::new(state, total_mass_drain, total_energy_drain, dt).run()
@@ -61,14 +61,14 @@ pub fn apply_tick_graph(
 /// follow and unit-test in isolation.
 #[derive(Debug, Clone, Copy)]
 struct EconomyTick<'a> {
-    state: &'a GameEcoParameters,
+    state: &'a GameEcoMetrics,
     mass_drain: f64,
     energy_drain: f64,
     dt: Time,
 }
 
 impl<'a> EconomyTick<'a> {
-    fn new(state: &'a GameEcoParameters, mass_drain: f64, energy_drain: f64, dt: f64) -> Self {
+    fn new(state: &'a GameEcoMetrics, mass_drain: f64, energy_drain: f64, dt: f64) -> Self {
         Self {
             state,
             mass_drain,
@@ -79,7 +79,7 @@ impl<'a> EconomyTick<'a> {
 
     /// Gross energy income this tick.
     fn gross_energy_income(&self) -> Energy {
-        self.state.production_per_second_energy * self.dt
+        self.state.production_energy_per_second * self.dt
     }
 
     /// Maintenance energy cost this tick.
@@ -125,7 +125,7 @@ impl<'a> EconomyTick<'a> {
     /// Army-wide energy efficiency: gross income divided by total energy
     /// requested (maintenance + construction), clamped to 1.0.
     fn energy_efficiency(&self) -> f64 {
-        let gross = self.state.production_per_second_energy;
+        let gross = self.state.production_energy_per_second;
         let total_requested = self.state.maintenance_consumption_per_second_energy
             + EnergyRate::from_raw(self.energy_drain);
         if total_requested.value() <= 0.0 {
@@ -211,7 +211,7 @@ impl<'a> EconomyTick<'a> {
             mass_stalled: self.mass_stalled(),
             net_mass_income: self.scaled_mass_income()
                 - MassRate::from_raw(mass_consumed.value() / self.dt.value()),
-            net_energy_income: self.state.production_per_second_energy
+            net_energy_income: self.state.production_energy_per_second
                 - self.state.maintenance_consumption_per_second_energy
                 - EnergyRate::from_raw(energy_consumed.value() / self.dt.value()),
         }
@@ -229,10 +229,10 @@ mod tests {
         maintenance_consumption_per_second_energy: f64,
         mass_storage: f64,
         energy_storage: f64,
-    ) -> GameEcoParameters {
-        GameEcoParameters {
+    ) -> GameEcoMetrics {
+        GameEcoMetrics {
             production_per_second_mass: MassRate::from_raw(production_per_second_mass),
-            production_per_second_energy: EnergyRate::from_raw(production_per_second_energy),
+            production_energy_per_second: EnergyRate::from_raw(production_per_second_energy),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(
                 maintenance_consumption_per_second_energy,
             ),
@@ -282,8 +282,8 @@ mod tests {
     fn maintenance_is_subtracted_from_energy_storage() {
         // Gross income (2) is lower than maintenance (5). Even with no
         // construction, storage should drain by the net deficit each tick.
-        let state = GameEcoParameters {
-            production_per_second_energy: EnergyRate::from_raw(2.0),
+        let state = GameEcoMetrics {
+            production_energy_per_second: EnergyRate::from_raw(2.0),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(5.0),
             energy_storage: Storage::new(Energy::from_raw(4000.0), Energy::from_raw(5000.0)),
             ..Default::default()

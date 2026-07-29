@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 
 use crate::components::{
     inventory_after_steps, AxisSide, ChartMetric, CurrentUnits, DualAxisSeries, DualAxisUplotChart,
@@ -185,7 +185,7 @@ fn ResultStatusHeader(status: ResultStatus, form: Signal<ScheduleFormState>) -> 
 /// the economy once every step has been applied rather than the initial state.
 #[component]
 fn EconomyAfterFinalStep(
-    eco: GameEcoParameters,
+    eco: GameEcoMetrics,
     #[props(default = "flex flex-col gap-1 min-w-0")] class: &'static str,
 ) -> Element {
     rsx! {
@@ -212,7 +212,7 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
     let initial_mass = form_state.initial_mass_production;
     let initial_energy = form_state.initial_energy_production;
     let final_mass = schedule.final_eco.production_per_second_mass.value();
-    let final_energy = schedule.final_eco.production_per_second_energy.value();
+    let final_energy = schedule.final_eco.production_energy_per_second.value();
     let is_eco = form_state.mode == ScheduleModeTab::Eco;
     let target_met = final_mass + form_state.tolerance >= form_state.target_mass_production;
     let headline = match form_state.mode {
@@ -242,7 +242,7 @@ fn ResultSuccessBanner(schedule: Schedule, form: Signal<ScheduleFormState>) -> E
     .chain(schedule.steps.iter().map(|s| IncomePoint {
         time: s.finish_time_seconds,
         mass: s.economy.production_per_second_mass.value(),
-        energy: s.economy.production_per_second_energy.value()
+        energy: s.economy.production_energy_per_second.value()
             - s.economy.maintenance_consumption_per_second_energy.value(),
     }))
     .collect();

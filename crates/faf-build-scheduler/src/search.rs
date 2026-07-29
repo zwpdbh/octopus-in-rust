@@ -7,7 +7,7 @@ use bevy_ecs::prelude::*;
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
 use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 use faf_sim_shared::plan_types::{ConstructionItem, ConstructionPlan, UnitSummary};
-use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoParameters};
+use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoMetrics};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
 use crate::components::{BuildPowerComp, BuilderState, CandidateAssignment, UnitKindComp};
@@ -43,7 +43,7 @@ impl SearchTarget {
     /// True if the goal has been met given the current economy and inventory.
     pub fn is_reached(
         &self,
-        current_eco: &GameEcoParameters,
+        current_eco: &GameEcoMetrics,
         inventory: &HashMap<UnitKind, u32>,
     ) -> bool {
         match self {
@@ -56,7 +56,7 @@ impl SearchTarget {
     /// unit entities.
     pub fn is_reached_from_entities(
         &self,
-        current_eco: &GameEcoParameters,
+        current_eco: &GameEcoMetrics,
         units: &Query<&UnitKindComp>,
     ) -> bool {
         match self {
@@ -68,7 +68,7 @@ impl SearchTarget {
 
 /// Convert the chosen actions into a final `Schedule`.
 pub(crate) fn build_schedule(
-    economy: &GameEcoParameters,
+    economy: &GameEcoMetrics,
     task_log: &TaskLog,
     step_log: &StepLog,
 ) -> Result<Schedule, ScheduleError> {
@@ -202,7 +202,7 @@ pub(crate) fn build_task_for_action(
 /// Simulate `action` as the next step from the current search state and
 /// return the per-task result.
 pub(crate) fn solve_action(
-    current_economy: &GameEcoParameters,
+    current_economy: &GameEcoMetrics,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
@@ -223,7 +223,7 @@ pub(crate) fn solve_action(
 /// upgrades correctly replace the source unit's contribution instead of adding
 /// to it.
 pub(crate) fn simulate_action(
-    current_economy: &GameEcoParameters,
+    current_economy: &GameEcoMetrics,
     action: &Action,
     task: &BuildTask,
     library: &BlueprintLibrary,
@@ -253,7 +253,7 @@ pub(crate) fn spawn_build_candidates(
     builder: &UnitKind,
     target: UnitKind,
     idle_builders: &IdleBuilderQuery,
-    eco_snapshot: &GameEcoParameters,
+    eco_snapshot: &GameEcoMetrics,
 ) {
     let available: Vec<(Entity, UnitKind, UnitEcoStats)> = idle_builders
         .iter()

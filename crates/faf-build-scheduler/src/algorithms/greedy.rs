@@ -6,7 +6,7 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use faf_blueprints::UnitEcoStats;
 use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
-use faf_sim_shared::{EcoSnapshot, GameEcoParameters};
+use faf_sim_shared::{EcoSnapshot, GameEcoMetrics};
 
 use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;
@@ -73,7 +73,7 @@ pub(crate) fn spawn_eco_candidates(
     config: &SchedulerConfig,
     units: &Query<&UnitKindComp>,
     idle_builders: &IdleBuilderQuery,
-    eco_snapshot: &GameEcoParameters,
+    eco_snapshot: &GameEcoMetrics,
 ) {
     let owned_kinds: Vec<UnitKind> = units.iter().map(|u| u.0.clone()).collect();
     let current_mex_count = count_mex_from_iter(&owned_kinds, library);
@@ -168,7 +168,7 @@ pub(crate) fn spawn_eco_candidates(
 /// the score combines the direction confidence (0–100) with the action’s
 /// efficiency.
 pub(crate) fn score_eco_candidate(
-    current_economy: &GameEcoParameters,
+    current_economy: &GameEcoMetrics,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,
@@ -186,7 +186,7 @@ pub(crate) fn score_eco_candidate(
 /// all others are ranked by how many build/upgrade edges separate their result
 /// from the goal. Higher scores are better.
 pub(crate) fn score_unit_candidate(
-    current_economy: &GameEcoParameters,
+    current_economy: &GameEcoMetrics,
     next_id: u32,
     options: &SearchOptions,
     action: &Action,

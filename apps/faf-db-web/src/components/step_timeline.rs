@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 
 use crate::components::EcoSnapshotView;
 use crate::types::{
@@ -17,7 +17,7 @@ use crate::utils::kind_label;
 pub fn StepTimeline(
     steps: Vec<StepResult>,
     reasoning: Vec<StepReasoning>,
-    initial_eco: GameEcoParameters,
+    initial_eco: GameEcoMetrics,
     initial_inventory: Vec<UnitKind>,
     mut selected_step: Signal<Option<usize>>,
 ) -> Element {
@@ -112,7 +112,7 @@ fn CopyStepButton(
     end_seconds: f64,
     step: StepResult,
     reasoning: Option<StepReasoning>,
-    pre_eco: GameEcoParameters,
+    pre_eco: GameEcoMetrics,
 ) -> Element {
     rsx! {
         button {
@@ -139,7 +139,7 @@ fn CopyStepButton(
 fn StepDetails(
     step: StepResult,
     reasoning: Option<StepReasoning>,
-    pre_eco: GameEcoParameters,
+    pre_eco: GameEcoMetrics,
     current_units: Vec<UnitKind>,
 ) -> Element {
     let (scores, priorities) = reasoning
@@ -164,7 +164,7 @@ fn StepDetails(
 
 /// Economy state just before the scheduler committed this step.
 #[component]
-fn EconomyBeforeDecision(pre_eco: GameEcoParameters) -> Element {
+fn EconomyBeforeDecision(pre_eco: GameEcoMetrics) -> Element {
     rsx! {
         div { class: "flex flex-col gap-1 lg:w-[420px] shrink-0",
             h5 { class: "text-[10px] font-semibold text-neutral-400 uppercase tracking-wide",
@@ -553,9 +553,9 @@ fn format_duration_range(start_seconds: f64, end_seconds: f64) -> String {
 
 fn pre_step_eco(
     steps: &[StepResult],
-    initial_eco: &GameEcoParameters,
+    initial_eco: &GameEcoMetrics,
     idx: usize,
-) -> GameEcoParameters {
+) -> GameEcoMetrics {
     if idx == 0 {
         initial_eco.clone()
     } else {

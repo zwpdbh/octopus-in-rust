@@ -11,7 +11,7 @@ use faf_build_scheduler::{
     SchedulerStepEvent, UnitScheduleInput, UnitScheduleRequest,
 };
 use faf_quantities::MassRate;
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 
 use crate::command_line::{ScheduleEcoArgs, ScheduleMode, ScheduleUnitArgs};
 
@@ -163,7 +163,7 @@ fn print_step_trace(event: On<SchedulerStepEvent>) {
     eprintln!(
         "Result economy: mass {:>5.1}/s | energy {:>5.1}/s | mass_storage {:>6.0}/{:<6.0} | energy_storage {:>6.0}/{:<6.0} | time {:.1}s",
         eco.production_per_second_mass.value(),
-        eco.production_per_second_energy.value(),
+        eco.production_energy_per_second.value(),
         eco.mass_storage.current.value(),
         eco.mass_storage.cap.value(),
         eco.energy_storage.current.value(),
@@ -177,7 +177,7 @@ fn print_step_trace(event: On<SchedulerStepEvent>) {
 
 fn default_eco_input() -> EcoScheduleInput {
     EcoScheduleInput {
-        initial_eco: GameEcoParameters::default(),
+        initial_eco: GameEcoMetrics::default(),
         initial_inventory: vec!["Commander".to_string()],
         target_mass_production: MassRate::from_raw(15.0),
         tolerance: 1.0,
@@ -188,7 +188,7 @@ fn default_eco_input() -> EcoScheduleInput {
 
 fn default_unit_input() -> UnitScheduleInput {
     UnitScheduleInput {
-        initial_eco: GameEcoParameters::default(),
+        initial_eco: GameEcoMetrics::default(),
         initial_inventory: vec!["Commander".to_string()],
         // UEF Novax Center: a recognizable late-game unit target.
         target: "XEB2402".to_string(),

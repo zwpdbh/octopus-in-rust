@@ -5,7 +5,7 @@
 //! prevents the "missing field" class of frontend errors when the scheduler
 //! evolves.
 
-use crate::{plan_types::ConstructionPlan, GameEcoParameters};
+use crate::{plan_types::ConstructionPlan, GameEcoMetrics};
 use serde::{Deserialize, Serialize};
 
 /// A single step in the planned build order.
@@ -17,7 +17,7 @@ pub struct StepResult {
     /// steps this is typically one; it is preserved so the timeline can show
     /// actionable descriptions like "4 Engineers build X".
     pub builder_count: usize,
-    pub economy: GameEcoParameters,
+    pub economy: GameEcoMetrics,
 }
 
 /// A concrete action the scheduler decided to take.
@@ -39,7 +39,7 @@ pub enum Action {
 pub struct Schedule {
     pub plan: ConstructionPlan,
     pub total_time_seconds: f64,
-    pub final_eco: GameEcoParameters,
+    pub final_eco: GameEcoMetrics,
     pub steps: Vec<StepResult>,
 }
 

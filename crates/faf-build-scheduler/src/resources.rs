@@ -7,7 +7,7 @@
 use bevy_ecs::prelude::Resource;
 
 use faf_quantities::Time;
-use faf_sim_shared::{BuildTask, GameEcoParameters};
+use faf_sim_shared::{BuildTask, GameEcoMetrics};
 
 use crate::request::SearchOptions;
 use crate::result::StepResult;
@@ -15,7 +15,7 @@ use crate::search::SearchTarget;
 
 #[derive(Resource)]
 pub struct GameEco {
-    pub eco: GameEcoParameters,
+    pub eco: GameEcoMetrics,
 }
 
 /// Global simulation clock for the scheduler.

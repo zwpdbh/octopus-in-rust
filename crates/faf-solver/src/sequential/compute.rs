@@ -1,7 +1,7 @@
 //! Top-level completion-time computation for single-task and sequential plans.
 
 use faf_blueprints::UnitEcoStats;
-use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoParameters, EPS};
+use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoMetrics, EPS};
 
 use crate::sequential::factor::effective_factor;
 
@@ -37,7 +37,7 @@ impl CompletionResult {
 /// This is a convenience wrapper around [`plan_completion_result`] for the
 /// common case of exactly one task.
 pub fn single_task_completion_result(
-    initial_eco: &GameEcoParameters,
+    initial_eco: &GameEcoMetrics,
     task: &BuildTask,
     max_time_seconds: f64,
 ) -> CompletionResult {
@@ -50,7 +50,7 @@ pub fn single_task_completion_result(
 /// contributions of every target it built are folded into the running state
 /// before the next task's `start_after` delay is applied.
 pub fn plan_completion_result(
-    initial_eco: &GameEcoParameters,
+    initial_eco: &GameEcoMetrics,
     tasks: &[BuildTask],
     max_time_seconds: f64,
 ) -> CompletionResult {
@@ -60,7 +60,7 @@ pub fn plan_completion_result(
 /// Compute the completion time and final economy of a sequence of tasks,
 /// returning a per-task breakdown.
 pub fn plan_completion_with_tasks(
-    initial_eco: &GameEcoParameters,
+    initial_eco: &GameEcoMetrics,
     tasks: &[BuildTask],
     max_time_seconds: f64,
 ) -> PlanResult {
@@ -178,7 +178,7 @@ fn solve_target(
             return false;
         }
 
-        state.target_tick(mass_drain, energy_drain, f);
+        state.tick_when_build_target(mass_drain, energy_drain, f);
         work -= f * power;
 
         f = effective_factor(state, mass_drain, energy_drain);
@@ -192,7 +192,7 @@ fn solve_target(
     if f <= EPS {
         return false;
     }
-    state.target_tick(mass_drain, energy_drain, f);
+    state.tick_when_build_target(mass_drain, energy_drain, f);
 
     true
 }
@@ -201,7 +201,7 @@ fn solve_target(
 /// What is the maximum build power it could hold.
 /// It means during the build progress there should be no energy stall
 pub fn solve_approriate_builder_power(
-    eco_snapshot: &GameEcoParameters,
+    eco_snapshot: &GameEcoMetrics,
     target_mass: f64,
     target_energy: f64,
     target_build_time: f64,

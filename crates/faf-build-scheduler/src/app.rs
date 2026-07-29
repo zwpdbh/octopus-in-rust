@@ -7,7 +7,7 @@ use bevy_app::prelude::*;
 
 use faf_blueprints::{BlueprintLibrary, UnitKind};
 use faf_quantities::Time;
-use faf_sim_shared::GameEcoParameters;
+use faf_sim_shared::GameEcoMetrics;
 
 use crate::components::{BuildPowerComp, BuilderState, UnitKindComp};
 use crate::config::SchedulerConfig;
@@ -38,7 +38,7 @@ impl SchedulerApp {
     /// Create a scheduler app for eco scheduling.
     pub fn new_for_eco(
         library: Arc<BlueprintLibrary>,
-        initial_eco: GameEcoParameters,
+        initial_eco: GameEcoMetrics,
         inventory: HashMap<UnitKind, u32>,
         target: EcoTarget,
         options: SearchOptions,
@@ -61,7 +61,7 @@ impl SchedulerApp {
     /// Create a scheduler app for unit scheduling.
     pub fn new_for_unit(
         library: Arc<BlueprintLibrary>,
-        initial_eco: GameEcoParameters,
+        initial_eco: GameEcoMetrics,
         inventory: HashMap<UnitKind, u32>,
         target: UnitKind,
         options: SearchOptions,
@@ -84,7 +84,7 @@ impl SchedulerApp {
     fn insert_shared_resources(
         app: &mut App,
         library: Arc<BlueprintLibrary>,
-        initial_eco: GameEcoParameters,
+        initial_eco: GameEcoMetrics,
         inventory: HashMap<UnitKind, u32>,
         target: SearchTarget,
         options: SearchOptions,

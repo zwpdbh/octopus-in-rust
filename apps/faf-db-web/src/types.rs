@@ -1,5 +1,5 @@
 use faf_quantities::MassRate;
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -44,7 +44,7 @@ fn default_max_mex_count() -> u32 {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum ScheduleApiRequest {
     Eco {
-        initial_eco: GameEcoParameters,
+        initial_eco: GameEcoMetrics,
         initial_inventory: Vec<UnitKind>,
         target_mass_production: MassRate,
         tolerance: f64,
@@ -53,7 +53,7 @@ pub enum ScheduleApiRequest {
         max_mex_count: u32,
     },
     Unit {
-        initial_eco: GameEcoParameters,
+        initial_eco: GameEcoMetrics,
         initial_inventory: Vec<UnitKind>,
         target: UnitKind,
         options: SearchOptions,

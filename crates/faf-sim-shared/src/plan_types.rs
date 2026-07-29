@@ -3,7 +3,7 @@
 use faf_blueprints::UnitEcoStats;
 use faf_quantities::Time;
 
-use crate::{BuildQueue, BuildTask, GameEcoParameters};
+use crate::{BuildQueue, BuildTask, GameEcoMetrics};
 use serde::{Deserialize, Serialize};
 
 /// Frontend-facing unit descriptor.
@@ -104,7 +104,7 @@ impl ConstructionItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConstructionPlan {
     #[serde(rename = "initial_eco", alias = "eco")]
-    pub eco: GameEcoParameters,
+    pub eco: GameEcoMetrics,
     pub items: Vec<ConstructionItem>,
 }
 

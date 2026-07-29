@@ -1,6 +1,6 @@
 //! The `predict` command: estimate completion time with the analytical solver.
 
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 use faf_sim_shared::BuildQueue;
 use faf_solver::plan_completion_with_tasks;
 
@@ -21,10 +21,10 @@ fn run_solver(args: PredictSolverArgs) {
     println!("{:?}", plan_result);
 }
 
-fn load_plan_and_eco(shared: &PredictShared) -> (GameEcoParameters, BuildQueue) {
+fn load_plan_and_eco(shared: &PredictShared) -> (GameEcoMetrics, BuildQueue) {
     let queue = read_json::<BuildQueue>(&shared.plan);
     let eco = match &shared.eco {
-        Some(path) => read_json::<GameEcoParameters>(path),
+        Some(path) => read_json::<GameEcoMetrics>(path),
         None => queue.initial_eco,
     };
     (eco, queue)

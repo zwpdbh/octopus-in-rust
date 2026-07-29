@@ -34,7 +34,7 @@ pub(crate) fn seed_initial_economy_system(mut commands: Commands, eco: Res<EcoSt
     commands.spawn((
         Producer {
             production_per_second_mass: eco.0.production_per_second_mass.value(),
-            production_per_second_energy: eco.0.production_per_second_energy.value(),
+            production_per_second_energy: eco.0.production_energy_per_second.value(),
             maintenance_consumption_per_second_energy: eco
                 .0
                 .maintenance_consumption_per_second_energy
@@ -127,7 +127,7 @@ pub(crate) fn recompute_base_economy_system(
     }
 
     eco.production_per_second_mass = MassRate::from_raw(production_per_second_mass);
-    eco.production_per_second_energy = EnergyRate::from_raw(production_per_second_energy);
+    eco.production_energy_per_second = EnergyRate::from_raw(production_per_second_energy);
     eco.maintenance_consumption_per_second_energy =
         EnergyRate::from_raw(maintenance_consumption_per_second_energy);
 

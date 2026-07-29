@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use faf_quantities::MassRate;
-use faf_sim::{GameEcoParameters, Storage};
+use faf_sim::{GameEcoMetrics, Storage};
 
 use crate::components::{SliderField, UnitSelectorModal};
 use crate::types::{AssignmentTarget, ScheduleApiRequest, SearchOptions, UnitKind, UnitSummary};
@@ -55,7 +55,7 @@ impl Default for ScheduleFormState {
 }
 
 impl ScheduleFormState {
-    pub fn init_eco(&self) -> GameEcoParameters {
+    pub fn init_eco(&self) -> GameEcoMetrics {
         use faf_quantities::{Energy, EnergyRate, Mass, MassRate};
 
         let mass_current = Mass::from_raw(self.initial_mass_storage);
@@ -66,9 +66,9 @@ impl ScheduleFormState {
         let energy_cap = Energy::from_raw(self.initial_energy_storage);
         let energy_storage = Storage::new(energy_current, energy_cap);
 
-        GameEcoParameters {
+        GameEcoMetrics {
             production_per_second_mass: MassRate::from_raw(self.initial_mass_production),
-            production_per_second_energy: EnergyRate::from_raw(self.initial_energy_production),
+            production_energy_per_second: EnergyRate::from_raw(self.initial_energy_production),
             maintenance_consumption_per_second_energy: EnergyRate::from_raw(0.0),
             energy_storage,
             mass_storage,

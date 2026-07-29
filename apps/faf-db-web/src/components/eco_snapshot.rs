@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use faf_sim::{EnergyRate, GameEcoParameters, MassRate};
+use faf_sim::{EnergyRate, GameEcoMetrics, MassRate};
 
 /// Game-style economy panel showing mass and energy storage, net rate, and
 /// income/expense breakdown.
@@ -9,7 +9,7 @@ use faf_sim::{EnergyRate, GameEcoParameters, MassRate};
 /// (`income / expense * 100`, e.g. `125%`).
 #[component]
 pub fn EcoSnapshotView(
-    snapshot: GameEcoParameters,
+    snapshot: GameEcoMetrics,
     #[props(default = false)] compact: bool,
     #[props(default = MassRate::zero())] mass_drain: MassRate,
     #[props(default = EnergyRate::zero())] energy_drain: EnergyRate,
@@ -45,9 +45,9 @@ pub fn EcoSnapshotView(
                 positive_class: "text-amber-300",
                 icon_size,
                 compact,
-                income: snapshot.production_per_second_energy.value(),
+                income: snapshot.production_energy_per_second.value(),
                 expense: energy_drain.value()
-                                                                    + snapshot.maintenance_consumption_per_second_energy.value(),
+                                                                                                    + snapshot.maintenance_consumption_per_second_energy.value(),
                 storage: snapshot.energy_storage.current.value(),
                 cap: snapshot.energy_storage.cap.value(),
                 show_pct,

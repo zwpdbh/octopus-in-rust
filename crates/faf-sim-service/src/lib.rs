@@ -512,12 +512,12 @@ mod tests {
     use super::*;
     use faf_quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
     use faf_sim::sim::{SimulationEvent, UnitEcoStats};
-    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, GameEcoParameters};
+    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, GameEcoMetrics};
 
-    fn rich_eco() -> GameEcoParameters {
-        GameEcoParameters {
+    fn rich_eco() -> GameEcoMetrics {
+        GameEcoMetrics {
             production_per_second_mass: MassRate::from_raw(1000.0),
-            production_per_second_energy: EnergyRate::from_raw(1000.0),
+            production_energy_per_second: EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(Mass::from_raw(10000.0), Mass::from_raw(10000.0)),
             energy_storage: Storage::new(Energy::from_raw(10000.0), Energy::from_raw(10000.0)),
             ..Default::default()

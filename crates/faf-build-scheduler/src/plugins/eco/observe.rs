@@ -6,7 +6,7 @@
 use bevy_ecs::prelude::*;
 
 use faf_quantities::{EnergyRate, MassRate};
-use faf_sim_shared::GameEcoParameters;
+use faf_sim_shared::GameEcoMetrics;
 
 use crate::components::{BuilderState, UnitKindComp};
 use crate::resources::{GameEco, SearchGoal};
@@ -15,7 +15,7 @@ use crate::search::SearchTarget;
 /// Symbolic observation of the current scheduler state.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct Observation {
-    eco: GameEcoParameters,
+    eco: GameEcoMetrics,
     energy_drain: EnergyRate,
     mass_drain: MassRate,
 }
@@ -23,7 +23,7 @@ pub struct Observation {
 impl Default for Observation {
     fn default() -> Self {
         Self {
-            eco: GameEcoParameters::default(),
+            eco: GameEcoMetrics::default(),
             energy_drain: EnergyRate::zero(),
             mass_drain: MassRate::zero(),
         }

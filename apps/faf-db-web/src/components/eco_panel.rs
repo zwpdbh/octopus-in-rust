@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage};
-use faf_sim::GameEcoParameters;
+use faf_sim::GameEcoMetrics;
 
 use crate::components::SliderField;
 use crate::types::ConstructionPlan;
@@ -10,7 +10,7 @@ pub fn EcoPanel(
     mut plan: Signal<ConstructionPlan>,
     #[props(default = false)] disabled: bool,
 ) -> Element {
-    fn update<F: FnOnce(&mut GameEcoParameters)>(mut plan: Signal<ConstructionPlan>, f: F) {
+    fn update<F: FnOnce(&mut GameEcoMetrics)>(mut plan: Signal<ConstructionPlan>, f: F) {
         plan.with_mut(|p| f(&mut p.eco));
     }
 
@@ -31,7 +31,7 @@ pub fn EcoPanel(
             }
             SliderField {
                 label: "Energy production",
-                value: plan.read().eco.production_per_second_energy.value(),
+                value: plan.read().eco.production_energy_per_second.value(),
                 min: 20.0,
                 max: 2000.0,
                 unit: "",
@@ -39,7 +39,7 @@ pub fn EcoPanel(
                 on_change: move |v: f64| update(
                     plan,
                     |eco| {
-                        eco.production_per_second_energy = EnergyRate::from_raw(
+                        eco.production_energy_per_second = EnergyRate::from_raw(
                             v.clamp(20.0, 2000.0),
                         );
                     },

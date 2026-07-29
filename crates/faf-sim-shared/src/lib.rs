@@ -8,7 +8,7 @@ pub mod economy_types;
 pub mod plan_types;
 pub mod scheduler_types;
 
-pub use economy_types::{BuildQueue, BuildTask, EcoSnapshot, GameEcoParameters, EPS};
+pub use economy_types::{BuildQueue, BuildTask, EcoSnapshot, GameEcoMetrics, EPS};
 pub use plan_types::{ConstructionItem, ConstructionPlan, UnitSummary};
 pub use scheduler_types::{
     Action, CandidateReasoning, CandidateScoreBreakdown, DirectionScores, PriorityTable, Schedule,

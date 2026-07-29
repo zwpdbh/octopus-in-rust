@@ -326,7 +326,7 @@ pub fn summarize_economy(
 ///
 /// For the public, point-in-time record that is emitted to consumers (UI,
 /// WebSocket, ML models), see [`EcoSnapshot`](crate::runtime::EcoSnapshot).
-pub use faf_sim_shared::GameEcoParameters;
+pub use faf_sim_shared::GameEcoMetrics;
 
 /// Result of applying a drain to an economy state for one second.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -353,12 +353,12 @@ pub struct TickResult {
 /// FAF stalls when storage would go negative. The effective build power is
 /// reduced to the largest fraction of the requested power that keeps both
 /// resources non-negative.
-pub fn apply_tick(requested: &BuildDrain, state: &GameEcoParameters, dt: f64) -> TickResult {
+pub fn apply_tick(requested: &BuildDrain, state: &GameEcoMetrics, dt: f64) -> TickResult {
     let dt = Time::from_raw(dt);
 
     // Gross income during this tick, ignoring the drain.
     let production_per_second_mass = state.production_per_second_mass * dt;
-    let production_per_second_energy = state.production_per_second_energy * dt;
+    let production_per_second_energy = state.production_energy_per_second * dt;
     let maintenance_energy = state.maintenance_consumption_per_second_energy * dt;
 
     // Requested consumption over the tick.
@@ -510,7 +510,7 @@ impl BuildProject {
     }
 
     /// Advance the project by `dt` seconds, consuming resources from `state`.
-    pub fn tick(&mut self, state: &mut GameEcoParameters, dt: f64) -> TickOutcome {
+    pub fn tick(&mut self, state: &mut GameEcoMetrics, dt: f64) -> TickOutcome {
         let Some(drain) = compute_drain(&self.target.to_target_stats(), self.assigned_build_power)
         else {
             return TickOutcome::InProgress {
@@ -630,9 +630,9 @@ mod tests {
         )
         .expect("valid drain");
 
-        let state = GameEcoParameters {
+        let state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -664,9 +664,9 @@ mod tests {
         .expect("valid drain");
 
         // Very little `ProductionPerSecondEnergy` and storage, plenty of mass.
-        let state = GameEcoParameters {
+        let state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(50000.0),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -699,9 +699,9 @@ mod tests {
         .expect("valid drain");
 
         // Very little `ProductionPerSecondMass` and storage, plenty of energy.
-        let state = GameEcoParameters {
+        let state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(1000.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(1000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(drain.mass_per_second * 0.5),
                 crate::quantities::Mass::from_raw(100000.0),
@@ -730,9 +730,9 @@ mod tests {
         let mut project = BuildProject::new(t1_eng, &units).expect("valid unit");
         project.assigned_build_power = build_power;
 
-        let mut state = GameEcoParameters {
+        let mut state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -762,9 +762,9 @@ mod tests {
         let build_time = project.target.build_time;
         project.assigned_build_power = build_power;
 
-        let mut state = GameEcoParameters {
+        let mut state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -800,9 +800,9 @@ mod tests {
         project.assigned_build_power = build_power;
 
         // No `ProductionPerSecondEnergy` and tiny storage: will stall.
-        let mut state = GameEcoParameters {
+        let mut state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(10000.0),
                 crate::quantities::Mass::from_raw(1000000.0),
@@ -838,9 +838,9 @@ mod tests {
         )
         .expect("valid drain");
 
-        let mut state = GameEcoParameters {
+        let mut state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(1000.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(10000.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(10000.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(100.0),
                 crate::quantities::Mass::from_raw(100.0),
@@ -892,9 +892,9 @@ mod tests {
         project.assigned_build_power = build_power;
 
         // No income, but enough storage to pay the full cost.
-        let mut state = GameEcoParameters {
+        let mut state = GameEcoMetrics {
             production_per_second_mass: crate::quantities::MassRate::from_raw(0.0),
-            production_per_second_energy: crate::quantities::EnergyRate::from_raw(0.0),
+            production_energy_per_second: crate::quantities::EnergyRate::from_raw(0.0),
             mass_storage: Storage::new(
                 crate::quantities::Mass::from_raw(total_mass),
                 crate::quantities::Mass::from_raw(total_mass * 2.0),
