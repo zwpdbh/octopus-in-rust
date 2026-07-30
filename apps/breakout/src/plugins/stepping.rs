@@ -33,9 +33,6 @@ impl SteppingPlugin {
 impl Plugin for SteppingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, build_stepping_hint);
-        if cfg!(not(feature = "bevy_debug_stepping")) {
-            return;
-        }
 
         // create and insert our debug schedule into the main schedule order.
         // We need an independent schedule so we have access to all other
@@ -133,13 +130,6 @@ fn build_ui(
         };
 
         for (key, system) in systems {
-            // skip bevy default systems; we don't want to step those
-            #[cfg(feature = "debug")]
-            if system.name().as_string().starts_with("bevy") {
-                always_run.push((*label, NodeId::System(key)));
-                continue;
-            }
-
             // Add an entry to our systems list so we can find where to draw
             // the cursor when the stepping cursor is at this system
             // we add plus 1 to account for the empty root span
@@ -184,15 +174,9 @@ fn build_ui(
 }
 
 fn build_stepping_hint(mut commands: Commands) {
-    let hint_text = if cfg!(feature = "bevy_debug_stepping") {
-        "Press ` to toggle stepping mode (S: step system, Space: step frame)"
-    } else {
-        "Bevy was compiled without stepping support. Run with `--features=bevy_debug_stepping` to enable stepping."
-    };
-    info!("{}", hint_text);
     // stepping description box
     commands.spawn((
-        Text::new(hint_text),
+        Text::new("Bevy was compiled without stepping support. Run with `--features=bevy_debug_stepping` to enable stepping."),
         TextFont {
             font_size: FontSize::Px(15.0),
             ..default()
