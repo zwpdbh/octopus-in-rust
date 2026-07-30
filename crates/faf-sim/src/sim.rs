@@ -11,7 +11,7 @@ use bevy_app::prelude::*;
 
 use crate::quantities::{StepTime, Time};
 use crate::runtime::resources::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
+    CompletedTasks, PlayerEcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 pub use crate::runtime::{
@@ -59,7 +59,7 @@ impl Simulation {
             })
             .insert_resource(TailEndTime::default())
             .insert_resource(PostQueueTailSeconds(tail_seconds))
-            .insert_resource(EcoState(queue.initial_eco));
+            .insert_resource(PlayerEcoState(queue.initial_eco));
 
         Self { app, dt }
     }

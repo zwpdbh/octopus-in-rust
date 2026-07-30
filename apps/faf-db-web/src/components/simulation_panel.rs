@@ -3,7 +3,7 @@ use faf_dioxus_ui::RGBColor;
 use faf_sim::protocol::{ControlEvent, SimClientMessage, SimRuntimeStatus, SimServerMessage};
 use faf_sim::sim::SimulationEvent;
 
-use faf_sim_shared::EcoSnapshot;
+use faf_sim_shared::PlayerEcoSnapshot;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, Event, MessageEvent, WebSocket};
@@ -46,7 +46,7 @@ pub fn SimulationPanel(
     mut state: Signal<SimulationUiState>,
 ) -> Element {
     let queue = use_memo(move || plan.read().to_build_queue());
-    let snapshots = use_signal(Vec::<EcoSnapshot>::new);
+    let snapshots = use_signal(Vec::<PlayerEcoSnapshot>::new);
     let mut ws = use_signal(|| None::<WsHandle>);
     let simulation_id = use_signal(|| None::<faf_sim::protocol::SimulationId>);
     let mut previous_queue = use_signal(|| queue.read().clone());
@@ -161,7 +161,7 @@ pub fn SimulationPanel(
                     }
                     UplotChart {
                         data: snapshots,
-                        x_extractor: ChartMetric::new(|s: &EcoSnapshot| s.time),
+                        x_extractor: ChartMetric::new(|s: &PlayerEcoSnapshot| s.time),
                         sidebar,
                         tabs: vec![
                             ChartTab {
@@ -278,7 +278,7 @@ pub fn SimulationPanel(
 }
 
 #[component]
-fn SnapshotDetails(snapshot: EcoSnapshot) -> Element {
+fn SnapshotDetails(snapshot: PlayerEcoSnapshot) -> Element {
     // let scaled = scaled_mass_income(&snapshot);
     // let energy_avail = energy_available(&snapshot);
     // let energy_net = energy_net(&snapshot);
@@ -354,7 +354,7 @@ fn ControlButton(label: String, enabled: bool, onclick: EventHandler<()>) -> Ele
 }
 
 fn reset_run(
-    mut snapshots: Signal<Vec<EcoSnapshot>>,
+    mut snapshots: Signal<Vec<PlayerEcoSnapshot>>,
     mut ws: Signal<Option<WsHandle>>,
     mut state: Signal<SimulationUiState>,
     mut simulation_id: Signal<Option<faf_sim::protocol::SimulationId>>,
@@ -367,7 +367,7 @@ fn reset_run(
 
 fn start_run(
     queue: &faf_sim::sim::BuildQueue,
-    mut snapshots: Signal<Vec<EcoSnapshot>>,
+    mut snapshots: Signal<Vec<PlayerEcoSnapshot>>,
     mut ws: Signal<Option<WsHandle>>,
     mut state: Signal<SimulationUiState>,
     mut simulation_id: Signal<Option<faf_sim::protocol::SimulationId>>,

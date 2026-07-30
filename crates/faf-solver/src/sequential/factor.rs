@@ -1,6 +1,6 @@
 //! Effective build-factor calculation.
 
-use faf_sim_shared::{EcoSnapshot, EPS};
+use faf_sim_shared::{PlayerEcoSnapshot, EPS};
 
 /// Compute the fraction of full build power that can be applied this tick.
 ///
@@ -8,7 +8,7 @@ use faf_sim_shared::{EcoSnapshot, EPS};
 /// - the energy-limited factor (available energy / energy drain),
 /// - the mass-limited factor (available mass / mass drain),
 /// - 1.0 (full power).
-pub(crate) fn effective_factor(state: &EcoSnapshot, mass_drain: f64, energy_drain: f64) -> f64 {
+pub(crate) fn effective_factor(state: &PlayerEcoSnapshot, mass_drain: f64, energy_drain: f64) -> f64 {
     let energy_available = (state.production_per_second_energy
         - state.maintenance_consumption_per_second_energy)
         .max(0.0);

@@ -18,7 +18,7 @@ pub use faf_blueprints as units;
 
 pub use economy::{
     apply_tick, apply_tick_graph, compute_drain, total_build_power, BuildDrain, BuildProject,
-    EcoFlow, EffectiveBuildPower, GameEcoMetrics, GraphTickResult, RequestedBuildPower,
+    EcoFlow, EffectiveBuildPower, GameEcoMetrics, PlayerEcoSummary, RequestedBuildPower,
     ResourceProducer, TickOutcome, TickResult,
 };
 pub use quantities::{BuildPower, BuildWork, Energy, EnergyRate, Mass, MassRate, Storage, Time};

@@ -6,7 +6,7 @@
 //! runtime-specific `SimulationEvent`.
 
 use faf_quantities::Time;
-use faf_sim_shared::EcoSnapshot;
+use faf_sim_shared::PlayerEcoSnapshot;
 use serde::{Deserialize, Serialize};
 
 pub use faf_sim_shared::{BuildQueue, BuildTask};
@@ -31,7 +31,7 @@ impl ScheduledTask {
 pub enum SimulationEvent {
     /// A tick happened and the economy is in the given state.
     // Ticked { time: f64, eco: GameEcoParameters },
-    Ticking(EcoSnapshot),
+    Ticking(PlayerEcoSnapshot),
     /// A task has become active.
     TaskStarted { task_id: u32, time: f64 },
     /// A task has finished.

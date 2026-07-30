@@ -17,7 +17,7 @@ use faf_sim::sim::{Simulation, SimulationEvent};
 //     scaled_mass_income,
 // };
 use faf_sim_service::{SimServiceEvent, SimulationId, SimulationReceiver, SimulationService};
-use faf_sim_shared::{BuildQueue, EcoSnapshot};
+use faf_sim_shared::{BuildQueue, PlayerEcoSnapshot};
 
 use crate::command_line::{BuildMode, BuildShared, OutputFormat};
 
@@ -82,7 +82,7 @@ fn subscribe(service: &SimulationService, id: SimulationId) -> SimulationReceive
 /// `--tail-seconds 0` is passed so final-only runs are as fast as possible.
 fn run_direct(queue: BuildQueue, dt: StepTime, max_time: Option<Time>, format: OutputFormat) {
     let mut sim = Simulation::new(queue, dt, max_time, None);
-    let mut last_tick: Option<EcoSnapshot> = None;
+    let mut last_tick: Option<PlayerEcoSnapshot> = None;
 
     while !sim.is_finished() {
         for event in sim.step() {
@@ -178,7 +178,7 @@ fn print_event(event: &SimulationEvent, format: OutputFormat) {
     }
 }
 
-fn grouped_tick_json(s: &EcoSnapshot) -> serde_json::Value {
+fn grouped_tick_json(s: &PlayerEcoSnapshot) -> serde_json::Value {
     serde_json::json!({
         "Ticked": {
             "time": s.time,

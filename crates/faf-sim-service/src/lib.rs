@@ -512,7 +512,7 @@ mod tests {
     use super::*;
     use faf_quantities::{Energy, EnergyRate, Mass, MassRate, StepTime, Storage, Time};
     use faf_sim::sim::{SimulationEvent, UnitEcoStats};
-    use faf_sim_shared::{BuildQueue, BuildTask, EcoSnapshot, GameEcoMetrics};
+    use faf_sim_shared::{BuildQueue, BuildTask, PlayerEcoSnapshot, GameEcoMetrics};
 
     fn rich_eco() -> GameEcoMetrics {
         GameEcoMetrics {
@@ -634,7 +634,7 @@ mod tests {
 
         // Drain events until each subscriber observes the Ticked event from the
         // manual advance (a TaskStarted event is emitted first).
-        fn recv_ticked(rx: &Receiver<SimServiceEvent>) -> EcoSnapshot {
+        fn recv_ticked(rx: &Receiver<SimServiceEvent>) -> PlayerEcoSnapshot {
             while let Ok(event) = rx.recv() {
                 if let SimServiceEvent::Simulation(SimulationEvent::Ticking(snapshot)) = event {
                     return snapshot;

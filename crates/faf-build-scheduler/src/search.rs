@@ -7,7 +7,7 @@ use bevy_ecs::prelude::*;
 use faf_blueprints::{BlueprintLibrary, TechLevel, UnitEcoStats, UnitKind};
 use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
 use faf_sim_shared::plan_types::{ConstructionItem, ConstructionPlan, UnitSummary};
-use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoMetrics};
+use faf_sim_shared::{BuildTask, PlayerEcoSnapshot, GameEcoMetrics};
 use faf_solver::{plan_completion_with_tasks, PlanResult};
 
 use crate::components::{BuildPowerComp, BuilderState, CandidateAssignment, UnitKindComp};

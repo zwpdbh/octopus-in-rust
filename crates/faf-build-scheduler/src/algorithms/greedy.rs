@@ -6,7 +6,7 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use faf_blueprints::UnitEcoStats;
 use faf_blueprints::{BlueprintGraph, BlueprintLibrary, TechLevel, UnitKind};
-use faf_sim_shared::{EcoSnapshot, GameEcoMetrics};
+use faf_sim_shared::{GameEcoMetrics, PlayerEcoSnapshot};
 
 use crate::algorithms::heuristic;
 use crate::algorithms::SchedulingAlgorithm;

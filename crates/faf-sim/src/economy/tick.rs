@@ -14,7 +14,7 @@ use super::rules::GameEcoMetrics;
 /// Unlike [`TickResult`](super::rules::TickResult), this models the combined
 /// drain of all active projects and applies FAF-standard mass-income scaling.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GraphTickResult {
+pub struct PlayerEcoSummary {
     /// Global stall factor applied to every active project.
     pub effective_factor: f64,
     /// Mass actually consumed across all projects.
@@ -50,7 +50,7 @@ pub fn apply_tick_graph(
     total_energy_drain: f64,
     state: &GameEcoMetrics,
     dt: f64,
-) -> GraphTickResult {
+) -> PlayerEcoSummary {
     EconomyTick::new(state, total_mass_drain, total_energy_drain, dt).run()
 }
 
@@ -182,7 +182,7 @@ impl<'a> EconomyTick<'a> {
     }
 
     /// Run the tick and return the resulting state changes.
-    fn run(&self) -> GraphTickResult {
+    fn run(&self) -> PlayerEcoSummary {
         let effective_factor = self.effective_factor();
         let mass_consumed = self.requested_mass() * effective_factor;
         let energy_consumed = self.requested_energy() * effective_factor;
@@ -201,7 +201,7 @@ impl<'a> EconomyTick<'a> {
             .min(self.state.energy_storage.cap)
             .max(Energy::zero());
 
-        GraphTickResult {
+        PlayerEcoSummary {
             effective_factor,
             mass_consumed,
             energy_consumed,

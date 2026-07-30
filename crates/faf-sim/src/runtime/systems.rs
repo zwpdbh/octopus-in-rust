@@ -21,7 +21,7 @@ use crate::runtime::components::{
     ActiveBuildTask, AdjacencyBonusComp, Producer, StorageContributor,
 };
 use crate::runtime::resources::{
-    CompletedTasks, EcoState, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks,
+    CompletedTasks, EffectiveFactor, EventJournal, FinishedFlag, PendingTasks, PlayerEcoState,
     PostQueueTailSeconds, SimClock, TailEndTime, TotalsSpent,
 };
 use crate::runtime::types::SimulationEvent;
@@ -30,7 +30,7 @@ use crate::runtime::types::SimulationEvent;
 ///
 /// This runs once at startup before the first update, so the entities exist
 /// when `recompute_base_economy_system` first aggregates income and storage.
-pub(crate) fn seed_initial_economy_system(mut commands: Commands, eco: Res<EcoState>) {
+pub(crate) fn seed_initial_economy_system(mut commands: Commands, eco: Res<PlayerEcoState>) {
     commands.spawn((
         Producer {
             production_per_second_mass: eco.0.production_per_second_mass.value(),
@@ -105,7 +105,7 @@ pub(crate) fn spawn_tasks_system(
 pub(crate) fn recompute_base_economy_system(
     producers: Query<(&Producer, &AdjacencyBonusComp)>,
     storage: Query<&StorageContributor>,
-    mut eco: ResMut<EcoState>,
+    mut eco: ResMut<PlayerEcoState>,
 ) {
     let eco = &mut eco.0;
     let mut production_per_second_mass = 0.0;
@@ -137,7 +137,7 @@ pub(crate) fn recompute_base_economy_system(
 
 pub(crate) fn eco_system(
     sites: Query<&ActiveBuildTask>,
-    mut eco: ResMut<EcoState>,
+    mut eco: ResMut<PlayerEcoState>,
     mut clock: ResMut<SimClock>,
     mut factor: ResMut<EffectiveFactor>,
     mut _journal: ResMut<EventJournal>,

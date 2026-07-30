@@ -1,8 +1,8 @@
 //! Bevy ECS resources used by the economy runtime.
 
 use bevy_ecs::prelude::*;
+use faf_sim_shared::PlayerEcoSnapshot;
 
-use crate::economy::GameEcoMetrics;
 use crate::quantities::Time;
 use crate::runtime::types::{BuildTask, ScheduledTask, SimulationEvent};
 
@@ -59,7 +59,7 @@ pub(crate) struct FinishedFlag(pub(crate) bool);
 
 /// Current economy state, mirrored from [`EconomyRuntimeState`].
 #[derive(Resource)]
-pub(crate) struct EcoState(pub(crate) GameEcoMetrics);
+pub(crate) struct PlayerEcoState(pub(crate) PlayerEcoSnapshot);
 
 /// Cumulative resources spent on construction.
 #[derive(Resource)]

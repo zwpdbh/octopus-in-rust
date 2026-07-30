@@ -14,4 +14,4 @@ pub use rules::{
     EcoProducer, EffectiveBuildPower, GameEcoMetrics, RequestedBuildPower, ResourceProducer,
     TickOutcome, TickResult,
 };
-pub use tick::{apply_tick_graph, GraphTickResult};
+pub use tick::{apply_tick_graph, PlayerEcoSummary};

@@ -1,7 +1,7 @@
 //! Top-level completion-time computation for single-task and sequential plans.
 
 use faf_blueprints::UnitEcoStats;
-use faf_sim_shared::{BuildTask, EcoSnapshot, GameEcoMetrics, EPS};
+use faf_sim_shared::{BuildTask, PlayerEcoSnapshot, GameEcoMetrics, EPS};
 
 use crate::sequential::factor::effective_factor;
 
@@ -10,7 +10,7 @@ use crate::sequential::factor::effective_factor;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompletionResult {
     pub finished_on_time: bool,
-    pub eco_snapshot: EcoSnapshot,
+    pub eco_snapshot: PlayerEcoSnapshot,
 }
 
 /// Result of solving a multi-task plan, including a per-task breakdown.
@@ -24,7 +24,7 @@ pub struct PlanResult {
 }
 
 impl CompletionResult {
-    fn new(state: &EcoSnapshot, max_time_seconds: f64) -> Self {
+    fn new(state: &PlayerEcoSnapshot, max_time_seconds: f64) -> Self {
         Self {
             eco_snapshot: *state,
             finished_on_time: state.time < max_time_seconds,
@@ -64,7 +64,7 @@ pub fn plan_completion_with_tasks(
     tasks: &[BuildTask],
     max_time_seconds: f64,
 ) -> PlanResult {
-    let mut state = EcoSnapshot::init_with_eco_parameters(initial_eco);
+    let mut state = PlayerEcoSnapshot::init_with_eco_parameters(initial_eco);
     let mut task_results = Vec::with_capacity(tasks.len());
 
     for task in tasks {
@@ -156,7 +156,7 @@ pub fn plan_completion_with_tasks(
 /// Returns `false` if the target cannot finish before `max_time_seconds` or if
 /// progress stalls (`effective_factor == 0`).
 fn solve_target(
-    state: &mut EcoSnapshot,
+    state: &mut PlayerEcoSnapshot,
     target: &UnitEcoStats,
     power: f64,
     mass_drain: f64,

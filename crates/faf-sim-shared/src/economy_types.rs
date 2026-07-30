@@ -95,7 +95,7 @@ impl GameEcoMetrics {
 
 /// A EcoSnapshot is GameEcoParameters + Time
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct EcoSnapshot {
+pub struct PlayerEcoSnapshot {
     pub time: f64,
     pub eco_metrics: GameEcoMetrics,
     pub mass_drain_per_second: f64,
@@ -104,7 +104,7 @@ pub struct EcoSnapshot {
 
 pub const EPS: f64 = 1e-9;
 
-impl EcoSnapshot {
+impl PlayerEcoSnapshot {
     pub fn init_with_eco_parameters(game_eco_metrics: &GameEcoMetrics) -> Self {
         Self {
             time: 0.0,
@@ -160,27 +160,5 @@ impl EcoSnapshot {
         self.eco_metrics.energy_storage_current += player_net_energy_income;
 
         self.time += 1.0;
-    }
-
-    // /// Add a completed target's economy contributions to the running state.
-    // pub fn add_target_contributions(&mut self, target: &UnitEcoStats) {
-    //     self.production_per_second_mass +=
-    //         target.production_per_second_mass * target.adjacency.mass_production_multiplier();
-    //     self.production_per_second_energy +=
-    //         target.production_per_second_energy * target.adjacency.energy_production_multiplier();
-    //     self.maintenance_consumption_per_second_energy +=
-    //         target.maintenance_consumption_per_second_energy;
-    //     self.mass_storage_cap += target.mass_storage;
-    //     self.energy_storage_cap += target.energy_storage;
-    // }
-}
-
-pub fn clamp(v: f64, min: f64, max: f64) -> f64 {
-    if v < min {
-        min
-    } else if v > max {
-        max
-    } else {
-        v
     }
 }
