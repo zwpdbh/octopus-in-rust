@@ -8,7 +8,6 @@ license = "MIT"
 
 [dependencies]
 faf-blueprints = { workspace = true }
-faf-quantities = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

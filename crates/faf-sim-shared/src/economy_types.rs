@@ -4,10 +4,7 @@
 //! the CLI, tests, the WebSocket service, and the analytical solver) can describe
 //! units and queues without depending on the full ECS runtime.
 
-use std::f32::consts::E;
-
-use faf_blueprints::{UnitCost, UnitEcoStats};
-use faf_quantities::{Energy, EnergyRate, Mass, MassRate, Storage, Time};
+use faf_blueprints::UnitEcoStats;
 use serde::{Deserialize, Serialize};
 
 /// One task in a build queue.
@@ -19,7 +16,7 @@ pub struct BuildTask {
     ///
     /// For the first task this is a delay relative to simulation start (time 0).
     #[serde(default = "default_start_after")]
-    pub start_after: Time,
+    pub start_after: usize,
 
     /// Builders assigned to the task.
     pub builders: Vec<UnitEcoStats>,
@@ -27,8 +24,8 @@ pub struct BuildTask {
     pub targets: Vec<UnitEcoStats>,
 }
 
-fn default_start_after() -> Time {
-    Time::from_raw(1.0)
+fn default_start_after() -> usize {
+    0
 }
 
 /// A full build queue to simulate.

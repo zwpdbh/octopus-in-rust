@@ -5,22 +5,13 @@ members = [
     "crates/brain",
     "crates/faf-units",
     "crates/faf-dioxus-ui",
-    "crates/faf-quantities",
-    "crates/faf-sim",
-    "crates/faf-sim-service",
-    "crates/faf-solver",
     "crates/faf-blueprints",
-    "crates/faf-build-scheduler",
     "crates/faf-sim-shared",
     "crates/faf-downloader",
-    "crates/train-tui",
     "plugins/example-http",
     "plugins/faf-units",
     "plugins/faf-party",
-    "apps/docref",
     "apps/faf-sim-cli",
-    "apps/faf-db-server",
-    "apps/faf-db-web",
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
@@ -30,28 +21,29 @@ resolver = "3"
 [workspace.dependencies]
 # Path crates
 faf-dioxus-ui = { path = "crates/faf-dioxus-ui" }
-faf-sim = { path = "crates/faf-sim", default-features = false }
-faf-sim-service = { path = "crates/faf-sim-service" }
 faf-blueprints = { path = "crates/faf-blueprints" }
-faf-build-scheduler = { path = "crates/faf-build-scheduler" }
-faf-quantities = { path = "crates/faf-quantities" }
 faf-sim-shared = { path = "crates/faf-sim-shared" }
-faf-solver = { path = "crates/faf-solver" }
 faf-units = { path = "crates/faf-units" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }
 qqbot-config = { path = "crates/qqbot-config" }
-train-tui = { path = "crates/train-tui" }
 
 # Common external crates
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
-burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
+burn = { version = "0.21", default-features = false, features = [
+    "std",
+    "autodiff",
+] }
 chrono = { version = "0.4", features = ["serde"] }
 console_error_panic_hook = "0.1"
 clap = { version = "4", features = ["derive"] }
-dioxus = { version = "0.7", default-features = false, features = ["web", "lib", "launch"] }
+dioxus = { version = "0.7", default-features = false, features = [
+    "web",
+    "lib",
+    "launch",
+] }
 extism = "1"
 extism-pdk = "1"
 futures = "0.3"
@@ -62,7 +54,9 @@ http = "1"
 petgraph = "0.8"
 rand = "0.10"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }

@@ -1,7 +1,6 @@
 //! Shared plan types that bridge the simulator and UI/tooling.
 
 use faf_blueprints::UnitEcoStats;
-use faf_quantities::Time;
 
 use crate::{BuildQueue, BuildTask, GameEcoMetrics};
 use serde::{Deserialize, Serialize};
@@ -91,7 +90,7 @@ pub struct ConstructionItem {
     pub id: u32,
     pub builders: Vec<UnitSummary>,
     pub targets: Vec<UnitSummary>,
-    pub start_after: Time,
+    pub start_after: usize,
 }
 
 impl ConstructionItem {

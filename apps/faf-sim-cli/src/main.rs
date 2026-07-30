@@ -5,18 +5,22 @@
 
 mod build;
 mod command_line;
-mod predict;
-mod schedule;
 mod util;
 
 use clap::Parser;
-use command_line::{Cli, Command};
+use command_line::Cli;
+
+use crate::command_line::Command::Build;
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { mode } => build::run(mode),
-        Command::Predict { mode } => predict::run(mode),
-        Command::Schedule { mode } => schedule::run(mode),
+        Build {
+            mass,
+            energy,
+            build_time,
+        } => {
+            build::run(mass, energy, build_time);
+        }
     }
 }
