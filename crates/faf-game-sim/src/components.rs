@@ -6,22 +6,17 @@ use uuid::Uuid;
 pub struct Unit {
     id: Uuid,
     name: String,
+    nick_name: Option<String>,
+}
+
+struct UnitCost {
     mass: usize,
     energy: usize,
     build_time: usize,
-    tech_level: UnitTechLevel,
-    build_power: Option<usize>,
 }
 
-#[derive(Component)]
-pub struct Building {
-    target: Uuid,
-}
-
-#[derive(Component)]
-pub struct BuiltBy {
-    builders: Vec<Uuid>,
-    finished_in_seconds: usize,
+struct BuildPower {
+    value: usize,
 }
 
 #[derive(Component)]
@@ -38,7 +33,11 @@ pub struct GenerateMass {
 }
 
 #[derive(Component)]
-pub struct GeneratePower {
+pub struct GenerateEnergy {
+    rate: usize,
+}
+
+pub struct DrainEnergy {
     rate: usize,
 }
 

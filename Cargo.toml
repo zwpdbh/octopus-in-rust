@@ -15,7 +15,7 @@ members = [
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
-    "crates/faf-game-sim",
+    "crates/faf-game-sim", "apps/breakout",
 ]
 resolver = "3"
 
