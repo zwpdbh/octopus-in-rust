@@ -1,7 +1,8 @@
 use crate::{
     BALL_DIAMETER, Collision, LEFT_WALL, PADDLE_PADDING, PADDLE_SIZE, PADDLE_SPEED, RIGHT_WALL,
     WALL_THICKNESS,
-    components::{Ball, BallCollided, Brick, Collider, Paddle, ScoreboardUi, Velocity},
+    components::{Ball, Brick, Collider, Paddle, ScoreboardUi, Velocity},
+    observers::BallCollided,
     resources::Score,
 };
 use bevy::{

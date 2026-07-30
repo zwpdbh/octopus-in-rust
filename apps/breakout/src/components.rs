@@ -11,9 +11,6 @@ pub struct Ball;
 #[derive(Component, Deref, DerefMut)]
 pub struct Velocity(pub Vec2);
 
-#[derive(Event)]
-pub struct BallCollided;
-
 #[derive(Component)]
 pub struct Brick;
 
@@ -21,13 +18,13 @@ pub struct Brick;
 #[derive(Component, Default)]
 pub struct Collider;
 
+#[derive(Component)]
+pub struct ScoreboardUi;
+
 // This is a collection of the components that define a "Wall" in our game
 #[derive(Component)]
 #[require(Sprite, Transform, Collider)]
 pub struct Wall;
-
-#[derive(Component)]
-pub struct ScoreboardUi;
 
 impl Wall {
     // This "builder method" allows us to reuse logic across our wall entities,

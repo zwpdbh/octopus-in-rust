@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
-use crate::{CollisionSound, components::BallCollided};
+use crate::CollisionSound;
+
+#[derive(Event)]
+pub struct BallCollided;
 
 pub fn play_collision_sound(
     _collided: On<BallCollided>,
