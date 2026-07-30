@@ -2367,6 +2367,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-game-sim"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "uuid",
+]
+
+[[package]]
 name = "faf-party-plugin"
 version = "0.1.0"
 dependencies = [

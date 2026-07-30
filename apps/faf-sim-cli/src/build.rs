@@ -5,4 +5,9 @@
 //! back to a direct `Simulation` loop — the same fast path the dataset
 //! generator uses.
 
-pub fn run(mass: usize, energy: usize, build_time: usize) {}
+use anyhow::Result;
+
+#[allow(unused)]
+pub fn run(mass: usize, energy: usize, build_time: usize, build_power: usize) -> Result<()> {
+    Ok(())
+}

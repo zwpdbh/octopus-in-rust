@@ -19,5 +19,6 @@ pub enum Command {
         mass: usize,
         energy: usize,
         build_time: usize,
+        build_power: usize,
     },
 }

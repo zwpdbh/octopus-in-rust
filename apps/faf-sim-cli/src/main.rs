@@ -11,16 +11,19 @@ use clap::Parser;
 use command_line::Cli;
 
 use crate::command_line::Command::Build;
+use anyhow::Result;
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Build {
             mass,
             energy,
             build_time,
+            build_power,
         } => {
-            build::run(mass, energy, build_time);
+            let _ = build::run(mass, energy, build_time, build_power)?;
         }
     }
+    Ok(())
 }

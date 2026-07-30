@@ -15,6 +15,7 @@ members = [
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
+    "crates/faf-game-sim",
 ]
 resolver = "3"
 
@@ -29,6 +30,8 @@ brain = { path = "crates/brain" }
 qqbot-config = { path = "crates/qqbot-config" }
 
 # Common external crates
+bevy_app = "0.19"
+bevy_ecs = "0.19"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
