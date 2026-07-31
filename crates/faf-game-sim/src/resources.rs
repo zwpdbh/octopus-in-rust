@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
+use uuid::Uuid;
 
 #[derive(Resource)]
 pub struct PlayerEco {
@@ -21,24 +22,47 @@ pub struct PlayerEco {
 }
 
 impl PlayerEco {
-    fn net_mass_rate(&mut self) -> f64 {
+    pub fn net_mass_rate(&mut self) -> f64 {
         (self.mass_generate_rate - self.mass_drain)
     }
 
-    fn net_energy_rate(&self) -> f64 {
+    pub fn net_energy_rate(&self) -> f64 {
         (self.energy_generate_rate - self.energy_drain)
     }
 
-    pub fn update_storage(&mut self) {
-        let net_mass_rate = self.net_mass_rate();
-        let net_energy_rate = self.net_energy_rate();
-
-        self.mass_in_storage = self
-            .max_capacity_in_mass_storage
-            .min(self.mass_in_storage + self.net_mass_rate());
-
-        self.energy_in_storage = self
-            .max_capacity_in_energy_storage
-            .min(self.energy_in_storage + self.net_energy_rate())
+    pub fn energy_efficiency(&self) -> f64 {
+        if self.energy_in_storage > 0.0 {
+            1.0
+        } else {
+            self.energy_generate_rate / self.energy_drain
+        }
     }
+
+    // need to consider energy_efficiency
+    fn mass_efficiency(&self) -> f64 {
+        if self.mass_in_storage > 0.0 {
+            1.0
+        } else {
+            self.mass_generate_rate / self.mass_drain
+        }
+    }
+
+    // direct efficiency apply to update build progress
+    pub fn construction_efficiency(&self) -> f64 {
+        self.mass_efficiency() * self.energy_efficiency()
+    }
+}
+
+type BuildPowerAssigned = f64;
+type BuildTimeConstructed = f64;
+type BuildTimeNeeded = f64;
+type TaskId = Uuid;
+type MassDrain = f64;
+type EnergyDrain = f64;
+type BuildTime = f64;
+
+#[derive(Resource)]
+pub struct Constructions {
+    pub assigned_bp: HashMap<TaskId, (MassDrain, EnergyDrain, BuildTime, BuildPowerAssigned)>,
+    pub progress: HashMap<TaskId, BuildTimeConstructed>,
 }

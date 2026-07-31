@@ -41,10 +41,12 @@ fn update_player_eco_from_existing_unit(
 // A system which aggregate all mass drain and energy drain from all building tasks
 fn update_player_eco_from_construction(
     mut player_eco: ResMut<PlayerEco>,
+    mut constructions: ResMut<Constructions>,
     building_query: Query<(Entity, &UnitCost, Option<&BuildingInProgress>)>,
 ) {
     let mut building_records: HashMap<Uuid, (UnitCost, f64)> = HashMap::new();
 
+    // Aggregate mass drain and energy drain from construction on some task.
     for (_each_entity, unit_cost, building_in_progress) in building_query {
         if let Some(building_in_progress) = building_in_progress {
             match building_in_progress {
@@ -62,19 +64,61 @@ fn update_player_eco_from_construction(
         }
     }
 
-    for (_, (unit_cost, build_power)) in building_records {
+    for (task, (unit_cost, build_power)) in building_records {
         let build_ratio = unit_cost.build_time / build_power;
         let mass_drain = unit_cost.mass / build_ratio;
         let energy_drain = unit_cost.energy / build_ratio;
 
         player_eco.mass_drain += mass_drain;
         player_eco.energy_drain += energy_drain;
+
+        constructions.assigned_bp.entry(task).insert_entry((
+            mass_drain,
+            energy_drain,
+            unit_cost.build_time,
+            build_power,
+        ));
     }
 }
 
 // step3, update storage
 // emit stall or overflow event
-fn update_player_eco_for_storage(mut player_eco: ResMut<PlayerEco>) {
-    player_eco.update_storage();
-    // TODO:: emit storage overflow or mass stall or energy stall event
+fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
+    let net_mass_rate = player_eco.net_mass_rate();
+    let net_energy_rate = player_eco.net_energy_rate();
+
+    let udpated_mass_in_storage = if player_eco.mass_in_storage + net_mass_rate > 0.0 {
+        player_eco
+            .max_capacity_in_mass_storage
+            .min(player_eco.mass_in_storage + net_mass_rate)
+    } else {
+        0.0
+    };
+
+    let updated_energy_in_storage = if player_eco.energy_in_storage + net_energy_rate > 0.0 {
+        player_eco
+            .max_capacity_in_energy_storage
+            .min(player_eco.energy_in_storage + net_energy_rate)
+    } else {
+        0.0
+    };
+
+    player_eco.mass_in_storage = udpated_mass_in_storage;
+    player_eco.energy_in_storage = updated_energy_in_storage;
+}
+
+// state 4.1: update mass_production from efficiency
+fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
+    if player.energy_efficiency() < 1.0 {
+        player.mass_generate_rate = player.mass_generate_rate * player.energy_efficiency();
+    }
+}
+
+// step 4.2: update each construction progress basedon efficiency ratio
+fn update_construction_pragress(
+    player_eco: Res<PlayerEco>,
+    mut constructions: ResMut<Constructions>,
+) {
+    let construction_efficiency = player_eco.construction_efficiency();
+    todo!("update each construction task's progress")
 }
