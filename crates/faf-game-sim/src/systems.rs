@@ -6,6 +6,7 @@ use super::resources::*;
 use bevy_ecs::prelude::*;
 use uuid::Uuid;
 
+// step 1. compute current static eco production and drain from existing buildings
 fn update_player_eco_from_existing_unit(
     mut player_eco: ResMut<PlayerEco>,
     building_generate_mass: Query<(Entity, Option<&GenerateMass>)>,
@@ -36,6 +37,7 @@ fn update_player_eco_from_existing_unit(
     }
 }
 
+// step 2.
 // A system which aggregate all mass drain and energy drain from all building tasks
 fn update_player_eco_from_construction(
     mut player_eco: ResMut<PlayerEco>,
@@ -68,4 +70,11 @@ fn update_player_eco_from_construction(
         player_eco.mass_drain += mass_drain;
         player_eco.energy_drain += energy_drain;
     }
+}
+
+// step3, update storage
+// emit stall or overflow event
+fn update_player_eco_for_storage(mut player_eco: ResMut<PlayerEco>) {
+    player_eco.update_storage();
+    // TODO:: emit storage overflow or mass stall or energy stall event
 }
