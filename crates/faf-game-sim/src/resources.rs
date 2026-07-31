@@ -3,32 +3,42 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-pub struct TotalMassProduction {
-    rate: usize,
+#[derive(Resource)]
+pub struct PlayerEco {
+    // mass produce vs consume
+    pub mass_generate_rate: f64,
+    pub mass_drain: f64,
+
+    // energy produce vs consume
+    pub energy_generate_rate: f64,
+    pub energy_drain: f64,
+
+    // storage related
+    pub mass_in_storage: f64,
+    pub max_capacity_in_mass_storage: f64,
+    pub energy_in_storage: f64,
+    pub max_capacity_in_energy_storage: f64,
 }
 
-pub struct TotalEnergyProduction {
-    rate: usize,
-}
+impl PlayerEco {
+    fn net_mass_rate(&mut self) -> f64 {
+        (self.mass_generate_rate - self.mass_drain)
+    }
 
-pub struct TotalMassDrain {
-    rate: usize,
-}
+    fn net_energy_rate(&self) -> f64 {
+        (self.energy_generate_rate - self.energy_drain)
+    }
 
-pub struct TotalEnergyDrain {
-    rate: usize,
-}
+    pub fn update_storage(&mut self) {
+        let net_mass_rate = self.net_mass_rate();
+        let net_energy_rate = self.net_energy_rate();
 
-pub struct MassStorage {
-    pub mass_in_storage: usize,
-    pub capacity: usize,
-}
+        self.mass_in_storage = self
+            .max_capacity_in_mass_storage
+            .min(self.mass_in_storage + self.net_mass_rate());
 
-pub struct EnergyStorage {
-    pub capacity: usize,
-    pub energy_in_storage: usize,
-}
-
-pub struct Building {
-    tasks: HashMap<Entity, Vec<Entity>>,
+        self.energy_in_storage = self
+            .max_capacity_in_energy_storage
+            .min(self.energy_in_storage + self.net_energy_rate())
+    }
 }

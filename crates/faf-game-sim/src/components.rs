@@ -9,14 +9,11 @@ pub struct Unit {
     nick_name: Option<String>,
 }
 
-struct UnitCost {
-    mass: usize,
-    energy: usize,
-    build_time: usize,
-}
-
-struct BuildPower {
-    value: usize,
+#[derive(Component, Copy, Clone)]
+pub struct UnitCost {
+    pub mass: f64,
+    pub energy: f64,
+    pub build_time: f64,
 }
 
 #[derive(Component)]
@@ -29,24 +26,31 @@ pub enum UnitTechLevel {
 
 #[derive(Component)]
 pub struct GenerateMass {
-    rate: usize,
+    pub rate: f64,
 }
 
 #[derive(Component)]
 pub struct GenerateEnergy {
-    rate: usize,
-}
-
-pub struct DrainEnergy {
-    rate: usize,
+    pub rate: f64,
 }
 
 #[derive(Component)]
-pub struct ProvideMassStorage {
-    capacity: usize,
+pub struct DrainMaintainanceEnergy {
+    pub rate: f64,
 }
 
 #[derive(Component)]
-pub struct ProvideEnergyStorage {
-    capacity: usize,
+pub struct IncreaseMassStorage {
+    pub capacity: f64,
+}
+
+#[derive(Component)]
+pub struct IncreaseEnergyStorage {
+    pub capacity: f64,
+}
+
+#[derive(Component)]
+pub enum BuildingInProgress {
+    Target { task: Uuid },
+    Builder { task: Uuid, build_power: f64 },
 }
