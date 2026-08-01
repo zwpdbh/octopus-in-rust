@@ -25,18 +25,10 @@ pub enum UnitTechLevel {
 }
 
 #[derive(Component)]
-pub struct GenerateMass {
-    pub rate: f64,
-}
-
-#[derive(Component)]
-pub struct GenerateEnergy {
-    pub rate: f64,
-}
-
-#[derive(Component)]
-pub struct DrainMaintainanceEnergy {
-    pub rate: f64,
+pub struct EcoBuilding {
+    pub generate_mass: Option<f64>,
+    pub generate_energy: Option<f64>,
+    pub maintainance_power_drain: Option<f64>,
 }
 
 #[derive(Component)]
@@ -50,7 +42,7 @@ pub struct IncreaseEnergyStorage {
 }
 
 #[derive(Component)]
-pub enum BuildingInProgress {
+pub enum ConstructionRole {
     Target { task: Uuid },
     Builder { task: Uuid, build_power: f64 },
 }

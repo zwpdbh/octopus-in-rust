@@ -54,15 +54,23 @@ impl PlayerEco {
 }
 
 type BuildPowerAssigned = f64;
-type BuildTimeConstructed = f64;
+type ConstructionProgress = f64;
 type BuildTimeNeeded = f64;
 type TaskId = Uuid;
 type MassDrain = f64;
 type EnergyDrain = f64;
-type BuildTime = f64;
+type TargetBuildTime = f64;
 
 #[derive(Resource)]
 pub struct Constructions {
-    pub assigned_bp: HashMap<TaskId, (MassDrain, EnergyDrain, BuildTime, BuildPowerAssigned)>,
-    pub progress: HashMap<TaskId, BuildTimeConstructed>,
+    pub records: HashMap<
+        TaskId,
+        (
+            MassDrain,
+            EnergyDrain,
+            TargetBuildTime,
+            BuildPowerAssigned,
+            ConstructionProgress,
+        ),
+    >,
 }

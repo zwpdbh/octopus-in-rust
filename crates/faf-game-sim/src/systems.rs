@@ -1,5 +1,6 @@
 #![allow(unused)]
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::components::*;
 use super::resources::*;
@@ -9,30 +10,24 @@ use uuid::Uuid;
 // step 1. compute current static eco production and drain from existing buildings
 fn update_player_eco_from_existing_unit(
     mut player_eco: ResMut<PlayerEco>,
-    building_generate_mass: Query<(Entity, Option<&GenerateMass>)>,
-    building_generate_energy: Query<(Entity, Option<&GenerateEnergy>)>,
-    building_drain_energy: Query<(Entity, Option<&DrainMaintainanceEnergy>)>,
+    query_eco_related_units: Query<(Entity, &EcoBuilding), With<EcoBuilding>>,
 ) {
     // reset to zero first, then aggregate
     player_eco.mass_generate_rate = 0.0;
     player_eco.energy_generate_rate = 0.0;
     player_eco.energy_drain = 0.0;
 
-    for (_, generate_mass) in building_generate_mass {
-        if let Some(GenerateMass { rate }) = generate_mass {
-            player_eco.mass_generate_rate += rate
+    for (_, building) in query_eco_related_units {
+        if let Some(v) = building.generate_mass {
+            player_eco.mass_generate_rate += v
         }
-    }
 
-    for (_, generate_energy) in building_generate_energy {
-        if let Some(GenerateEnergy { rate }) = generate_energy {
-            player_eco.energy_generate_rate += rate
+        if let Some(v) = building.generate_energy {
+            player_eco.energy_generate_rate += v
         }
-    }
 
-    for (_, buidling_drain) in building_drain_energy {
-        if let Some(DrainMaintainanceEnergy { rate }) = buidling_drain {
-            player_eco.energy_drain += rate
+        if let Some(v) = building.maintainance_power_drain {
+            player_eco.energy_drain += v
         }
     }
 }
@@ -42,24 +37,29 @@ fn update_player_eco_from_existing_unit(
 fn update_player_eco_from_construction(
     mut player_eco: ResMut<PlayerEco>,
     mut constructions: ResMut<Constructions>,
-    building_query: Query<(Entity, &UnitCost, Option<&BuildingInProgress>)>,
+    construction_role_query: Query<(Entity, &UnitCost, &ConstructionRole), With<ConstructionRole>>,
 ) {
+    // Aggregate mass drain and energy drain from construction on some task.
+    // key is task id
+    // value is (unit_cost, assigned_bp)
     let mut building_records: HashMap<Uuid, (UnitCost, f64)> = HashMap::new();
 
-    // Aggregate mass drain and energy drain from construction on some task.
-    for (_each_entity, unit_cost, building_in_progress) in building_query {
-        if let Some(building_in_progress) = building_in_progress {
-            match building_in_progress {
-                BuildingInProgress::Target { task } => {
-                    let _ = building_records
-                        .entry(*task)
-                        .and_modify(|(unit_cost, _build_power)| *unit_cost = *unit_cost);
-                }
-                BuildingInProgress::Builder { task, build_power } => {
-                    let _ = building_records
-                        .entry(*task)
-                        .and_modify(|(_unit_cost, build_power)| *build_power += *build_power);
-                }
+    for (_each_entity, unit_cost, role) in construction_role_query {
+        match role {
+            ConstructionRole::Target { task } => {
+                let _ = building_records
+                    .entry(*task)
+                    .and_modify(|(unit_cost, _build_power)| *unit_cost = *unit_cost)
+                    .or_insert((*unit_cost, 0.0));
+            }
+            ConstructionRole::Builder {
+                task,
+                build_power: builder_bp,
+            } => {
+                let _ = building_records
+                    .entry(*task)
+                    .and_modify(|(_unit_cost, build_power)| *build_power += *builder_bp)
+                    .or_insert((*unit_cost, *builder_bp));
             }
         }
     }
@@ -72,12 +72,20 @@ fn update_player_eco_from_construction(
         player_eco.mass_drain += mass_drain;
         player_eco.energy_drain += energy_drain;
 
-        constructions.assigned_bp.entry(task).insert_entry((
-            mass_drain,
-            energy_drain,
-            unit_cost.build_time,
-            build_power,
-        ));
+        // remember to initalize construction record when spawn component for ConstructionRole
+        constructions.records.entry(task).and_modify(
+            |(
+                current_mass_drain,
+                current_energy_drain,
+                _target_build_time,
+                current_bp_assigned,
+                _current_progress,
+            )| {
+                *current_mass_drain = mass_drain;
+                *current_energy_drain = energy_drain;
+                *current_bp_assigned = build_power;
+            },
+        );
     }
 }
 
@@ -116,9 +124,59 @@ fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
 
 // step 4.2: update each construction progress basedon efficiency ratio
 fn update_construction_pragress(
+    mut commands: Commands,
     player_eco: Res<PlayerEco>,
     mut constructions: ResMut<Constructions>,
+    constructions_query: Query<(Entity, &ConstructionRole), With<ConstructionRole>>,
 ) {
     let construction_efficiency = player_eco.construction_efficiency();
-    todo!("update each construction task's progress")
+
+    let mut finished_constructions: HashSet<Uuid> = HashSet::new();
+
+    for (task_id, (mass_drain, energy_drain, build_time, bp, construction_progress)) in
+        constructions.records.clone()
+    {
+        let effective_bp = bp * construction_efficiency;
+
+        constructions
+            .records
+            .entry(task_id)
+            .and_modify(|(_, _, _, _, current_progress)| *current_progress += effective_bp)
+            .or_insert((
+                mass_drain,
+                energy_drain,
+                build_time,
+                bp,
+                construction_progress,
+            ));
+
+        let (_mass_drain, energy_drain, build_time, bp, construction_progress) =
+            constructions.records.get(&task_id).unwrap();
+        let (_mass_drain, energy_drain, build_time, bp, construction_progress) =
+            constructions.records.get(&task_id).unwrap();
+        if construction_progress >= build_time {
+            finished_constructions.insert(task_id);
+        }
+    }
+
+    // destory components and related resource records
+    for (related_entity, role) in constructions_query {
+        match role {
+            ConstructionRole::Builder { task, .. } => {
+                if finished_constructions.contains(task) {
+                    commands.entity(related_entity).despawn();
+                }
+            }
+            ConstructionRole::Target { task } => {
+                if finished_constructions.contains(task) {
+                    commands.entity(related_entity).despawn();
+                }
+            }
+        }
+    }
+
+    // also destory construction record
+    for each in finished_constructions {
+        constructions.records.remove(&each);
+    }
 }
