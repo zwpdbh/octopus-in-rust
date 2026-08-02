@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -7,6 +6,7 @@ use super::resources::*;
 use bevy_ecs::prelude::*;
 use uuid::Uuid;
 
+#[allow(unused)]
 // step 1. compute current static eco production and drain from existing buildings
 fn update_player_eco_from_existing_unit(
     mut player_eco: ResMut<PlayerEco>,
@@ -32,6 +32,7 @@ fn update_player_eco_from_existing_unit(
     }
 }
 
+#[allow(unused)]
 // step 2.
 // A system which aggregate all mass drain and energy drain from all building tasks
 fn update_player_eco_from_construction(
@@ -46,7 +47,7 @@ fn update_player_eco_from_construction(
 
     for (_each_entity, unit_cost, role) in construction_role_query {
         match role {
-            ConstructionRole::Target { task } => {
+            ConstructionRole::Target { task, .. } => {
                 let _ = building_records
                     .entry(*task)
                     .and_modify(|(unit_cost, _build_power)| *unit_cost = *unit_cost)
@@ -89,6 +90,7 @@ fn update_player_eco_from_construction(
     }
 }
 
+#[allow(unused)]
 // step3, update storage
 // emit stall or overflow event
 fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
@@ -115,6 +117,7 @@ fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
     player_eco.energy_in_storage = updated_energy_in_storage;
 }
 
+#[allow(unused)]
 // state 4.1: update mass_production from efficiency
 fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
     if player.energy_efficiency() < 1.0 {
@@ -122,6 +125,7 @@ fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
     }
 }
 
+#[allow(unused)]
 // step 4.2: update each construction progress basedon efficiency ratio
 fn update_construction_pragress(
     mut commands: Commands,
@@ -150,26 +154,29 @@ fn update_construction_pragress(
                 construction_progress,
             ));
 
-        let (_mass_drain, energy_drain, build_time, bp, construction_progress) =
-            constructions.records.get(&task_id).unwrap();
-        let (_mass_drain, energy_drain, build_time, bp, construction_progress) =
+        let (_mass_drain, _energy_drain, build_time, _bp, construction_progress) =
             constructions.records.get(&task_id).unwrap();
         if construction_progress >= build_time {
             finished_constructions.insert(task_id);
         }
     }
 
-    // destory components and related resource records
+    // check each related entity to see if it participate the construction which is finished
     for (related_entity, role) in constructions_query {
         match role {
             ConstructionRole::Builder { task, .. } => {
                 if finished_constructions.contains(task) {
-                    commands.entity(related_entity).despawn();
+                    // TODO:: remove related component from participated entity
                 }
             }
-            ConstructionRole::Target { task } => {
+            ConstructionRole::Target { task, eco_building } => {
                 if finished_constructions.contains(task) {
                     commands.entity(related_entity).despawn();
+
+                    if let Some(eco_building) = eco_building {
+                        // TODO:: remove related component from participated entity
+                        // TODO:: add EcoBuilding to the Target entity
+                    }
                 }
             }
         }
@@ -178,5 +185,6 @@ fn update_construction_pragress(
     // also destory construction record
     for each in finished_constructions {
         constructions.records.remove(&each);
+        // TODO:: notice one construction has finished
     }
 }

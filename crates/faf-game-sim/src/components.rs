@@ -43,6 +43,12 @@ pub struct IncreaseEnergyStorage {
 
 #[derive(Component)]
 pub enum ConstructionRole {
-    Target { task: Uuid },
-    Builder { task: Uuid, build_power: f64 },
+    Target {
+        task: Uuid,
+        eco_building: Option<EcoBuilding>,
+    },
+    Builder {
+        task: Uuid,
+        build_power: f64,
+    },
 }
