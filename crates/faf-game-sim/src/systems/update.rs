@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::components::*;
-use crate::events::*;
+use crate::observers::*;
 use crate::resources::*;
 use bevy_ecs::prelude::*;
 use uuid::Uuid;
@@ -22,6 +22,7 @@ pub fn update_player_eco_from_existing_unit(
             With<GenerateMass>,
             With<GenerateEnergy>,
             With<MaintainancePowerDrain>,
+            Without<ConstructionTarget>,
         ),
     >,
 ) {

@@ -1,5 +1,5 @@
 mod components;
 mod entities;
-mod events;
+mod observers;
 mod resources;
 mod systems;
