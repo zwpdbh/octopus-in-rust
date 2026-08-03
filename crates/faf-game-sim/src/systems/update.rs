@@ -1,41 +1,44 @@
+#![allow(unused)]
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use super::components::*;
-use super::resources::*;
+use crate::components::*;
+use crate::resources::*;
 use bevy_ecs::prelude::*;
 use uuid::Uuid;
 
-#[allow(unused)]
 // step 1. compute current static eco production and drain from existing buildings
-fn update_player_eco_from_existing_unit(
+pub fn update_player_eco_from_existing_unit(
     mut player_eco: ResMut<PlayerEco>,
-    query_eco_related_units: Query<(Entity, &EcoBuilding), With<EcoBuilding>>,
+    query_eco_related_units: Query<
+        (
+            Entity,
+            &GenerateMass,
+            &GenerateEnergy,
+            &MaintainancePowerDrain,
+        ),
+        (
+            With<GenerateMass>,
+            With<GenerateEnergy>,
+            With<MaintainancePowerDrain>,
+        ),
+    >,
 ) {
     // reset to zero first, then aggregate
     player_eco.mass_generate_rate = 0.0;
     player_eco.energy_generate_rate = 0.0;
     player_eco.energy_drain = 0.0;
 
-    for (_, building) in query_eco_related_units {
-        if let Some(v) = building.generate_mass {
-            player_eco.mass_generate_rate += v
-        }
-
-        if let Some(v) = building.generate_energy {
-            player_eco.energy_generate_rate += v
-        }
-
-        if let Some(v) = building.maintainance_power_drain {
-            player_eco.energy_drain += v
-        }
+    for (_, generate_mass, generate_energy, maintainance_energy_drain) in query_eco_related_units {
+        player_eco.mass_generate_rate += generate_mass.0;
+        player_eco.energy_generate_rate += generate_energy.0;
+        player_eco.energy_generate_rate += maintainance_energy_drain.0;
     }
 }
 
-#[allow(unused)]
 // step 2.
 // A system which aggregate all mass drain and energy drain from all building tasks
-fn update_player_eco_from_construction(
+pub fn update_player_eco_from_construction(
     mut player_eco: ResMut<PlayerEco>,
     mut constructions: ResMut<Constructions>,
     construction_role_query: Query<(Entity, &UnitCost, &ConstructionRole), With<ConstructionRole>>,
@@ -90,10 +93,9 @@ fn update_player_eco_from_construction(
     }
 }
 
-#[allow(unused)]
 // step3, update storage
 // emit stall or overflow event
-fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
+pub fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
     let net_mass_rate = player_eco.net_mass_rate();
     let net_energy_rate = player_eco.net_energy_rate();
 
@@ -117,17 +119,15 @@ fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
     player_eco.energy_in_storage = updated_energy_in_storage;
 }
 
-#[allow(unused)]
 // state 4.1: update mass_production from efficiency
-fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
+pub fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
     if player.energy_efficiency() < 1.0 {
         player.mass_generate_rate = player.mass_generate_rate * player.energy_efficiency();
     }
 }
 
-#[allow(unused)]
 // step 4.2: update each construction progress basedon efficiency ratio
-fn update_construction_pragress(
+pub fn update_construction_pragress(
     mut commands: Commands,
     player_eco: Res<PlayerEco>,
     mut constructions: ResMut<Constructions>,
@@ -166,17 +166,20 @@ fn update_construction_pragress(
         match role {
             ConstructionRole::Builder { task, .. } => {
                 if finished_constructions.contains(task) {
-                    // TODO:: remove related component from participated entity
+                    commands.entity(related_entity).remove::<ConstructionRole>();
                 }
             }
             ConstructionRole::Target { task, eco_building } => {
                 if finished_constructions.contains(task) {
-                    commands.entity(related_entity).despawn();
-
-                    if let Some(eco_building) = eco_building {
-                        // TODO:: remove related component from participated entity
-                        // TODO:: add EcoBuilding to the Target entity
-                    }
+                    let eco_building_bundle = EcoBuilding::new(
+                        eco_building.generate_mass.0,
+                        eco_building.generate_energy.0,
+                        eco_building.maintainance_power_drain.0,
+                    );
+                    commands
+                        .entity(related_entity)
+                        .insert(eco_building_bundle)
+                        .remove::<ConstructionRole>();
                 }
             }
         }
@@ -185,6 +188,6 @@ fn update_construction_pragress(
     // also destory construction record
     for each in finished_constructions {
         constructions.records.remove(&each);
-        // TODO:: notice one construction has finished
+        // IMPROVE:: notice one construction has finished
     }
 }
