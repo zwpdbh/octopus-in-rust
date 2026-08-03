@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 use uuid::Uuid;
 
 // step 1. compute current static eco production and drain from existing buildings
-pub fn update_player_eco_from_existing_unit(
+pub fn update_player_eco_from_existing_units(
     mut player_eco: ResMut<PlayerEco>,
     query_eco_related_units: Query<
         (
@@ -28,19 +28,20 @@ pub fn update_player_eco_from_existing_unit(
 ) {
     // reset to zero first, then aggregate
     player_eco.mass_generate_rate = 0.0;
+    player_eco.mass_drain = 0.0;
     player_eco.energy_generate_rate = 0.0;
     player_eco.energy_drain = 0.0;
 
     for (_, generate_mass, generate_energy, maintainance_energy_drain) in query_eco_related_units {
         player_eco.mass_generate_rate += generate_mass.0;
         player_eco.energy_generate_rate += generate_energy.0;
-        player_eco.energy_generate_rate += maintainance_energy_drain.0;
+        player_eco.energy_drain += maintainance_energy_drain.0;
     }
 }
 
-// step 2.
 // A system which aggregate all mass drain and energy drain from all building tasks
-pub fn update_player_eco_from_construction(
+pub fn update_player_eco_from_building_units(
+    mut commands: Commands,
     mut player_eco: ResMut<PlayerEco>,
     construction_builder_query: Query<
         (Entity, &BuildPower, &ConstructionBuilder),
@@ -77,11 +78,7 @@ pub fn update_player_eco_from_construction(
         player_eco.mass_drain += mass_drain;
         player_eco.energy_drain += energy_drain;
     }
-}
 
-// step3, update storage
-// emit stall or overflow event
-pub fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
     let net_mass_rate = player_eco.net_mass_rate();
     let net_energy_rate = player_eco.net_energy_rate();
 
@@ -103,19 +100,27 @@ pub fn update_player_eco_storage_metrics(mut player_eco: ResMut<PlayerEco>) {
 
     player_eco.mass_in_storage = udpated_mass_in_storage;
     player_eco.energy_in_storage = updated_energy_in_storage;
-}
 
-// state 4.1: update mass_production from efficiency
-pub fn check_player_eco_from_power_stall(mut player: ResMut<PlayerEco>) {
-    if player.energy_efficiency() < 1.0 {
-        player.mass_generate_rate = player.mass_generate_rate * player.energy_efficiency();
+    if player_eco.energy_efficiency() < 1.0 {
+        player_eco.mass_generate_rate =
+            player_eco.mass_generate_rate * player_eco.energy_efficiency();
     }
+
+    commands.trigger(PlayerEcoSummary {
+        mass_generate_rate: player_eco.mass_generate_rate,
+        mass_drain: player_eco.mass_drain,
+        energy_generate_rate: player_eco.energy_generate_rate,
+        energy_drain: player_eco.energy_drain,
+        mass_in_storage: player_eco.mass_in_storage,
+        max_capacity_in_mass_storage: player_eco.max_capacity_in_mass_storage,
+        energy_in_storage: player_eco.energy_in_storage,
+        max_capacity_in_energy_storage: player_eco.max_capacity_in_energy_storage,
+    });
 }
 
 type AccumulatedBP = f64;
 type AccumulatedBuildTime = f64;
 
-// step 4.2: update each construction progress basedon efficiency ratio
 pub fn update_construction_pragress(
     mut commands: Commands,
     player_eco: Res<PlayerEco>,
