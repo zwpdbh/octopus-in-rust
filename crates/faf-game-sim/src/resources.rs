@@ -52,25 +52,3 @@ impl PlayerEco {
         self.mass_efficiency() * self.energy_efficiency()
     }
 }
-
-type BuildPowerAssigned = f64;
-type ConstructionProgress = f64;
-type BuildTimeNeeded = f64;
-type TaskId = Uuid;
-type MassDrain = f64;
-type EnergyDrain = f64;
-type TargetBuildTime = f64;
-
-#[derive(Resource)]
-pub struct Constructions {
-    pub records: HashMap<
-        TaskId,
-        (
-            MassDrain,
-            EnergyDrain,
-            TargetBuildTime,
-            BuildPowerAssigned,
-            ConstructionProgress,
-        ),
-    >,
-}

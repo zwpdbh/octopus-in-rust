@@ -16,6 +16,16 @@ pub struct UnitCost {
     pub build_time: f64,
 }
 
+impl UnitCost {
+    pub fn default() -> Self {
+        Self {
+            mass: 0.0,
+            energy: 0.0,
+            build_time: 0.0,
+        }
+    }
+}
+
 #[derive(Component)]
 pub enum UnitTechLevel {
     T1,
@@ -25,21 +35,31 @@ pub enum UnitTechLevel {
 }
 
 #[derive(Bundle)]
-pub struct EcoBuilding {
+pub struct EcoEffectMetrics {
     pub generate_mass: GenerateMass,
     pub generate_energy: GenerateEnergy,
     pub maintainance_power_drain: MaintainancePowerDrain,
+    pub build_power: BuildPower,
 }
 
-impl EcoBuilding {
-    pub fn new(generate_mass: f64, generate_energy: f64, maintainance_energy_drain: f64) -> Self {
+impl EcoEffectMetrics {
+    pub fn new(
+        generate_mass: f64,
+        generate_energy: f64,
+        maintainance_energy_drain: f64,
+        build_power: f64,
+    ) -> Self {
         Self {
             generate_mass: GenerateMass(generate_mass),
             generate_energy: GenerateEnergy(generate_energy),
             maintainance_power_drain: MaintainancePowerDrain(maintainance_energy_drain),
+            build_power: BuildPower(build_power),
         }
     }
 }
+
+#[derive(Component)]
+pub struct BuildPower(pub f64);
 
 #[derive(Component)]
 pub struct GenerateMass(pub f64);
@@ -61,13 +81,18 @@ pub struct IncreaseEnergyStorage {
 }
 
 #[derive(Component)]
-pub enum ConstructionRole {
-    Target {
-        task: Uuid,
-        eco_building: EcoBuilding,
-    },
-    Builder {
-        task: Uuid,
-        build_power: f64,
-    },
+pub struct ConstructionBuilder {
+    pub task: Uuid,
+}
+
+#[derive(Component)]
+pub struct ConstructionTarget {
+    pub task: Uuid,
+    pub progress: f64,
+}
+
+impl ConstructionTarget {
+    pub fn new(task: Uuid, progress: f64) -> Self {
+        Self { task, progress }
+    }
 }
