@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use faf_units::DataIndex;
+use faf_units::FafUnitIndex;
 use rusqlite::Connection;
 use serde::Deserialize;
 use tracing::info;
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn download_index(url: &str) -> Result<DataIndex> {
+async fn download_index(url: &str) -> Result<FafUnitIndex> {
     let response = reqwest::get(url)
         .await
         .with_context(|| format!("failed to GET {}", url))?;
@@ -113,7 +113,7 @@ fn load_translations(path: &Path) -> Result<HashMap<String, UnitTranslation>> {
     serde_json::from_str(&text).context("failed to parse translations JSON")
 }
 
-fn apply_translations(index: &mut DataIndex, translations: &HashMap<String, UnitTranslation>) {
+fn apply_translations(index: &mut FafUnitIndex, translations: &HashMap<String, UnitTranslation>) {
     for unit in &mut index.units {
         let key = unit.id.to_lowercase();
         if let Some(translation) = translations.get(&key) {
@@ -127,7 +127,7 @@ fn apply_translations(index: &mut DataIndex, translations: &HashMap<String, Unit
     }
 }
 
-async fn write_json(index: &DataIndex, path: &Path, pretty: bool) -> Result<()> {
+async fn write_json(index: &FafUnitIndex, path: &Path, pretty: bool) -> Result<()> {
     let output = if pretty {
         serde_json::to_string_pretty(index).context("failed to serialize pretty JSON")?
     } else {
@@ -140,7 +140,7 @@ async fn write_json(index: &DataIndex, path: &Path, pretty: bool) -> Result<()> 
     Ok(())
 }
 
-async fn write_sqlite(index: &DataIndex, path: &Path) -> Result<()> {
+async fn write_sqlite(index: &FafUnitIndex, path: &Path) -> Result<()> {
     // SQLite access is synchronous; run it in a blocking task.
     let index = index.clone();
     let path = path.to_path_buf();
@@ -149,7 +149,7 @@ async fn write_sqlite(index: &DataIndex, path: &Path) -> Result<()> {
         .context("sqlite write task panicked")?
 }
 
-fn write_sqlite_sync(index: &DataIndex, path: &Path) -> Result<()> {
+fn write_sqlite_sync(index: &FafUnitIndex, path: &Path) -> Result<()> {
     if path.exists() {
         std::fs::remove_file(path)
             .with_context(|| format!("failed to remove old {}", path.display()))?;

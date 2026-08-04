@@ -16,13 +16,14 @@ use anyhow::Result;
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Build {
-            mass,
-            energy,
-            build_time,
-            build_power,
-        } => {
-            let _ = build::run(mass, energy, build_time, build_power)?;
+        Build { queue } => {
+            #[allow(unused)]
+            let json = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
+                eprintln!("Failed to read: {}, error: {}", queue.display(), e);
+                std::process::exit(1);
+            });
+
+            let _ = build::run()?;
         }
     }
     Ok(())

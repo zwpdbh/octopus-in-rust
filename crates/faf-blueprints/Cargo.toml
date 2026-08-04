@@ -3,7 +3,7 @@ name = "faf-blueprints"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "ECS-backed blueprint library and unit knowledge for FAF."
+description = "High level faf game features and units"
 license = "MIT"
 
 [dependencies]

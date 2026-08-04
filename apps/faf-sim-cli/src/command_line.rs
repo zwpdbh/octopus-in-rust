@@ -3,6 +3,8 @@
 //! This module contains every `clap` argument, subcommand, and value enum used
 //! by the binary. The actual command logic lives in sibling modules.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -15,10 +17,5 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Run a build-queue simulation and emit events as NDJSON.
-    Build {
-        mass: usize,
-        energy: usize,
-        build_time: usize,
-        build_power: usize,
-    },
+    Build { queue: PathBuf },
 }

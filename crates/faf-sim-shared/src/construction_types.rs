@@ -6,12 +6,23 @@
 
 use faf_blueprints::UnitEcoStats;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// pub struct ConstructionBuilder {
+//     unit_id: String,
+// }
+
+// impl ConstructionBuilder {
+//     fn get_build_power(&self) -> f64 {
+//         todo!("given unit id, from faf-game-units get its bp")
+//     }
+// }
 
 /// One task in a build queue.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BuildTask {
+pub struct ConstructionTask {
     /// Caller-defined id, echoed back in start/complete events.
-    pub id: u32,
+    pub id: Uuid,
     /// Delay after the previous task finishes before this task may begin.
     ///
     /// For the first task this is a delay relative to simulation start (time 0).
@@ -21,7 +32,7 @@ pub struct BuildTask {
     /// Builders assigned to the task.
     pub builders: Vec<UnitEcoStats>,
     /// Units being built, in order. Builders work through the list sequentially.
-    pub targets: Vec<UnitEcoStats>,
+    pub target: Vec<UnitEcoStats>,
 }
 
 fn default_start_after() -> usize {
@@ -32,57 +43,57 @@ fn default_start_after() -> usize {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BuildQueue {
     /// Initial economy state (income and storage).
-    pub initial_eco: GameEcoMetrics,
+    pub initial_eco: PlayerEcoMetrics,
     /// Tasks to run, in queue order.
-    pub tasks: Vec<BuildTask>,
+    pub tasks: Vec<ConstructionTask>,
 }
 
 /// `EcoSnapshot` is a flat, primitive view of one tick and includes construction
 /// drain rates; `EconomyRuntimeState` is the typed, evolving state that the
 /// simulator mutates to produce those snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct GameEcoMetrics {
-    pub production_per_second_mass: f64,
-    pub production_energy_per_second: f64,
-    pub maintenance_consumption_per_second_energy: f64,
-    /// Mass storage (current amount + capacity).
-    pub mass_storage_current: f64,
-    pub mass_storage_capacity: f64,
+pub struct PlayerEcoMetrics {
+    pub mass_generate_rate: f64,
+    pub mass_drain: f64,
+    pub energy_generate_rate: f64,
+    pub energy_drain: f64,
 
-    pub energy_storage_current: f64,
-    pub energy_storage_capacity: f64,
+    pub mass_in_storage: f64,
+    pub max_capacity_in_mass_storage: f64,
+
+    pub energy_in_storage: f64,
+    pub max_capacity_in_energy_storage: f64,
 }
 
-impl Default for GameEcoMetrics {
+impl Default for PlayerEcoMetrics {
     fn default() -> Self {
         Self {
-            production_per_second_mass: 1.0,
-            production_energy_per_second: 20.0,
-            maintenance_consumption_per_second_energy: 0.0,
-            mass_storage_current: 650.0,
-            mass_storage_capacity: 650.0,
-            energy_storage_current: 4000.0,
-            energy_storage_capacity: 4000.0,
+            mass_generate_rate: 1.0,
+            mass_drain: 0.0,
+            energy_generate_rate: 20.0,
+            energy_drain: 0.0,
+            mass_in_storage: 650.0,
+            max_capacity_in_mass_storage: 650.0,
+            energy_in_storage: 4000.0,
+            max_capacity_in_energy_storage: 4000.0,
         }
     }
 }
 
-impl GameEcoMetrics {
+impl PlayerEcoMetrics {
     /// FAF army-wide energy efficiency ratio used to scale mass income.
     pub fn energy_efficiency(&self, energy_drain: f64) -> f64 {
-        let requested = self.maintenance_consumption_per_second_energy + energy_drain;
+        let requested = self.energy_drain + energy_drain;
         if requested <= 0.0 {
             1.0
         } else {
-            (self.production_energy_per_second / requested).min(1.0)
+            (self.energy_generate_rate / requested).min(1.0)
         }
     }
 
     pub fn mass_efficiency(&self, energy_drain: f64) -> f64 {
-        let net_energy_income = self.production_energy_per_second
-            - self.maintenance_consumption_per_second_energy
-            - energy_drain;
-        if self.energy_storage_current + net_energy_income < 0.0 {
+        let net_energy_income = self.energy_generate_rate - self.energy_drain - energy_drain;
+        if self.energy_in_storage + net_energy_income < 0.0 {
             self.energy_efficiency(energy_drain)
         } else {
             1.0
@@ -94,7 +105,7 @@ impl GameEcoMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerEcoSnapshot {
     pub time: f64,
-    pub eco_metrics: GameEcoMetrics,
+    pub eco_metrics: PlayerEcoMetrics,
     pub mass_drain_per_second: f64,
     pub energy_drain_per_second: f64,
 }
@@ -102,7 +113,7 @@ pub struct PlayerEcoSnapshot {
 pub const EPS: f64 = 1e-9;
 
 impl PlayerEcoSnapshot {
-    pub fn init_with_eco_parameters(game_eco_metrics: &GameEcoMetrics) -> Self {
+    pub fn init_with_eco_parameters(game_eco_metrics: &PlayerEcoMetrics) -> Self {
         Self {
             time: 0.0,
             eco_metrics: *game_eco_metrics,
@@ -116,7 +127,7 @@ impl PlayerEcoSnapshot {
     /// `extra_drain` is the energy consumed by construction this tick; it is
     /// `0.0` for idle ticks.
     fn player_net_mass_income(&self) -> f64 {
-        let actual_mass_production_per_second = self.eco_metrics.production_per_second_mass
+        let actual_mass_production_per_second = self.eco_metrics.mass_generate_rate
             * self
                 .eco_metrics
                 .mass_efficiency(self.energy_drain_per_second);
@@ -124,8 +135,8 @@ impl PlayerEcoSnapshot {
     }
 
     fn player_net_energy_income(&self) -> f64 {
-        self.eco_metrics.production_energy_per_second
-            - self.eco_metrics.maintenance_consumption_per_second_energy
+        self.eco_metrics.energy_generate_rate
+            - self.eco_metrics.energy_drain
             - self.energy_drain_per_second
     }
 
@@ -153,8 +164,8 @@ impl PlayerEcoSnapshot {
         let player_net_mass_income = self.player_net_mass_income();
         let player_net_energy_income = self.player_net_energy_income();
 
-        self.eco_metrics.mass_storage_current += player_net_mass_income;
-        self.eco_metrics.energy_storage_current += player_net_energy_income;
+        self.eco_metrics.mass_in_storage += player_net_mass_income;
+        self.eco_metrics.energy_in_storage += player_net_energy_income;
 
         self.time += 1.0;
     }

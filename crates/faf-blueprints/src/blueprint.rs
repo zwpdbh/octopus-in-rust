@@ -10,9 +10,10 @@
 //! `components` module for the full list.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use bevy_ecs::prelude::*;
-use faf_units::DataIndex;
+use faf_units::FafUnitIndex;
 
 use crate::unit_eco::{AdjacencyBonus, UnitEcoStats};
 
@@ -35,7 +36,7 @@ use super::types::{
 /// references the raw `DataIndex`. All build/upgrade rules are explicit recipes
 /// rather than derived string-category graphs.
 #[derive(Debug)]
-pub struct BlueprintLibrary {
+pub struct FAFBlueprint {
     world: World,
     kind_to_entity: HashMap<UnitKind, Entity>,
     /// Runtime economic stats for every known blueprint, keyed by abstract kind.
@@ -46,25 +47,21 @@ pub struct BlueprintLibrary {
     blueprint_stats_table: HashMap<UnitKind, UnitEcoStats>,
 }
 
-impl BlueprintLibrary {
+impl FAFBlueprint {
     /// Build the repository from a raw unit index.
-    pub fn new(index: DataIndex) -> Self {
-        Self::from_index(index)
-    }
-
-    /// Build the repository from a borrowed raw unit index.
-    pub fn from_ref(index: &DataIndex) -> Self {
-        Self::from_index(index.clone())
+    pub fn new(units_json_file: PathBuf) -> anyhow::Result<Self> {
+        let index = FafUnitIndex::new(units_json_file)?;
+        FAFBlueprint::from_index(index)
     }
 
     /// Build the repository from the default FAF units JSON shipped with the
     /// workspace.
-    pub fn from_default_units() -> anyhow::Result<Self> {
-        let index = crate::loader::load_default_data_index()?;
-        Ok(Self::new(index))
+    pub fn default() -> anyhow::Result<Self> {
+        let index = FafUnitIndex::default()?;
+        FAFBlueprint::from_index(index)
     }
 
-    fn from_index(index: DataIndex) -> Self {
+    fn from_index(index: FafUnitIndex) -> anyhow::Result<Self> {
         let mut world = World::new();
         let mut kind_to_entity: HashMap<UnitKind, Entity> = HashMap::new();
         let mut blueprint_stats_table: HashMap<UnitKind, UnitEcoStats> = HashMap::new();
@@ -224,11 +221,11 @@ impl BlueprintLibrary {
             }
         }
 
-        Self {
+        Ok(Self {
             world,
             kind_to_entity,
             blueprint_stats_table,
-        }
+        })
     }
 
     /// Entity handle for the blueprint of `kind`, if one exists.
@@ -717,8 +714,8 @@ fn producer_priority(role: UnitRole) -> i32 {
 mod tests {
     use super::*;
 
-    fn load_library() -> BlueprintLibrary {
-        BlueprintLibrary::from_default_units().expect("default units should load")
+    fn load_library() -> FAFBlueprint {
+        FAFBlueprint::default().expect("default units should load")
     }
 
     #[test]

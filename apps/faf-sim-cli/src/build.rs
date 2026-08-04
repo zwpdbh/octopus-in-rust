@@ -8,6 +8,6 @@
 use anyhow::Result;
 
 #[allow(unused)]
-pub fn run(mass: usize, energy: usize, build_time: usize, build_power: usize) -> Result<()> {
+pub fn run() -> Result<()> {
     Ok(())
 }

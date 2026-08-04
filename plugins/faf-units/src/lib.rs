@@ -1,14 +1,14 @@
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};
 
-use faf_units::{DataIndex, Unit};
+use faf_units::{FafUnitIndex, Unit};
 
 // The unit index is baked into the WASM binary at compile time.
 // Run `cargo run -p faf-downloader -- -f json -o plugins/faf-units/data/faf_units.json`
 // to refresh it.
 const UNITS_JSON: &str = include_str!("../data/faf_units.json");
 
-fn load_index() -> Result<DataIndex, String> {
+fn load_index() -> Result<FafUnitIndex, String> {
     serde_json::from_str(UNITS_JSON)
         .map_err(|e| format!("failed to parse embedded unit index: {e}"))
 }

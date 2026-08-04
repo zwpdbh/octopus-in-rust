@@ -5,7 +5,7 @@
 //! them. It sits on top of the raw `faf-units` parser and is used by the
 //! simulator, scheduler, predictor, CLI, backend, and frontend.
 
-pub use blueprint::BlueprintLibrary;
+pub use blueprint::FAFBlueprint;
 pub use components::{
     attributes::{
         BlueprintBundle, BlueprintId, DisplayName, FactionComp, TechLevelComp, UnitKindComp,
@@ -14,7 +14,6 @@ pub use components::{
     relationships::{BuiltBy, CapsInto, UpgradesInto},
 };
 pub use graph::{BlueprintEdge, BlueprintGraph, BlueprintNode};
-pub use loader::{default_units_path, load_default_data_index};
 pub use types::{
     category_of, category_of_role, matches_tech_level, role_of, tech_level_of, BuildRule, Faction,
     TechLevel, UnitCategory, UnitCost, UnitId, UnitKind, UnitRole,
@@ -25,6 +24,5 @@ mod blueprint;
 mod build;
 mod components;
 mod graph;
-mod loader;
 mod types;
 mod unit_eco;
