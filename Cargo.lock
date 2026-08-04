@@ -4207,6 +4207,7 @@ dependencies = [
 name = "faf-game-sim"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "bevy_ecs",
  "uuid",
 ]
@@ -4227,7 +4228,7 @@ name = "faf-sim-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bevy_app",
+ "bevy",
  "bevy_ecs",
  "clap",
  "faf-blueprints",

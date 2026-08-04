@@ -1,3 +1,13 @@
+# See: https://bevy.org/learn/quick-start/getting-started/setup/#compile-with-performance-optimizations
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+
 [workspace]
 members = [
     "apps/octopus-cli",
@@ -15,7 +25,8 @@ members = [
     "apps/qqbot",
     "apps/qqbot-core",
     "xtask",
-    "crates/faf-game-sim", "apps/breakout",
+    "crates/faf-game-sim",
+    "apps/breakout",
 ]
 resolver = "3"
 
@@ -30,7 +41,7 @@ brain = { path = "crates/brain" }
 qqbot-config = { path = "crates/qqbot-config" }
 
 # Common external crates
-bevy_app = "0.19"
+bevy = "0.19"
 bevy_ecs = "0.19"
 anyhow = "1"
 async-trait = "0.1"

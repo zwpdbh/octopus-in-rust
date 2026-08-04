@@ -22,6 +22,19 @@ pub struct PlayerEco {
 }
 
 impl PlayerEco {
+    pub fn default() -> Self {
+        Self {
+            mass_generate_rate: 1.0,
+            mass_drain: 0.0,
+            energy_generate_rate: 20.0,
+            energy_drain: 0.0,
+            mass_in_storage: 650.0,
+            max_capacity_in_mass_storage: 650.0,
+            energy_in_storage: 4000.0,
+            max_capacity_in_energy_storage: 4000.0,
+        }
+    }
+
     pub fn net_mass_rate(&mut self) -> f64 {
         (self.mass_generate_rate - self.mass_drain)
     }
