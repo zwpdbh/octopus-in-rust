@@ -16,6 +16,14 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    Id {
+        id: String,
+    },
+    Name {
+        name: String,
+    },
     /// Run a build-queue simulation and emit events as NDJSON.
-    Build { queue: PathBuf },
+    Build {
+        queue: PathBuf,
+    },
 }

@@ -16,6 +16,5 @@ bevy = { workspace = true }
 bevy_ecs = { workspace = true }
 clap = { workspace = true }
 faf-blueprints = { workspace = true }
-faf-sim-shared = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -7,8 +7,8 @@ description = "High level faf game features and units"
 license = "MIT"
 
 [dependencies]
+thiserror = { workspace = true }
 anyhow = { workspace = true }
-bevy_ecs = { version = "0.19" }
 petgraph = { workspace = true }
 faf-units = { workspace = true }
 serde = { workspace = true }

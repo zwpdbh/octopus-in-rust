@@ -1,19 +1,6 @@
-//! Strongly-typed unit kinds, roles, categories, and recipes.
-//!
-//! This module defines the abstract vocabulary the optimizer uses for units:
-//! factions, tech tiers, unit kinds, functional roles, UI categories, costs,
-//! and build/upgrade recipes. It is deliberately separate from the raw
-//! `faf-units` index so that the optimizer can reason about "a T1 engineer"
-//! without caring about faction-specific blueprint ids.
-//!
-//! Numeric unit attributes (cost, build power, economy, storage) live in the
-//! runtime boundary table owned by [`BlueprintLibrary`](super::BlueprintLibrary).
-//! The blueprint ECS world stores only symbolic identity and build/upgrade
-//! relationships.
-
+use crate::{Error, Result};
 use faf_units::BuildTargetStats;
 use serde::{Deserialize, Serialize};
-
 /// Faction a unit belongs to.
 ///
 /// `Common` is used for units that exist in every faction with the same
@@ -35,6 +22,19 @@ pub enum TechLevel {
     T2,
     T3,
     T4,
+}
+
+impl TechLevel {
+    pub fn new(level_str: &str) -> Result<TechLevel> {
+        match level_str {
+            "TECH1" => Ok(TechLevel::T1),
+            "TECH2" => Ok(TechLevel::T2),
+            "TECH3" => Ok(TechLevel::T3),
+            "TECH4" => Ok(TechLevel::T4),
+            "EXPERIMENTAL" => Ok(TechLevel::T4),
+            others => Err(Error::Others(format!("unsupported tech level: {others}"))),
+        }
+    }
 }
 
 /// Strongly-typed identifier for a unit that does not fit the common
