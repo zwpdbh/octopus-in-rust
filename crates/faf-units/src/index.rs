@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::Unit;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// Root wrapper for the generated FAF unit index.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -26,25 +26,27 @@ pub struct FafUnitIndex {
 }
 
 impl FafUnitIndex {
-    pub fn default() -> anyhow::Result<Self> {
+    pub fn default() -> Result<Self> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../plugins/faf-units/data/faf_units.json");
         FafUnitIndex::new(path)
     }
 
-    pub fn new(units_file_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(units_file_path: PathBuf) -> Result<Self> {
         let text = std::fs::read_to_string(&units_file_path).map_err(|e| {
             anyhow::anyhow!(
                 "failed to read units file {}: {e}",
                 units_file_path.display()
             )
         })?;
-        serde_json::from_str(&text).map_err(|e| {
+
+        let index: FafUnitIndex = serde_json::from_str(&text).map_err(|e| {
             anyhow::anyhow!(
                 "failed to parse units file {}: {e}",
                 units_file_path.display()
             )
-        })
+        })?;
+        Ok(index)
     }
 
     /// Look up a unit by blueprint id (case-insensitive).

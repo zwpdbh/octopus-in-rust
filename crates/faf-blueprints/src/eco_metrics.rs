@@ -1,3 +1,4 @@
+#![allow(unused)]
 #[derive(Debug, Clone)]
 pub struct UnitCostEcoMetrics {
     pub mass: f64,

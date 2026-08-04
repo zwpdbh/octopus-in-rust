@@ -11,22 +11,16 @@ use clap::Parser;
 use command_line::Cli;
 use faf_blueprints::FafBlueprints;
 
-use crate::command_line::Command::{Build, Id, Name};
+use crate::command_line::Command::{Build, Search};
 use anyhow::Result;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Id { id } => {
+        Search { str } => {
             let faf = FafBlueprints::new()?;
-            let info = faf.get_unit_info(&id)?;
+            let info = faf.get_units_from_search(&str)?;
             println!("{:?}", info);
-        }
-        Name { name } => {
-            let faf = FafBlueprints::new()?;
-            let info = faf.get_unit_info_by_name(&name)?;
-            println!("{:?}", info);
-            todo!("not implemented, from name check unit")
         }
         Build { queue } => {
             #[allow(unused)]
