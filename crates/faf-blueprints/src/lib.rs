@@ -7,8 +7,10 @@
 
 mod blueprint;
 mod categories;
+mod constructions;
 mod eco_metrics;
 mod error;
 
 pub use blueprint::*;
+pub use constructions::*;
 pub use error::*;

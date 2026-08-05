@@ -1,8 +1,8 @@
 #![allow(unused)]
-
 use crate::{categories::*, eco_metrics::*};
 use crate::{Error, Result};
 use faf_units::{FafUnitIndex, Unit};
+use serde::{Deserialize, Serialize};
 /// Unified repository of unit knowledge backed by a Bevy ECS blueprint world.
 ///
 /// `BlueprintLibrary` is self-contained: after construction it no longer
@@ -13,7 +13,7 @@ pub struct FafBlueprints {
     index: FafUnitIndex,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnitBlueprint {
     unit_id: String,
     unit_description: String,
@@ -50,6 +50,19 @@ impl FafBlueprints {
             blueprints.push(unit_blueprint);
         }
         Ok(blueprints)
+    }
+
+    pub fn get_one_unit_from_search(&self, search: &str) -> Result<UnitBlueprint> {
+        let units = self.get_units_from_search(search)?;
+        if units.len() == 0 {
+            return Err(Error::UnitNotFound(search.to_string()));
+        } else if units.len() > 1 {
+            return Err(Error::Others(format!(
+                "There are multiple units find for searching: {search}"
+            )));
+        } else {
+            return Ok(units.get(0).unwrap().clone());
+        }
     }
 
     fn get_unit_from_search(&self, search: &str) -> Result<Vec<Unit>> {

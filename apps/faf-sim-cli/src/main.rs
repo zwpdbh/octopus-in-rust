@@ -19,17 +19,16 @@ fn main() -> Result<()> {
     match cli.command {
         Search { str } => {
             let faf = FafBlueprints::new()?;
-            let info = faf.get_units_from_search(&str)?;
+            let info = faf.get_one_unit_from_search(&str)?;
             println!("{:?}", info);
         }
         Build { queue } => {
-            #[allow(unused)]
-            let json = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
+            let construction_plan_str = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
                 eprintln!("Failed to read: {}, error: {}", queue.display(), e);
                 std::process::exit(1);
             });
 
-            let _ = build::run()?;
+            let _ = build::run(&construction_plan_str)?;
         }
     }
     Ok(())

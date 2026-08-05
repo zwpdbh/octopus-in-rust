@@ -1,5 +1,23 @@
-#![allow(unused)]
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlayerEcoMetrics {
+    // mass produce vs consume
+    pub mass_generate_rate: f64,
+    pub mass_drain: f64,
+
+    // energy produce vs consume
+    pub energy_generate_rate: f64,
+    pub energy_drain: f64,
+
+    // storage related
+    pub mass_in_storage: f64,
+    pub max_capacity_in_mass_storage: f64,
+    pub energy_in_storage: f64,
+    pub max_capacity_in_energy_storage: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnitCostEcoMetrics {
     pub mass: f64,
     pub energy: f64,
@@ -16,7 +34,7 @@ impl UnitCostEcoMetrics {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnitEffectEcoMetrics {
     pub generate_mass_rate: f64,
     pub generate_energy_rate: f64,
