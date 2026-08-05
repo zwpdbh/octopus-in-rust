@@ -22,7 +22,7 @@ fn main() -> Result<()> {
             let info = faf.get_one_unit_from_search(&str)?;
             println!("{:?}", info);
         }
-        Build { queue } => {
+        Build { plan_file: queue } => {
             let construction_plan_str = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
                 eprintln!("Failed to read: {}, error: {}", queue.display(), e);
                 std::process::exit(1);

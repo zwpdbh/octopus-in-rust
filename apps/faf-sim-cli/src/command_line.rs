@@ -21,6 +21,6 @@ pub enum Command {
     },
     /// Run a build-queue simulation and emit events as NDJSON.
     Build {
-        queue: PathBuf,
+        plan_file: PathBuf,
     },
 }
