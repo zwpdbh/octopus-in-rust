@@ -1,7 +1,6 @@
-#[derive(Debug)]
 pub enum SimCmd {
+    Start,
     Pause,
     Resume,
-    Stop,
-    Subscribe,
+    GameSpeed(f64),
 }

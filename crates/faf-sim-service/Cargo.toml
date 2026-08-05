@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 faf-blueprints = { workspace = true }
+faf-sim-protocol = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

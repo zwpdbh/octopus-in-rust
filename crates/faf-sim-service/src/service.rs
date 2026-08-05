@@ -1,11 +1,11 @@
+use crate::simulation::Simulation;
 use faf_blueprints::ConstructionPlan;
+use faf_sim_protocol::SimCmd;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
-
-use crate::{sim_cmd::SimCmd, simulation::Simulation};
 
 pub type SimulationId = Uuid;
 

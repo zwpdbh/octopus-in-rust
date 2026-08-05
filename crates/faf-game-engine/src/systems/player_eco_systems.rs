@@ -1,17 +1,9 @@
-#![allow(unused)]
-use std::collections::HashMap;
-use std::collections::HashSet;
-
 use crate::components::*;
 use crate::observers::*;
 use crate::resources::*;
 use bevy_ecs::prelude::*;
-use faf_blueprints::ConstructionAction;
+use std::collections::HashMap;
 use uuid::Uuid;
-
-pub fn update_new_construction(construction_action: ConstructionAction) {
-    todo!()
-}
 
 // step 1. compute current static eco production and drain from existing buildings
 pub fn update_player_eco_from_existing_units(
@@ -123,12 +115,8 @@ pub fn update_player_eco_from_building_units(
     });
 }
 
-type AccumulatedBP = f64;
-type AccumulatedBuildTime = f64;
-
 pub fn update_construction_pragress(
     mut commands: Commands,
-    player_eco: Res<PlayerEco>,
     construction_builder_query: Query<
         (Entity, &BuildPower, &ConstructionBuilder),
         (With<BuildPower>, With<ConstructionBuilder>),
@@ -137,7 +125,6 @@ pub fn update_construction_pragress(
         (Entity, &UnitCost, &ConstructionTarget),
         (With<UnitCost>, With<ConstructionTarget>),
     >,
-    // mut ev_building_finished: EventWriter<BuildingFinished>,
 ) {
     let mut build_powers_tracking: HashMap<Uuid, f64> = HashMap::new();
     for (_, build_power, builder) in construction_builder_query {
@@ -147,7 +134,6 @@ pub fn update_construction_pragress(
             .or_insert(build_power.0);
     }
 
-    let mut build_progress_tracking: HashMap<Uuid, (f64, f64)> = HashMap::new();
     for (entity, unit_cost, target) in construction_target_query {
         let task_id = target.task;
         let current_progress = target.progress;

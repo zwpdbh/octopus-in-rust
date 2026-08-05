@@ -12,7 +12,6 @@ impl Plugin for EcoPlugin {
         app.add_systems(
             Update,
             (
-                player_eco_systems::update_construction_pragress,
                 player_eco_systems::update_player_eco_from_existing_units,
                 player_eco_systems::update_player_eco_from_building_units,
                 player_eco_systems::update_construction_pragress,
