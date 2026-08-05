@@ -14,5 +14,6 @@ pub fn run(construction_plan: &str) -> Result<()> {
             anyhow::anyhow!("failed to parse construction plan: {construction_plan}, error: {e}",)
         })?;
     println!("{:?}", construction_plan);
+
     Ok(())
 }

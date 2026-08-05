@@ -4207,8 +4207,9 @@ dependencies = [
 name = "faf-game-engine"
 version = "0.1.0"
 dependencies = [
- "bevy",
+ "bevy_app",
  "bevy_ecs",
+ "faf-blueprints",
  "uuid",
 ]
 
@@ -4234,6 +4235,17 @@ dependencies = [
  "faf-blueprints",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "faf-sim-service"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "faf-blueprints",
+ "serde",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

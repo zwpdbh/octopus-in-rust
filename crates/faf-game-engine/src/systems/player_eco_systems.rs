@@ -6,7 +6,12 @@ use crate::components::*;
 use crate::observers::*;
 use crate::resources::*;
 use bevy_ecs::prelude::*;
+use faf_blueprints::ConstructionAction;
 use uuid::Uuid;
+
+pub fn update_new_construction(construction_action: ConstructionAction) {
+    todo!()
+}
 
 // step 1. compute current static eco production and drain from existing buildings
 pub fn update_player_eco_from_existing_units(

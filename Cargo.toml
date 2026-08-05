@@ -26,6 +26,7 @@ members = [
     "xtask",
     "crates/faf-game-engine",
     "apps/breakout",
+    "crates/faf-sim-service",
 ]
 resolver = "3"
 
@@ -41,6 +42,7 @@ qqbot-config = { path = "crates/qqbot-config" }
 
 # Common external crates
 bevy = "0.19"
+bevy_app = "0.19"
 bevy_ecs = "0.19"
 anyhow = "1"
 async-trait = "0.1"

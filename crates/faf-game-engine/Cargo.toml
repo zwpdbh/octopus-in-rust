@@ -6,5 +6,6 @@ edition = "2024"
 
 [dependencies]
 bevy_ecs = { workspace = true }
-bevy = { workspace = true }
+bevy_app = { workspace = true }
+faf-blueprints = { workspace = true }
 uuid = { workspace = true }
