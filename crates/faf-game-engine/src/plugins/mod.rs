@@ -1,1 +1,3 @@
-pub mod eco_plugin;
+mod eco_plugin;
+
+pub use eco_plugin::EcoPlugin;

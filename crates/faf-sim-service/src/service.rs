@@ -1,5 +1,7 @@
 use crate::simulation::Simulation;
+use bevy_app::prelude::*;
 use faf_blueprints::ConstructionPlan;
+use faf_game_engine::*;
 use faf_sim_protocol::SimCmd;
 use std::{
     collections::HashMap,
@@ -56,7 +58,9 @@ fn run_sim_thread(
     let mut sim = Simulation::new(construction_plan);
     let mut run_state = SimRunState::Running;
 
-    loop {
-        // TODO:: run simulation while use commands to control it, like pause, stop or speedup.
-    }
+    // TODO:: how to make Simulation interact with bevy_app
+    App::new()
+        .add_plugins(EcoPlugin)
+        .add_message::<BuildingFinished>()
+        .init_resource::<PlayerEco>();
 }

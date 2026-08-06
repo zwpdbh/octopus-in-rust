@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy_app = { workspace = true }
 faf-blueprints = { workspace = true }
 faf-sim-protocol = { workspace = true }
+faf-game-engine = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

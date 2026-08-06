@@ -37,7 +37,9 @@ faf-dioxus-ui = { path = "crates/faf-dioxus-ui" }
 faf-blueprints = { path = "crates/faf-blueprints" }
 faf-sim-shared = { path = "crates/faf-sim-shared" }
 faf-sim-protocol = { path = "crates/faf-sim-protocol" }
+faf-game-engine = { path = "crates/faf-game-engine" }
 faf-units = { path = "crates/faf-units" }
+faf-sim-service = { path = "crates/faf-sim-service" }
 kosong = { path = "crates/kosong" }
 brain = { path = "crates/brain" }
 qqbot-config = { path = "crates/qqbot-config" }

@@ -4233,6 +4233,7 @@ dependencies = [
  "bevy_ecs",
  "clap",
  "faf-blueprints",
+ "faf-sim-service",
  "serde",
  "serde_json",
 ]
@@ -4245,8 +4246,10 @@ version = "0.1.0"
 name = "faf-sim-service"
 version = "0.1.0"
 dependencies = [
+ "bevy_app",
  "crossbeam-channel",
  "faf-blueprints",
+ "faf-game-engine",
  "faf-sim-protocol",
  "serde",
  "thiserror 2.0.18",

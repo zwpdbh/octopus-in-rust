@@ -5,7 +5,7 @@ use bevy_app::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
 
 /// EcoPlugin should prepare all system need for running engine for doing construction
-struct EcoPlugin;
+pub struct EcoPlugin;
 
 impl Plugin for EcoPlugin {
     fn build(&self, app: &mut App) {
