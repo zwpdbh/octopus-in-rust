@@ -1,58 +1,26 @@
 use crate::components::*;
-use crate::observers::*;
+use crate::events::*;
 use crate::resources::*;
 use bevy_ecs::prelude::*;
 use faf_blueprints::UnitCostMetrics;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-// step 1. compute current static eco production and drain from existing buildings
-pub fn update_player_eco_from_existing_units(
-    mut player_eco: ResMut<PlayerEco>,
-    query_eco_related_units: Query<
-        (
-            Entity,
-            &GenerateMass,
-            &GenerateEnergy,
-            &MaintainancePowerDrain,
-        ),
-        (
-            With<GenerateMass>,
-            With<GenerateEnergy>,
-            With<MaintainancePowerDrain>,
-            Without<ConstructionTarget>,
-        ),
-    >,
-) {
-    // reset to zero first, then aggregate
-    player_eco.0.mass_generate_rate = 0.0;
-    player_eco.0.mass_drain = 0.0;
-    player_eco.0.energy_generate_rate = 0.0;
-    player_eco.0.energy_drain = 0.0;
-
-    for (_, generate_mass, generate_energy, maintainance_energy_drain) in query_eco_related_units {
-        player_eco.0.mass_generate_rate += generate_mass.0;
-        player_eco.0.energy_generate_rate += generate_energy.0;
-        player_eco.0.energy_drain += maintainance_energy_drain.0;
-    }
-}
-
 // A system which aggregate all mass drain and energy drain from all building tasks
 pub fn update_player_eco_from_building_units(
     mut commands: Commands,
     mut player_eco: ResMut<PlayerEco>,
     construction_builder_query: Query<
-        (Entity, &BuildPower, &ConstructionBuilder),
+        (&BuildPower, &ConstructionBuilder),
         (With<BuildPower>, With<ConstructionBuilder>),
     >,
     construction_target_query: Query<
-        (Entity, &UnitCost, &ConstructionTarget),
+        (&UnitCost, &ConstructionTarget),
         (With<UnitCost>, With<ConstructionTarget>),
     >,
 ) {
     let mut build_powers_tracking: HashMap<Uuid, f64> = HashMap::new();
-
-    for (_, build_power, builder) in construction_builder_query {
+    for (build_power, builder) in construction_builder_query {
         build_powers_tracking
             .entry(builder.task)
             .and_modify(|bp| *bp += build_power.0)
@@ -60,13 +28,13 @@ pub fn update_player_eco_from_building_units(
     }
 
     let mut build_cost_tracking: HashMap<Uuid, UnitCostMetrics> = HashMap::new();
-    for (_, unit_cost, target) in construction_target_query {
+    for (unit_cost, target) in construction_target_query {
         build_cost_tracking
             .entry(target.task)
             .insert_entry(unit_cost.0);
     }
 
-    // based on each target, compute the drain
+    // based on each target, compute the mass drain and energy drain for each ConstructionTarget
     for (task, build_cost) in build_cost_tracking {
         let assigned_build_power = build_powers_tracking.get(&task).unwrap();
         let drain_ratio = build_cost.build_time / assigned_build_power;
@@ -111,6 +79,7 @@ pub fn update_player_eco_from_building_units(
 
 pub fn update_construction_pragress(
     mut commands: Commands,
+    mut finished_construction_writer: MessageWriter<BuildingFinished>,
     construction_builder_query: Query<
         (Entity, &BuildPower, &ConstructionBuilder),
         (With<BuildPower>, With<ConstructionBuilder>),
@@ -133,14 +102,86 @@ pub fn update_construction_pragress(
         let current_progress = target.progress;
 
         let assigned_bp_for_task = build_powers_tracking.get(&task_id).unwrap();
-        // how to set components value
+
+        // overwrite to update target progress
         commands.entity(entity).insert(ConstructionTarget::new(
             task_id,
             current_progress + assigned_bp_for_task,
+            target.unit_eco_effect.clone(),
+            target.tech_level,
         ));
 
         if current_progress + assigned_bp_for_task > unit_cost.0.build_time {
-            commands.trigger(BuildingFinished { task_id });
+            finished_construction_writer.write(BuildingFinished { task_id });
+        }
+    }
+}
+
+pub fn apply_finished_constructions(
+    mut player_eco: ResMut<PlayerEco>,
+    mut finished_construction_reader: MessageReader<BuildingFinished>,
+    mut commands: Commands,
+    construction_builder_query: Query<(Entity, &ConstructionBuilder), With<ConstructionBuilder>>,
+    construction_target_query: Query<(Entity, &ConstructionTarget), With<ConstructionTarget>>,
+) {
+    for finished_task in finished_construction_reader.read() {
+        for (each_builder_entity, builder) in construction_builder_query {
+            if builder.task == finished_task.task_id {
+                commands
+                    .entity(each_builder_entity)
+                    .remove::<ConstructionBuilder>();
+            }
+        }
+
+        for (each_target_entity, target) in construction_target_query {
+            if target.task == finished_task.task_id {
+                commands
+                    .entity(each_target_entity)
+                    .remove::<ConstructionTarget>();
+
+                // spawn new entity and according to UnitEffectEcoMetrics assign valid effect
+                let mut entity = commands.spawn_empty();
+
+                if target.unit_eco_effect.build_power > 0.0 {
+                    entity.insert(BuildPower(target.unit_eco_effect.build_power));
+                }
+
+                if target.unit_eco_effect.generate_mass_rate > 0.0 {
+                    entity.insert(GenerateMass(target.unit_eco_effect.generate_mass_rate));
+                    player_eco.0.mass_generate_rate += target.unit_eco_effect.generate_mass_rate;
+                }
+
+                if target.unit_eco_effect.generate_energy_rate > 0.0 {
+                    entity.insert(GenerateEnergy(target.unit_eco_effect.generate_energy_rate));
+                    player_eco.0.energy_generate_rate +=
+                        target.unit_eco_effect.generate_energy_rate;
+                }
+
+                if target.unit_eco_effect.maintainance_energy_drain > 0.0 {
+                    entity.insert(MaintainancePowerDrain(
+                        target.unit_eco_effect.maintainance_energy_drain,
+                    ));
+                    player_eco.0.energy_drain += target.unit_eco_effect.maintainance_energy_drain;
+                }
+
+                if target.unit_eco_effect.increase_mass_storage_capacity > 0.0 {
+                    entity.insert(IncreaseMassStorageCapacity(
+                        target.unit_eco_effect.increase_mass_storage_capacity,
+                    ));
+                    player_eco.0.max_capacity_in_mass_storage +=
+                        target.unit_eco_effect.increase_mass_storage_capacity;
+                }
+
+                if target.unit_eco_effect.increase_energy_storage_capacity > 0.0 {
+                    entity.insert(IncreaseEnergyStorageCapacity(
+                        target.unit_eco_effect.increase_energy_storage_capacity,
+                    ));
+                    player_eco.0.max_capacity_in_energy_storage +=
+                        target.unit_eco_effect.increase_energy_storage_capacity;
+                }
+
+                entity.insert(UnitTechLevel(target.tech_level));
+            }
         }
     }
 }
