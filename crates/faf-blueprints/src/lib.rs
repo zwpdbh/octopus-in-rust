@@ -12,5 +12,7 @@ mod eco_metrics;
 mod error;
 
 pub use blueprint::*;
+pub use categories::*;
 pub use constructions::*;
+pub use eco_metrics::*;
 pub use error::*;

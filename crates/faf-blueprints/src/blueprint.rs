@@ -17,7 +17,7 @@ pub struct FafBlueprints {
 pub struct UnitBlueprint {
     unit_id: String,
     unit_description: String,
-    unit_cost: UnitCostEcoMetrics,
+    unit_cost: UnitCostMetrics,
     unit_eco_effect: UnitEffectEcoMetrics,
     tech_level: TechLevel,
 }
@@ -71,7 +71,7 @@ impl FafBlueprints {
         Ok(units)
     }
 
-    fn get_eco_cost_from_search(&self, unit: &Unit) -> Result<UnitCostEcoMetrics> {
+    fn get_eco_cost_from_search(&self, unit: &Unit) -> Result<UnitCostMetrics> {
         let unit_eco = unit
             .economy
             .clone()
@@ -80,7 +80,7 @@ impl FafBlueprints {
         let build_cost_mass = unit_eco.build_cost_mass.unwrap_or(0.0);
         let build_cost_energy = unit_eco.build_cost_energy.unwrap_or(0.0);
         let build_time = unit_eco.build_time.unwrap_or(0.0);
-        let eco_metrics = UnitCostEcoMetrics::new(build_cost_mass, build_cost_energy, build_time);
+        let eco_metrics = UnitCostMetrics::new(build_cost_mass, build_cost_energy, build_time);
         Ok(eco_metrics)
     }
 
@@ -106,6 +106,7 @@ impl FafBlueprints {
             .unwrap_or(0.0);
         let increase_mass_storage_capacity = unit_eco.storage_mass.unwrap_or(0.0);
         let increase_energy_storage_capacity = unit_eco.storage_energy.unwrap_or(0.0);
+        let build_power = unit_eco.build_rate.unwrap_or(0.0);
 
         Ok(UnitEffectEcoMetrics::new(
             generate_mass_rate,
@@ -113,6 +114,7 @@ impl FafBlueprints {
             maintainance_energy_drain,
             increase_mass_storage_capacity,
             increase_energy_storage_capacity,
+            build_power,
         ))
     }
 }

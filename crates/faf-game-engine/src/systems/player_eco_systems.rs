@@ -2,6 +2,7 @@ use crate::components::*;
 use crate::observers::*;
 use crate::resources::*;
 use bevy_ecs::prelude::*;
+use faf_blueprints::UnitCostMetrics;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -24,15 +25,15 @@ pub fn update_player_eco_from_existing_units(
     >,
 ) {
     // reset to zero first, then aggregate
-    player_eco.mass_generate_rate = 0.0;
-    player_eco.mass_drain = 0.0;
-    player_eco.energy_generate_rate = 0.0;
-    player_eco.energy_drain = 0.0;
+    player_eco.0.mass_generate_rate = 0.0;
+    player_eco.0.mass_drain = 0.0;
+    player_eco.0.energy_generate_rate = 0.0;
+    player_eco.0.energy_drain = 0.0;
 
     for (_, generate_mass, generate_energy, maintainance_energy_drain) in query_eco_related_units {
-        player_eco.mass_generate_rate += generate_mass.0;
-        player_eco.energy_generate_rate += generate_energy.0;
-        player_eco.energy_drain += maintainance_energy_drain.0;
+        player_eco.0.mass_generate_rate += generate_mass.0;
+        player_eco.0.energy_generate_rate += generate_energy.0;
+        player_eco.0.energy_drain += maintainance_energy_drain.0;
     }
 }
 
@@ -58,11 +59,11 @@ pub fn update_player_eco_from_building_units(
             .or_insert(build_power.0);
     }
 
-    let mut build_cost_tracking: HashMap<Uuid, UnitCost> = HashMap::new();
+    let mut build_cost_tracking: HashMap<Uuid, UnitCostMetrics> = HashMap::new();
     for (_, unit_cost, target) in construction_target_query {
         build_cost_tracking
             .entry(target.task)
-            .insert_entry(*unit_cost);
+            .insert_entry(unit_cost.0);
     }
 
     // based on each target, compute the drain
@@ -72,47 +73,40 @@ pub fn update_player_eco_from_building_units(
         let mass_drain = build_cost.mass / drain_ratio;
         let energy_drain = build_cost.energy / drain_ratio;
 
-        player_eco.mass_drain += mass_drain;
-        player_eco.energy_drain += energy_drain;
+        player_eco.0.mass_drain += mass_drain;
+        player_eco.0.energy_drain += energy_drain;
     }
 
-    let net_mass_rate = player_eco.net_mass_rate();
-    let net_energy_rate = player_eco.net_energy_rate();
+    let net_mass_rate = player_eco.0.net_mass_rate();
+    let net_energy_rate = player_eco.0.net_energy_rate();
 
-    let udpated_mass_in_storage = if player_eco.mass_in_storage + net_mass_rate > 0.0 {
+    let udpated_mass_in_storage = if player_eco.0.mass_in_storage + net_mass_rate > 0.0 {
         player_eco
+            .0
             .max_capacity_in_mass_storage
-            .min(player_eco.mass_in_storage + net_mass_rate)
+            .min(player_eco.0.mass_in_storage + net_mass_rate)
     } else {
         0.0
     };
 
-    let updated_energy_in_storage = if player_eco.energy_in_storage + net_energy_rate > 0.0 {
+    let updated_energy_in_storage = if player_eco.0.energy_in_storage + net_energy_rate > 0.0 {
         player_eco
+            .0
             .max_capacity_in_energy_storage
-            .min(player_eco.energy_in_storage + net_energy_rate)
+            .min(player_eco.0.energy_in_storage + net_energy_rate)
     } else {
         0.0
     };
 
-    player_eco.mass_in_storage = udpated_mass_in_storage;
-    player_eco.energy_in_storage = updated_energy_in_storage;
+    player_eco.0.mass_in_storage = udpated_mass_in_storage;
+    player_eco.0.energy_in_storage = updated_energy_in_storage;
 
-    if player_eco.energy_efficiency() < 1.0 {
-        player_eco.mass_generate_rate =
-            player_eco.mass_generate_rate * player_eco.energy_efficiency();
+    if player_eco.0.energy_efficiency() < 1.0 {
+        player_eco.0.mass_generate_rate =
+            player_eco.0.mass_generate_rate * player_eco.0.energy_efficiency();
     }
 
-    commands.trigger(PlayerEcoSummary {
-        mass_generate_rate: player_eco.mass_generate_rate,
-        mass_drain: player_eco.mass_drain,
-        energy_generate_rate: player_eco.energy_generate_rate,
-        energy_drain: player_eco.energy_drain,
-        mass_in_storage: player_eco.mass_in_storage,
-        max_capacity_in_mass_storage: player_eco.max_capacity_in_mass_storage,
-        energy_in_storage: player_eco.energy_in_storage,
-        max_capacity_in_energy_storage: player_eco.max_capacity_in_energy_storage,
-    });
+    commands.trigger(PlayerEcoSummary(player_eco.0.clone()));
 }
 
 pub fn update_construction_pragress(
@@ -145,7 +139,7 @@ pub fn update_construction_pragress(
             current_progress + assigned_bp_for_task,
         ));
 
-        if current_progress + assigned_bp_for_task > unit_cost.build_time {
+        if current_progress + assigned_bp_for_task > unit_cost.0.build_time {
             commands.trigger(BuildingFinished { task_id });
         }
     }

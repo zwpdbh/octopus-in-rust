@@ -17,16 +17,61 @@ pub struct PlayerEcoMetrics {
     pub max_capacity_in_energy_storage: f64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct UnitCostEcoMetrics {
+impl PlayerEcoMetrics {
+    pub fn default() -> Self {
+        Self {
+            mass_generate_rate: 1.0,
+            mass_drain: 0.0,
+            energy_generate_rate: 20.0,
+            energy_drain: 0.0,
+            mass_in_storage: 650.0,
+            max_capacity_in_mass_storage: 650.0,
+            energy_in_storage: 4000.0,
+            max_capacity_in_energy_storage: 4000.0,
+        }
+    }
+
+    pub fn net_mass_rate(&mut self) -> f64 {
+        self.mass_generate_rate - self.mass_drain
+    }
+
+    pub fn net_energy_rate(&self) -> f64 {
+        self.energy_generate_rate - self.energy_drain
+    }
+
+    pub fn energy_efficiency(&self) -> f64 {
+        if self.energy_in_storage > 0.0 {
+            1.0
+        } else {
+            self.energy_generate_rate / self.energy_drain
+        }
+    }
+
+    // need to consider energy_efficiency
+    fn mass_efficiency(&self) -> f64 {
+        if self.mass_in_storage > 0.0 {
+            1.0
+        } else {
+            self.mass_generate_rate / self.mass_drain
+        }
+    }
+
+    // direct efficiency apply to update build progress
+    pub fn construction_efficiency(&self) -> f64 {
+        self.mass_efficiency() * self.energy_efficiency()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Copy)]
+pub struct UnitCostMetrics {
     pub mass: f64,
     pub energy: f64,
     pub build_time: f64,
 }
 
-impl UnitCostEcoMetrics {
+impl UnitCostMetrics {
     pub fn new(mass: f64, energy: f64, build_time: f64) -> Self {
-        UnitCostEcoMetrics {
+        UnitCostMetrics {
             mass,
             energy,
             build_time,
@@ -41,6 +86,7 @@ pub struct UnitEffectEcoMetrics {
     pub maintainance_energy_drain: f64,
     pub increase_mass_storage_capacity: f64,
     pub increase_energy_storage_capacity: f64,
+    pub build_power: f64,
 }
 
 impl UnitEffectEcoMetrics {
@@ -50,6 +96,7 @@ impl UnitEffectEcoMetrics {
         maintainance_energy_drain: f64,
         increase_mass_storage_capacity: f64,
         increase_energy_storage_capacity: f64,
+        build_power: f64,
     ) -> Self {
         UnitEffectEcoMetrics {
             generate_mass_rate,
@@ -57,6 +104,7 @@ impl UnitEffectEcoMetrics {
             maintainance_energy_drain,
             increase_mass_storage_capacity,
             increase_energy_storage_capacity,
+            build_power,
         }
     }
 }
