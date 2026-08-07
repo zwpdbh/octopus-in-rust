@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 // A system which aggregate all mass drain and energy drain from all building tasks
 pub fn update_player_eco_from_building_units(
-    mut commands: Commands,
     mut player_eco: ResMut<PlayerEco>,
     construction_builder_query: Query<
         (&BuildPower, &ConstructionBuilder),
@@ -73,11 +72,10 @@ pub fn update_player_eco_from_building_units(
         player_eco.0.mass_generate_rate =
             player_eco.0.mass_generate_rate * player_eco.0.energy_efficiency();
     }
-
-    commands.trigger(PlayerEcoSummary(player_eco.0.clone()));
 }
 
 pub fn update_construction_pragress(
+    player_eco: Res<PlayerEco>,
     mut commands: Commands,
     mut finished_construction_writer: MessageWriter<BuildingFinished>,
     construction_builder_query: Query<
@@ -113,6 +111,8 @@ pub fn update_construction_pragress(
 
         if current_progress + assigned_bp_for_task > unit_cost.0.build_time {
             finished_construction_writer.write(BuildingFinished { task_id });
+
+            commands.trigger(PlayerEcoSummary(player_eco.0.clone()));
         }
     }
 }

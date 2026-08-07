@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Default, Clone, Deserialize, Serialize)]
 pub struct PlayerEcoMetrics {
     // mass produce vs consume
     pub mass_generate_rate: f64,
@@ -15,6 +15,23 @@ pub struct PlayerEcoMetrics {
     pub max_capacity_in_mass_storage: f64,
     pub energy_in_storage: f64,
     pub max_capacity_in_energy_storage: f64,
+}
+
+impl std::fmt::Debug for PlayerEcoMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PlayerEcoMetrics {{ mass_generate_rate: {:.1}, mass_drain: {:.1}, energy_generate_rate: {:.1}, energy_drain: {:.1}, mass_in_storage: {:.1}, max_capacity_in_mass_storage: {:.1}, energy_in_storage: {:.1}, max_capacity_in_energy_storage: {:.1} }}",
+            self.mass_generate_rate,
+            self.mass_drain,
+            self.energy_generate_rate,
+            self.energy_drain,
+            self.mass_in_storage,
+            self.max_capacity_in_mass_storage,
+            self.energy_in_storage,
+            self.max_capacity_in_energy_storage,
+        )
+    }
 }
 
 impl PlayerEcoMetrics {

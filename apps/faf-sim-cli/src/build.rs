@@ -7,13 +7,17 @@
 
 use anyhow::Result;
 use faf_blueprints::*;
+use faf_sim_service::SimulationService;
 
 pub fn run(construction_plan: &str) -> Result<()> {
     let construction_plan: ConstructionPlan =
         serde_json::from_str(construction_plan).map_err(|e| {
             anyhow::anyhow!("failed to parse construction plan: {construction_plan}, error: {e}",)
         })?;
-    println!("{:?}", construction_plan);
 
+    let service = SimulationService::new();
+    service.run_blocking(construction_plan)?;
+
+    println!("simulation finished");
     Ok(())
 }

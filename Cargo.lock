@@ -4241,12 +4241,17 @@ dependencies = [
 [[package]]
 name = "faf-sim-protocol"
 version = "0.1.0"
+dependencies = [
+ "faf-blueprints",
+ "uuid",
+]
 
 [[package]]
 name = "faf-sim-service"
 version = "0.1.0"
 dependencies = [
  "bevy_app",
+ "bevy_ecs",
  "crossbeam-channel",
  "faf-blueprints",
  "faf-game-engine",

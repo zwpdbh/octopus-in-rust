@@ -22,6 +22,28 @@ pub struct UnitBlueprint {
     tech_level: TechLevel,
 }
 
+impl UnitBlueprint {
+    pub fn unit_id(&self) -> &str {
+        &self.unit_id
+    }
+
+    pub fn unit_description(&self) -> &str {
+        &self.unit_description
+    }
+
+    pub fn unit_cost(&self) -> UnitCostMetrics {
+        self.unit_cost
+    }
+
+    pub fn unit_eco_effect(&self) -> &UnitEffectEcoMetrics {
+        &self.unit_eco_effect
+    }
+
+    pub fn tech_level(&self) -> TechLevel {
+        self.tech_level
+    }
+}
+
 impl FafBlueprints {
     pub fn new() -> Result<Self> {
         let blueprint = FafBlueprints {
