@@ -14,5 +14,6 @@ data/qqbot-data/groups/*
 data/snowluma-data/*
 snowluma-data
 dist
+apps/fafcn-web/assets/tailwind.css
 
 

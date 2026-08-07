@@ -1,32 +1,40 @@
 use crate::Route;
 use dioxus::prelude::*;
 
-const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");
-
-/// The Navbar component that will be rendered on all pages of our app since every page is under the layout.
-///
-///
-/// This layout component wraps the UI of [Route::Home] and [Route::Blog] in a common navbar. The contents of the Home and Blog
-/// routes will be rendered under the outlet inside this component
 #[component]
 pub fn Navbar() -> Element {
     rsx! {
-        document::Link { rel: "stylesheet", href: NAVBAR_CSS }
-
-        div {
-            id: "navbar",
-            Link {
-                to: Route::Home {},
-                "Home"
+        div { class: "flex flex-col min-h-screen bg-neutral-950",
+            nav { class: "flex items-center gap-4 px-4 py-3 bg-neutral-900 border-b border-neutral-800 shrink-0",
+                Link {
+                    class: "text-lg font-bold text-white hover:text-blue-400 transition-colors",
+                    to: Route::Home {},
+                    "fafcn"
+                }
+                div { class: "flex-1" }
+                NavLink { to: Route::Home {}, label: "Home" }
+                NavLink { to: Route::Simulate {}, label: "Simulate" }
             }
-            Link {
-                to: Route::Blog { id: 1 },
-                "Blog"
+            div { class: "flex-1 min-h-0 flex flex-col",
+                Outlet::<Route> {}
             }
         }
+    }
+}
 
-        // The `Outlet` component is used to render the next component inside the layout. In this case, it will render either
-        // the [`Home`] or [`Blog`] component depending on the current route.
-        Outlet::<Route> {}
+#[component]
+fn NavLink(to: Route, label: String) -> Element {
+    let current = use_route::<Route>();
+    let active = current == to;
+    rsx! {
+        Link {
+            class: if active {
+                "px-3 py-1.5 rounded bg-blue-700 text-white text-sm"
+            } else {
+                "px-3 py-1.5 rounded text-neutral-300 hover:bg-neutral-800 text-sm transition-colors"
+            },
+            to,
+            "{label}"
+        }
     }
 }

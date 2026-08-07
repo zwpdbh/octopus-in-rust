@@ -7,20 +7,28 @@ use uuid::Uuid;
 
 /// Inbound channel for construction actions fed by `run_sim_thread`.
 ///
-/// `run_sim_thread` pushes one action at a time and waits for a
-/// `SimEvent::ActionFinished` report before pushing the next.  A Bevy system
-/// reads from this resource and spawns the corresponding entities.
+/// `run_sim_thread` pushes one action at a time and waits for a completion
+/// report before pushing the next.  A Bevy system reads from this resource
+/// and spawns the corresponding entities.
 #[derive(Resource)]
 pub struct ActionReceiver(pub Receiver<(Uuid, ConstructionAction)>);
 
 /// Outbound channel used by Bevy systems to report simulation events back to
-/// the service thread.
+/// the service thread / external caller.
 ///
 /// This is the Bevy-app → normal-application bridge.  Anything the service
 /// or CLI needs to observe (eco snapshots, finished actions, etc.) is sent
 /// through here as a `SimEvent`.
 #[derive(Resource)]
 pub struct EventSender(pub Sender<SimEvent>);
+
+/// Internal channel used to signal that a construction task finished.
+///
+/// `run_sim_thread` reads from this channel so it can dispatch the next
+/// queued action.  It is separate from `EventSender` because the external
+/// `Receiver<SimEvent>` is held by the caller and cannot be cloned.
+#[derive(Resource)]
+pub struct FinishedSender(pub Sender<Uuid>);
 
 /// Spawn builder and target entities for every construction action that has
 /// been pushed into the simulation thread.
@@ -60,18 +68,8 @@ fn spawn_target(commands: &mut Commands, task_id: Uuid, target: &faf_blueprints:
     ));
 }
 
-/// Forward internal `PlayerEcoSummary` events to the external service channel.
-///
-/// The engine emits economy snapshots as Bevy `Event`s.  This observer turns
-/// them into `SimEvent::EcoSummary` messages so the service / CLI can log or
-/// stream them.
-pub fn forward_eco_summary(summary: On<PlayerEcoSummary>, event_sender: Res<EventSender>) {
-    // best-effort reporting; the receiver may be gone during shutdown
-    let _ = event_sender.0.send(SimEvent::EcoSummary(summary.0.clone()));
-}
-
-/// Forward internal `BuildingFinished` messages to the external service channel
-/// so `run_sim_thread` can dispatch the next queued action.
+/// Forward internal `BuildingFinished` messages to both the external service
+/// channel and the internal completion channel.
 ///
 /// `BuildingFinished` is a Bevy `Message`, so multiple readers can observe the
 /// same completion signal.  This system runs alongside the engine's own
@@ -79,10 +77,22 @@ pub fn forward_eco_summary(summary: On<PlayerEcoSummary>, event_sender: Res<Even
 pub fn report_finished_constructions(
     mut finished_reader: MessageReader<BuildingFinished>,
     event_sender: Res<EventSender>,
+    finished_sender: Res<FinishedSender>,
 ) {
     for finished in finished_reader.read() {
         let _ = event_sender
             .0
             .send(SimEvent::ActionFinished(finished.task_id));
+        let _ = finished_sender.0.send(finished.task_id);
     }
+}
+
+/// Emit the current economy snapshot every simulation tick.
+///
+/// This is what feeds the live chart and stats panel in the web frontend.
+pub fn emit_eco_summary(player_eco: Res<PlayerEco>, event_sender: Res<EventSender>) {
+    // best-effort reporting; the receiver may be gone during shutdown
+    let _ = event_sender
+        .0
+        .send(SimEvent::EcoSummary(player_eco.0.clone()));
 }

@@ -18,6 +18,10 @@ pub fn update_player_eco_from_building_units(
         (With<UnitCost>, With<ConstructionTarget>),
     >,
 ) {
+    // Drain accumulates only from currently active construction tasks.
+    player_eco.0.mass_drain = 0.0;
+    player_eco.0.energy_drain = 0.0;
+
     let mut build_powers_tracking: HashMap<Uuid, f64> = HashMap::new();
     for (build_power, builder) in construction_builder_query {
         build_powers_tracking
@@ -67,11 +71,6 @@ pub fn update_player_eco_from_building_units(
 
     player_eco.0.mass_in_storage = udpated_mass_in_storage;
     player_eco.0.energy_in_storage = updated_energy_in_storage;
-
-    if player_eco.0.energy_efficiency() < 1.0 {
-        player_eco.0.mass_generate_rate =
-            player_eco.0.mass_generate_rate * player_eco.0.energy_efficiency();
-    }
 }
 
 pub fn update_construction_pragress(

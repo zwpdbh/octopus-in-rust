@@ -1,11 +1,12 @@
-use crate::components::Hero;
 use dioxus::prelude::*;
 
-/// The Home page component that will be rendered when the current route is `[Route::Home]`
+use crate::components::UnitBrowser;
+
 #[component]
 pub fn Home() -> Element {
     rsx! {
-        Hero {}
-
+        div { class: "h-full bg-neutral-950 overflow-hidden",
+            UnitBrowser {}
+        }
     }
 }

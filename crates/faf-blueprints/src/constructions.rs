@@ -8,6 +8,13 @@ pub struct ConstructionPlan {
 }
 
 impl ConstructionPlan {
+    pub fn new(player_eco: PlayerEcoMetrics, building_queue: Vec<ConstructionAction>) -> Self {
+        Self {
+            player_eco,
+            building_queue,
+        }
+    }
+
     pub fn player_eco(&self) -> &PlayerEcoMetrics {
         &self.player_eco
     }
@@ -28,6 +35,10 @@ pub struct ConstructionAction {
 }
 
 impl ConstructionAction {
+    pub fn new(builders: Vec<UnitBlueprint>, target: UnitBlueprint) -> Self {
+        Self { builders, target }
+    }
+
     pub fn builders(&self) -> &[UnitBlueprint] {
         &self.builders
     }

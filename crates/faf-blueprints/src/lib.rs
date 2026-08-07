@@ -10,9 +10,11 @@ mod categories;
 mod constructions;
 mod eco_metrics;
 mod error;
+mod unit_meta;
 
 pub use blueprint::*;
 pub use categories::*;
 pub use constructions::*;
 pub use eco_metrics::*;
 pub use error::*;
+pub use unit_meta::*;

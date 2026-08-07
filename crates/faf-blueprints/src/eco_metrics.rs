@@ -79,7 +79,7 @@ impl PlayerEcoMetrics {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Copy)]
+#[derive(Debug, Clone, Deserialize, Serialize, Copy, PartialEq)]
 pub struct UnitCostMetrics {
     pub mass: f64,
     pub energy: f64,
@@ -96,7 +96,7 @@ impl UnitCostMetrics {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct UnitEffectEcoMetrics {
     pub generate_mass_rate: f64,
     pub generate_energy_rate: f64,

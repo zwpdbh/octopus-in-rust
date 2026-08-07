@@ -9,10 +9,10 @@ title = "fafcn-web"
 [web.resource]
 
 # Additional CSS style files
-style = []
+style = ["/uplot.min.css"]
 
 # Additional JavaScript files
-script = []
+script = ["/uplot.iife.min.js"]
 
 [web.resource.dev]
 

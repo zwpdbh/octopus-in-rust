@@ -1,4 +1,4 @@
-use crate::{categories::*, eco_metrics::*};
+use crate::{categories::*, eco_metrics::*, unit_meta::*};
 use crate::{Error, Result};
 use faf_units::{FafUnitIndex, Unit};
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,37 @@ pub struct UnitBlueprint {
     unit_cost: UnitCostMetrics,
     unit_eco_effect: UnitEffectEcoMetrics,
     tech_level: TechLevel,
+    #[serde(default)]
+    category: Option<UnitCategory>,
+    #[serde(default)]
+    kind: Option<UnitKind>,
+    #[serde(default)]
+    strategic_icon_name: Option<String>,
 }
 
 impl UnitBlueprint {
+    pub fn new(
+        unit_id: String,
+        unit_description: String,
+        unit_cost: UnitCostMetrics,
+        unit_eco_effect: UnitEffectEcoMetrics,
+        tech_level: TechLevel,
+        category: Option<UnitCategory>,
+        kind: Option<UnitKind>,
+        strategic_icon_name: Option<String>,
+    ) -> Self {
+        Self {
+            unit_id,
+            unit_description,
+            unit_cost,
+            unit_eco_effect,
+            tech_level,
+            category,
+            kind,
+            strategic_icon_name,
+        }
+    }
+
     pub fn unit_id(&self) -> &str {
         &self.unit_id
     }
@@ -40,6 +68,18 @@ impl UnitBlueprint {
 
     pub fn tech_level(&self) -> TechLevel {
         self.tech_level
+    }
+
+    pub fn category(&self) -> Option<UnitCategory> {
+        self.category
+    }
+
+    pub fn kind(&self) -> Option<UnitKind> {
+        self.kind
+    }
+
+    pub fn strategic_icon_name(&self) -> Option<&str> {
+        self.strategic_icon_name.as_deref()
     }
 }
 
@@ -60,13 +100,18 @@ impl FafBlueprints {
             let eco_metrics = self.get_eco_cost_from_search(&each)?;
             let eco_effect = self.get_unit_eco_effect(&each)?;
             let tech_level = self.get_unit_tech_level(&each)?;
+            let category = Some(classify_category(&each));
+            let kind = Some(unit_kind(&each));
 
             let unit_blueprint = UnitBlueprint {
                 unit_id: each.id,
                 unit_description: each.description,
                 unit_cost: eco_metrics,
                 unit_eco_effect: eco_effect,
-                tech_level: tech_level,
+                tech_level,
+                category,
+                kind,
+                strategic_icon_name: each.strategic_icon_name.clone(),
             };
             blueprints.push(unit_blueprint);
         }
@@ -84,6 +129,35 @@ impl FafBlueprints {
         } else {
             return Ok(units.get(0).unwrap().clone());
         }
+    }
+
+    /// Return a blueprint for every unit in the index.
+    ///
+    /// Units that are missing required data (economy, tech level) are skipped
+    /// rather than failing the whole list.
+    pub fn all_units(&self) -> Vec<UnitBlueprint> {
+        self.index
+            .units
+            .iter()
+            .filter_map(|unit| self.unit_to_blueprint(unit).ok())
+            .collect()
+    }
+
+    fn unit_to_blueprint(&self, unit: &faf_units::Unit) -> Result<UnitBlueprint> {
+        let eco_metrics = self.get_eco_cost_from_search(unit)?;
+        let eco_effect = self.get_unit_eco_effect(unit)?;
+        let tech_level = self.get_unit_tech_level(unit)?;
+
+        Ok(UnitBlueprint {
+            unit_id: unit.id.clone(),
+            unit_description: unit.description.clone(),
+            unit_cost: eco_metrics,
+            unit_eco_effect: eco_effect,
+            tech_level,
+            category: Some(classify_category(unit)),
+            kind: Some(unit_kind(unit)),
+            strategic_icon_name: unit.strategic_icon_name.clone(),
+        })
     }
 
     fn get_unit_from_search(&self, search: &str) -> Result<Vec<Unit>> {
