@@ -1,4 +1,3 @@
-#![allow(unused)]
 use crate::{categories::*, eco_metrics::*};
 use crate::{Error, Result};
 use faf_units::{FafUnitIndex, Unit};

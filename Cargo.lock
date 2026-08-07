@@ -4233,6 +4233,7 @@ dependencies = [
  "bevy_ecs",
  "clap",
  "faf-blueprints",
+ "faf-sim-protocol",
  "faf-sim-service",
  "serde",
  "serde_json",

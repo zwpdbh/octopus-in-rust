@@ -22,5 +22,13 @@ pub enum Command {
     /// Run a build-queue simulation and emit events as NDJSON.
     Build {
         plan_file: PathBuf,
+
+        /// Playback speed in ticks per wall-clock second.
+        ///
+        /// The engine processes one fixed tick per `app.update()`.  A value of
+        /// `1` runs one tick per real second; `10` runs ten ticks per real
+        /// second.  Use `0` (default) to run as fast as the CPU allows.
+        #[arg(long, default_value_t = 0.0)]
+        speed: f64,
     },
 }

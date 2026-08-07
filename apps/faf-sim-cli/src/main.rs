@@ -22,13 +22,18 @@ fn main() -> Result<()> {
             let info = faf.get_one_unit_from_search(&str)?;
             println!("{:?}", info);
         }
-        Build { plan_file: queue } => {
+        // Run the construction plan through the Bevy-backed simulation service.
+        // `speed` controls real-world playback; the engine itself is tick-based.
+        Build {
+            plan_file: queue,
+            speed,
+        } => {
             let construction_plan_str = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
                 eprintln!("Failed to read: {}, error: {}", queue.display(), e);
                 std::process::exit(1);
             });
 
-            let _ = build::run(&construction_plan_str)?;
+            let _ = build::run(&construction_plan_str, speed)?;
         }
     }
     Ok(())

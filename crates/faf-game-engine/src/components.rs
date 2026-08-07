@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use bevy_ecs::prelude::*;
 use faf_blueprints::*;
 use uuid::Uuid;
