@@ -27,7 +27,7 @@ members = [
     "crates/faf-game-engine",
     "apps/breakout",
     "crates/faf-sim-service",
-    "crates/faf-sim-protocol",
+    "crates/faf-sim-protocol", "apps/fafcn-web",
 ]
 resolver = "3"
 
