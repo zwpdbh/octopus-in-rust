@@ -10,6 +10,16 @@ pub struct PlayerEcoMetrics {
     pub energy_generate_rate: f64,
     pub energy_drain: f64,
 
+    // continuous energy maintenance paid by all owned units
+    #[serde(default)]
+    pub maintenance_consumption_per_second_energy: f64,
+
+    // cumulative resources spent on construction
+    #[serde(default)]
+    pub total_mass_spent: f64,
+    #[serde(default)]
+    pub total_energy_spent: f64,
+
     // storage related
     pub mass_in_storage: f64,
     pub max_capacity_in_mass_storage: f64,
@@ -21,11 +31,14 @@ impl std::fmt::Debug for PlayerEcoMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PlayerEcoMetrics {{ mass_generate_rate: {:.1}, mass_drain: {:.1}, energy_generate_rate: {:.1}, energy_drain: {:.1}, mass_in_storage: {:.1}, max_capacity_in_mass_storage: {:.1}, energy_in_storage: {:.1}, max_capacity_in_energy_storage: {:.1} }}",
+            "PlayerEcoMetrics {{ mass_generate_rate: {:.1}, mass_drain: {:.1}, energy_generate_rate: {:.1}, energy_drain: {:.1}, maintenance_consumption_per_second_energy: {:.1}, total_mass_spent: {:.1}, total_energy_spent: {:.1}, mass_in_storage: {:.1}, max_capacity_in_mass_storage: {:.1}, energy_in_storage: {:.1}, max_capacity_in_energy_storage: {:.1} }}",
             self.mass_generate_rate,
             self.mass_drain,
             self.energy_generate_rate,
             self.energy_drain,
+            self.maintenance_consumption_per_second_energy,
+            self.total_mass_spent,
+            self.total_energy_spent,
             self.mass_in_storage,
             self.max_capacity_in_mass_storage,
             self.energy_in_storage,
@@ -41,6 +54,9 @@ impl PlayerEcoMetrics {
             mass_drain: 0.0,
             energy_generate_rate: 20.0,
             energy_drain: 0.0,
+            maintenance_consumption_per_second_energy: 0.0,
+            total_mass_spent: 0.0,
+            total_energy_spent: 0.0,
             mass_in_storage: 650.0,
             max_capacity_in_mass_storage: 650.0,
             energy_in_storage: 4000.0,
@@ -53,7 +69,9 @@ impl PlayerEcoMetrics {
     }
 
     pub fn net_energy_rate(&self) -> f64 {
-        self.energy_generate_rate - self.energy_drain
+        self.energy_generate_rate
+            - self.maintenance_consumption_per_second_energy
+            - self.energy_drain
     }
 
     pub fn energy_efficiency(&self) -> f64 {

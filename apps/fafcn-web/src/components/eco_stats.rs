@@ -1,25 +1,22 @@
 use dioxus::prelude::*;
-use faf_blueprints::PlayerEcoMetrics;
 use faf_dioxus_ui::Stat;
+use faf_sim_protocol::EcoSnapshot;
 
 #[component]
-pub fn EcoStats(eco: Signal<Option<PlayerEcoMetrics>>) -> Element {
+pub fn EcoStats(eco: Signal<Option<EcoSnapshot>>) -> Element {
     let (mass_income, mass_drain, energy_income, energy_drain, mass_storage, energy_storage) = eco
         .read()
         .as_ref()
-        .map_or((None, None, None, None, None, None), |m| {
+        .map_or((None, None, None, None, None, None), |s| {
             (
-                Some(format!("{:.1}", m.mass_generate_rate)),
-                Some(format!("{:.1}", m.mass_drain)),
-                Some(format!("{:.1}", m.energy_generate_rate)),
-                Some(format!("{:.1}", m.energy_drain)),
+                Some(format!("{:.1}", s.production_per_second_mass)),
+                Some(format!("{:.1}", s.mass_drain)),
+                Some(format!("{:.1}", s.production_per_second_energy)),
+                Some(format!("{:.1}", s.energy_drain)),
+                Some(format!("{:.1} / {:.1}", s.mass_storage, s.mass_storage_cap)),
                 Some(format!(
                     "{:.1} / {:.1}",
-                    m.mass_in_storage, m.max_capacity_in_mass_storage
-                )),
-                Some(format!(
-                    "{:.1} / {:.1}",
-                    m.energy_in_storage, m.max_capacity_in_energy_storage
+                    s.energy_storage, s.energy_storage_cap
                 )),
             )
         });

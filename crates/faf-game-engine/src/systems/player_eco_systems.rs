@@ -17,6 +17,7 @@ pub fn update_player_eco_from_building_units(
         (&UnitCost, &ConstructionTarget),
         (With<UnitCost>, With<ConstructionTarget>),
     >,
+    maintenance_query: Query<&MaintainancePowerDrain, With<MaintainancePowerDrain>>,
 ) {
     // Drain accumulates only from currently active construction tasks.
     player_eco.0.mass_drain = 0.0;
@@ -47,6 +48,14 @@ pub fn update_player_eco_from_building_units(
         player_eco.0.mass_drain += mass_drain;
         player_eco.0.energy_drain += energy_drain;
     }
+
+    // Sum continuous maintenance drains from all finished units.
+    player_eco.0.maintenance_consumption_per_second_energy =
+        maintenance_query.iter().map(|m| m.0).sum();
+
+    // Track cumulative construction spending.
+    player_eco.0.total_mass_spent += player_eco.0.mass_drain;
+    player_eco.0.total_energy_spent += player_eco.0.energy_drain;
 
     let net_mass_rate = player_eco.0.net_mass_rate();
     let net_energy_rate = player_eco.0.net_energy_rate();
@@ -160,7 +169,8 @@ pub fn apply_finished_constructions(
                     entity.insert(MaintainancePowerDrain(
                         target.unit_eco_effect.maintainance_energy_drain,
                     ));
-                    player_eco.0.energy_drain += target.unit_eco_effect.maintainance_energy_drain;
+                    // Maintenance is aggregated each tick from
+                    // MaintainancePowerDrain components, not added to energy_drain.
                 }
 
                 if target.unit_eco_effect.increase_mass_storage_capacity > 0.0 {

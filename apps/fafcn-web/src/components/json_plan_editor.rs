@@ -2,7 +2,10 @@ use dioxus::prelude::*;
 use faf_blueprints::ConstructionPlan;
 
 #[component]
-pub fn JsonPlanEditor(plan: Signal<ConstructionPlan>) -> Element {
+pub fn JsonPlanEditor(
+    plan: Signal<ConstructionPlan>,
+    #[props(default = false)] disabled: bool,
+) -> Element {
     let mut json_text = use_signal(|| serialize_plan(&plan.read()));
     let mut error = use_signal(|| String::new());
     let mut copied = use_signal(|| false);
@@ -16,29 +19,35 @@ pub fn JsonPlanEditor(plan: Signal<ConstructionPlan>) -> Element {
             div { class: "flex items-center gap-2 shrink-0",
                 span { class: "text-xs text-neutral-400", "Edit the plan JSON below." }
                 button {
-                    class: "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-sm",
+                    class: if disabled { "px-2 py-1 text-xs rounded bg-neutral-700 text-neutral-500 cursor-not-allowed" } else { "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-sm" },
+                    disabled,
                     onclick: move |_| {
-                        let text = json_text.read().clone();
-                        copy_to_clipboard(&text);
-                        copied.set(true);
+                        if !disabled {
+                            let text = json_text.read().clone();
+                            copy_to_clipboard(&text);
+                            copied.set(true);
+                        }
                     },
                     if *copied.read() { "Copied!" } else { "Copy" }
                 }
             }
             textarea {
-                class: "flex-1 min-h-0 w-full p-3 rounded bg-neutral-950 border border-neutral-700 text-xs font-mono text-neutral-300 resize-none focus:outline-none focus:border-blue-500",
+                class: if disabled { "flex-1 min-h-0 w-full p-3 rounded bg-neutral-950 border border-neutral-700 text-xs font-mono text-neutral-300 resize-none cursor-not-allowed opacity-60" } else { "flex-1 min-h-0 w-full p-3 rounded bg-neutral-950 border border-neutral-700 text-xs font-mono text-neutral-300 resize-none focus:outline-none focus:border-blue-500" },
                 value: "{json_text}",
+                disabled,
                 oninput: move |e| {
-                    copied.set(false);
-                    let text = e.value();
-                    json_text.set(text.clone());
-                    match serde_json::from_str::<ConstructionPlan>(&text) {
-                        Ok(parsed) => {
-                            plan.set(parsed);
-                            error.set(String::new());
-                        }
-                        Err(err) => {
-                            error.set(format!("Invalid JSON: {err}"));
+                    if !disabled {
+                        copied.set(false);
+                        let text = e.value();
+                        json_text.set(text.clone());
+                        match serde_json::from_str::<ConstructionPlan>(&text) {
+                            Ok(parsed) => {
+                                plan.set(parsed);
+                                error.set(String::new());
+                            }
+                            Err(err) => {
+                                error.set(format!("Invalid JSON: {err}"));
+                            }
                         }
                     }
                 },

@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 /// Top-level application selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum App {
-    FafDb,
+    Fafcn,
     FafSim,
     Qqbot,
 }
@@ -31,7 +31,7 @@ impl Task {
         let first = args.next().unwrap_or_else(|| "help".to_string());
 
         match first.as_str() {
-            "faf" => Self::parse_app(App::FafDb, args, "help"),
+            "fafcn" => Self::parse_app(App::Fafcn, args, "help"),
             "faf-sim" => Self::parse_app(App::FafSim, args, "run"),
             "qqbot" => Self::parse_app(App::Qqbot, args, "help"),
             "test" => Ok(Task::Global(GlobalCommand::Test)),
@@ -56,20 +56,20 @@ impl Task {
     }
 }
 
-pub fn print_faf_db_help() {
-    println!("cargo xtask faf — run the FAF unit database");
+pub fn print_fafcn_help() {
+    println!("cargo xtask fafcn — run the FAF construction simulator");
     println!();
     println!("Usage:");
-    println!("  cargo xtask faf <command>");
+    println!("  cargo xtask fafcn <command>");
     println!();
     println!("Commands:");
-    println!("  backend    Start the Axum backend (cargo run --package faf-db-server)");
-    println!("             Logs are written to data/logs/faf-db-server.log");
+    println!("  backend    Start the Axum backend (cargo run --package fafcn-server)");
+    println!("             Logs are written to data/logs/fafcn-server.log");
     println!("  frontend   Start the Dioxus dev server (dx serve --platform web)");
     println!();
     println!("Examples:");
-    println!("  cargo xtask faf backend");
-    println!("  cargo xtask faf frontend");
+    println!("  cargo xtask fafcn backend");
+    println!("  cargo xtask fafcn frontend");
 }
 
 pub fn print_faf_sim_help() {
@@ -105,16 +105,16 @@ pub fn print_top_help() {
     println!("       cargo xtask <global-command>");
     println!();
     println!("Apps:");
-    println!("  faf          FAF unit database (Dioxus frontend + Axum backend)");
-    println!("  faf-sim      FAF eco/build simulator");
-    println!("  qqbot        QQ bot service manager");
+    println!("  fafcn      FAF construction simulator (Dioxus frontend + Axum backend)");
+    println!("  faf-sim    FAF eco/build simulator");
+    println!("  qqbot      QQ bot service manager");
     println!();
     println!("Global commands:");
-    println!("  test         Run cargo test --workspace");
+    println!("  test       Run cargo test --workspace");
     println!();
     println!("Examples:");
-    println!("  cargo xtask faf backend");
-    println!("  cargo xtask faf frontend");
+    println!("  cargo xtask fafcn backend");
+    println!("  cargo xtask fafcn frontend");
     println!("  cargo xtask faf-sim");
     println!("  cargo xtask faf-sim --release");
     println!("  cargo xtask faf-sim web");

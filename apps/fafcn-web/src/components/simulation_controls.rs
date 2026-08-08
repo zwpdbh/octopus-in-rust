@@ -16,12 +16,15 @@ pub fn SimulationControls(
     on_start: EventHandler<()>,
     on_pause: EventHandler<()>,
     on_resume: EventHandler<()>,
+    on_stop: EventHandler<()>,
     on_reset: EventHandler<()>,
 ) -> Element {
     let can_start =
         *status.read() == SimulationStatus::Idle || *status.read() == SimulationStatus::Finished;
     let is_running = *status.read() == SimulationStatus::Running;
     let is_paused = *status.read() == SimulationStatus::Paused;
+    let can_stop =
+        *status.read() == SimulationStatus::Running || *status.read() == SimulationStatus::Paused;
 
     rsx! {
         div { class: "flex items-center gap-3",
@@ -44,6 +47,13 @@ pub fn SimulationControls(
                     class: "px-4 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm transition-colors",
                     onclick: move |_| on_resume.call(()),
                     "Resume"
+                }
+            }
+            if can_stop {
+                button {
+                    class: "px-4 py-2 rounded bg-red-700 hover:bg-red-600 text-white text-sm transition-colors",
+                    onclick: move |_| on_stop.call(()),
+                    "Stop"
                 }
             }
             if !can_start {

@@ -1,10 +1,10 @@
 use dioxus::prelude::*;
 use faf_blueprints::{ConstructionAction, ConstructionPlan};
-use faf_sim_protocol::{SimCmd, SimEvent};
+use faf_sim_protocol::{EcoSnapshot, SimCmd, SimEvent};
 use gloo_net::http::Request;
 
 use crate::components::{
-    to_sim_speed, use_sim_connection, AssignmentTarget, EcoChart, EcoPanel, EcoPoint, EcoStats,
+    to_sim_speed, use_sim_connection, AssignmentTarget, EcoChart, EcoPanel, EcoStats,
     JsonPlanEditor, QueueItemCreator, QueueItemList, SimulationControls, SimulationStatus,
     UnitSelectorModal, UnitSummary,
 };
@@ -49,8 +49,8 @@ pub fn Simulate() -> Element {
     let mut show_json_editor = use_signal(|| false);
     let mut status = use_signal(|| SimulationStatus::Idle);
     let speed = use_signal(|| 0.0_f64);
-    let mut latest_eco = use_signal(|| None::<faf_blueprints::PlayerEcoMetrics>);
-    let mut chart_data = use_signal(Vec::<EcoPoint>::new);
+    let mut latest_eco = use_signal(|| None::<EcoSnapshot>);
+    let mut chart_data = use_signal(Vec::<EcoSnapshot>::new);
     let mut status_msg = use_signal(|| String::new());
     let mut sim_time = use_signal(|| 0.0_f64);
     let mut connection = use_sim_connection();
@@ -81,22 +81,26 @@ pub fn Simulate() -> Element {
     let assign_unit = move |unit: UnitSummary| {
         if let Some(target) = *pending_target.read() {
             match target {
-                AssignmentTarget::ExistingBuilder { item_id } => {
+                AssignmentTarget::ExistingBuilder { start, end } => {
                     let blueprint = unit.to_blueprint();
                     plan.with_mut(|p| {
                         let mut queue = p.building_queue().to_vec();
-                        if let Some(action) = queue.get_mut(item_id as usize) {
-                            action.set_builders(vec![blueprint]);
+                        let start = start as usize;
+                        let end = (end as usize).min(queue.len());
+                        for action in queue.iter_mut().take(end).skip(start) {
+                            action.set_builders(vec![blueprint.clone()]);
                         }
                         *p = ConstructionPlan::new(p.player_eco().clone(), queue);
                     });
                 }
-                AssignmentTarget::ExistingTarget { item_id } => {
+                AssignmentTarget::ExistingTarget { start, end } => {
                     let blueprint = unit.to_blueprint();
                     plan.with_mut(|p| {
                         let mut queue = p.building_queue().to_vec();
-                        if let Some(action) = queue.get_mut(item_id as usize) {
-                            action.set_target(blueprint);
+                        let start = start as usize;
+                        let end = (end as usize).min(queue.len());
+                        for action in queue.iter_mut().take(end).skip(start) {
+                            action.set_target(blueprint.clone());
                         }
                         *p = ConstructionPlan::new(p.player_eco().clone(), queue);
                     });
@@ -158,12 +162,10 @@ pub fn Simulate() -> Element {
             plan.read().clone(),
             to_sim_speed(*speed.read()),
             move |event| match event {
-                SimEvent::EcoSummary(eco) => {
-                    sim_time.with_mut(|t| {
-                        *t += 1.0;
-                        data_writer.write().push(EcoPoint::new(*t, &eco));
-                    });
-                    eco_writer.set(Some(eco));
+                SimEvent::EcoSummary(snapshot) => {
+                    sim_time.set(snapshot.time);
+                    data_writer.write().push(snapshot);
+                    eco_writer.set(Some(snapshot));
                 }
                 SimEvent::ActionFinished(_) => {
                     msg_writer.set("action finished".to_string());
@@ -198,6 +200,13 @@ pub fn Simulate() -> Element {
         }
     };
 
+    let on_stop = move |_| {
+        if let Some(conn) = connection.read().as_ref() {
+            conn.send_command(SimCmd::Stop);
+        }
+        status.set(SimulationStatus::Idle);
+    };
+
     let on_reset = move |_| {
         if let Some(conn) = connection.read().as_ref() {
             conn.close();
@@ -210,18 +219,25 @@ pub fn Simulate() -> Element {
         status_msg.set(String::new());
     };
 
+    let plan_locked = matches!(
+        *status.read(),
+        SimulationStatus::Running | SimulationStatus::Paused
+    );
+
     rsx! {
         div { class: "flex flex-col h-full bg-neutral-950 text-gray-200 overflow-hidden",
             div { class: "flex-1 flex min-h-0 p-4 gap-4",
                 // Left sidebar: eco settings + new item creator.
-                div { class: "w-80 flex flex-col gap-4 shrink-0 overflow-y-auto",
-                    EcoPanel { plan }
+                div {
+                    class: if plan_locked { "w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pointer-events-none opacity-60" } else { "w-80 flex flex-col gap-4 shrink-0 overflow-y-auto" },
+                    EcoPanel { plan, disabled: plan_locked }
                     div { class: "border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
                         QueueItemCreator {
                             draft_builder,
                             draft_builder_count,
                             draft_target,
                             draft_target_count,
+                            disabled: plan_locked,
                             on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
                             on_save: save_draft,
                             on_clear: clear_draft,
@@ -231,7 +247,7 @@ pub fn Simulate() -> Element {
 
                 // Right area: queue (top) + simulation (bottom).
                 div { class: "flex-1 flex flex-col gap-4 min-h-0",
-                    div { class: "flex-1 flex flex-col min-h-0 border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
+                    div { class: "flex-1 flex flex-col min-h-0 overflow-hidden border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
                         div { class: "flex items-center gap-2 mb-3 shrink-0",
                             h3 { class: "text-sm font-semibold text-white", "Construction Plan" }
                             button {
@@ -242,16 +258,17 @@ pub fn Simulate() -> Element {
                             }
                         }
                         if *show_json_editor.read() {
-                            JsonPlanEditor { plan }
+                            JsonPlanEditor { plan, disabled: plan_locked }
                         } else {
                             QueueItemList {
                                 plan,
+                                disabled: plan_locked,
                                 on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
                             }
                         }
                     }
 
-                    div { class: "flex-1 flex flex-col min-h-0 border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
+                    div { class: "flex-1 flex flex-col min-h-0 overflow-hidden border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
                         div { class: "flex items-center justify-between mb-3 shrink-0",
                             SimulationControls {
                                 status,
@@ -259,14 +276,24 @@ pub fn Simulate() -> Element {
                                 on_start,
                                 on_pause,
                                 on_resume,
+                                on_stop,
                                 on_reset,
                             }
-                            div { class: "text-xs text-neutral-400", "{status_msg}" }
+                            div { class: "flex items-center gap-3",
+                                div { class: "text-xs text-neutral-400", "{status_msg}" }
+                                div { class: "text-sm text-neutral-400 tabular-nums",
+                                    if *status.read() == SimulationStatus::Finished {
+                                        "{sim_time:.1}s / {sim_time:.1}s"
+                                    } else {
+                                        "{sim_time:.1}s / ..."
+                                    }
+                                }
+                            }
                         }
                         div { class: "flex-1 min-h-0 flex flex-col",
                             EcoStats { eco: latest_eco }
                             div { class: "flex-1 border border-neutral-700 rounded-lg bg-neutral-900/80 p-3 mt-3 min-h-0 flex flex-col",
-                                EcoChart { data: chart_data }
+                                EcoChart { data: chart_data, latest: *latest_eco.read() }
                             }
                         }
                     }

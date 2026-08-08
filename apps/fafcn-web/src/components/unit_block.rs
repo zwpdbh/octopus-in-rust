@@ -16,13 +16,13 @@ pub fn UnitBlock(
     #[props(default = false)] disabled: bool,
 ) -> Element {
     let button_class = if disabled {
-        "w-16 h-16 p-1 rounded bg-black border border-neutral-700 flex items-center justify-center self-center cursor-not-allowed opacity-60"
+        "w-12 h-12 p-1 rounded bg-black border border-neutral-700 flex items-center justify-center self-center cursor-not-allowed opacity-60"
     } else {
-        "w-16 h-16 p-1 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400 self-center"
+        "w-12 h-12 p-1 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400 self-center"
     };
 
     rsx! {
-        div { class: "flex flex-col gap-2 p-2 rounded bg-neutral-800/50 border border-neutral-700",
+        div { class: "flex flex-col gap-1.5 p-1.5 rounded bg-neutral-800/50 border border-neutral-700",
             span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
             button {
                 class: "{button_class}",
@@ -40,7 +40,7 @@ pub fn UnitBlock(
                         class: "w-full h-full object-contain",
                     }
                 } else {
-                    span { class: "text-neutral-500 text-3xl", "?" }
+                    span { class: "text-neutral-500 text-2xl", "?" }
                 }
             }
             div { class: "flex flex-col items-center text-center gap-1",

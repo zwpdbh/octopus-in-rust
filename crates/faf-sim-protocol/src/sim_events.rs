@@ -2,6 +2,47 @@ use faf_blueprints::{ConstructionPlan, PlayerEcoMetrics};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// A rich economy snapshot emitted every simulation tick.
+///
+/// This is a superset of [`PlayerEcoMetrics`] that adds the current simulation
+/// time and separates maintenance drain from construction drain so the frontend
+/// can draw FAF-style budget charts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EcoSnapshot {
+    pub time: f64,
+    pub production_per_second_mass: f64,
+    pub production_per_second_energy: f64,
+    pub maintenance_consumption_per_second_energy: f64,
+    pub mass_drain: f64,
+    pub energy_drain: f64,
+    pub total_mass_spent: f64,
+    pub total_energy_spent: f64,
+    pub mass_storage: f64,
+    pub mass_storage_cap: f64,
+    pub energy_storage: f64,
+    pub energy_storage_cap: f64,
+}
+
+impl EcoSnapshot {
+    pub fn from_player_eco(time: f64, eco: &PlayerEcoMetrics) -> Self {
+        Self {
+            time,
+            production_per_second_mass: eco.mass_generate_rate,
+            production_per_second_energy: eco.energy_generate_rate,
+            maintenance_consumption_per_second_energy: eco
+                .maintenance_consumption_per_second_energy,
+            mass_drain: eco.mass_drain,
+            energy_drain: eco.energy_drain,
+            total_mass_spent: eco.total_mass_spent,
+            total_energy_spent: eco.total_energy_spent,
+            mass_storage: eco.mass_in_storage,
+            mass_storage_cap: eco.max_capacity_in_mass_storage,
+            energy_storage: eco.energy_in_storage,
+            energy_storage_cap: eco.max_capacity_in_energy_storage,
+        }
+    }
+}
+
 /// Commands sent from the service / CLI into a running simulation thread.
 ///
 /// These cross the normal-application → Bevy-app boundary via the
@@ -11,6 +52,9 @@ pub enum SimCmd {
     Start,
     Pause,
     Resume,
+    /// Stop the simulation. The server will close the connection once the
+    /// simulation thread exits.
+    Stop,
     /// Change playback speed. The engine itself is tick-based; speed is
     /// realized by the service thread throttling how often it calls
     /// `app.update()`.
@@ -52,7 +96,7 @@ impl SimSpeed {
 /// `EventSender` resource held by the engine world.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimEvent {
-    EcoSummary(PlayerEcoMetrics),
+    EcoSummary(EcoSnapshot),
     ActionFinished(Uuid),
 }
 

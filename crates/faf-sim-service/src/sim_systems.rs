@@ -2,7 +2,7 @@ use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use faf_blueprints::ConstructionAction;
 use faf_game_engine::*;
-use faf_sim_protocol::SimEvent;
+use faf_sim_protocol::{EcoSnapshot, SimEvent};
 use uuid::Uuid;
 
 /// Inbound channel for construction actions fed by `run_sim_thread`.
@@ -89,10 +89,14 @@ pub fn report_finished_constructions(
 
 /// Emit the current economy snapshot every simulation tick.
 ///
-/// This is what feeds the live chart and stats panel in the web frontend.
-pub fn emit_eco_summary(player_eco: Res<PlayerEco>, event_sender: Res<EventSender>) {
+/// This is what feeds the live chart, stats panel, and snapshot sidebar in the
+/// web frontend.
+pub fn emit_eco_summary(
+    player_eco: Res<PlayerEco>,
+    time: Res<Time>,
+    event_sender: Res<EventSender>,
+) {
+    let snapshot = EcoSnapshot::from_player_eco(time.elapsed_seconds, &player_eco.0);
     // best-effort reporting; the receiver may be gone during shutdown
-    let _ = event_sender
-        .0
-        .send(SimEvent::EcoSummary(player_eco.0.clone()));
+    let _ = event_sender.0.send(SimEvent::EcoSummary(snapshot));
 }

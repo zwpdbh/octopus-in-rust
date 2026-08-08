@@ -5,8 +5,16 @@ use crate::components::{UnitSelector, UnitSummary};
 /// What slot the user is picking a unit for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentTarget {
-    ExistingBuilder { item_id: u32 },
-    ExistingTarget { item_id: u32 },
+    /// Edit the builder of every action in the half-open index range [start, end).
+    ExistingBuilder {
+        start: u32,
+        end: u32,
+    },
+    /// Edit the target of every action in the half-open index range [start, end).
+    ExistingTarget {
+        start: u32,
+        end: u32,
+    },
     NewBuilder,
     NewTarget,
 }

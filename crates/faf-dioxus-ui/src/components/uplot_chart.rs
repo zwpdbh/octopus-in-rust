@@ -13,9 +13,20 @@ use dioxus::prelude::*;
 use js_sys::{Array, Function, Object, Reflect};
 pub use plotters::prelude::RGBColor;
 use wasm_bindgen::prelude::*;
-use web_sys::window;
+use web_sys::{window, ResizeObserver, ResizeObserverEntry};
 
 static CHART_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Owned uPlot instance plus the closures/observers that must stay alive with it.
+struct ChartHandle {
+    index: usize,
+    chart: JsValue,
+    // Kept alive so the uPlot hooks/closures remain valid.
+    #[allow(dead_code)]
+    hooks: Vec<Closure<dyn FnMut(JsValue)>>,
+    observer: Option<ResizeObserver>,
+    _observer_closure: Option<Closure<dyn FnMut(Vec<ResizeObserverEntry>)>>,
+}
 
 /// Wrapper around a function pointer so it can be used as a Dioxus prop
 /// without triggering function-pointer equality warnings.
@@ -102,8 +113,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     });
     // Stores the active tab index, the live uPlot instance, and any closures
     // installed as hooks so they stay alive as long as the chart.
-    let chart_state: Rc<RefCell<Option<(usize, JsValue, Vec<Closure<dyn FnMut(JsValue)>>)>>> =
-        use_hook(|| Rc::new(RefCell::new(None)));
+    let chart_state: Rc<RefCell<Option<ChartHandle>>> = use_hook(|| Rc::new(RefCell::new(None)));
     let chart_state_for_effect = chart_state.clone();
     let chart_state_for_cleanup = chart_state.clone();
 
@@ -113,8 +123,11 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     let tooltip_pos = use_signal(|| (0.0_f64, 0.0_f64));
 
     use_drop(move || {
-        if let Some((_, chart, _)) = chart_state_for_cleanup.borrow_mut().take() {
-            let _ = destroy_chart(&chart);
+        if let Some(handle) = chart_state_for_cleanup.borrow_mut().take() {
+            if let Some(observer) = handle.observer {
+                observer.disconnect();
+            }
+            let _ = destroy_chart(&handle.chart);
         }
     });
 
@@ -129,13 +142,16 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
 
         let mut state = chart_state_for_effect.borrow_mut();
         let should_create = match state.as_ref() {
-            Some((last_index, _, _)) => *last_index != tab_index,
+            Some(handle) => handle.index != tab_index,
             None => true,
         };
 
         if should_create {
-            if let Some((_, old_chart, _)) = state.take() {
-                let _ = destroy_chart(&old_chart);
+            if let Some(old_handle) = state.take() {
+                if let Some(observer) = old_handle.observer {
+                    observer.disconnect();
+                }
+                let _ = destroy_chart(&old_handle.chart);
             }
             match create_chart(
                 &chart_id_for_effect,
@@ -145,13 +161,16 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 tooltip,
                 tooltip_pos,
             ) {
-                Some((chart, hooks)) => {
-                    *state = Some((tab_index, chart, hooks));
+                Some(handle) => {
+                    *state = Some(ChartHandle {
+                        index: tab_index,
+                        ..handle
+                    });
                 }
                 None => {}
             }
-        } else if let Some((_, chart, _)) = state.as_ref() {
-            let _ = update_chart(chart, &points, x_extractor, &tab.series);
+        } else if let Some(handle) = state.as_ref() {
+            let _ = update_chart(&handle.chart, &points, x_extractor, &tab.series);
         }
     });
 
@@ -172,8 +191,8 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         document::Style {
             r#"
             .uplot-chart-container .uplot {{
-                width: 100% !important;
-                height: 100% !important;
+                width: 100%;
+                height: 100%;
             }}
             .uplot-chart-container .uplot .title {{
                 color: #ffffff;
@@ -193,8 +212,8 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
             }
             div { class: "flex-1 rounded-lg border border-neutral-800 bg-[#171717] p-2 min-h-0 overflow-hidden flex flex-col",
                 div { class: "flex-1 min-h-0 flex flex-row gap-3",
-                    div { class: "shrink-0 self-start overflow-y-auto w-56",
-                        if let Some(sidebar) = sidebar.as_ref() {
+                    if let Some(sidebar) = sidebar.as_ref() {
+                        div { class: "shrink-0 self-start overflow-y-auto w-56",
                             { sidebar.clone() }
                         }
                     }
@@ -268,7 +287,7 @@ fn create_chart<T: Clone + 'static>(
     series: &[ChartSeries<T>],
     tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
     tooltip_pos: Signal<(f64, f64)>,
-) -> Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)> {
+) -> Option<ChartHandle> {
     let window = window()?;
     let document = window.document()?;
     let container = document.get_element_by_id(element_id)?;
@@ -289,8 +308,16 @@ fn create_chart<T: Clone + 'static>(
     args.push(&container);
     let chart = Reflect::construct(&uplot_fn, &args).ok()?;
 
+    let (observer, _observer_closure) = create_resize_observer(&chart, &container);
+
     let hooks = vec![set_cursor];
-    Some((chart, hooks))
+    Some(ChartHandle {
+        index: 0,
+        chart,
+        hooks,
+        observer,
+        _observer_closure,
+    })
 }
 
 fn update_chart<T: Clone>(
@@ -311,6 +338,48 @@ fn destroy_chart(chart: &JsValue) -> Result<(), JsValue> {
     let destroy_fn = Function::from(destroy);
     Reflect::apply(&destroy_fn, chart, &Array::new())?;
     Ok(())
+}
+
+fn resize_chart(chart: &JsValue, width: f64, height: f64) -> Result<(), JsValue> {
+    let set_size = Reflect::get(chart, &"setSize".into())?;
+    let set_size_fn = Function::from(set_size);
+    let size = Object::new();
+    Reflect::set(&size, &"width".into(), &JsValue::from_f64(width))?;
+    Reflect::set(&size, &"height".into(), &JsValue::from_f64(height))?;
+    Reflect::apply(&set_size_fn, chart, &Array::of1(&size))?;
+    Ok(())
+}
+
+fn create_resize_observer(
+    chart: &JsValue,
+    container: &web_sys::Element,
+) -> (
+    Option<ResizeObserver>,
+    Option<Closure<dyn FnMut(Vec<ResizeObserverEntry>)>>,
+) {
+    let chart = chart.clone();
+    let container_for_closure = container.clone();
+    let closure = Closure::wrap(Box::new(move |entries: Vec<ResizeObserverEntry>| {
+        for entry in entries {
+            if entry.target() == container_for_closure {
+                let rect = entry.content_rect();
+                let width = rect.width().max(1.0);
+                let height = rect.height().max(1.0);
+                let _ = resize_chart(&chart, width, height);
+            }
+        }
+    }) as Box<dyn FnMut(Vec<ResizeObserverEntry>)>);
+
+    match ResizeObserver::new(closure.as_ref().unchecked_ref()) {
+        Ok(observer) => {
+            observer.observe(container);
+            (Some(observer), Some(closure))
+        }
+        Err(err) => {
+            web_sys::console::error_1(&format!("failed to create ResizeObserver: {err:?}").into());
+            (None, Some(closure))
+        }
+    }
 }
 
 fn build_series_data<T: Clone>(
@@ -545,8 +614,7 @@ pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
         let id = CHART_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("uplot-dual-axis-chart-{id}")
     });
-    let chart_state: Rc<RefCell<Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)>>> =
-        use_hook(|| Rc::new(RefCell::new(None)));
+    let chart_state: Rc<RefCell<Option<ChartHandle>>> = use_hook(|| Rc::new(RefCell::new(None)));
     let chart_state_for_effect = chart_state.clone();
     let chart_state_for_cleanup = chart_state.clone();
 
@@ -554,8 +622,11 @@ pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
     let tooltip_pos = use_signal(|| (0.0_f64, 0.0_f64));
 
     use_drop(move || {
-        if let Some((chart, _)) = chart_state_for_cleanup.borrow_mut().take() {
-            let _ = destroy_chart(&chart);
+        if let Some(handle) = chart_state_for_cleanup.borrow_mut().take() {
+            if let Some(observer) = handle.observer {
+                observer.disconnect();
+            }
+            let _ = destroy_chart(&handle.chart);
         }
     });
 
@@ -566,6 +637,12 @@ pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
         let mut state = chart_state_for_effect.borrow_mut();
         let should_create = state.is_none();
         if should_create {
+            if let Some(old_handle) = state.take() {
+                if let Some(observer) = old_handle.observer {
+                    observer.disconnect();
+                }
+                let _ = destroy_chart(&old_handle.chart);
+            }
             match create_dual_axis_chart(
                 &chart_id_for_effect,
                 data,
@@ -576,13 +653,13 @@ pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
                 left_axis_label,
                 right_axis_label,
             ) {
-                Some((chart, hooks)) => {
-                    *state = Some((chart, hooks));
+                Some(handle) => {
+                    *state = Some(handle);
                 }
                 None => {}
             }
-        } else if let Some((chart, _)) = state.as_ref() {
-            let _ = update_dual_axis_chart(chart, &points, x_extractor, &series_for_effect);
+        } else if let Some(handle) = state.as_ref() {
+            let _ = update_dual_axis_chart(&handle.chart, &points, x_extractor, &series_for_effect);
         }
     });
 
@@ -590,8 +667,8 @@ pub fn DualAxisUplotChart<T: Clone + PartialEq + 'static>(
         document::Style {
             r#"
             .uplot-chart-container .uplot {{
-                width: 100% !important;
-                height: 100% !important;
+                width: 100%;
+                height: 100%;
             }}
             .uplot-chart-container .uplot .title {{
                 color: #ffffff;
@@ -641,7 +718,7 @@ fn create_dual_axis_chart<T: Clone + 'static>(
     tooltip_pos: Signal<(f64, f64)>,
     left_axis_label: &'static str,
     right_axis_label: &'static str,
-) -> Option<(JsValue, Vec<Closure<dyn FnMut(JsValue)>>)> {
+) -> Option<ChartHandle> {
     let window = window()?;
     let document = window.document()?;
     let container = document.get_element_by_id(element_id)?;
@@ -670,8 +747,16 @@ fn create_dual_axis_chart<T: Clone + 'static>(
     args.push(&container);
     let chart = Reflect::construct(&uplot_fn, &args).ok()?;
 
+    let (observer, _observer_closure) = create_resize_observer(&chart, &container);
+
     let hooks = vec![set_cursor];
-    Some((chart, hooks))
+    Some(ChartHandle {
+        index: 0,
+        chart,
+        hooks,
+        observer,
+        _observer_closure,
+    })
 }
 
 fn update_dual_axis_chart<T: Clone>(

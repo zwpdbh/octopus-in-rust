@@ -160,6 +160,9 @@ fn run_sim_thread(
                 SimCmd::Start => run_state = SimRunState::Running,
                 SimCmd::Pause => run_state = SimRunState::Paused,
                 SimCmd::Resume => run_state = SimRunState::Running,
+                SimCmd::Stop => {
+                    run_state = SimRunState::Stopped;
+                }
                 SimCmd::GameSpeed(new_speed) => {
                     // Speed only affects wall-clock cadence via throttle_tick;
                     // the engine itself stays tick-based.
@@ -208,6 +211,9 @@ fn throttle_tick(tick_start: Instant, speed: &SimSpeed) {
 ///
 /// Does nothing if an action is already in flight.  `run_sim_thread` waits
 /// for the matching internal completion signal before calling this again.
+/// Because actions are dispatched between `app.update()` ticks, each action
+/// naturally starts one simulation second after the previous one finishes,
+/// giving the default 1-second in-game delay required by the UI.
 fn send_next_action(
     queue: &mut VecDeque<ConstructionAction>,
     action_tx: &crossbeam_channel::Sender<(Uuid, ConstructionAction)>,

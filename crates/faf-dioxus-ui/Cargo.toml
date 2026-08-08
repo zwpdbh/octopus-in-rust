@@ -15,4 +15,4 @@ serde_json = { workspace = true }
 plotters = { version = "0.3.7", default-features = false, features = ["line_series", "full_palette"] }
 plotters-canvas = "0.3"
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["console", "CustomEvent", "Document", "Element", "Event", "EventTarget", "HtmlElement", "Window", "Location"] }
+web-sys = { workspace = true, features = ["console", "CustomEvent", "Document", "DomRectReadOnly", "Element", "Event", "EventTarget", "HtmlElement", "ResizeObserver", "ResizeObserverEntry", "Window", "Location"] }
