@@ -60,6 +60,14 @@ pub fn Simulate() -> Element {
         save_plan_to_storage(&plan.read());
     });
 
+    // Forward speed changes to a running simulation.
+    use_effect(move || {
+        let current_speed = to_sim_speed(*speed.read());
+        if let Some(conn) = connection.read().as_ref() {
+            conn.send_command(SimCmd::GameSpeed(current_speed));
+        }
+    });
+
     let unit_list = match units.read().as_ref() {
         Some(Ok(list)) => list.clone(),
         Some(Err(err)) => {
@@ -157,6 +165,7 @@ pub fn Simulate() -> Element {
         let mut data_writer = chart_data;
         let mut msg_writer = status_msg;
         let mut conn_writer = connection;
+        let mut conn_status_writer = connection;
 
         match crate::components::SimConnection::open(
             plan.read().clone(),
@@ -174,6 +183,7 @@ pub fn Simulate() -> Element {
             move |msg| {
                 if msg == "finished" {
                     status_writer.set(SimulationStatus::Finished);
+                    conn_status_writer.set(None);
                 }
                 msg_writer.set(msg);
             },

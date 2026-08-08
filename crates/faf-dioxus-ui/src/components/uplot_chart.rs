@@ -107,6 +107,13 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
     #[props(default)] sidebar: Option<Element>,
 ) -> Element {
     let mut selected_index = use_signal(|| 0usize);
+    let tabs_for_visibility = tabs.clone();
+    let visibility = use_signal(move || {
+        tabs_for_visibility
+            .iter()
+            .map(|tab| vec![true; tab.series.len()])
+            .collect::<Vec<Vec<bool>>>()
+    });
     let chart_id = use_hook(|| {
         let id = CHART_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("uplot-chart-{id}")
@@ -133,6 +140,7 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
 
     let tabs_for_effect = tabs.clone();
     let chart_id_for_effect = chart_id.clone();
+    let visibility_for_effect = visibility;
     use_effect(move || {
         let points = data.read();
         let tab_index = *selected_index.read();
@@ -160,6 +168,8 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                 &tab.series,
                 tooltip,
                 tooltip_pos,
+                visibility_for_effect,
+                tab_index,
             ) {
                 Some(handle) => {
                     *state = Some(ChartHandle {
@@ -168,6 +178,15 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                     });
                 }
                 None => {}
+            }
+            drop(state);
+            // Apply the stored visibility state to the newly created chart.
+            if let Some(handle) = chart_state_for_effect.borrow().as_ref() {
+                if let Some(tab_vis) = visibility_for_effect.read().get(tab_index) {
+                    for (i, show) in tab_vis.iter().enumerate() {
+                        let _ = set_series_visibility(&handle.chart, i + 1, *show);
+                    }
+                }
             }
         } else if let Some(handle) = state.as_ref() {
             let _ = update_chart(&handle.chart, &points, x_extractor, &tab.series);
@@ -182,10 +201,24 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
         };
     }
 
+    let active_tab_index = *selected_index.read();
     let active_tab = tabs
-        .get(*selected_index.read())
+        .get(active_tab_index)
         .cloned()
         .unwrap_or_else(|| tabs[0].clone());
+    let chart_state_for_legend = chart_state.clone();
+    let series_visibility: Vec<bool> = active_tab
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            visibility
+                .read()
+                .get(active_tab_index)
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or(true)
+        })
+        .collect();
 
     rsx! {
         document::Style {
@@ -218,11 +251,39 @@ pub fn UplotChart<T: Clone + PartialEq + 'static>(
                         }
                     }
                     div { class: "flex-1 min-h-0 flex flex-col",
-                        div { class: "flex items-center justify-center gap-4 mb-1 shrink-0",
-                            for s in active_tab.series.iter() {
+                        div { class: "flex items-center justify-center gap-4 mb-1 shrink-0 flex-wrap",
+                            for (series_index , s) in active_tab.series.iter().enumerate() {
                                 LegendItem {
+                                    key: "{series_index}",
                                     color: rgb_to_hex(s.color),
                                     label: s.label.clone(),
+                                    visible: series_visibility[series_index],
+                                    onclick: {
+                                        let chart_state = chart_state_for_legend.clone();
+                                        let visibility = visibility;
+                                        let mut visibility = visibility;
+                                        move |_| {
+                                            let new_show = visibility.with_mut(|v| {
+                                                v.get_mut(active_tab_index)
+                                                    .and_then(|tab_vis| tab_vis.get_mut(series_index))
+                                                    .map(|show| {
+                                                        *show = !*show;
+                                                        *show
+                                                    })
+                                            });
+                                            if let Some(show) = new_show {
+                                                if let Some(handle) = chart_state.borrow().as_ref() {
+                                                    if handle.index == active_tab_index {
+                                                        let _ = set_series_visibility(
+                                                            &handle.chart,
+                                                            series_index + 1,
+                                                            show,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
                                 }
                             }
                         }
@@ -267,15 +328,32 @@ fn TabButton(label: String, is_active: bool, onclick: EventHandler<()>) -> Eleme
 }
 
 #[component]
-fn LegendItem(color: String, label: String) -> Element {
+fn LegendItem(
+    color: String,
+    label: String,
+    #[props(default = true)] visible: bool,
+    #[props(default)] onclick: EventHandler<()>,
+) -> Element {
+    let state_class = if visible { "opacity-100" } else { "opacity-50" };
+    let check_class = if visible {
+        "bg-blue-600 border-blue-600 text-white"
+    } else {
+        "bg-transparent border-neutral-500 text-transparent"
+    };
+    let label_class = if visible { "" } else { "line-through" };
     rsx! {
-        div { class: "flex items-center gap-1.5",
+        button {
+            class: "flex items-center gap-1.5 {state_class} hover:opacity-80 transition-opacity",
+            onclick: move |_| onclick.call(()),
+            div { class: "w-3.5 h-3.5 rounded border flex items-center justify-center text-[10px] {check_class}",
+                if visible { "✓" }
+            }
             span {
                 class: "text-lg leading-none select-none",
                 style: "color: {color}",
                 "▬"
             }
-            span { class: "text-xs text-neutral-300", "{label}" }
+            span { class: "text-xs text-neutral-300 {label_class}", "{label}" }
         }
     }
 }
@@ -287,6 +365,8 @@ fn create_chart<T: Clone + 'static>(
     series: &[ChartSeries<T>],
     tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
     tooltip_pos: Signal<(f64, f64)>,
+    visibility: Signal<Vec<Vec<bool>>>,
+    tab_index: usize,
 ) -> Option<ChartHandle> {
     let window = window()?;
     let document = window.document()?;
@@ -297,7 +377,15 @@ fn create_chart<T: Clone + 'static>(
     let width = container.client_width().max(1) as f64;
     let height = container.client_height().max(1) as f64;
 
-    let set_cursor = build_set_cursor_closure(data, x_extractor, series, tooltip, tooltip_pos);
+    let set_cursor = build_set_cursor_closure(
+        data,
+        x_extractor,
+        series,
+        tooltip,
+        tooltip_pos,
+        visibility,
+        tab_index,
+    );
     let opts = build_opts(series, width, height, &set_cursor);
 
     let uplot = Reflect::get(&window, &"uPlot".into()).ok()?;
@@ -347,6 +435,18 @@ fn resize_chart(chart: &JsValue, width: f64, height: f64) -> Result<(), JsValue>
     Reflect::set(&size, &"width".into(), &JsValue::from_f64(width))?;
     Reflect::set(&size, &"height".into(), &JsValue::from_f64(height))?;
     Reflect::apply(&set_size_fn, chart, &Array::of1(&size))?;
+    Ok(())
+}
+
+fn set_series_visibility(chart: &JsValue, series_idx: usize, show: bool) -> Result<(), JsValue> {
+    let set_series = Reflect::get(chart, &"setSeries".into())?;
+    let set_series_fn = Function::from(set_series);
+    let opts = Object::new();
+    Reflect::set(&opts, &"show".into(), &JsValue::from_bool(show))?;
+    let args = Array::new();
+    args.push(&JsValue::from_f64(series_idx as f64));
+    args.push(&opts);
+    Reflect::apply(&set_series_fn, chart, &args)?;
     Ok(())
 }
 
@@ -499,6 +599,8 @@ fn build_set_cursor_closure<T: Clone + 'static>(
     series: &[ChartSeries<T>],
     mut tooltip: Signal<Option<(String, Vec<(String, String)>)>>,
     mut tooltip_pos: Signal<(f64, f64)>,
+    visibility: Signal<Vec<Vec<bool>>>,
+    tab_index: usize,
 ) -> Closure<dyn FnMut(JsValue)> {
     let series = series.to_vec();
     Closure::wrap(Box::new(move |u: JsValue| {
@@ -527,13 +629,25 @@ fn build_set_cursor_closure<T: Clone + 'static>(
         };
 
         let x = x_extractor.extract(point);
-        let values = series
+        let values: Vec<(String, String)> = series
             .iter()
-            .map(|s| {
+            .enumerate()
+            .filter(|(i, _)| {
+                visibility
+                    .read()
+                    .get(tab_index)
+                    .and_then(|v| v.get(*i).copied())
+                    .unwrap_or(true)
+            })
+            .map(|(_, s)| {
                 let y = s.y_extractor.extract(point);
                 (s.label.clone(), format!("{:.2}", y))
             })
             .collect();
+        if values.is_empty() {
+            tooltip.set(None);
+            return;
+        }
         tooltip.set(Some((format_time(x), values)));
 
         if let (Some(left), Some(top)) = (
