@@ -225,29 +225,28 @@ pub fn Simulate() -> Element {
     );
 
     rsx! {
-        div { class: "flex flex-col h-full bg-neutral-950 text-gray-200 overflow-hidden",
-            div { class: "flex-1 flex min-h-0 p-4 gap-4",
+        div { class: "flex flex-col flex-1 min-h-0 bg-neutral-950 text-gray-200 overflow-hidden select-none font-sans",
+            div { class: "flex flex-1 overflow-hidden",
                 // Left sidebar: eco settings + new item creator.
                 div {
-                    class: if plan_locked { "w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pointer-events-none opacity-60" } else { "w-80 flex flex-col gap-4 shrink-0 overflow-y-auto" },
+                    class: if plan_locked { "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30 pointer-events-none opacity-60" } else { "w-80 shrink-0 overflow-auto p-4 border-r border-neutral-800 bg-neutral-900/30" },
                     EcoPanel { plan, disabled: plan_locked }
-                    div { class: "border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
-                        QueueItemCreator {
-                            draft_builder,
-                            draft_builder_count,
-                            draft_target,
-                            draft_target_count,
-                            disabled: plan_locked,
-                            on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
-                            on_save: save_draft,
-                            on_clear: clear_draft,
-                        }
+                    div { class: "my-4 border-t border-neutral-700" }
+                    QueueItemCreator {
+                        draft_builder,
+                        draft_builder_count,
+                        draft_target,
+                        draft_target_count,
+                        disabled: plan_locked,
+                        on_assign_slot: move |target: AssignmentTarget| pending_target.set(Some(target)),
+                        on_save: save_draft,
+                        on_clear: clear_draft,
                     }
                 }
 
                 // Right area: queue (top) + simulation (bottom).
-                div { class: "flex-1 flex flex-col gap-4 min-h-0",
-                    div { class: "flex-1 flex flex-col min-h-0 overflow-hidden border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
+                div { class: "flex-1 overflow-hidden flex flex-col",
+                    div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
                         div { class: "flex items-center gap-2 mb-3 shrink-0",
                             h3 { class: "text-sm font-semibold text-white", "Construction Plan" }
                             button {
@@ -268,8 +267,9 @@ pub fn Simulate() -> Element {
                         }
                     }
 
-                    div { class: "flex-1 flex flex-col min-h-0 overflow-hidden border border-neutral-700 rounded-lg bg-neutral-900/80 p-3",
-                        div { class: "flex items-center justify-between mb-3 shrink-0",
+                    div { class: "flex-1 overflow-hidden flex flex-col p-4 bg-neutral-900/30",
+                        div { class: "flex items-center mb-3 shrink-0",
+                            div { class: "flex-1" }
                             SimulationControls {
                                 status,
                                 speed,
@@ -279,7 +279,7 @@ pub fn Simulate() -> Element {
                                 on_stop,
                                 on_reset,
                             }
-                            div { class: "flex items-center gap-3",
+                            div { class: "flex-1 flex items-center justify-end gap-3",
                                 div { class: "text-xs text-neutral-400", "{status_msg}" }
                                 div { class: "text-sm text-neutral-400 tabular-nums",
                                     if *status.read() == SimulationStatus::Finished {

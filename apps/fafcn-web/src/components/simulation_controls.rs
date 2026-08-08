@@ -19,49 +19,46 @@ pub fn SimulationControls(
     on_stop: EventHandler<()>,
     on_reset: EventHandler<()>,
 ) -> Element {
-    let can_start =
+    let start_enabled =
         *status.read() == SimulationStatus::Idle || *status.read() == SimulationStatus::Finished;
-    let is_running = *status.read() == SimulationStatus::Running;
-    let is_paused = *status.read() == SimulationStatus::Paused;
-    let can_stop =
-        *status.read() == SimulationStatus::Running || *status.read() == SimulationStatus::Paused;
+    let pause_enabled = *status.read() == SimulationStatus::Running;
+    let resume_enabled = *status.read() == SimulationStatus::Paused;
+    let stop_enabled = *status.read() == SimulationStatus::Running
+        || *status.read() == SimulationStatus::Paused
+        || *status.read() == SimulationStatus::Finished;
+    let reset_enabled = *status.read() != SimulationStatus::Idle;
 
     rsx! {
         div { class: "flex items-center gap-3",
-            if can_start {
-                button {
-                    class: "px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm transition-colors",
-                    onclick: move |_| on_start.call(()),
-                    "Start"
-                }
+            ControlButton {
+                label: "Start",
+                enabled: start_enabled,
+                onclick: on_start,
+                active_class: "bg-emerald-700 hover:bg-emerald-600",
             }
-            if is_running {
-                button {
-                    class: "px-4 py-2 rounded bg-amber-700 hover:bg-amber-600 text-white text-sm transition-colors",
-                    onclick: move |_| on_pause.call(()),
-                    "Pause"
-                }
+            ControlButton {
+                label: "Pause",
+                enabled: pause_enabled,
+                onclick: on_pause,
+                active_class: "bg-amber-700 hover:bg-amber-600",
             }
-            if is_paused {
-                button {
-                    class: "px-4 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm transition-colors",
-                    onclick: move |_| on_resume.call(()),
-                    "Resume"
-                }
+            ControlButton {
+                label: "Resume",
+                enabled: resume_enabled,
+                onclick: on_resume,
+                active_class: "bg-blue-700 hover:bg-blue-600",
             }
-            if can_stop {
-                button {
-                    class: "px-4 py-2 rounded bg-red-700 hover:bg-red-600 text-white text-sm transition-colors",
-                    onclick: move |_| on_stop.call(()),
-                    "Stop"
-                }
+            ControlButton {
+                label: "Stop",
+                enabled: stop_enabled,
+                onclick: on_stop,
+                active_class: "bg-red-700 hover:bg-red-600",
             }
-            if !can_start {
-                button {
-                    class: "px-4 py-2 rounded bg-neutral-700 hover:bg-neutral-600 text-white text-sm transition-colors",
-                    onclick: move |_| on_reset.call(()),
-                    "Reset"
-                }
+            ControlButton {
+                label: "Reset",
+                enabled: reset_enabled,
+                onclick: on_reset,
+                active_class: "bg-neutral-700 hover:bg-neutral-600",
             }
 
             div { class: "flex items-center gap-2 ml-4",
@@ -80,6 +77,35 @@ pub fn SimulationControls(
                     option { value: "10", selected: speed() == 10.0, "10x" }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn ControlButton(
+    label: String,
+    enabled: bool,
+    onclick: EventHandler<()>,
+    active_class: &'static str,
+) -> Element {
+    let base = "px-4 py-2 rounded text-white text-sm transition-colors";
+    let disabled_class = "bg-neutral-800 text-neutral-500 cursor-not-allowed";
+    let class = if enabled {
+        format!("{base} {active_class}")
+    } else {
+        format!("{base} {disabled_class}")
+    };
+
+    rsx! {
+        button {
+            class,
+            disabled: !enabled,
+            onclick: move |_| {
+                if enabled {
+                    onclick.call(());
+                }
+            },
+            "{label}"
         }
     }
 }
