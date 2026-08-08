@@ -31,13 +31,13 @@ Key decisions:
 
 | File                                                        | Change                                                  |
 | ----------------------------------------------------------- | ------------------------------------------------------- |
-| `apps/fafcn-server/Cargo.toml`                              | Add`brain`, `futures-util`, `tokio-stream` dependencies |
-| `apps/fafcn-server/src/qa.rs` (new)                         | `QaConfig`, `QaState`, `ask` helper, `run_brain_turn`   |
-| `apps/fafcn-server/src/main.rs`                             | Import qa module, add`POST /api/ask`, wire state        |
-| `apps/fafcn-web/src/main.rs`                                | Add`/qa` route                                          |
-| `apps/fafcn-web/src/views/qa.rs` (new)                      | Chat UI: message list, input, send handler              |
-| `apps/fafcn-web/src/views/mod.rs`                           | Re-export`qa` module                                    |
-| `apps/fafcn-web/src/components/navbar.rs` (or existing nav) | Add "Q&A" link                                          |
+| `apps/fafcn-server/Cargo.toml`              | Add `brain` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
+| `apps/fafcn-server/src/qa.rs` (new)         | `QaConfig`, `create_brain`, `ask`                                                               |
+| `apps/fafcn-server/src/main.rs`             | Import qa module, add `POST /api/ask`, wire state                                               |
+| `apps/fafcn-web/src/main.rs`                | Add `/qa` route inside the `#[layout(Navbar)]` block                                            |
+| `apps/fafcn-web/src/views/qa.rs` (new)      | Chat UI: message list, input, send handler                                                      |
+| `apps/fafcn-web/src/views/mod.rs`           | Re-export `qa` module                                                                           |
+| `apps/fafcn-web/src/views/navbar.rs`        | Add "Q&A" link                                                                                  |
 
 ---
 
@@ -49,11 +49,9 @@ Key decisions:
 # apps/fafcn-server/Cargo.toml
 [dependencies]
 brain = { workspace = true }
-futures-util = { workspace = true }
-tokio-stream = { workspace = true }
 ```
 
-`reqwest` is not required for the LLM call because `brain` handles provider networking. Keep `reqwest` out unless you add non-agent endpoints later.
+`reqwest` is not required for the LLM call because `brain` handles provider networking. Keep `reqwest` out unless you add non-agent endpoints later. `futures-util` and `tokio-stream` are only needed if you switch from `run_turn_to_completion` to streaming `run_turn`; leave them out for v1.
 
 ### 3.2 Create `apps/fafcn-server/src/qa.rs`
 
@@ -71,6 +69,9 @@ Read settings from environment variables so you do not need a new config file ye
 
 ```rust
 // apps/fafcn-server/src/qa.rs
+use serde::Deserialize;
+use std::{collections::HashSet, path::PathBuf};
+
 #[derive(Clone, Debug)]
 pub struct QaConfig {
     pub base_url: String,
@@ -110,9 +111,8 @@ impl QaConfig {
 Use `ExtismPluginSource::with_filter` to load only `faf_units_plugin`:
 
 ```rust
-use brain::{Brain, BrainBuilder, BrainConfig, BrainEvent, ExtismPluginSource, ToolAwareSystemPromptPolicy};
+use brain::{Brain, BrainBuilder, BrainConfig, ExtismPluginSource, ToolAwareSystemPromptPolicy};
 use std::sync::Arc;
-use futures_util::StreamExt;
 
 pub async fn create_brain(config: &QaConfig) -> anyhow::Result<Brain> {
     let allowed: HashSet<String> = ["faf_units_plugin"].into_iter().map(String::from).collect();
@@ -171,9 +171,12 @@ pub async fn ask(config: &QaConfig, question: &str) -> anyhow::Result<QaResponse
 Add request/response structs:
 
 ```rust
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Deserialize)]
 pub struct AskRequest {
     pub question: String,
+    /// Reserved for future conversation-memory support. Ignored in v1.
     #[serde(default)]
     pub history: Vec<ChatMessage>,
 }
@@ -253,17 +256,22 @@ Add a `Brain(brain::BrainError)` variant to `AppError` and implement `From<brain
 
 ### 4.1 Add route
 
+`fafcn-web` already uses a `Navbar` layout. Add `Qa` inside it so the nav bar is preserved:
+
 ```rust
 // apps/fafcn-web/src/main.rs
-mod views;
-use views::{simulate, qa};
+use views::{Home, Navbar, Qa, Simulate};
 
-#[derive(Routable, Clone, PartialEq, Debug)]
+#[derive(Debug, Clone, Routable, PartialEq)]
+#[rustfmt::skip]
 enum Route {
-    #[route("/")]
-    Simulate {},
-    #[route("/qa")]
-    Qa {},
+    #[layout(Navbar)]
+        #[route("/")]
+        Home {},
+        #[route("/simulate")]
+        Simulate {},
+        #[route("/qa")]
+        Qa {},
 }
 ```
 
@@ -393,7 +401,13 @@ pub mod simulate;
 
 ### 4.4 Add navigation link
 
-Find the existing navbar component and add a link to `/qa`.
+Edit `apps/fafcn-web/src/views/navbar.rs` and add the link next to the existing ones:
+
+```rust
+NavLink { to: Route::Home {}, label: "Home" }
+NavLink { to: Route::Simulate {}, label: "Simulate" }
+NavLink { to: Route::Qa {}, label: "Q&A" }
+```
 
 ---
 
