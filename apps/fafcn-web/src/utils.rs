@@ -27,6 +27,17 @@ pub fn tech_level_short(tech: TechLevel) -> &'static str {
     }
 }
 
+/// Infer faction from the second character of a FAF blueprint id.
+pub fn faction_from_id(id: &str) -> &'static str {
+    match id.chars().nth(1) {
+        Some('E') => "uef",
+        Some('A') => "aeon",
+        Some('R') => "cybran",
+        Some('S') => "seraphim",
+        _ => "unknown",
+    }
+}
+
 /// Hex faction color for borders and highlights.
 pub fn faction_color(faction: &str) -> &'static str {
     match faction.to_lowercase().as_str() {

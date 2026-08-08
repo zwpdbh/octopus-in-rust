@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 
 mod components;
+mod state;
 mod utils;
 mod views;
 

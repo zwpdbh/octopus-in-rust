@@ -12,7 +12,7 @@ pub struct FafBlueprints {
     index: FafUnitIndex,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitBlueprint {
     unit_id: String,
     unit_description: String,

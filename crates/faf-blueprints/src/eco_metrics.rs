@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Clone, Deserialize, Serialize)]
+#[derive(Default, Clone, Copy, Deserialize, Serialize)]
 pub struct PlayerEcoMetrics {
     // mass produce vs consume
     pub mass_generate_rate: f64,

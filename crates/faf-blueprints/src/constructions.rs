@@ -1,7 +1,7 @@
 use crate::{eco_metrics::*, UnitBlueprint};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ConstructionPlan {
     player_eco: PlayerEcoMetrics,
     building_queue: Vec<ConstructionAction>,
@@ -26,9 +26,13 @@ impl ConstructionPlan {
     pub fn into_parts(self) -> (PlayerEcoMetrics, Vec<ConstructionAction>) {
         (self.player_eco, self.building_queue)
     }
+
+    pub fn set_player_eco(&mut self, eco: PlayerEcoMetrics) {
+        self.player_eco = eco;
+    }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ConstructionAction {
     builders: Vec<UnitBlueprint>,
     target: UnitBlueprint,
@@ -45,5 +49,13 @@ impl ConstructionAction {
 
     pub fn target(&self) -> &UnitBlueprint {
         &self.target
+    }
+
+    pub fn set_builders(&mut self, builders: Vec<UnitBlueprint>) {
+        self.builders = builders;
+    }
+
+    pub fn set_target(&mut self, target: UnitBlueprint) {
+        self.target = target;
     }
 }
