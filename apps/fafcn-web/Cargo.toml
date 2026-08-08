@@ -1,0 +1,24 @@
+[package]
+name = "fafcn-web"
+version = "0.1.0"
+authors = ["zwpdbh <hyperion_z@outlook.com>"]
+edition = "2021"
+
+[dependencies]
+dioxus = { workspace = true, features = ["web", "router"] }
+faf-blueprints = { workspace = true }
+faf-dioxus-ui = { workspace = true }
+faf-sim-protocol = { workspace = true }
+gloo-net = { workspace = true }
+js-sys = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = "0.4"
+web-sys = { workspace = true, features = ["Window", "Location", "Storage", "WebSocket", "MessageEvent", "Event", "CloseEvent", "Clipboard", "Navigator"] }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]

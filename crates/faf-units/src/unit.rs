@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +95,16 @@ pub struct Unit {
     pub weapon: Vec<Weapon>,
 }
 
+impl fmt::Display for Unit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let output = format!(
+            "(unit_id: {}, unit_description: {})",
+            self.id, self.description
+        );
+        write!(f, "{}", output)
+    }
+}
+
 /// Split damage parameters.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
 #[serde(rename_all = "PascalCase")]
@@ -162,9 +173,11 @@ impl Unit {
 
     /// Extracts the tech level from categories, if present.
     pub fn tech_level(&self) -> Option<&str> {
-        self.categories.iter().find_map(|c| match c.as_str() {
-            "TECH1" | "TECH2" | "TECH3" | "TECH4" | "EXPERIMENTAL" => Some(c.as_str()),
-            _ => None,
+        self.categories.iter().find_map(|c| -> Option<&str> {
+            match c.as_str() {
+                "TECH1" | "TECH2" | "TECH3" | "TECH4" | "EXPERIMENTAL" => Some(c.as_str()),
+                _ => None,
+            }
         })
     }
 

@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::Unit;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// Root wrapper for the generated FAF unit index.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct DataIndex {
+pub struct FafUnitIndex {
     pub version: String,
 
     pub shield_default_overspill: f64,
@@ -25,7 +25,30 @@ pub struct DataIndex {
     pub units: Vec<Unit>,
 }
 
-impl DataIndex {
+impl FafUnitIndex {
+    pub fn default() -> Result<Self> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/faf-units/data/faf_units.json");
+        FafUnitIndex::new(path)
+    }
+
+    pub fn new(units_file_path: PathBuf) -> Result<Self> {
+        let text = std::fs::read_to_string(&units_file_path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read units file {}: {e}",
+                units_file_path.display()
+            )
+        })?;
+
+        let index: FafUnitIndex = serde_json::from_str(&text).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to parse units file {}: {e}",
+                units_file_path.display()
+            )
+        })?;
+        Ok(index)
+    }
+
     /// Look up a unit by blueprint id (case-insensitive).
     pub fn find_unit(&self, id: &str) -> Option<&Unit> {
         self.units.iter().find(|u| u.id.eq_ignore_ascii_case(id))

@@ -1,27 +1,40 @@
-//! CLI for the FAF build-queue simulator and build-time predictor.
+//! CLI for the FAF build-queue simulator and build-order scheduler.
 //!
 //! This binary dispatches to focused modules in `src/*.rs`. Most commands are
-//! thin wrappers over the `faf-sim`, `faf-sim-service`, and
-//! `faf-build-prediction` crates.
+//! thin wrappers over the `faf-sim` and `faf-sim-service` crates.
 
 mod build;
 mod command_line;
-mod dataset;
-mod predict;
-mod schedule;
-mod train;
 mod util;
 
 use clap::Parser;
-use command_line::{Cli, Command};
+use command_line::Cli;
+use faf_blueprints::FafBlueprints;
 
-fn main() {
+use crate::command_line::Command::{Build, Search};
+use anyhow::Result;
+
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { mode } => build::run(mode),
-        Command::Dataset { mode } => dataset::run(mode),
-        Command::Train(args) => train::run(args),
-        Command::Predict { mode } => predict::run(mode),
-        Command::Schedule { mode } => schedule::run(mode),
+        Search { str } => {
+            let faf = FafBlueprints::new()?;
+            let info = faf.get_one_unit_from_search(&str)?;
+            println!("{:?}", info);
+        }
+        // Run the construction plan through the Bevy-backed simulation service.
+        // `speed` controls real-world playback; the engine itself is tick-based.
+        Build {
+            plan_file: queue,
+            speed,
+        } => {
+            let construction_plan_str = std::fs::read_to_string(&queue).unwrap_or_else(|e| {
+                eprintln!("Failed to read: {}, error: {}", queue.display(), e);
+                std::process::exit(1);
+            });
+
+            let _ = build::run(&construction_plan_str, speed)?;
+        }
     }
+    Ok(())
 }

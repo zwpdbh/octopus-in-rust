@@ -1,14 +1,15 @@
 [package]
 name = "faf-sim-service"
 version = "0.1.0"
-edition = "2021"
-authors = ["octopus contributors"]
-description = "Multi-simulation service that wraps faf-sim into a stream of events."
-license = "MIT"
+edition = "2024"
 
 [dependencies]
-crossbeam-channel = "0.5"
-faf-sim = { workspace = true, features = ["headless"] }
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+faf-blueprints = { workspace = true }
+faf-sim-protocol = { workspace = true }
+faf-game-engine = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+crossbeam-channel = "0.5"

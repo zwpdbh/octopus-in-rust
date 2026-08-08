@@ -341,46 +341,43 @@ fn process(s: &mut SampleStage) {
 #### Good
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 364 — SamplePipeline (abbreviated)
-struct SamplePipeline<'a, 'conn, R: Rng> {
-    generator: &'a DatasetGenerator,
-    rng: &'a mut R,
-    tx: &'a Transaction<'conn>,
-    stats: &'a mut NormalizationParams,
-    practical_count: &'a mut usize,
-    not_practical_count: &'a mut usize,
+// docref: demo
+struct BuildPipeline<'a> {
+    request: &'a BuildRequest,
+    library: &'a BlueprintLibrary,
+    clock: &'a mut SchedulerClock,
 }
 
-impl<'a, 'conn, R: Rng> SamplePipeline<'a, 'conn, R> {
-    fn generate_sample(&'a mut self) -> UnsimulatedSample<'a, 'conn, R> { ... }
+impl<'a> BuildPipeline<'a> {
+    fn select_action(self) -> ActionSelected<'a> { ... }
 }
 
-struct UnsimulatedSample<'a, 'conn, R: Rng> { ... }
-impl<'a, 'conn, R: Rng> UnsimulatedSample<'a, 'conn, R> {
-    fn simulate(self, time_limit_seconds: f64) -> SimulatedSample<'a, 'conn, R> { ... }
+struct ActionSelected<'a> { ... }
+impl<'a> ActionSelected<'a> {
+    fn simulate(self) -> SimulatedAction<'a> { ... }
 }
 
-struct SimulatedSample<'a, 'conn, R: Rng> { ... }
-impl<'a, 'conn, R: Rng> SimulatedSample<'a, 'conn, R> {
-    fn extract_sequence_features(self) -> FeaturedSample<'a, 'conn, R> { ... }
+struct SimulatedAction<'a> { ... }
+impl<'a> SimulatedAction<'a> {
+    fn commit(self) -> CommittedAction<'a> { ... }
 }
 
-struct FeaturedSample<'a, 'conn, R: Rng> { ... }
-impl<'a, 'conn, R: Rng> FeaturedSample<'a, 'conn, R> {
-    fn insert_sample(self) -> Result<()> { ... }
+struct CommittedAction<'a> { ... }
+impl<'a> CommittedAction<'a> {
+    fn update_world(self) -> Result<()> { ... }
 }
 ```
 
 Usage:
 
 ```rust
-// crates/faf-build-prediction/src/data/generator.rs ~line 292 — DatasetPipeline::generate_samples (abbreviated)
-SamplePipeline { generator, rng: &mut rng, tx: &tx, stats, ... }
-    .generate_sample()
-    .simulate(time_limit)
-    .extract_sequence_features()
-    .insert_sample()
-    .with_context(|| format!("Failed to insert sample {}", i + 1))?;
+// docref: demo
+BuildPipeline { request, library, clock }
+    .select_action()
+    .simulate()
+    .commit()
+    .update_world()
+    .with_context(|| "Failed to apply build step")?;
 ```
 
 #### Migration

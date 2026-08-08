@@ -1,0 +1,21 @@
+[application]
+
+[web.app]
+
+# HTML title tag content
+title = "fafcn-web"
+
+# include `assets` in web platform
+[web.resource]
+
+# Additional CSS style files
+style = ["/uplot.min.css"]
+
+# Additional JavaScript files
+script = ["/uplot.iife.min.js"]
+
+[web.resource.dev]
+
+# Javascript code file
+# serve: [dev-server] only
+script = []

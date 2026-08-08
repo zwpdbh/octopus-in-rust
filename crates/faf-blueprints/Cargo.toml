@@ -1,0 +1,15 @@
+[package]
+name = "faf-blueprints"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "High level faf game features and units"
+license = "MIT"
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+petgraph = { workspace = true }
+faf-units = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

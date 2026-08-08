@@ -1,0 +1,11 @@
+[package]
+name = "faf-game-engine"
+description = "raw low level faf unit parsed from json, faf-blueprints is the one user should use regularly"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy_ecs = { workspace = true }
+bevy_app = { workspace = true }
+faf-blueprints = { workspace = true }
+uuid = { workspace = true }
