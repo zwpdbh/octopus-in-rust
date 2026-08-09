@@ -38,7 +38,7 @@
 | **config.py** | **429** | **config.rs** | **433** | **🔄** | **Models done; no live config reload** |
 | `constant.py` | — | `constant.rs` | — | ✅ | Constants ported |
 | `exception.py` | — | `exception.rs` | 223 | 🔄 | Core errors done; `BackToTheFuture` added |
-| **llm.py** | **333** | **llm.rs** | **446** | **✅** | **Streaming + non-streaming via kosong. Kimi, OpenAI Legacy, OpenAI Responses supported.** |
+| **llm.py** | **333** | **llm.rs** | **446** | **✅** | **Streaming + non-streaming via llm-provider. Kimi, OpenAI Legacy, OpenAI Responses supported.** |
 | `metadata.py` | — | `metadata.rs` | 106 | ✅ | Build metadata |
 | **session.py** | **319** | **session.rs** | **290** | **🔄** | **Create/resume/continue/list/delete working. Fork/undo partial.** |
 | `session_state.py` | — | `session_state.rs` | 181 | 🔄 | Approval state synced |
@@ -207,7 +207,7 @@
 | `dynamic_injections/plan_mode.py` | — | `plan_mode.rs` | 256 | ✅ | Plan mode injection |
 | `message.py` | — | `message.rs` | 129 | 🔄 | `tool_result_to_message()` simplified |
 | `slash.py` | 341 | `slash.rs` | 1240 | ✅ | 20+ commands; all core commands implemented |
-| **toolset.py** | **888** | **toolset.rs** | **777** | **🔄** | **MCP stdio wired; kosong streaming fully wired** |
+| **toolset.py** | **888** | **toolset.rs** | **777** | **🔄** | **MCP stdio wired; llm-provider streaming fully wired** |
 
 ### `soul/` Sub-Gaps
 
@@ -477,6 +477,6 @@
 
 ## Kosong Crate Status
 
-See [`kosong_mirror_comparison.md`](./kosong_mirror_comparison.md) for the detailed `kosong` parity analysis.
+See [`llm_provider_mirror_comparison.md`](./llm_provider_mirror_comparison.md) for the detailed `llm-provider` parity analysis.
 
-**Summary:** `kosong` is **~100% complete for the default `kimi-cli` user**. All core providers (Kimi, OpenAI Legacy, OpenAI Responses) + testing providers (Echo, Mock) are implemented. Only Anthropic and Google GenAI remain as optional extras requiring manual configuration.
+**Summary:** `llm-provider` is **~100% complete for the default `kimi-cli` user**. All core providers (Kimi, OpenAI Legacy, OpenAI Responses) + testing providers (Echo, Mock) are implemented. Only Anthropic and Google GenAI remain as optional extras requiring manual configuration.

@@ -8,14 +8,14 @@ In this tour, we'll examine the **Tool trait**, the **tool registry**, the **exe
 
 ---
 
-## 🔧 The Universal Wrench: `kosong::CallableTool`
+## 🔧 The Universal Wrench: `llm_provider::CallableTool`
 
-File: `kosong/src/tooling.rs` + `octopus-cli/src/tools/*/mod.rs`
+File: `llm-provider/src/tooling.rs` + `octopus-cli/src/tools/*/mod.rs`
 
-Every tool in the shed implements the kosong trait directly — there is no parallel octopus trait layer:
+Every tool in the shed implements the llm-provider trait directly — there is no parallel octopus trait layer:
 
 ```rust
-// File: kosong/src/tooling.rs
+// File: llm-provider/src/tooling.rs
 #[async_trait]
 pub trait CallableTool: Send + Sync {
     fn name(&self) -> &str;
@@ -42,14 +42,14 @@ impl CallableTool2 for ShellTool {
 
 🐍 **Python's way:** Tools are classes inheriting from a base `Tool` class. Schema is built via Pydantic models or `@property` methods.
 
-🦀 **Rust's way:** A trait from the kosong crate with `async_trait`. The `Send + Sync` bounds mean tools can be shared across threads — critical for concurrent execution. `CallableTool2Adapter` bridges `CallableTool2` → `CallableTool` by deriving the JSON Schema via `schemars::schema_for!()`.
+🦀 **Rust's way:** A trait from the llm-provider crate with `async_trait`. The `Send + Sync` bounds mean tools can be shared across threads — critical for concurrent execution. `CallableTool2Adapter` bridges `CallableTool2` → `CallableTool` by deriving the JSON Schema via `schemars::schema_for!()`.
 
 ✨ **Where Rust shines:** **Schema is code.** `CallableTool2` uses `schemars::schema_for!(Params)` to generate the JSON Schema at compile time. For dynamic tools, `CallableTool::parameters()` returns a `Value` built at runtime — e.g. `McpTool` fetches its schema from the MCP server at connection time:
 
 ```rust
 // File: octopus-cli/src/mcp/tool.rs
 #[async_trait]
-impl kosong::tooling::CallableTool for McpTool {
+impl llm_provider::tooling::CallableTool for McpTool {
     fn parameters(&self) -> Value {
         self.schema.get("parameters").cloned().unwrap_or(...)
     }
@@ -67,7 +67,7 @@ The `KimiToolset` is the **shed's inventory system**. It knows every tool and ha
 ```rust
 // File: octopus-cli/src/soul/toolset.rs
 pub struct KimiToolset {
-    tools: HashMap<String, Box<dyn kosong::tooling::CallableTool>>,
+    tools: HashMap<String, Box<dyn llm_provider::tooling::CallableTool>>,
     /// Tool names that are registered but hidden from the LLM tool list.
     /// Used for subagent `ToolPolicy::AllowList` — register all tools once,
     /// then hide the ones the agent spec disallows.
@@ -102,7 +102,7 @@ for tool in spec.tools {
 
 🐍 **Python's way:** Tools are registered via `toolset.register_tool(MyTool())` in a list comprehension or loop. Agent spec parsing + dynamic import via `importlib`.
 
-🦀 **Rust's way:** Static name-to-constructor mapping in `build_tool()` via exhaustive `match` on `BuiltinTool`. No dynamic imports — the compiler ensures every mapped tool exists, and adding a new builtin tool becomes a compile error until you update the match. `Box<dyn kosong::CallableTool>` is a **fat pointer** (data + vtable), but lookup is O(1) via `HashMap<String, Box<dyn CallableTool>>`.
+🦀 **Rust's way:** Static name-to-constructor mapping in `build_tool()` via exhaustive `match` on `BuiltinTool`. No dynamic imports — the compiler ensures every mapped tool exists, and adding a new builtin tool becomes a compile error until you update the match. `Box<dyn llm_provider::CallableTool>` is a **fat pointer** (data + vtable), but lookup is O(1) via `HashMap<String, Box<dyn CallableTool>>`.
 
 ✨ **Where Rust shines:** **Agent-driven toolset.** Change `agents/default/agent.yaml` and the soul boots with a different toolbox — no recompilation needed for config changes, but the compiler still validates every tool constructor at build time.
 
@@ -114,7 +114,7 @@ When the LLM requests a tool, this pipeline runs:
 
 ```rust
 // File: octopus-cli/src/soul/toolset.rs
-async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::ToolResult {
+async fn handle_inner(&self, tool_call: &llm_provider::ToolCall) -> llm_provider::ToolResult {
     // 1. Deduplication check (same-step + cross-step)
     if let Some(cached) = state.current_step_results.get(&call_key) {
         return cached.clone();
@@ -125,9 +125,9 @@ async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::ToolResult
 
     // 3. Run PreToolUse hook
     if let HookAction::Block { reason } = self.run_pre_hook(...).await {
-        return kosong::ToolResult {
+        return llm_provider::ToolResult {
             tool_call_id: tool_call.id.clone(),
-            return_value: kosong::ToolReturnValue::error(format!("Blocked by hook: {}", reason)),
+            return_value: llm_provider::ToolReturnValue::error(format!("Blocked by hook: {}", reason)),
         };
     }
 
@@ -136,9 +136,9 @@ async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::ToolResult
         match approval.request(...).await {
             ApprovalResult::Approved => {}
             ApprovalResult::Rejected { feedback } => {
-                return kosong::ToolResult {
+                return llm_provider::ToolResult {
                     tool_call_id: tool_call.id.clone(),
-                    return_value: kosong::ToolReturnValue::error(format!("User rejected: {}", feedback)),
+                    return_value: llm_provider::ToolReturnValue::error(format!("User rejected: {}", feedback)),
                 };
             }
         }
@@ -155,7 +155,7 @@ async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::ToolResult
     // 7. Track telemetry
     track!("tool_call", tool_name = name, duration_ms = ...);
 
-    kosong::ToolResult { tool_call_id, return_value }
+    llm_provider::ToolResult { tool_call_id, return_value }
 }
 ```
 
@@ -171,49 +171,49 @@ This pipeline has **four guardrails** before the tool actually runs:
 
 ---
 
-## 🔌 The Kosong Bridge: `KimiToolsetHandle`
+## 🔌 The llm-provider Bridge: `KimiToolsetHandle`
 
 File: `octopus-cli/src/soul/toolset.rs` (near the bottom)
 
-The Tool Shed doesn't just serve the local `KimiSoul`. It also serves the **`kosong` LLM abstraction layer**. `kosong::step()` expects a `&dyn kosong::Toolset`, and `KimiToolset` is the natural owner of the tools.
+The Tool Shed doesn't just serve the local `KimiSoul`. It also serves the **`llm-provider` LLM abstraction layer**. `llm_provider::step()` expects a `&dyn llm_provider::Toolset`, and `KimiToolset` is the natural owner of the tools.
 
-`kosong::step()` expects `&dyn kosong::Toolset`. `KimiToolset` is the natural owner of the tools, but `Toolset::handle` must spawn async work into a `tokio::task` that outlives the `&self` borrow. To do that, `handle` needs to clone an `Arc<KimiToolset>` — but `&self` on `KimiToolset` itself doesn't provide one. The **newtype wrapper** holds the `Arc`:
+`llm_provider::step()` expects `&dyn llm_provider::Toolset`. `KimiToolset` is the natural owner of the tools, but `Toolset::handle` must spawn async work into a `tokio::task` that outlives the `&self` borrow. To do that, `handle` needs to clone an `Arc<KimiToolset>` — but `&self` on `KimiToolset` itself doesn't provide one. The **newtype wrapper** holds the `Arc`:
 
 ```rust
 pub struct KimiToolsetHandle(pub Arc<KimiToolset>);
 
-impl kosong::Toolset for KimiToolsetHandle {
-    fn tools(&self) -> Vec<kosong::Tool> {
-        self.0.tools().into_iter().map(|t| kosong::Tool {
+impl llm_provider::Toolset for KimiToolsetHandle {
+    fn tools(&self) -> Vec<llm_provider::Tool> {
+        self.0.tools().into_iter().map(|t| llm_provider::Tool {
             name: t.name().to_string(),
             description: t.description().to_string(),
             parameters: t.parameters(),
         }).collect()
     }
 
-    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
+    fn handle(&self, tool_call: &llm_provider::ToolCall) -> llm_provider::HandleResult {
         let inner = Arc::clone(&self.0);
         let tc = tool_call.clone();
         let handle = tokio::spawn(async move { inner.handle_inner(&tc).await });
-        kosong::HandleResult::Pending(handle)
+        llm_provider::HandleResult::Pending(handle)
     }
 }
 ```
 
 ### Why the callback moved to `step_with_callbacks`
 
-The `on_tool_result` callback sends `WireEvent::ToolResult` to the UI as soon as each tool finishes. `kosong::step_with_callbacks` accepts this callback as a parameter, so it lives outside the toolset entirely:
+The `on_tool_result` callback sends `WireEvent::ToolResult` to the UI as soon as each tool finishes. `llm_provider::step_with_callbacks` accepts this callback as a parameter, so it lives outside the toolset entirely:
 
 ```rust
 // Control Room (kimisoul.rs)
-let step_result = kosong::step_with_callbacks(
+let step_result = llm_provider::step_with_callbacks(
     provider.as_ref(),
     &self.agent.system_prompt,
     &KimiToolsetHandle(self.toolset.clone()),
-    &kosong_history,
+    &llm_history,
     Some(&mut on_message_part),
-    Some(Arc::new(|result: &kosong::ToolResult| {
-        // Convert kosong result → wire result and send to UI
+    Some(Arc::new(|result: &llm_provider::ToolResult| {
+        // Convert llm-provider result → wire result and send to UI
         wire_send(WireEvent::ToolResult(wire_result));
     })),
 ).await;
@@ -221,16 +221,16 @@ let step_result = kosong::step_with_callbacks(
 
 🐍 **Python's way:** Python `kosong.step` accepts an `on_tool_result` callback directly as a parameter. No adapter needed because Python's dynamic typing handles the conversion implicitly.
 
-🦀 **Rust's way:** The `KimiToolsetHandle` newtype wraps `Arc<KimiToolset>` so that `handle` can clone the Arc and spawn the tool into a task. The callback is passed directly to `kosong::step_with_callbacks`, matching Python's API shape. `KimiToolset` implements kosong types natively — no wire/kosong conversion inside the toolset itself.
+🦀 **Rust's way:** The `KimiToolsetHandle` newtype wraps `Arc<KimiToolset>` so that `handle` can clone the Arc and spawn the tool into a task. The callback is passed directly to `llm_provider::step_with_callbacks`, matching Python's API shape. `KimiToolset` implements llm-provider types natively — no wire/llm-provider conversion inside the toolset itself.
 
 ✨ **Where Rust shines:** **Two complementary traits, one adapter, no duplication.** The current stack is cleanly layered and every layer lives in a real file you can trace:
 
-- **`kosong::tooling::CallableTool`** (`kosong/src/tooling.rs`) — the runtime trait: object-safe, erased params (`Value`), used by `KimiToolset`'s HashMap.
-- **`kosong::tooling::CallableTool2`** (`kosong/src/tooling.rs`) — the author trait: typed params via `type Params`, auto-generates JSON Schema via `schemars`.
-- **`kosong::tooling::CallableTool2Adapter`** (`kosong/src/tooling.rs`) — bridges `CallableTool2 → CallableTool` so typed tools slot into the runtime collection.
-- **`kosong::Toolset`** (`kosong/src/tooling.rs`) — the collection trait consumed by `kosong::step_with_callbacks`.
+- **`llm_provider::tooling::CallableTool`** (`llm-provider/src/tooling.rs`) — the runtime trait: object-safe, erased params (`Value`), used by `KimiToolset`'s HashMap.
+- **`llm_provider::tooling::CallableTool2`** (`llm-provider/src/tooling.rs`) — the author trait: typed params via `type Params`, auto-generates JSON Schema via `schemars`.
+- **`llm_provider::tooling::CallableTool2Adapter`** (`llm-provider/src/tooling.rs`) — bridges `CallableTool2 → CallableTool` so typed tools slot into the runtime collection.
+- **`llm_provider::Toolset`** (`llm-provider/src/tooling.rs`) — the collection trait consumed by `llm_provider::step_with_callbacks`.
 - **`KimiToolset`** (`octopus-cli/src/soul/toolset.rs`) — the production implementation: dedup, approval, hooks, MCP, telemetry.
-- **`KimiToolsetHandle`** (`octopus-cli/src/soul/toolset.rs`) — the `Arc`-holding bridge that implements `kosong::Toolset` for `KimiToolset`.
+- **`KimiToolsetHandle`** (`octopus-cli/src/soul/toolset.rs`) — the `Arc`-holding bridge that implements `llm_provider::Toolset` for `KimiToolset`.
 
 There is no dead adapter code or phantom trait. Every struct and trait in the list above has an active implementation in the current codebase.
 
@@ -389,7 +389,7 @@ The MCP client:
 1. Spawns the server process
 2. Performs an `initialize` handshake
 3. Calls `tools/list` to discover available tools
-4. Wraps each remote tool as a local `McpTool` implementing `kosong::CallableTool`
+4. Wraps each remote tool as a local `McpTool` implementing `llm_provider::CallableTool`
 
 🐍 **Python's way:** `mcp` Python SDK handles transport and schema conversion.
 
@@ -465,7 +465,7 @@ At startup, `discover_plugins()` scans this directory and registers every valid 
 
 ```rust
 // File: octopus-cli/src/plugin/discovery.rs
-pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn llm_provider::tooling::CallableTool>> {
     let mut tools = Vec::new();
     for entry in fs::read_dir(plugins_dir).unwrap_or_else(|_| return vec![]) {
         let path = entry.path();
@@ -486,7 +486,7 @@ Both agent-spec-loaded agents **and** basic fallback agents scan for plugins. So
 
 ## 🎁 Souvenir Shop: What to Remember
 
-1. **`kosong::CallableTool` is the universal interface.** Every tool — built-in, MCP, WASM plugin, or subagent — speaks the same kosong language: `name()`, `description()`, `parameters()`, `call_raw()`. There is no parallel octopus trait layer.
+1. **`llm_provider::CallableTool` is the universal interface.** Every tool — built-in, MCP, WASM plugin, or subagent — speaks the same llm-provider language: `name()`, `description()`, `parameters()`, `call_raw()`. There is no parallel octopus trait layer.
 2. **Execution is middleware-heavy.** Hooks, approval, dedup, and telemetry wrap every tool call. The tool itself only handles the core logic.
 3. **Background tasks are first-class.** `ShellTool` can foreground or background with a single flag. The `BackgroundTaskManager` handles the lifecycle.
 4. **Subagents are policy-enforced recursive souls.** `AgentTool` looks up types in `LaborMarket`, enforces `ToolPolicy`, resolves model overrides, and shares the parent's runtime via `copy_for_subagent()`.

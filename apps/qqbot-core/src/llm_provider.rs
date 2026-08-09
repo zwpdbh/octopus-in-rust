@@ -1,10 +1,10 @@
 use crate::config::{AuthConfig, KimiCodeIdentity, LlmProviderConfig};
 use crate::oauth::OAuthManager;
+use agent_core::{BrainConfig, BrainError, ProviderFactory};
 use anyhow::Result;
 use async_trait::async_trait;
-use brain::{BrainConfig, BrainError, ProviderFactory};
-use kosong::provider::kimi::Kimi;
-use kosong::provider::openai_legacy::OpenAILegacy;
+use llm_provider::provider::kimi::Kimi;
+use llm_provider::provider::openai_legacy::OpenAILegacy;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// Default identity used when talking to the kimi-code managed endpoint.
 const KIMI_CODE_PLATFORM: &str = "kimi_code_cli";
 
-/// Factory that builds a [`kosong::ChatProvider`] based on `llm.provider_type`.
+/// Factory that builds a [`llm_provider::ChatProvider`] based on `llm.provider_type`.
 #[derive(Debug, Clone)]
 pub struct QqbotProviderFactory {
     provider: LlmProviderConfig,
@@ -29,7 +29,7 @@ impl ProviderFactory for QqbotProviderFactory {
     async fn create(
         &self,
         brain_config: &BrainConfig,
-    ) -> Result<Arc<dyn kosong::ChatProvider>, BrainError> {
+    ) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
         let token = auth_token(&self.provider)
             .await
             .map_err(|e| BrainError::Other(e.to_string()))?;
@@ -90,7 +90,7 @@ fn build_openai_legacy_provider(
     brain_config: &BrainConfig,
     base_url: &str,
     token: String,
-) -> Arc<dyn kosong::ChatProvider> {
+) -> Arc<dyn llm_provider::ChatProvider> {
     let mut provider = OpenAILegacy::new(&brain_config.model)
         .with_base_url(base_url)
         .with_stream(false);
@@ -105,7 +105,7 @@ fn build_kimi_provider(
     base_url: &str,
     token: String,
     headers: HashMap<String, String>,
-) -> Arc<dyn kosong::ChatProvider> {
+) -> Arc<dyn llm_provider::ChatProvider> {
     let mut provider = Kimi::new(&brain_config.model)
         .with_base_url(base_url)
         .with_api_key(token)

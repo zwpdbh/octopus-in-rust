@@ -22,7 +22,7 @@ pub struct WasmPluginTool {
 }
 
 #[async_trait]
-impl kosong::tooling::CallableTool for WasmPluginTool {
+impl llm_provider::tooling::CallableTool for WasmPluginTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -35,11 +35,11 @@ impl kosong::tooling::CallableTool for WasmPluginTool {
         self.schema.clone()
     }
 
-    async fn call_raw(&self, arguments: Value) -> kosong::tooling::ToolReturnValue {
+    async fn call_raw(&self, arguments: Value) -> llm_provider::tooling::ToolReturnValue {
         let input = match serde_json::to_string(&arguments) {
             Ok(s) => s,
             Err(e) => {
-                return kosong::tooling::ToolReturnValue::error(format!(
+                return llm_provider::tooling::ToolReturnValue::error(format!(
                     "Failed to serialize arguments: {}",
                     e
                 ));
@@ -64,16 +64,16 @@ impl kosong::tooling::CallableTool for WasmPluginTool {
         .await
         {
             Ok(Ok(s)) => s,
-            Ok(Err(e)) => return kosong::tooling::ToolReturnValue::error(e),
+            Ok(Err(e)) => return llm_provider::tooling::ToolReturnValue::error(e),
             Err(e) => {
-                return kosong::tooling::ToolReturnValue::error(format!(
+                return llm_provider::tooling::ToolReturnValue::error(format!(
                     "Plugin task panicked: {}",
                     e
                 ));
             }
         };
 
-        kosong::tooling::ToolReturnValue::ok(output)
+        llm_provider::tooling::ToolReturnValue::ok(output)
     }
 }
 
@@ -90,7 +90,7 @@ unsafe impl Sync for WasmPluginTool {}
 /// Scans for `.wasm` files and attempts to load each one as a plugin tool.
 /// Failures are logged as warnings and skipped; they don't fail the entire
 /// discovery process.
-pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::CallableTool>> {
+pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn llm_provider::tooling::CallableTool>> {
     let mut tools = Vec::new();
 
     if !plugins_dir.is_dir() {
@@ -130,7 +130,7 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<Box<dyn kosong::tooling::Call
 /// 3. Build an Extism `Manifest` with security restrictions.
 /// 4. Compile the plugin with those restrictions.
 /// 5. If no JSON manifest, fall back to `tool_metadata` export or filename.
-fn load_wasm_plugin(path: &Path) -> Result<Box<dyn kosong::tooling::CallableTool>, String> {
+fn load_wasm_plugin(path: &Path) -> Result<Box<dyn llm_provider::tooling::CallableTool>, String> {
     let wasm_bytes = std::fs::read(path).map_err(|e| format!("Failed to read WASM file: {}", e))?;
 
     // Try JSON manifest first
@@ -256,7 +256,7 @@ pub fn default_plugins_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kosong::tooling::CallableTool;
+    use llm_provider::tooling::CallableTool;
 
     #[test]
     fn test_load_example_http_plugin() {

@@ -13,7 +13,7 @@
 | Original | Language | Octopus Replacement |
 |----------|----------|---------------------|
 | `kimi-cli` (core runtime) | Python | `octopus-cli` (Tokio + clap) |
-| `kimi-cli` LLM/model layer | Python | `kosong` (standalone LLM crate) |
+| `kimi-cli` LLM/model layer | Python | `llm-provider` (standalone LLM crate) |
 | `kimi-cli` plugin loader | Python | `qqbot-plugins/example-http` + discovery in `octopus-cli` |
 | Documentation cross-reference | Manual | `docref` (docref tool) |
 
@@ -62,7 +62,7 @@ During every session, verify:
 - [ ] **State updates**: Update task spec's "Completed Steps" in real time. Update `STATUS.md` at session end.
 - [ ] **Compile gate**: `cargo check --workspace` passes after every meaningful change.
 - [ ] **Test gate**: `cargo test -p octopus-cli` passes before declaring progress.
-- [ ] **Crate boundaries**: Protocol/event types live in the right crate; `kosong` stays independent of `octopus-cli` specifics.
+- [ ] **Crate boundaries**: Protocol/event types live in the right crate; `llm-provider` stays independent of `octopus-cli` specifics.
 - [ ] **No schema changes**: Do NOT introduce breaking config or wire-protocol changes without documenting them.
 - [ ] **Git hygiene**: Check `git status --short`. No unintended files modified.
 
@@ -117,9 +117,9 @@ For full operational status, read [`STATUS.md`](./STATUS.md).
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Language | Rust edition 2024 (plugins currently 2021) | Single toolchain, type safety across boundaries |
-| Async runtime | Tokio | Used throughout `octopus-cli` and `kosong` |
+| Async runtime | Tokio | Used throughout `octopus-cli` and `llm-provider` |
 | CLI framework | clap | Standard Rust CLI parsing |
-| LLM crate | `kosong` | Standalone crate decoupled from CLI specifics |
+| LLM crate | `llm-provider` | Standalone crate decoupled from CLI specifics |
 | Plugin model | WASM-compatible dynamic crates | `qqbot-plugins/example-http` is the reference implementation |
 | Config format | TOML | Matches `kimi-cli` and Rust ecosystem conventions |
 | Wire protocol | JSON-RPC over stdio | Matches `kimi-cli` wire protocol |
@@ -154,7 +154,8 @@ octopus/
 ├── Cargo.toml             ← Workspace manifest
 │
 ├── octopus-cli/           ← Main CLI runtime
-├── kosong/                ← Standalone LLM / model crate
+├── llm-provider/          ← Standalone LLM / provider abstraction crate
+├── agent-core/            ← Reusable agent runtime crate
 ├── qqbot-plugins/         ← Plugin crates
 │   ├── example-http/      ← Reference plugin implementation
 │   └── summary/           ← Default qqbot plugin: conversation summary

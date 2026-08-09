@@ -82,10 +82,10 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 schemars = { workspace = true }
 
 # Kosong LLM abstraction layer
-kosong = { workspace = true }
+llm-provider = { workspace = true }
 
 # Reusable agent core
-brain = { workspace = true }
+agent-core = { workspace = true }
 
 # Unicode display width
 unicode-width = "0.2"

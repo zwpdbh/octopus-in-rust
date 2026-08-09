@@ -7,7 +7,7 @@ description = "Supervisor that starts and manages SnowLuma and qqbot-core."
 license = "MIT"
 
 [dependencies]
-brain = { workspace = true }
+agent-core = { workspace = true }
 qqbot-config = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["env"] }

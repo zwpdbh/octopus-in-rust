@@ -59,7 +59,7 @@ impl SimpleCompaction {
         }
 
         // Call LLM to generate a compacted summary of the old context.
-        // Mirrors Python's `kosong.step(...)` call in `compaction.py`.
+        // Mirrors the `llm_provider::step(...)` call in the original Python `compaction.py`.
         let system_prompt = "You are a helpful assistant that compacts conversation context.";
         let history = vec![compact_message.unwrap()];
 

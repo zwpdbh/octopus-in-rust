@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use agent_core::control::{ControlRequest, ControlResponse};
 use anyhow::{Context, Result};
-use brain::control::{ControlRequest, ControlResponse};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tracing::{error, info, warn};

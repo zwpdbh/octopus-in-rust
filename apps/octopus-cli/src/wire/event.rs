@@ -63,7 +63,7 @@ pub struct MediaUrl {
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
-    pub call_type: kosong::ToolCallType,
+    pub call_type: llm_provider::ToolCallType,
     pub function: ToolCallFunction,
 }
 

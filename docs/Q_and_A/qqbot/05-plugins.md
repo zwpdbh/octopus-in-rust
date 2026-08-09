@@ -1,7 +1,7 @@
 # 4. WASM Plugin System
 
 Octopus uses WebAssembly plugins as portable, sandboxed tools. The same plugin
-binary can be loaded by the `brain` agent core, by `octopus-cli`, and by
+binary can be loaded by the `agent-core` agent core, by `octopus-cli`, and by
 `qqbot-core`. All three hosts share one plugin ABI, one runtime (Extism), and
 one manifest format.
 
@@ -155,14 +155,14 @@ cannot make network requests.
 
 ---
 
-## 4.4 How plugins work in `brain`
+## 4.4 How plugins work in `agent-core`
 
-`crates/brain` is the reusable agent core. Plugin support lives in
-`crates/brain/src/tools/plugin/`.
+`crates/agent-core` is the reusable agent core. Plugin support lives in
+`crates/agent-core/src/tools/plugin/`.
 
 ### Key types
 
-- `WasmPluginTool` — a `kosong::tooling::CallableTool` backed by a compiled WASM
+- `WasmPluginTool` — a `llm_provider::tooling::CallableTool` backed by a compiled WASM
   module.
 - `discover_plugins(dir)` — scans a directory for `.wasm` files and returns a
   `Vec<Box<dyn CallableTool>>`.
@@ -183,7 +183,7 @@ cannot make network requests.
      `tool_metadata`, then the filename;
    - returns a `WasmPluginTool`.
 4. The tool is registered in the `ToolRegistry`.
-5. During a turn, `kosong::step()` sees the tool definition, the LLM may call it,
+5. During a turn, `llm_provider::step()` sees the tool definition, the LLM may call it,
    and `ToolRegistry::handle()` routes the call to `WasmPluginTool::call_raw()`.
 6. `call_raw()` spawns a blocking task, instantiates a fresh `Plugin` from the
    pre-compiled module, and calls `execute` with the JSON input.
@@ -191,10 +191,10 @@ cannot make network requests.
 ### Using plugins in a Brain programmatically
 
 ```rust
-use brain::{Brain, BrainConfig, BrainBuilder, ExtismPluginSource};
+use agent_core::{Brain, BrainConfig, BrainBuilder, ExtismPluginSource};
 use std::sync::Arc;
 
-let tool_sources: Vec<Arc<dyn brain::ToolSource>> = vec![
+let tool_sources: Vec<Arc<dyn agent_core::ToolSource>> = vec![
     Arc::new(ExtismPluginSource::new("./data/qqbot-data/plugins")),
 ];
 
@@ -305,7 +305,7 @@ name `faf_units_plugin.wasm`.
 // apps/qqbot/src/plugins.rs ~line 62 — plugins::register (abbreviated)
 pub async fn register(data_dir: &Path, wasm_path: &Path) -> Result<String> {
     // 1. Validate the .wasm with the same brain loader qqbot-core uses.
-    let info = brain::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(...)?;
+    let info = agent_core::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(...)?;
 
     // 2. Copy into the plugin directory, overwriting an existing install.
     let dst = plugin_dir(data_dir).join(format!("{name}.wasm"));
@@ -467,7 +467,7 @@ async fn create_brain(&self, group_id: i64) -> Result<Brain> {
     // Only load plugins listed in the group's whitelist.
     let installed = Self::installed_plugin_names(&self.plugin_dir);
     let allowed = profile.filter_plugins(installed.iter().map(|s| s.as_str()));
-    let tool_source: Arc<dyn brain::ToolSource> =
+    let tool_source: Arc<dyn agent_core::ToolSource> =
         Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed));
 
     let config = BrainConfig {
@@ -605,5 +605,5 @@ Reloading:
 
 Older drafts of this project used a C-like ABI with exports such as `init`,
 `on_message`, `on_command`, `malloc`, and `free`. That ABI is **no longer used**
-by `brain`, `octopus-cli`, or `qqbot-core`. The active path is the Extism-based
+by `agent-core`, `octopus-cli`, or `qqbot-core`. The active path is the Extism-based
 `register_tools` / `execute` ABI described above.

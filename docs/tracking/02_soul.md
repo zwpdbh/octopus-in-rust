@@ -28,7 +28,7 @@
 | File | Description | LOC | Status |
 |------|-------------|-----|--------|
 | `octopus-cli/src/soul/mod.rs` | Module declarations and re-exports | ~60 | ✅ Module tree stable |
-| `octopus-cli/src/soul/kimisoul.rs` | `KimiSoul`, thin outer turn loop, wire event mapping, MCP loading | ~600 | 🔄 Outer loop done; per-step logic delegated to `brain` |
+| `octopus-cli/src/soul/kimisoul.rs` | `KimiSoul`, thin outer turn loop, wire event mapping, MCP loading | ~600 | 🔄 Outer loop done; per-step logic delegated to `agent-core` |
 | `octopus-cli/src/soul/brain_bridge.rs` | CLI-specific Brain policy bridges | ~650 | ✅ `CliStepPolicy`, `CliCheckpointPolicy`, `CliInjectionPolicy`, etc. |
 | `octopus-cli/src/soul/slash.rs` | Soul-level slash commands | ~1,118 | ✅ All major commands ported with mirror comments |
 | `octopus-cli/src/soul/agent.rs` | Agent struct, system prompt | ~162 | 🔄 Basic agent exists |

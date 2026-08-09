@@ -23,7 +23,7 @@ pub struct PluginInfo {
     pub enabled: bool,
 }
 
-/// Summary of a registered WASM plugin tool, as reported by the brain loader.
+/// Summary of a registered WASM plugin tool, as reported by the agent-core loader.
 #[derive(Debug, Clone)]
 pub struct RegisteredTool {
     pub name: String,
@@ -64,7 +64,7 @@ pub async fn enable(data_dir: &Path, name: &str) -> Result<()> {
 
 /// Register a built `.wasm` plugin file from an explicit path.
 ///
-/// The file is validated by the brain plugin loader, copied into the data
+/// The file is validated by the agent-core plugin loader, copied into the data
 /// directory's plugin folder, and qqbot-core is signalled to reload if it is
 /// currently running.
 pub async fn register(data_dir: &Path, wasm_path: &Path) -> Result<String> {
@@ -82,7 +82,7 @@ pub async fn register(data_dir: &Path, wasm_path: &Path) -> Result<String> {
         .to_string();
 
     // Validate the plugin with the internal brain loader before installing it.
-    let info = brain::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(|e| {
+    let info = agent_core::tools::plugin::inspect_wasm_plugin(wasm_path).map_err(|e| {
         anyhow::anyhow!("failed to inspect WASM plugin {}: {e}", wasm_path.display())
     })?;
 
@@ -132,7 +132,7 @@ pub async fn unregister(data_dir: &Path, name: &str) -> Result<()> {
 
 /// List the tools currently registered in the plugin directory.
 ///
-/// Only plugins that can be successfully loaded by the brain plugin loader are
+/// Only plugins that can be successfully loaded by the agent-core plugin loader are
 /// returned; corrupt or incompatible files are skipped with a warning log.
 pub fn list_registered(data_dir: &Path) -> Result<Vec<RegisteredTool>> {
     let dir = plugin_dir(data_dir);
@@ -140,7 +140,7 @@ pub fn list_registered(data_dir: &Path) -> Result<Vec<RegisteredTool>> {
         return Ok(Vec::new());
     }
 
-    Ok(brain::tools::plugin::discover_plugin_infos(&dir)
+    Ok(agent_core::tools::plugin::discover_plugin_infos(&dir)
         .into_iter()
         .map(|info| RegisteredTool {
             name: info.name,

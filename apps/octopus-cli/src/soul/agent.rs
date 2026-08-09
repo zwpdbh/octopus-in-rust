@@ -378,9 +378,9 @@ fn load_system_prompt(
 fn build_tool(
     tool: crate::tools::tool_name::BuiltinTool,
     runtime: &AppRuntime,
-) -> Option<Box<dyn kosong::tooling::CallableTool>> {
+) -> Option<Box<dyn llm_provider::tooling::CallableTool>> {
     use crate::tools::tool_name::BuiltinTool;
-    use kosong::tooling::CallableTool2Adapter;
+    use llm_provider::tooling::CallableTool2Adapter;
     match tool {
         // Shell & background
         BuiltinTool::Shell => Some(Box::new(CallableTool2Adapter::new(

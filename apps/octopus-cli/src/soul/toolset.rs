@@ -21,10 +21,10 @@ const DEDUP_REMINDER_TEXT: &str = "\n\n<system-reminder>\n\
     try a different method or parameters instead of repeating the same call.\
     \n</system-reminder>";
 
-/// Append dedup reminder text to a kosong [`ToolReturnValue`] output.
+/// Append dedup reminder text to an llm-provider [`ToolReturnValue`] output.
 fn append_dedup_reminder(
-    mut rv: kosong::tooling::ToolReturnValue,
-) -> kosong::tooling::ToolReturnValue {
+    mut rv: llm_provider::tooling::ToolReturnValue,
+) -> llm_provider::tooling::ToolReturnValue {
     let reminder = DEDUP_REMINDER_TEXT.to_string();
 
     match &mut rv.output {
@@ -52,7 +52,7 @@ fn append_dedup_reminder(
 struct StepState {
     previous_step_calls: Vec<(String, String)>,
     current_step_calls: Vec<(String, String)>,
-    current_step_results: HashMap<(String, String), kosong::tooling::ToolResult>,
+    current_step_results: HashMap<(String, String), llm_provider::tooling::ToolResult>,
     dedup_triggered: bool,
     step_no: usize,
     turn_id: String,
@@ -65,7 +65,7 @@ struct McpState {
 }
 
 pub struct KimiToolset {
-    tools: HashMap<String, Box<dyn kosong::tooling::CallableTool>>,
+    tools: HashMap<String, Box<dyn llm_provider::tooling::CallableTool>>,
     /// Tool names that are registered but hidden from the LLM tool list.
     ///
     /// Hidden tools are still callable (e.g. by name via `find`), but they are
@@ -135,16 +135,18 @@ impl KimiToolset {
         self.session_id = id;
     }
 
-    pub fn register(&mut self, tool: Box<dyn kosong::tooling::CallableTool>) {
+    pub fn register(&mut self, tool: Box<dyn llm_provider::tooling::CallableTool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
     /// Convenience: register a [`CallableTool2`] by wrapping it in a [`CallableTool2Adapter`].
-    pub fn register_typed<T: kosong::tooling::CallableTool2 + 'static>(&mut self, tool: T) {
-        self.register(Box::new(kosong::tooling::CallableTool2Adapter::new(tool)));
+    pub fn register_typed<T: llm_provider::tooling::CallableTool2 + 'static>(&mut self, tool: T) {
+        self.register(Box::new(llm_provider::tooling::CallableTool2Adapter::new(
+            tool,
+        )));
     }
 
-    pub fn find(&self, name: &str) -> Option<&dyn kosong::tooling::CallableTool> {
+    pub fn find(&self, name: &str) -> Option<&dyn llm_provider::tooling::CallableTool> {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
@@ -176,7 +178,7 @@ impl KimiToolset {
     }
 
     /// Visible tools.
-    pub fn tools(&self) -> Vec<&dyn kosong::tooling::CallableTool> {
+    pub fn tools(&self) -> Vec<&dyn llm_provider::tooling::CallableTool> {
         self.tools
             .values()
             .filter(|t| !self.hidden_tools.contains(t.name()))
@@ -210,8 +212,11 @@ impl KimiToolset {
         self.step_state.lock().unwrap().dedup_triggered
     }
 
-    /// Core tool execution — works with kosong types directly.
-    async fn handle_inner(&self, tool_call: &kosong::ToolCall) -> kosong::tooling::ToolResult {
+    /// Core tool execution — works with llm-provider types directly.
+    async fn handle_inner(
+        &self,
+        tool_call: &llm_provider::ToolCall,
+    ) -> llm_provider::tooling::ToolResult {
         let args_str = tool_call.function.arguments.clone().unwrap_or_default();
         let call_key = (tool_call.function.name.clone(), args_str.clone());
 
@@ -269,9 +274,9 @@ impl KimiToolset {
         let tool = match self.tools.get(&tool_call.function.name) {
             Some(t) => t.as_ref(),
             None => {
-                let result = kosong::tooling::ToolResult {
+                let result = llm_provider::tooling::ToolResult {
                     tool_call_id: tool_call.id.clone(),
-                    return_value: kosong::tooling::ToolReturnValue::error(format!(
+                    return_value: llm_provider::tooling::ToolReturnValue::error(format!(
                         "Tool '{}' not found",
                         tool_call.function.name
                     )),
@@ -288,9 +293,9 @@ impl KimiToolset {
         let arguments: Value = match serde_json::from_str(&args_str) {
             Ok(v) => v,
             Err(e) => {
-                let result = kosong::tooling::ToolResult {
+                let result = llm_provider::tooling::ToolResult {
                     tool_call_id: tool_call.id.clone(),
-                    return_value: kosong::tooling::ToolReturnValue::error(format!(
+                    return_value: llm_provider::tooling::ToolReturnValue::error(format!(
                         "JSON parse error: {e}"
                     )),
                 };
@@ -320,9 +325,9 @@ impl KimiToolset {
             let results = self.hook_engine.trigger(event).await;
             for r in &results {
                 if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
-                    let result = kosong::tooling::ToolResult {
+                    let result = llm_provider::tooling::ToolResult {
                         tool_call_id: tool_call.id.clone(),
-                        return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
+                        return_value: llm_provider::tooling::ToolReturnValue::error(reason.clone()),
                     };
                     let mut state = self.step_state.lock().unwrap();
                     state
@@ -343,8 +348,9 @@ impl KimiToolset {
                     .request("Octopus", &tool_call.function.name, &description, None)
                     .await;
                 if let crate::soul::approval::ApprovalResult::Rejected { feedback } = result {
-                    let return_value = kosong::tooling::ToolReturnValue::error(feedback.clone());
-                    let result = kosong::tooling::ToolResult {
+                    let return_value =
+                        llm_provider::tooling::ToolReturnValue::error(feedback.clone());
+                    let result = llm_provider::tooling::ToolResult {
                         tool_call_id: tool_call.id.clone(),
                         return_value,
                     };
@@ -394,7 +400,7 @@ impl KimiToolset {
             );
         }
 
-        let mut result = kosong::tooling::ToolResult {
+        let mut result = llm_provider::tooling::ToolResult {
             tool_call_id,
             return_value,
         };
@@ -711,7 +717,7 @@ impl Default for KimiToolset {
 }
 
 // ============================================================================
-// kosong::Toolset wrapper
+// llm_provider::Toolset wrapper
 // ============================================================================
 
 /// Thin wrapper around `Arc<KimiToolset>` so that `handle` can clone the Arc
@@ -722,12 +728,12 @@ impl Default for KimiToolset {
 /// `Arc::clone(&self.0)` and move the clone into the spawned task.
 pub struct KimiToolsetHandle(pub std::sync::Arc<KimiToolset>);
 
-impl kosong::Toolset for KimiToolsetHandle {
-    fn tools(&self) -> Vec<kosong::Tool> {
+impl llm_provider::Toolset for KimiToolsetHandle {
+    fn tools(&self) -> Vec<llm_provider::Tool> {
         self.0
             .tools()
             .into_iter()
-            .map(|t| kosong::Tool {
+            .map(|t| llm_provider::Tool {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.parameters(),
@@ -736,11 +742,11 @@ impl kosong::Toolset for KimiToolsetHandle {
             .collect()
     }
 
-    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
+    fn handle(&self, tool_call: &llm_provider::ToolCall) -> llm_provider::HandleResult {
         let inner = std::sync::Arc::clone(&self.0);
         let tc = tool_call.clone();
         let handle = tokio::spawn(async move { inner.handle_inner(&tc).await });
-        kosong::HandleResult::Pending(handle)
+        llm_provider::HandleResult::Pending(handle)
     }
 }
 
@@ -756,7 +762,7 @@ pub struct WireExternalTool {
 }
 
 #[async_trait::async_trait]
-impl kosong::tooling::CallableTool for WireExternalTool {
+impl llm_provider::tooling::CallableTool for WireExternalTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -770,10 +776,10 @@ impl kosong::tooling::CallableTool for WireExternalTool {
         self.parameters.clone()
     }
 
-    async fn call_raw(&self, _args: Value) -> kosong::tooling::ToolReturnValue {
+    async fn call_raw(&self, _args: Value) -> llm_provider::tooling::ToolReturnValue {
         // The actual call is handled by the wire server — this should not be
         // invoked directly. If it is, return an error explaining the issue.
-        kosong::tooling::ToolReturnValue::error(format!(
+        llm_provider::tooling::ToolReturnValue::error(format!(
             "External tool '{}' must be called through the wire protocol, not directly.",
             self.name
         ))

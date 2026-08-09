@@ -1,6 +1,6 @@
-# Plan: Integrate `brain` Agent Q&A into `fafcn-web`
+# Plan: Integrate `agent-core` Agent Q&A into `fafcn-web`
 
-**Goal:** Add a Q&A page to `fafcn-web` that answers FAF-related questions by running the same `brain` agent runtime + `faf-units` plugin tools used by `qqbot-core`.
+**Goal:** Add a Q&A page to `fafcn-web` that answers FAF-related questions by running the same `agent-core` agent runtime + `faf-units` plugin tools used by `qqbot-core`.
 
 **Approach:** Run the agent inside `fafcn-server`. Expose a new HTTP endpoint that the Dioxus frontend calls. Keep the first version synchronous (full answer in one response), leaving room to upgrade to SSE streaming later.
 
@@ -20,7 +20,7 @@
 
 Key decisions:
 
-- **Agent lives in the backend.** `brain` depends on `extism`, `tokio`, and native network calls; it is not WASM-browser friendly.
+- **Agent lives in the backend.** `agent-core` depends on `extism`, `tokio`, and native network calls; it is not WASM-browser friendly.
 - **One `Brain` per request** in the first version. This avoids shared mutable state and makes the endpoint stateless. Later you can pool brains or share an `InMemoryMessageStore` if you want conversation history across requests.
 - **OpenAI-compatible provider via `DefaultProviderFactory`.** For the first iteration, set `api_key` directly in `BrainConfig`. If you need KimiCode/OAuth later, copy or reuse `QqbotProviderFactory` from `apps/qqbot-core`.
 - **Load only the `faf-units` plugin.** Use `ExtismPluginSource::with_filter` so the server does not accidentally load party/HTTP plugins.
@@ -31,7 +31,7 @@ Key decisions:
 
 | File                                                        | Change                                                  |
 | ----------------------------------------------------------- | ------------------------------------------------------- |
-| `apps/fafcn-server/Cargo.toml`              | Add `brain` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
+| `apps/fafcn-server/Cargo.toml`              | Add `agent-core` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
 | `apps/fafcn-server/src/qa.rs` (new)         | `QaConfig`, `create_brain`, `ask`                                                               |
 | `apps/fafcn-server/src/main.rs`             | Import qa module, add `POST /api/ask`, wire state                                               |
 | `apps/fafcn-web/src/main.rs`                | Add `/qa` route inside the `#[layout(Navbar)]` block                                            |
@@ -48,10 +48,10 @@ Key decisions:
 ```toml
 # apps/fafcn-server/Cargo.toml
 [dependencies]
-brain = { workspace = true }
+agent-core = { workspace = true }
 ```
 
-`reqwest` is not required for the LLM call because `brain` handles provider networking. Keep `reqwest` out unless you add non-agent endpoints later. `futures-util` and `tokio-stream` are only needed if you switch from `run_turn_to_completion` to streaming `run_turn`; leave them out for v1.
+`reqwest` is not required for the LLM call because `agent-core` handles provider networking. Keep `reqwest` out unless you add non-agent endpoints later. `futures-util` and `tokio-stream` are only needed if you switch from `run_turn_to_completion` to streaming `run_turn`; leave them out for v1.
 
 ### 3.2 Create `apps/fafcn-server/src/qa.rs`
 
@@ -111,7 +111,7 @@ impl QaConfig {
 Use `ExtismPluginSource::with_filter` to load only `faf_units_plugin`:
 
 ```rust
-use brain::{Brain, BrainBuilder, BrainConfig, ExtismPluginSource, ToolAwareSystemPromptPolicy};
+use agent_core::{Brain, BrainBuilder, BrainConfig, ExtismPluginSource, ToolAwareSystemPromptPolicy};
 use std::sync::Arc;
 
 pub async fn create_brain(config: &QaConfig) -> anyhow::Result<Brain> {
@@ -138,7 +138,7 @@ pub async fn create_brain(config: &QaConfig) -> anyhow::Result<Brain> {
 }
 ```
 
-> **Note:** If you want to reuse `qqbot-core`'s KimiCode auth, replace `DefaultProviderFactory` by implementing a small `ProviderFactory` in `fafcn-server` or by depending on `qqbot-config` and copying `QqbotProviderFactory`. The `brain` crate only requires something that implements `brain::ProviderFactory`.
+> **Note:** If you want to reuse `qqbot-core`'s KimiCode auth, replace `DefaultProviderFactory` by implementing a small `ProviderFactory` in `fafcn-server` or by depending on `qqbot-config` and copying `QqbotProviderFactory`. The `agent-core` crate only requires something that implements `agent_core::ProviderFactory`.
 
 #### 3.2.3 Run one turn and collect the answer
 
@@ -201,7 +201,7 @@ pub enum QaEvent {
 }
 ```
 
-> **Conversation history:** `run_turn_to_completion` takes a `TurnInput`. If you want to pass `history` into the turn, inspect `TurnInput` (likely `String` or a struct) and convert the history into the format `brain` expects. If `TurnInput` is just `From<String>`, implement history support later by using `run_turn` with a custom message store.
+> **Conversation history:** `run_turn_to_completion` takes a `TurnInput`. If you want to pass `history` into the turn, inspect `TurnInput` (likely `String` or a struct) and convert the history into the format `agent-core` expects. If `TurnInput` is just `From<String>`, implement history support later by using `run_turn` with a custom message store.
 
 ### 3.3 Wire the endpoint in `main.rs`
 
@@ -248,7 +248,7 @@ let cors = CorsLayer::new()
 
 ### 3.4 Error mapping
 
-Add a `Brain(brain::BrainError)` variant to `AppError` and implement `From<brain::BrainError>`. Map it to a `500` response with the error message.
+Add a `Brain(agent_core::BrainError)` variant to `AppError` and implement `From<agent_core::BrainError>`. Map it to a `500` response with the error message.
 
 ---
 

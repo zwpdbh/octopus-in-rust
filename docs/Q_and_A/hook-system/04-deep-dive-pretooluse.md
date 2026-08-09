@@ -141,16 +141,16 @@ pub fn create_request(...) {
 
 **File:** `octopus-cli/src/soul/toolset.rs`
 
-When the LLM decides to call a tool, `kosong` (the inference engine) invokes the toolset. `KimiToolsetHandle` wraps an `Arc<KimiToolset>` and spawns the real work into a `tokio::task`:
+When the LLM decides to call a tool, `llm-provider` (the inference engine) invokes the toolset. `KimiToolsetHandle` wraps an `Arc<KimiToolset>` and spawns the real work into a `tokio::task`:
 
 ```rust
 // octopus-cli/src/soul/toolset.rs ~line 720 — KimiToolsetHandle::handle
-impl kosong::Toolset for KimiToolsetHandle {
-    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult {
+impl llm_provider::Toolset for KimiToolsetHandle {
+    fn handle(&self, tool_call: &llm_provider::ToolCall) -> llm_provider::HandleResult {
         let inner = std::sync::Arc::clone(&self.0);
         let tc = tool_call.clone();
         let handle = tokio::spawn(async move { inner.handle_inner(&tc).await });
-        kosong::HandleResult::Pending(handle)
+        llm_provider::HandleResult::Pending(handle)
     }
 }
 ```
@@ -210,9 +210,9 @@ if self.hook_engine.has_hooks_for(event.kind()) {
     for r in &results {
         if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
             // Hook blocked! Return error without running the tool.
-            let result = kosong::tooling::ToolResult {
+            let result = llm_provider::tooling::ToolResult {
                 tool_call_id: tool_call.id.clone(),
-                return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
+                return_value: llm_provider::tooling::ToolReturnValue::error(reason.clone()),
             };
             // Track in step state for deduplication
             let mut state = self.step_state.lock().unwrap();
@@ -603,9 +603,9 @@ After `hook_engine.trigger()` returns, `handle_inner` checks the results:
 for r in &results {
     if let crate::hooks::runner::HookAction::Block(ref reason) = r.action {
         // Hook blocked! Build error result.
-        let result = kosong::tooling::ToolResult {
+        let result = llm_provider::tooling::ToolResult {
             tool_call_id: tool_call.id.clone(),
-            return_value: kosong::tooling::ToolReturnValue::error(reason.clone()),
+            return_value: llm_provider::tooling::ToolReturnValue::error(reason.clone()),
         };
         // Store in step state so same-step deduplication can reuse it
         let mut state = self.step_state.lock().unwrap();
