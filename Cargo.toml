@@ -57,6 +57,7 @@ burn = { version = "0.21", default-features = false, features = [
     "autodiff",
 ] }
 chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
 console_error_panic_hook = "0.1"
 clap = { version = "4", features = ["derive"] }
 dioxus = { version = "0.7", default-features = false, features = [

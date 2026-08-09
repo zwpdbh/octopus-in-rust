@@ -32,7 +32,7 @@ Key decisions:
 | File                                                        | Change                                                  |
 | ----------------------------------------------------------- | ------------------------------------------------------- |
 | `apps/fafcn-server/Cargo.toml`              | Add `agent-core` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
-| `apps/fafcn-server/src/qa.rs` (new)         | `QaConfig`, `create_brain`, `ask`                                                               |
+| `apps/fafcn-server/src/handlers/qa.rs` (new)         | `QaConfig`, `create_brain`, `ask`                                                               |
 | `apps/fafcn-server/src/main.rs`             | Import qa module, add `POST /api/ask`, wire state                                               |
 | `apps/fafcn-web/src/main.rs`                | Add `/qa` route inside the `#[layout(Navbar)]` block                                            |
 | `apps/fafcn-web/src/views/qa.rs` (new)      | Chat UI: message list, input, send handler                                                      |
@@ -53,7 +53,7 @@ agent-core = { workspace = true }
 
 `reqwest` is not required for the LLM call because `agent-core` handles provider networking. Keep `reqwest` out unless you add non-agent endpoints later. `futures-util` and `tokio-stream` are only needed if you switch from `run_turn_to_completion` to streaming `run_turn`; leave them out for v1.
 
-### 3.2 Create `apps/fafcn-server/src/qa.rs`
+### 3.2 Create `apps/fafcn-server/src/handlers/qa.rs`
 
 #### 3.2.1 Configuration
 
@@ -68,7 +68,7 @@ Read settings from environment variables so you do not need a new config file ye
 | `FAFCN_QA_SYSTEM_PROMPT` | Optional system prompt override | —                           |
 
 ```rust
-// apps/fafcn-server/src/qa.rs
+// apps/fafcn-server/src/handlers/qa.rs
 use serde::Deserialize;
 use std::{collections::HashSet, path::PathBuf};
 
@@ -203,37 +203,44 @@ pub enum QaEvent {
 
 > **Conversation history:** `run_turn_to_completion` takes a `TurnInput`. If you want to pass `history` into the turn, inspect `TurnInput` (likely `String` or a struct) and convert the history into the format `agent-core` expects. If `TurnInput` is just `From<String>`, implement history support later by using `run_turn` with a custom message store.
 
-### 3.3 Wire the endpoint in `main.rs`
+### 3.3 Wire the router in `main.rs`
 
 ```rust
 // apps/fafcn-server/src/main.rs
-mod qa;
+mod handlers;
+mod routes;
 
 #[derive(Clone)]
 struct AppState {
     blueprints: Arc<FafBlueprints>,
     portraits_dir: Arc<PathBuf>,
     assets_dir: Arc<PathBuf>,
-    qa_config: Arc<qa::QaConfig>,
+    qa_config: Arc<handlers::qa::QaConfig>,
 }
 
 // in main()
-let qa_config = Arc::new(qa::QaConfig::from_env()?);
+let qa_config = Arc::new(handlers::qa::QaConfig::from_env()?);
+let app = routes::router()
+    .fallback_service(
+        ServeDir::new(state.assets_dir.as_ref())
+            .fallback(ServeFile::new(state.assets_dir.join("index.html"))),
+    )
+    .layer(cors)
+    .layer(TraceLayer::new_for_http())
+    .with_state(state);
+```
 
-let app = Router::new()
-    .route("/api/units", get(list_units))
-    .route("/api/units/:id", get(get_unit))
-    .route("/api/portraits/:id", get(get_portrait))
-    .route("/ws/simulate", get(simulate_ws_handler))
-    .route("/api/ask", post(ask_handler))   // <-- new
-    ...
+The route table lives in `apps/fafcn-server/src/routes.rs` so `main.rs` does not need to know the path list:
 
-async fn ask_handler(
-    State(state): State<AppState>,
-    Json(req): Json<qa::AskRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let resp = qa::ask(&state.qa_config, &req.question).await?;
-    Ok(axum::Json(resp))
+```rust
+// apps/fafcn-server/src/routes.rs
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/units", get(handlers::units::list_units))
+        .route("/api/units/:id", get(handlers::units::get_unit))
+        .route("/api/portraits/:id", get(handlers::portraits::get_portrait))
+        .route("/ws/simulate", get(handlers::simulate::simulate_ws_handler))
+        .route("/api/ask", post(handlers::qa::ask_handler))
 }
 ```
 

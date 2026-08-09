@@ -1,3 +1,4 @@
+.env
 tmp
 target
 .docref.db

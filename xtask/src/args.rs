@@ -64,7 +64,9 @@ pub fn print_fafcn_help() {
     println!();
     println!("Commands:");
     println!("  backend    Start the Axum backend (cargo run --package fafcn-server)");
-    println!("             Logs are written to data/logs/fafcn-server.log");
+    println!(
+        "             The server writes logs to data/logs/fafcn-server.log and prints them to the console"
+    );
     println!("  frontend   Start the Dioxus dev server (dx serve --platform web)");
     println!();
     println!("Examples:");

@@ -12,7 +12,7 @@ qqbot-config = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 daemonize = "0.5"
-dotenvy = "0.15"
+dotenvy = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 libc = "0.2"
