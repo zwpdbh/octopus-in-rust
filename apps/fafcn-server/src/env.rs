@@ -30,8 +30,7 @@ pub fn var_or(key: &str, default: &str) -> String {
 
 /// Read a required environment variable, returning a clear error if missing.
 pub fn required(key: &str) -> anyhow::Result<String> {
-    std::env::var(key)
-        .map_err(|_| anyhow::anyhow!("missing required environment variable: {key}"))
+    std::env::var(key).map_err(|_| anyhow::anyhow!("missing required environment variable: {key}"))
 }
 
 /// Parse an environment variable into any `FromStr` type.
@@ -48,5 +47,7 @@ where
 
 /// Read a path environment variable, falling back to a default path.
 pub fn path_or(key: &str, default: impl Into<PathBuf>) -> PathBuf {
-    var(key).map(PathBuf::from).unwrap_or_else(|| default.into())
+    var(key)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default.into())
 }

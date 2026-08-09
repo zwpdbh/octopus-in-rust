@@ -190,7 +190,9 @@ fn get_sys_release() -> String {
 /// Verify that the configured provider can authenticate and generate a tiny
 /// response. This is intended for health checks: it costs a small number of
 /// tokens, but proves the API key / OAuth token and base URL are working.
-pub async fn verify_provider_auth(config: &crate::handlers::qa::QaConfig) -> anyhow::Result<String> {
+pub async fn verify_provider_auth(
+    config: &crate::handlers::qa::QaConfig,
+) -> anyhow::Result<String> {
     use llm_provider::{ContentPart, Message, Role, StreamedMessagePart, Tool};
 
     let factory = FafcnProviderFactory::new(config.provider_type.clone());

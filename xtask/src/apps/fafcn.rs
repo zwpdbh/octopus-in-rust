@@ -29,7 +29,16 @@ fn run_backend() -> Result<()> {
 
     let mut cmd = cargo::command();
     cmd.args(["run", "--package", "fafcn-server"]);
-    cmd.env("RUST_LOG", "debug");
+
+    // Keep dependency noise (reqwest, hyper, extism, wasmtime, rustls) at info/warn
+    // while still showing debug output from the application crates.  Respect any
+    // RUST_LOG the user already has set.
+    if std::env::var_os("RUST_LOG").is_none() {
+        cmd.env(
+            "RUST_LOG",
+            "info,fafcn_server=debug,agent_core=debug,llm_provider=debug,reqwest=warn,hyper=warn,hyper_util=warn,rustls=warn,extism=warn,wasmtime=warn",
+        );
+    }
 
     println!("Starting fafcn backend...");
     let mut child = cmd.spawn().context("failed to spawn fafcn-server")?;
