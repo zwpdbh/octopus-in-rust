@@ -1,12 +1,14 @@
 //! LLM provider factory supporting both OpenAI-compatible APIs and kimi-code.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agent_core::{BrainConfig, BrainError, ProviderFactory};
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::StreamExt;
 use llm_provider::provider::kimi::Kimi;
 use llm_provider::provider::openai_legacy::OpenAILegacy;
 use serde::Deserialize;
@@ -29,6 +31,15 @@ impl ProviderType {
         match value.trim().to_lowercase().as_str() {
             "kimi_code" | "kimi-code" => ProviderType::KimiCode { token_file },
             _ => ProviderType::OpenAiCompatible,
+        }
+    }
+}
+
+impl fmt::Display for ProviderType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProviderType::OpenAiCompatible => write!(f, "openai_compatible"),
+            ProviderType::KimiCode { .. } => write!(f, "kimi_code"),
         }
     }
 }
@@ -174,6 +185,56 @@ fn get_sys_release() -> String {
 #[cfg(not(target_os = "macos"))]
 fn get_sys_release() -> String {
     std::env::consts::OS.to_string()
+}
+
+/// Verify that the configured provider can authenticate and generate a tiny
+/// response. This is intended for health checks: it costs a small number of
+/// tokens, but proves the API key / OAuth token and base URL are working.
+pub async fn verify_provider_auth(config: &crate::handlers::qa::QaConfig) -> anyhow::Result<String> {
+    use llm_provider::{ContentPart, Message, Role, StreamedMessagePart, Tool};
+
+    let factory = FafcnProviderFactory::new(config.provider_type.clone());
+    let brain_config = BrainConfig {
+        system_prompt: config.system_prompt.clone(),
+        base_url: config.base_url.clone(),
+        api_key: config.api_key.clone(),
+        model: config.model.clone(),
+        max_steps_per_turn: config.max_steps_per_turn,
+        tool_sources: vec![],
+        ..Default::default()
+    };
+
+    let provider = factory
+        .create(&brain_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to build provider: {e}"))?;
+
+    let history = vec![Message {
+        role: Role::User,
+        name: None,
+        content: vec![ContentPart::Text {
+            text: "ping".to_string(),
+        }],
+        tool_calls: None,
+        tool_call_id: None,
+        partial: None,
+    }];
+
+    let system = "You are a helpful assistant. Reply with exactly the word pong.";
+    let streamed = provider
+        .generate(system, &[] as &[Tool], &history)
+        .await
+        .map_err(|e| anyhow::anyhow!("provider auth / connectivity check failed: {e}"))?;
+
+    let mut reply = String::new();
+    let mut stream = streamed.stream;
+    while let Some(part) = stream.next().await {
+        if let StreamedMessagePart::Content(ContentPart::Text { text }) = part {
+            reply.push_str(&text);
+        }
+    }
+
+    Ok(reply)
 }
 
 fn ascii_header(value: &str) -> String {

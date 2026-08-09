@@ -5,12 +5,17 @@
 
 use std::{path::PathBuf, str::FromStr};
 
-/// Load variables from a `.env` file, ignoring errors if the file is missing.
+/// Load variables from `.env`.
+///
+/// First tries `apps/fafcn-server/.env` (the crate manifest directory), then
+/// falls back to searching the current working directory and its parents.
 pub fn load() {
-    match dotenvy::dotenv() {
-        Ok(path) => tracing::debug!(path = %path.display(), ".env file loaded"),
-        Err(e) => tracing::debug!("no .env file loaded: {e}"),
+    let manifest_env = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
+    if manifest_env.is_file() {
+        let _ = dotenvy::from_path(&manifest_env);
+        return;
     }
+    let _ = dotenvy::dotenv();
 }
 
 /// Read an optional environment variable.
@@ -25,7 +30,8 @@ pub fn var_or(key: &str, default: &str) -> String {
 
 /// Read a required environment variable, returning a clear error if missing.
 pub fn required(key: &str) -> anyhow::Result<String> {
-    std::env::var(key).map_err(|_| anyhow::anyhow!("missing required environment variable: {key}"))
+    std::env::var(key)
+        .map_err(|_| anyhow::anyhow!("missing required environment variable: {key}"))
 }
 
 /// Parse an environment variable into any `FromStr` type.
@@ -42,7 +48,5 @@ where
 
 /// Read a path environment variable, falling back to a default path.
 pub fn path_or(key: &str, default: impl Into<PathBuf>) -> PathBuf {
-    var(key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default.into())
+    var(key).map(PathBuf::from).unwrap_or_else(|| default.into())
 }

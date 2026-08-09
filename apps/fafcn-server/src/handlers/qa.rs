@@ -6,6 +6,7 @@ use agent_core::{
     Brain, BrainBuilder, BrainConfig, BrainError, BrainEvent, ExtismPluginSource,
     ToolAwareSystemPromptPolicy,
 };
+use axum::http::StatusCode;
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +88,15 @@ impl QaConfig {
 }
 
 /// Build a `Brain` that loads only the `faf_units_plugin`.
+#[tracing::instrument(skip(config))]
 pub async fn create_brain(config: &QaConfig) -> Result<Brain, BrainError> {
+    tracing::info!(
+        provider = ?config.provider_type,
+        base_url = %config.base_url,
+        model = %config.model,
+        plugins_dir = %config.plugins_dir.display(),
+        "building Q&A brain"
+    );
     let allowed: HashSet<String> = ["faf_units_plugin"].into_iter().map(String::from).collect();
     let tool_source = Arc::new(ExtismPluginSource::with_filter(
         &config.plugins_dir,
@@ -144,14 +153,16 @@ pub struct QaResponse {
 }
 
 /// Run a single question through the agent and collect the answer.
+#[tracing::instrument(skip(config))]
 pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse, BrainError> {
+    tracing::info!(%question, "running Q&A turn");
     let mut brain = create_brain(config).await?;
     let result = brain
         .run_turn_to_completion(question.into())
         .await
         .map_err(|e| BrainError::Other(e.to_string()))?;
 
-    let events = result
+    let events: Vec<QaEvent> = result
         .events
         .into_iter()
         .filter_map(|ev| match ev {
@@ -164,6 +175,12 @@ pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse, BrainE
             _ => None,
         })
         .collect();
+
+    tracing::info!(
+        event_count = events.len(),
+        answer_len = result.final_text.len(),
+        "Q&A turn complete"
+    );
 
     Ok(QaResponse {
         answer: result.final_text,
@@ -178,4 +195,47 @@ pub async fn ask_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let resp = ask(&state.qa_config, &req.question).await?;
     Ok(Json(resp))
+}
+
+/// Health check response for `GET /api/health/qa`.
+#[derive(Debug, Serialize)]
+pub struct QaHealthResponse {
+    pub status: &'static str,
+    pub provider_type: String,
+    pub base_url: String,
+    pub model: String,
+    pub reply: String,
+}
+
+/// Axum handler for `GET /api/health/qa`.
+///
+/// Performs a tiny provider call to verify that authentication and connectivity
+/// are working. Returns `503 Service Unavailable` if the provider rejects the
+/// request or cannot be reached.
+pub async fn health_handler(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let config = &state.qa_config;
+    match crate::llm_factory::verify_provider_auth(config).await {
+        Ok(reply) => {
+            let body = serde_json::json!(QaHealthResponse {
+                status: "ok",
+                provider_type: config.provider_type.to_string(),
+                base_url: config.base_url.clone(),
+                model: config.model.clone(),
+                reply,
+            });
+            Ok((StatusCode::OK, Json(body)))
+        }
+        Err(e) => {
+            let body = serde_json::json!({
+                "status": "error",
+                "error": e.to_string(),
+                "provider_type": config.provider_type.to_string(),
+                "base_url": config.base_url,
+                "model": config.model,
+            });
+            Ok((StatusCode::SERVICE_UNAVAILABLE, Json(body)))
+        }
+    }
 }

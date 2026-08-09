@@ -18,4 +18,5 @@ pub fn router() -> Router<AppState> {
         .route("/api/portraits/:id", get(handlers::portraits::get_portrait))
         .route("/ws/simulate", get(handlers::simulate::simulate_ws_handler))
         .route("/api/ask", post(handlers::qa::ask_handler))
+        .route("/api/health/qa", get(handlers::qa::health_handler))
 }

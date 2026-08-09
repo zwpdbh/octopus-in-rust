@@ -19,6 +19,7 @@ faf-sim-protocol = { workspace = true }
 faf-sim-service = { workspace = true }
 agent-core = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 llm-provider = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

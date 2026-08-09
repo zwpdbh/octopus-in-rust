@@ -29,6 +29,7 @@ fn run_backend() -> Result<()> {
 
     let mut cmd = cargo::command();
     cmd.args(["run", "--package", "fafcn-server"]);
+    cmd.env("RUST_LOG", "debug");
 
     println!("Starting fafcn backend...");
     let mut child = cmd.spawn().context("failed to spawn fafcn-server")?;

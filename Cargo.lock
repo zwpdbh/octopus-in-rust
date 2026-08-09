@@ -4840,6 +4840,7 @@ dependencies = [
  "faf-blueprints",
  "faf-sim-protocol",
  "faf-sim-service",
+ "futures",
  "llm-provider",
  "serde",
  "serde_json",

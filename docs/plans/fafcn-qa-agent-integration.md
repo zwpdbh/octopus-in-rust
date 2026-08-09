@@ -29,15 +29,15 @@ Key decisions:
 
 ## 2. Files to Change
 
-| File                                                        | Change                                                  |
-| ----------------------------------------------------------- | ------------------------------------------------------- |
-| `apps/fafcn-server/Cargo.toml`              | Add `agent-core` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
-| `apps/fafcn-server/src/handlers/qa.rs` (new)         | `QaConfig`, `create_brain`, `ask`                                                               |
-| `apps/fafcn-server/src/main.rs`             | Import qa module, add `POST /api/ask`, wire state                                               |
-| `apps/fafcn-web/src/main.rs`                | Add `/qa` route inside the `#[layout(Navbar)]` block                                            |
-| `apps/fafcn-web/src/views/qa.rs` (new)      | Chat UI: message list, input, send handler                                                      |
-| `apps/fafcn-web/src/views/mod.rs`           | Re-export `qa` module                                                                           |
-| `apps/fafcn-web/src/views/navbar.rs`        | Add "Q&A" link                                                                                  |
+| File                                         | Change                                                                                               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `apps/fafcn-server/Cargo.toml`               | Add`agent-core` dependency (add `futures-util`/`tokio-stream` only if you later switch to streaming) |
+| `apps/fafcn-server/src/handlers/qa.rs` (new) | `QaConfig`, `create_brain`, `ask`                                                                    |
+| `apps/fafcn-server/src/main.rs`              | Import qa module, add`POST /api/ask`, wire state                                                     |
+| `apps/fafcn-web/src/main.rs`                 | Add`/qa` route inside the `#[layout(Navbar)]` block                                                  |
+| `apps/fafcn-web/src/views/qa.rs` (new)       | Chat UI: message list, input, send handler                                                           |
+| `apps/fafcn-web/src/views/mod.rs`            | Re-export`qa` module                                                                                 |
+| `apps/fafcn-web/src/views/navbar.rs`         | Add "Q&A" link                                                                                       |
 
 ---
 
