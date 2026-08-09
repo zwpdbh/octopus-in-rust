@@ -13,34 +13,62 @@ use llm_provider::provider::kimi::Kimi;
 use llm_provider::provider::openai_legacy::OpenAILegacy;
 use serde::Deserialize;
 
-/// Which LLM backend to use.
-#[derive(Clone, Debug)]
+/// Which LLM backend to use, with provider-specific credentials.
+#[derive(Clone)]
 pub enum ProviderType {
     /// Generic OpenAI-compatible endpoint (OpenAI, Moonshot, etc.).
-    OpenAiCompatible,
+    OpenAiCompatible { api_key: String },
 
     /// Kimi Code managed endpoint using OAuth token + identity headers.
     KimiCode { token_file: PathBuf },
 }
 
 impl ProviderType {
-    /// Parse from an environment variable value.
-    ///
-    /// Accepted values: `openai_compatible` (default) or `kimi_code`.
-    pub fn parse(value: &str, token_file: PathBuf) -> Self {
-        match value.trim().to_lowercase().as_str() {
-            "kimi_code" | "kimi-code" => ProviderType::KimiCode { token_file },
-            _ => ProviderType::OpenAiCompatible,
+    /// Return the provider label used in logs and configuration.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProviderType::OpenAiCompatible { .. } => "openai_compatible",
+            ProviderType::KimiCode { .. } => "kimi_code",
+        }
+    }
+
+    /// Borrow the API key, if this is an OpenAI-compatible provider.
+    pub fn api_key(&self) -> Option<&str> {
+        match self {
+            ProviderType::OpenAiCompatible { api_key } => Some(api_key.as_str()),
+            ProviderType::KimiCode { .. } => None,
+        }
+    }
+
+    /// Borrow the OAuth token file path, if this is a Kimi Code provider.
+    pub fn token_file(&self) -> Option<&Path> {
+        match self {
+            ProviderType::OpenAiCompatible { .. } => None,
+            ProviderType::KimiCode { token_file } => Some(token_file.as_path()),
+        }
+    }
+}
+
+impl fmt::Debug for ProviderType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProviderType::OpenAiCompatible { api_key } => {
+                let status = if api_key.is_empty() { "missing" } else { "set" };
+                f.debug_struct("OpenAiCompatible")
+                    .field("api_key", &status)
+                    .finish()
+            }
+            ProviderType::KimiCode { token_file } => f
+                .debug_struct("KimiCode")
+                .field("token_file", &token_file.display().to_string())
+                .finish(),
         }
     }
 }
 
 impl fmt::Display for ProviderType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProviderType::OpenAiCompatible => write!(f, "openai_compatible"),
-            ProviderType::KimiCode { .. } => write!(f, "kimi_code"),
-        }
+        write!(f, "{}", self.label())
     }
 }
 
@@ -63,7 +91,9 @@ impl ProviderFactory for FafcnProviderFactory {
         brain_config: &BrainConfig,
     ) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
         match &self.provider_type {
-            ProviderType::OpenAiCompatible => build_openai_legacy(brain_config),
+            ProviderType::OpenAiCompatible { api_key } => {
+                build_openai_legacy(brain_config, api_key)
+            }
             ProviderType::KimiCode { token_file } => build_kimi_code(brain_config, token_file),
         }
     }
@@ -71,6 +101,7 @@ impl ProviderFactory for FafcnProviderFactory {
 
 fn build_openai_legacy(
     brain_config: &BrainConfig,
+    api_key: &str,
 ) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
     if brain_config.base_url.is_empty() || brain_config.model.is_empty() {
         return Err(BrainError::NoProvider);
@@ -80,8 +111,8 @@ fn build_openai_legacy(
         .with_base_url(&brain_config.base_url)
         .with_stream(false);
 
-    if !brain_config.api_key.is_empty() {
-        provider = provider.with_api_key(&brain_config.api_key);
+    if !api_key.is_empty() {
+        provider = provider.with_api_key(api_key);
     }
 
     Ok(Arc::new(provider))
@@ -199,7 +230,7 @@ pub async fn verify_provider_auth(
     let brain_config = BrainConfig {
         system_prompt: config.system_prompt.clone(),
         base_url: config.base_url.clone(),
-        api_key: config.api_key.clone(),
+        api_key: config.provider_type.api_key().unwrap_or("").to_string(),
         model: config.model.clone(),
         max_steps_per_turn: config.max_steps_per_turn,
         tool_sources: vec![],

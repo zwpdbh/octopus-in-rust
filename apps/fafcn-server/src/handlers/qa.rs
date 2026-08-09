@@ -15,14 +15,11 @@ use crate::{config::workspace_root, error::AppError, llm_factory::ProviderType, 
 /// Configuration for the Q&A agent, loaded from environment variables.
 #[derive(Clone, Debug)]
 pub struct QaConfig {
-    /// LLM backend type and provider-specific data.
+    /// LLM backend type and provider-specific credentials.
     pub provider_type: ProviderType,
 
     /// LLM base URL.
     pub base_url: String,
-
-    /// API key for standard OpenAI-compatible providers.
-    pub api_key: String,
 
     /// Model name, e.g. `gpt-4o` or `kimi-for-coding`.
     pub model: String,
@@ -42,7 +39,7 @@ impl QaConfig {
     ///
     /// Variables:
     /// - `FAFCN_LLM_PROVIDER_TYPE` — `openai_compatible` (default) or `kimi_code`.
-    /// - `FAFCN_LLM_BASE_URL` (default: `https://api.openai.com/v1`).
+    /// - `FAFCN_LLM_BASE_URL` (provider-specific default).
     /// - `FAFCN_LLM_API_KEY` — required for `openai_compatible`.
     /// - `FAFCN_LLM_MODEL` (default: `gpt-4o`).
     /// - `FAFCN_LLM_TOKEN_FILE` — required for `kimi_code`.
@@ -56,34 +53,64 @@ impl QaConfig {
             .map(|home| PathBuf::from(home).join(".kimi/credentials/kimi-code.json"))
             .unwrap_or_else(|_| PathBuf::from(".kimi/credentials/kimi-code.json"));
 
-        let provider_type = ProviderType::parse(
-            &crate::env::var_or("FAFCN_LLM_PROVIDER_TYPE", "openai_compatible"),
-            crate::env::path_or("FAFCN_LLM_TOKEN_FILE", default_token_file),
-        );
+        let provider_type = match crate::env::var_or("FAFCN_LLM_PROVIDER_TYPE", "openai_compatible")
+            .trim()
+            .to_lowercase()
+            .as_str()
+        {
+            "kimi_code" | "kimi-code" => ProviderType::KimiCode {
+                token_file: crate::env::path_or("FAFCN_LLM_TOKEN_FILE", default_token_file),
+            },
+            _ => ProviderType::OpenAiCompatible {
+                api_key: crate::env::var_or("FAFCN_LLM_API_KEY", ""),
+            },
+        };
 
         let model = crate::env::var_or("FAFCN_LLM_MODEL", "gpt-4o");
         let base_url = match &provider_type {
             ProviderType::KimiCode { .. } => {
                 crate::env::var_or("FAFCN_LLM_BASE_URL", "https://api.kimi.com/coding/v1")
             }
-            ProviderType::OpenAiCompatible => {
+            ProviderType::OpenAiCompatible { .. } => {
                 crate::env::var_or("FAFCN_LLM_BASE_URL", "https://api.openai.com/v1")
             }
         };
 
-        Ok(Self {
+        let plugins_dir = crate::env::path_or("FAFCN_PLUGINS_DIR", default_plugins);
+        let system_prompt = crate::env::var_or(
+            "FAFCN_QA_SYSTEM_PROMPT",
+            "You are an expert assistant for the game Forged Alliance Forever. \
+             Answer questions about units, buildings, and economy using the tools available.",
+        );
+        let max_steps_per_turn: usize = crate::env::var_or("FAFCN_QA_MAX_STEPS", "16").parse()?;
+
+        let config = Self {
             provider_type,
             base_url,
-            api_key: crate::env::var_or("FAFCN_LLM_API_KEY", ""),
             model,
-            plugins_dir: crate::env::path_or("FAFCN_PLUGINS_DIR", default_plugins),
-            system_prompt: crate::env::var_or(
-                "FAFCN_QA_SYSTEM_PROMPT",
-                "You are an expert assistant for the game Forged Alliance Forever. \
-                 Answer questions about units, buildings, and economy using the tools available.",
-            ),
-            max_steps_per_turn: crate::env::var_or("FAFCN_QA_MAX_STEPS", "16").parse()?,
-        })
+            plugins_dir,
+            system_prompt,
+            max_steps_per_turn,
+        };
+
+        // Log the resolved provider configuration.  Secrets are never emitted.
+        tracing::info!(
+            provider_type = %config.provider_type,
+            base_url = %config.base_url,
+            model = %config.model,
+            plugins_dir = %config.plugins_dir.display(),
+            api_key_set = config.provider_type.api_key().map_or(false, |k| !k.is_empty()),
+            token_file = ?config.provider_type.token_file().map(|p| p.display().to_string()),
+            max_steps_per_turn = config.max_steps_per_turn,
+            "QaConfig initialized"
+        );
+
+        Ok(config)
+    }
+
+    /// API key for the OpenAI-compatible provider, if any.
+    fn api_key(&self) -> String {
+        self.provider_type.api_key().unwrap_or("").to_string()
     }
 }
 
@@ -106,7 +133,7 @@ pub async fn create_brain(config: &QaConfig) -> Result<Brain, BrainError> {
     let brain_config = BrainConfig {
         system_prompt: config.system_prompt.clone(),
         base_url: config.base_url.clone(),
-        api_key: config.api_key.clone(),
+        api_key: config.api_key(),
         model: config.model.clone(),
         max_steps_per_turn: config.max_steps_per_turn,
         tool_sources: vec![tool_source],
