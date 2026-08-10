@@ -66,9 +66,19 @@ impl QaConfig {
             "kimi_code" | "kimi-code" => ProviderType::KimiCode {
                 token_file: crate::env::path_or("FAFCN_LLM_TOKEN_FILE", default_token_file),
             },
-            _ => ProviderType::OpenAiCompatible {
-                api_key: crate::env::var_or("FAFCN_LLM_API_KEY", ""),
-            },
+            _ => {
+                let api_key = crate::env::required("FAFCN_LLM_API_KEY")?;
+                let api_key = api_key.trim();
+                if api_key.is_empty() {
+                    return Err(Error::Config(
+                        "FAFCN_LLM_API_KEY cannot be empty for openai_compatible provider"
+                            .to_string(),
+                    ));
+                }
+                ProviderType::OpenAiCompatible {
+                    api_key: api_key.to_string(),
+                }
+            }
         };
 
         let model = crate::env::var_or("FAFCN_LLM_MODEL", "gpt-4o");
