@@ -277,7 +277,8 @@ async fn build_subscription_provider(
     }
 }
 
-async fn build_identity_headers(
+/// Build the identity headers required by subscription-based providers.
+pub async fn build_identity_headers(
     identity: &ProviderIdentity,
 ) -> anyhow::Result<HashMap<String, String>> {
     let device_id = tokio::fs::read_to_string(identity.home_dir.join("device_id"))

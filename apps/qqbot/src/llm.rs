@@ -1,6 +1,4 @@
-use crate::core_config::{
-    AuthConfig, CoreConfigFile, KimiCodeIdentity, LlmConfig, LlmProviderConfig,
-};
+use crate::core_config::{AuthConfig, CoreConfigFile, LlmConfig, LlmProviderConfig};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -75,8 +73,6 @@ struct LlmErrorDetail {
     #[allow(dead_code)]
     typ: String,
 }
-
-const KIMI_CODE_PLATFORM: &str = "kimi_code_cli";
 
 pub async fn ask(
     data_dir: &Path,
@@ -395,8 +391,15 @@ async fn resolve_provider(llm: &LlmConfig) -> Result<(String, String, HashMap<St
             token_file,
             identity,
         } => {
-            let token = crate::oauth::resolve_token(token_file).await?;
-            let headers = build_kimi_code_identity_headers(identity)?;
+            let token = resolve_oauth_token(token_file).await?;
+            let provider_identity = agent_core::ProviderIdentity {
+                platform: "kimi_code_cli".to_string(),
+                version: identity.version.clone(),
+                user_agent_product: identity.user_agent_product.clone(),
+                home_dir: expand_path(&identity.home_dir),
+            };
+            let headers =
+                agent_core::core::provider::build_identity_headers(&provider_identity).await?;
             Ok((token, api_url.clone(), headers))
         }
     }
@@ -405,8 +408,13 @@ async fn resolve_provider(llm: &LlmConfig) -> Result<(String, String, HashMap<St
 async fn resolve_auth(auth: &AuthConfig) -> Result<String> {
     match auth {
         AuthConfig::ApiKey { api_key } => Ok(api_key.clone()),
-        AuthConfig::OAuth { token_file } => crate::oauth::resolve_token(token_file).await,
+        AuthConfig::OAuth { token_file } => resolve_oauth_token(token_file).await,
     }
+}
+
+async fn resolve_oauth_token(token_file: &str) -> Result<String> {
+    let manager = agent_core::OAuthManager::new(agent_core::OAuthConfig::kimi_code(), token_file);
+    manager.access_token().await
 }
 
 fn build_models_url(api_url: &str) -> Result<String> {
@@ -424,66 +432,6 @@ fn build_chat_url(api_url: &str) -> String {
     }
 }
 
-fn build_kimi_code_identity_headers(
-    identity: &KimiCodeIdentity,
-) -> Result<HashMap<String, String>> {
-    let home_dir = expand_path(&identity.home_dir);
-
-    let device_id = read_device_id(&home_dir);
-    let hostname = ascii_header(std::env::var("HOSTNAME").as_deref().unwrap_or("qqbot"));
-    let device_model = ascii_header(&format_device_model());
-    let os_version = ascii_header(get_sys_release().as_str());
-
-    let mut headers = HashMap::new();
-    headers.insert(
-        "User-Agent".to_string(),
-        format!("{}/{}", identity.user_agent_product, identity.version),
-    );
-    headers.insert("X-Msh-Platform".to_string(), KIMI_CODE_PLATFORM.to_string());
-    headers.insert("X-Msh-Version".to_string(), identity.version.clone());
-    headers.insert("X-Msh-Device-Name".to_string(), hostname);
-    headers.insert("X-Msh-Device-Model".to_string(), device_model);
-    headers.insert("X-Msh-Os-Version".to_string(), os_version);
-    headers.insert("X-Msh-Device-Id".to_string(), device_id);
-
-    Ok(headers)
-}
-
-fn read_device_id(home_dir: &Path) -> String {
-    let path = home_dir.join("device_id");
-    std::fs::read_to_string(&path)
-        .map(|s| ascii_header(s.trim()))
-        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
-}
-
-fn format_device_model() -> String {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    let version = get_sys_release();
-    format!("{} {} {}", os, version, arch)
-}
-
-#[cfg(target_os = "macos")]
-fn get_sys_release() -> String {
-    std::process::Command::new("/usr/bin/sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| get_fallback_release())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn get_sys_release() -> String {
-    get_fallback_release()
-}
-
-fn get_fallback_release() -> String {
-    std::env::consts::OS.to_string()
-}
-
 fn expand_path(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -491,17 +439,4 @@ fn expand_path(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
-}
-
-fn ascii_header(value: &str) -> String {
-    let cleaned: String = value
-        .chars()
-        .filter(|c| (0x20..=0x7E).contains(&(*c as u32)))
-        .collect();
-    let cleaned = cleaned.trim();
-    if cleaned.is_empty() {
-        "unknown".to_string()
-    } else {
-        cleaned.to_string()
-    }
 }
