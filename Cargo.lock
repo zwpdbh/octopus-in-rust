@@ -4729,6 +4729,7 @@ dependencies = [
  "petgraph 0.8.3",
  "plotters",
  "plotters-canvas",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "wasm-bindgen",

@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use faf_dioxus_ui::components::chat::{
-    Chat, ChatHistoryItem, ChatMessageItem, ChatSidebar, ChatWelcome,
+    Chat, ChatHistoryItem, ChatMessageItem, ChatSidebar, ChatWelcome, ToolCall,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
@@ -144,6 +144,7 @@ pub fn Qa() -> Element {
                     session.messages.push(ChatMessageItem::Assistant {
                         content: String::new(),
                         is_streaming: true,
+                        tool_calls: vec![],
                     });
                 }
             }
@@ -166,22 +167,26 @@ pub fn Qa() -> Element {
                                     }
                                 }
                                 QaStreamEvent::ToolCall { name, .. } => {
-                                    if let Some(ChatMessageItem::Assistant { content, .. }) =
+                                    if let Some(ChatMessageItem::Assistant { tool_calls, .. }) =
                                         session.messages.last_mut()
                                     {
-                                        content.push_str(&format!("\n\n[using tool: {name}]"));
+                                        tool_calls.push(ToolCall {
+                                            name,
+                                            result: None,
+                                            is_error: false,
+                                        });
                                     }
                                 }
                                 QaStreamEvent::ToolResult { output, is_error } => {
-                                    if let Some(ChatMessageItem::Assistant { content, .. }) =
+                                    if let Some(ChatMessageItem::Assistant { tool_calls, .. }) =
                                         session.messages.last_mut()
                                     {
-                                        let prefix = if is_error {
-                                            "[tool error]"
-                                        } else {
-                                            "[tool result]"
-                                        };
-                                        content.push_str(&format!("\n\n{prefix}: {output}"));
+                                        if let Some(call) =
+                                            tool_calls.iter_mut().rev().find(|c| c.result.is_none())
+                                        {
+                                            call.result = Some(output);
+                                            call.is_error = is_error;
+                                        }
                                     }
                                 }
                                 QaStreamEvent::Done => {
@@ -206,6 +211,7 @@ pub fn Qa() -> Element {
                             if let Some(ChatMessageItem::Assistant {
                                 content,
                                 is_streaming,
+                                ..
                             }) = session.messages.last_mut()
                             {
                                 *is_streaming = false;

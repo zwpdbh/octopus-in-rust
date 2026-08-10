@@ -6,7 +6,8 @@ pub mod stat;
 pub mod uplot_chart;
 
 pub use chat::{
-    Chat, ChatHistoryItem, ChatInput, ChatMessage, ChatMessageItem, ChatSidebar, ChatWelcome,
+    Chat, ChatHistory, ChatHistoryItem, ChatInputArea, ChatMessage, ChatMessageItem, ChatSidebar,
+    ChatWelcome, Markdown, ToolCall,
 };
 pub use count_slider::CountSlider;
 pub use graph_view::{GraphData, GraphEdgeData, GraphNodeData, GraphView};
