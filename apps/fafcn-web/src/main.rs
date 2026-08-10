@@ -26,7 +26,6 @@ enum Route {
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
-const MARKDOWN_CSS: Asset = asset!("/assets/styling/markdown.css");
 
 fn main() {
     dioxus::launch(App);
@@ -37,7 +36,6 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
-        document::Link { rel: "stylesheet", href: MARKDOWN_CSS }
         Router::<Route> {}
     }
 }

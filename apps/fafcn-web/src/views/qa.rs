@@ -143,6 +143,7 @@ pub fn Qa() -> Element {
                     });
                     session.messages.push(ChatMessageItem::Assistant {
                         content: String::new(),
+                        thinking: String::new(),
                         is_streaming: true,
                         tool_calls: vec![],
                     });
@@ -158,12 +159,18 @@ pub fn Qa() -> Element {
                     if let Some(id) = s.active_id.clone() {
                         if let Some(session) = s.sessions.iter_mut().find(|s| s.id == id) {
                             match event {
-                                QaStreamEvent::TextDelta { delta }
-                                | QaStreamEvent::ThinkingDelta { delta } => {
+                                QaStreamEvent::TextDelta { delta } => {
                                     if let Some(ChatMessageItem::Assistant { content, .. }) =
                                         session.messages.last_mut()
                                     {
                                         content.push_str(&delta);
+                                    }
+                                }
+                                QaStreamEvent::ThinkingDelta { delta } => {
+                                    if let Some(ChatMessageItem::Assistant { thinking, .. }) =
+                                        session.messages.last_mut()
+                                    {
+                                        thinking.push_str(&delta);
                                     }
                                 }
                                 QaStreamEvent::ToolCall { name, .. } => {

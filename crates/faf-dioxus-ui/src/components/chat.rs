@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
-use pulldown_cmark::{html, Options, Parser};
 use serde::{Deserialize, Serialize};
+
+use super::markdown::Markdown;
 
 /// A single item in a chat history.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -11,6 +12,8 @@ pub enum ChatMessageItem {
     /// response is still being generated.
     Assistant {
         content: String,
+        #[serde(default)]
+        thinking: String,
         is_streaming: bool,
         #[serde(default)]
         tool_calls: Vec<ToolCall>,
@@ -31,29 +34,6 @@ pub struct ToolCall {
 pub struct ChatHistoryItem {
     pub id: String,
     pub title: String,
-}
-
-/// Render markdown text as HTML inside a styled container.
-#[component]
-pub fn Markdown(text: String) -> Element {
-    let html_text = use_memo(move || markdown_to_html(&text));
-    rsx! {
-        div {
-            class: "markdown text-neutral-100 leading-relaxed",
-            dangerous_inner_html: "{html_text}",
-        }
-    }
-}
-
-fn markdown_to_html(text: &str) -> String {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(text, options);
-    let mut output = String::new();
-    html::push_html(&mut output, parser);
-    output
 }
 
 /// A complete chat panel: scrollable message list plus an input bar.
@@ -110,6 +90,7 @@ pub fn ChatMessage(message: ChatMessageItem) -> Element {
         },
         ChatMessageItem::Assistant {
             content,
+            thinking,
             is_streaming,
             tool_calls,
         } => rsx! {
@@ -119,23 +100,61 @@ pub fn ChatMessage(message: ChatMessageItem) -> Element {
                         "AI"
                     }
                     div { class: "flex flex-col gap-2 min-w-0",
+                        if !thinking.is_empty() {
+                            CollapsibleBox {
+                                title: "Thinking",
+                                children: rsx! {
+                                    pre { class: "whitespace-pre-wrap text-sm text-neutral-400 leading-relaxed",
+                                        "{thinking}"
+                                    }
+                                }
+                            }
+                        }
+                        if !tool_calls.is_empty() {
+                            CollapsibleBox {
+                                title: "Tool calls",
+                                children: rsx! {
+                                    div { class: "flex flex-wrap gap-2",
+                                        for call in tool_calls.iter().cloned() {
+                                            ToolCallBadge { call }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         div { class: "rounded-2xl rounded-bl-md px-4 py-2.5 bg-neutral-800 text-neutral-100",
                             Markdown { text: content.clone() }
                             if is_streaming {
                                 span { class: "inline-block w-0.5 h-4 ml-1 align-middle bg-blue-400 animate-pulse" }
                             }
                         }
-                        if !tool_calls.is_empty() {
-                            div { class: "flex flex-wrap gap-2",
-                                for call in tool_calls.iter().cloned() {
-                                    ToolCallBadge { call }
-                                }
-                            }
-                        }
                     }
                 }
             }
         },
+    }
+}
+
+/// A collapsible box for secondary content (thinking, tool calls).
+#[component]
+fn CollapsibleBox(title: String, children: Element) -> Element {
+    let mut expanded = use_signal(|| false);
+    rsx! {
+        div { class: "rounded-lg border border-neutral-700 bg-neutral-900/60 overflow-hidden",
+            button {
+                class: "w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors",
+                onclick: move |_| expanded.set(!expanded()),
+                span { "{title}" }
+                span { class: "text-neutral-500",
+                    if expanded() { "▼" } else { "▶" }
+                }
+            }
+            if expanded() {
+                div { class: "px-3 pb-3",
+                    {children}
+                }
+            }
+        }
     }
 }
 
@@ -334,10 +353,10 @@ pub fn ChatInputArea(
                     }
                 }
                 button {
-                    class: "shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
+                    class: "shrink-0 h-10 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
                     disabled: disabled,
                     onclick: move |_| submit(),
-                    "→"
+                    "Send"
                 }
             }
         }
