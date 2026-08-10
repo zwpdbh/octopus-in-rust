@@ -6,9 +6,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 pub fn Markdown(text: String) -> Element {
     let nodes = use_memo(move || parse_markdown(&text));
     rsx! {
-        div { class: "text-neutral-200 break-words leading-relaxed",
-            {render_nodes(&nodes.read())}
-        }
+        div { class: "text-neutral-200 break-words leading-relaxed", {render_nodes(&nodes.read())} }
     }
 }
 
@@ -241,7 +239,11 @@ fn render_node(node: &MdNode) -> Element {
             }
         },
         MdNode::Image { url, alt, .. } => rsx! {
-            img { class: "max-w-full rounded my-2", src: "{url}", alt: "{alt}" }
+            img {
+                class: "max-w-full rounded my-2",
+                src: "{url}",
+                alt: "{alt}",
+            }
         },
         MdNode::Paragraph(children) => rsx! {
             p { class: "my-[0.5em]", {render_nodes(children)} }
@@ -254,19 +256,35 @@ fn render_node(node: &MdNode) -> Element {
                 _ => "text-sm font-semibold text-neutral-100 mt-2 mb-1",
             };
             match level {
-                1 => rsx! { h1 { class: "{class}", {render_nodes(children)} } },
-                2 => rsx! { h2 { class: "{class}", {render_nodes(children)} } },
-                3 => rsx! { h3 { class: "{class}", {render_nodes(children)} } },
-                4 => rsx! { h4 { class: "{class}", {render_nodes(children)} } },
-                5 => rsx! { h5 { class: "{class}", {render_nodes(children)} } },
-                _ => rsx! { h6 { class: "{class}", {render_nodes(children)} } },
+                1 => rsx! {
+                    h1 { class: "{class}", {render_nodes(children)} }
+                },
+                2 => rsx! {
+                    h2 { class: "{class}", {render_nodes(children)} }
+                },
+                3 => rsx! {
+                    h3 { class: "{class}", {render_nodes(children)} }
+                },
+                4 => rsx! {
+                    h4 { class: "{class}", {render_nodes(children)} }
+                },
+                5 => rsx! {
+                    h5 { class: "{class}", {render_nodes(children)} }
+                },
+                _ => rsx! {
+                    h6 { class: "{class}", {render_nodes(children)} }
+                },
             }
         }
         MdNode::List(ordered, children) => {
             if *ordered {
-                rsx! { ol { class: "list-decimal pl-5 my-[0.5em]", {render_nodes(children)} } }
+                rsx! {
+                    ol { class: "list-decimal pl-5 my-[0.5em]", {render_nodes(children)} }
+                }
             } else {
-                rsx! { ul { class: "list-disc pl-5 my-[0.5em]", {render_nodes(children)} } }
+                rsx! {
+                    ul { class: "list-disc pl-5 my-[0.5em]", {render_nodes(children)} }
+                }
             }
         }
         MdNode::Item(children) => rsx! {
@@ -278,7 +296,7 @@ fn render_node(node: &MdNode) -> Element {
                     r#type: "checkbox",
                     checked: *checked,
                     disabled: true,
-                    class: "mt-1"
+                    class: "mt-1",
                 }
                 {render_nodes(children)}
             }
@@ -300,7 +318,9 @@ fn render_node(node: &MdNode) -> Element {
                 {render_nodes(children)}
             }
         },
-        MdNode::ThematicBreak => rsx! { hr { class: "border-neutral-700 my-4" } },
+        MdNode::ThematicBreak => rsx! {
+            hr { class: "border-neutral-700 my-4" }
+        },
         MdNode::Table(children) => {
             let mut head: Option<&Vec<MdNode>> = None;
             let mut body_rows: Vec<&MdNode> = Vec::new();
@@ -313,25 +333,21 @@ fn render_node(node: &MdNode) -> Element {
             rsx! {
                 table { class: "w-full border-collapse my-[0.5em] text-sm",
                     if let Some(head) = head {
-                        thead { class: "bg-neutral-800",
-                            {render_nodes(head)}
-                        }
+                        thead { class: "bg-neutral-800", {render_nodes(head)} }
                     }
                     tbody { class: "divide-y divide-neutral-800",
-                        for row in body_rows { {render_node(row)} }
+                        for row in body_rows {
+                            {render_node(row)}
+                        }
                     }
                 }
             }
         }
         MdNode::TableHead(children) => rsx! {
-            tr { class: "border-b border-neutral-700",
-                {render_nodes(children)}
-            }
+            tr { class: "border-b border-neutral-700", {render_nodes(children)} }
         },
         MdNode::TableRow(children) => rsx! {
-            tr { class: "border-b border-neutral-800 last:border-b-0",
-                {render_nodes(children)}
-            }
+            tr { class: "border-b border-neutral-800 last:border-b-0", {render_nodes(children)} }
         },
         MdNode::TableCell(children) => rsx! {
             td { class: "border border-neutral-700 px-3 py-2 text-left text-neutral-200",
@@ -339,7 +355,9 @@ fn render_node(node: &MdNode) -> Element {
             }
         },
         MdNode::SoftBreak => rsx! { " " },
-        MdNode::HardBreak => rsx! { br {} },
+        MdNode::HardBreak => rsx! {
+            br {}
+        },
         MdNode::Html(html) => rsx! { "{html}" },
     }
 }

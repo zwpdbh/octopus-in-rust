@@ -120,6 +120,16 @@ pub fn Qa() -> Element {
         save_state(&state.read());
     };
 
+    let delete_chat = move |id: String| {
+        state.with_mut(|s| {
+            s.sessions.retain(|session| session.id != id);
+            if s.active_id.as_deref() == Some(id.as_str()) {
+                s.active_id = s.sessions.first().map(|session| session.id.clone());
+            }
+        });
+        save_state(&state.read());
+    };
+
     let on_send = move |question: String| {
         // Create a session if this is the first message.
         if state.read().active_id.is_none() {
@@ -240,6 +250,7 @@ pub fn Qa() -> Element {
                 active_id: active_id(),
                 on_new_chat: move |_| create_new_chat(),
                 on_select: select_chat,
+                on_delete: delete_chat,
             }
             div { class: "flex-1 min-w-0 flex flex-col",
                 if messages.read().is_empty() {
@@ -257,14 +268,13 @@ pub fn Qa() -> Element {
                         ],
                     }
                 } else {
-                    div { class: "px-4 py-3 bg-neutral-900 border-b border-neutral-800 shrink-0",
-                        h2 { class: "text-sm font-medium text-neutral-200 truncate", "{active_title}" }
+                    div { class: "h-12 flex items-center justify-center px-4 border-b border-neutral-800/60 shrink-0",
+                        h2 { class: "text-sm text-neutral-400 truncate", "{active_title}" }
                     }
                     Chat {
                         messages,
                         input,
                         on_send,
-                        is_loading: false,
                         disabled: *is_loading.read(),
                         placeholder: "Ask about a unit, build order, or economy...".to_string(),
                     }
