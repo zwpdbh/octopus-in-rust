@@ -4,7 +4,7 @@ use crate::core::approval::{ApprovalRuntime, AutoApprove, DefaultApprovalRuntime
 use crate::core::checkpoint::CheckpointPolicy;
 use crate::core::errors::BrainError;
 use crate::core::events::EventPolicy;
-use crate::core::provider::{DefaultProviderFactory, ProviderFactory};
+use crate::core::provider::{DefaultProviderFactory, ProviderFactory, ProviderType};
 use crate::core::recovery::{DefaultRecoveryPolicy, RecoveryPolicy};
 use crate::core::registry::ToolSource;
 use crate::core::retry::{ExponentialBackoffRetryPolicy, RetryPolicy};
@@ -23,19 +23,13 @@ pub struct BrainConfig {
     pub system_prompt: String,
 
     /// Base URL of the LLM API, e.g. `https://api.kimi.com/coding/v1`.
-    ///
-    /// Used by the default [`ProviderFactory`]; custom factories may ignore this.
     pub base_url: String,
 
-    /// API key or OAuth access token.
-    ///
-    /// Used by the default [`ProviderFactory`]; custom factories may ignore this.
-    pub api_key: String,
-
     /// Model name, e.g. `kimi-for-coding`.
-    ///
-    /// Used by the default [`ProviderFactory`]; custom factories may ignore this.
     pub model: String,
+
+    /// How the Brain authenticates and connects to the LLM backend.
+    pub provider_type: ProviderType,
 
     /// Maximum reasoning steps per turn.
     pub max_steps_per_turn: usize,
@@ -99,8 +93,8 @@ impl std::fmt::Debug for BrainConfig {
         f.debug_struct("BrainConfig")
             .field("system_prompt", &self.system_prompt)
             .field("base_url", &self.base_url)
-            .field("api_key", &"<redacted>")
             .field("model", &self.model)
+            .field("provider_type", &self.provider_type)
             .field("max_steps_per_turn", &self.max_steps_per_turn)
             .field("max_step_attempts", &self.max_step_attempts)
             .finish_non_exhaustive()
@@ -112,8 +106,12 @@ impl Default for BrainConfig {
         Self {
             system_prompt: "You are a helpful assistant.".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
-            api_key: String::new(),
             model: "gpt-4o".to_string(),
+            provider_type: ProviderType::ApiBased {
+                protocol: Default::default(),
+                api_key: String::new(),
+                reasoning_key: None,
+            },
             max_steps_per_turn: 16,
             max_step_attempts: 3,
             provider: None,

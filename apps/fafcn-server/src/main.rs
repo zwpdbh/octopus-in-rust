@@ -12,7 +12,6 @@ mod config;
 mod env;
 mod error;
 mod handlers;
-mod llm_factory;
 mod routes;
 mod state;
 

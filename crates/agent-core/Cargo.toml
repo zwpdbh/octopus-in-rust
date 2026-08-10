@@ -20,6 +20,8 @@ rand = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
 
 # Plugin sandboxing
 extism = { workspace = true }

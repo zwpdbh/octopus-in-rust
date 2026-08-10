@@ -5,6 +5,7 @@ pub mod checkpoint;
 pub mod config;
 pub mod errors;
 pub mod events;
+pub mod oauth;
 pub mod provider;
 pub mod recovery;
 pub mod registry;
@@ -24,7 +25,11 @@ pub use checkpoint::{CheckpointPolicy, NoOpCheckpointPolicy};
 pub use config::BrainConfig;
 pub use errors::{BrainError, BrainErrorCategory};
 pub use events::{BrainEvent, EventPolicy, NoOpEventPolicy, ProviderRefreshSender};
-pub use provider::{DefaultProviderFactory, ProviderFactory};
+pub use oauth::{OAuthConfig, OAuthManager, OAuthToken};
+pub use provider::{
+    ApiProtocol, DefaultProviderFactory, ProviderFactory, ProviderIdentity, ProviderType,
+    SubscriptionProtocol,
+};
 pub use recovery::{DefaultRecoveryPolicy, RecoveryAction, RecoveryPolicy};
 pub use registry::{ToolRegistry, ToolSource};
 pub use retry::{ExponentialBackoffRetryPolicy, RetryPolicy};

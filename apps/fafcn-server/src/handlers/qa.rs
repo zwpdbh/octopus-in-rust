@@ -3,17 +3,17 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use agent_core::{
-    Brain, BrainBuilder, BrainConfig, BrainError, BrainEvent, ExtismPluginSource,
-    ToolAwareSystemPromptPolicy,
+    Brain, BrainBuilder, BrainConfig, BrainError, BrainEvent, ExtismPluginSource, OAuthConfig,
+    ProviderIdentity, ProviderType, ToolAwareSystemPromptPolicy,
 };
 use axum::http::StatusCode;
 use axum::{extract::State, response::IntoResponse, Json};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     config::workspace_root,
     error::{Error, Result},
-    llm_factory::ProviderType,
     state::AppState,
 };
 
@@ -43,11 +43,10 @@ impl QaConfig {
     /// Load Q&A configuration from environment variables.
     ///
     /// Variables:
-    /// - `FAFCN_LLM_PROVIDER_TYPE` — `openai_compatible` (default) or `kimi_code`.
+    /// - `FAFCN_LLM_PROVIDER_TYPE` — `api` (default) or `subscription`.
     /// - `FAFCN_LLM_BASE_URL` (provider-specific default).
-    /// - `FAFCN_LLM_API_KEY` — required for `openai_compatible`.
-    /// - `FAFCN_LLM_MODEL` (default: `gpt-4o`).
-    /// - `FAFCN_LLM_TOKEN_FILE` — required for `kimi_code`.
+    /// - `FAFCN_LLM_API_KEY` — required for `api` provider.
+    /// - `FAFCN_LLM_TOKEN_FILE` — required for `subscription` provider.
     /// - `FAFCN_PLUGINS_DIR` (default: `data/qqbot-data/plugins`).
     /// - `FAFCN_QA_SYSTEM_PROMPT` (optional).
     /// - `FAFCN_QA_MAX_STEPS` (default: `16`).
@@ -58,35 +57,39 @@ impl QaConfig {
             .map(|home| PathBuf::from(home).join(".kimi/credentials/kimi-code.json"))
             .unwrap_or_else(|_| PathBuf::from(".kimi/credentials/kimi-code.json"));
 
-        let provider_type = match crate::env::var_or("FAFCN_LLM_PROVIDER_TYPE", "openai_compatible")
+        let provider_type = match crate::env::var_or("FAFCN_LLM_PROVIDER_TYPE", "api")
             .trim()
             .to_lowercase()
             .as_str()
         {
-            "kimi_code" | "kimi-code" => ProviderType::KimiCode {
+            "subscription" | "kimi_code" | "kimi-code" => ProviderType::SubscriptionBased {
+                protocol: agent_core::SubscriptionProtocol::Kimi,
                 token_file: crate::env::path_or("FAFCN_LLM_TOKEN_FILE", default_token_file),
+                identity: ProviderIdentity::kimi_code_default(),
+                oauth: OAuthConfig::kimi_code(),
             },
             _ => {
                 let api_key = crate::env::required("FAFCN_LLM_API_KEY")?;
                 let api_key = api_key.trim();
                 if api_key.is_empty() {
                     return Err(Error::Config(
-                        "FAFCN_LLM_API_KEY cannot be empty for openai_compatible provider"
-                            .to_string(),
+                        "FAFCN_LLM_API_KEY cannot be empty for api provider".to_string(),
                     ));
                 }
-                ProviderType::OpenAiCompatible {
+                ProviderType::ApiBased {
+                    protocol: agent_core::ApiProtocol::OpenAiLegacy,
                     api_key: api_key.to_string(),
+                    reasoning_key: None,
                 }
             }
         };
 
         let model = crate::env::var_or("FAFCN_LLM_MODEL", "gpt-4o");
         let base_url = match &provider_type {
-            ProviderType::KimiCode { .. } => {
+            ProviderType::SubscriptionBased { .. } => {
                 crate::env::var_or("FAFCN_LLM_BASE_URL", "https://api.kimi.com/coding/v1")
             }
-            ProviderType::OpenAiCompatible { .. } => {
+            ProviderType::ApiBased { .. } => {
                 crate::env::var_or("FAFCN_LLM_BASE_URL", "https://api.openai.com/v1")
             }
         };
@@ -114,18 +117,11 @@ impl QaConfig {
             base_url = %config.base_url,
             model = %config.model,
             plugins_dir = %config.plugins_dir.display(),
-            api_key_set = config.provider_type.api_key().map_or(false, |k| !k.is_empty()),
-            token_file = ?config.provider_type.token_file().map(|p| p.display().to_string()),
             max_steps_per_turn = config.max_steps_per_turn,
             "QaConfig initialized"
         );
 
         Ok(config)
-    }
-
-    /// API key for the OpenAI-compatible provider, if any.
-    fn api_key(&self) -> String {
-        self.provider_type.api_key().unwrap_or("").to_string()
     }
 }
 
@@ -133,7 +129,7 @@ impl QaConfig {
 #[tracing::instrument(skip(config))]
 pub async fn create_brain(config: &QaConfig) -> Result<Brain> {
     tracing::info!(
-        provider = ?config.provider_type,
+        provider_type = %config.provider_type,
         base_url = %config.base_url,
         model = %config.model,
         plugins_dir = %config.plugins_dir.display(),
@@ -148,20 +144,15 @@ pub async fn create_brain(config: &QaConfig) -> Result<Brain> {
     let brain_config = BrainConfig {
         system_prompt: config.system_prompt.clone(),
         base_url: config.base_url.clone(),
-        api_key: config.api_key(),
         model: config.model.clone(),
+        provider_type: config.provider_type.clone(),
         max_steps_per_turn: config.max_steps_per_turn,
         tool_sources: vec![tool_source],
         ..Default::default()
     };
 
-    let factory = Arc::new(crate::llm_factory::FafcnProviderFactory::new(
-        config.provider_type.clone(),
-    ));
-
     Ok(BrainBuilder::default()
         .from_config(brain_config)
-        .with_provider_factory(factory)
         .with_system_prompt_policy(Arc::new(ToolAwareSystemPromptPolicy))
         .build()
         .await?)
@@ -258,7 +249,7 @@ pub async fn health_handler(
     State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let config = &state.qa_config;
-    match crate::llm_factory::verify_provider_auth(config).await {
+    match verify_provider_auth(config).await {
         Ok(reply) => {
             let body = serde_json::json!(QaHealthResponse {
                 status: "ok",
@@ -280,4 +271,50 @@ pub async fn health_handler(
             Ok((StatusCode::SERVICE_UNAVAILABLE, Json(body)))
         }
     }
+}
+
+/// Verify that the configured provider can authenticate and generate a tiny
+/// response. This is intended for health checks: it costs a small number of
+/// tokens, but proves the API key / OAuth token and base URL are working.
+pub async fn verify_provider_auth(config: &QaConfig) -> Result<String> {
+    use llm_provider::{ContentPart, Message, Role, StreamedMessagePart, Tool};
+
+    let brain_config = BrainConfig {
+        system_prompt: config.system_prompt.clone(),
+        base_url: config.base_url.clone(),
+        model: config.model.clone(),
+        provider_type: config.provider_type.clone(),
+        max_steps_per_turn: config.max_steps_per_turn,
+        tool_sources: vec![],
+        ..Default::default()
+    };
+
+    let provider = brain_config.build_provider().await.map_err(Error::Agent)?;
+
+    let history = vec![Message {
+        role: Role::User,
+        name: None,
+        content: vec![ContentPart::Text {
+            text: "ping".to_string(),
+        }],
+        tool_calls: None,
+        tool_call_id: None,
+        partial: None,
+    }];
+
+    let system = "You are a helpful assistant. Reply with exactly the word pong.";
+    let streamed = provider
+        .generate(system, &[] as &[Tool], &history)
+        .await
+        .map_err(|e| Error::Internal(format!("provider auth / connectivity check failed: {e}")))?;
+
+    let mut reply = String::new();
+    let mut stream = streamed.stream;
+    while let Some(part) = stream.next().await {
+        if let StreamedMessagePart::Content(ContentPart::Text { text }) = part {
+            reply.push_str(&text);
+        }
+    }
+
+    Ok(reply)
 }

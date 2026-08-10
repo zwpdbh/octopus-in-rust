@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::auth::OAuthManager;
 use crate::config::{Config, LLMModel, LLMProvider, ModelCapability, ProviderType};
-use crate::exception::OctopusError;
+use crate::exception::{ChatProviderError, OctopusError};
 
 #[derive(Debug, Clone)]
 pub struct LLM {
@@ -12,9 +11,6 @@ pub struct LLM {
     pub capabilities: HashSet<ModelCapability>,
     pub model_config: Option<LLMModel>,
     pub provider_config: Option<LLMProvider>,
-    /// OAuth manager for resolving live access tokens.
-    /// If present, takes priority over the static `provider_config.api_key`.
-    pub oauth: Option<OAuthManager>,
 }
 
 pub fn model_display_name(model_name: Option<&str>, model: Option<&LLMModel>) -> String {
@@ -116,7 +112,6 @@ pub fn create_llm(provider: &LLMProvider, model: &LLMModel) -> Option<LLM> {
         capabilities,
         model_config: Some(model.clone()),
         provider_config: Some(provider.clone()),
-        oauth: None,
     })
 }
 
@@ -153,7 +148,7 @@ impl LLM {
         messages: &[crate::wire::Message],
         tools: Option<&[&dyn llm_provider::tooling::CallableTool]>,
     ) -> crate::exception::Result<ChatCompletion> {
-        let provider = self.build_llm_provider()?;
+        let provider = self.build_provider().await?;
         let llm_history: Vec<llm_provider::Message> =
             messages.iter().map(wire_to_llm_message).collect();
         let llm_tools: Vec<llm_provider::Tool> = tools
@@ -200,7 +195,7 @@ impl LLM {
     ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a
     {
         async move {
-            let provider = self.build_llm_provider()?;
+            let provider = self.build_provider().await?;
             let llm_history: Vec<llm_provider::Message> =
                 messages.iter().map(wire_to_llm_message).collect();
             let llm_tools: Vec<llm_provider::Tool> = tools
@@ -238,21 +233,11 @@ impl LLM {
         }
     }
 
-    /// Resolve the effective API key, preferring OAuth token if available.
-    fn resolve_api_key(&self) -> Option<String> {
-        let provider_config = self.provider_config.as_ref()?;
-        self.oauth
-            .as_ref()
-            .and_then(|o| {
-                o.resolve_api_key(
-                    provider_config.api_key.clone(),
-                    provider_config.oauth.as_ref(),
-                )
-            })
-            .map(|c| c.as_str().to_string())
-    }
-
-    pub(crate) fn build_llm_provider(
+    /// Build the LLM provider through the shared `agent-core` factory.
+    ///
+    /// This replaces the old per-provider builder logic and uses the same
+    /// `ProviderType` + `DefaultProviderFactory` path as `Brain`.
+    async fn build_provider(
         &self,
     ) -> crate::exception::Result<Arc<dyn llm_provider::ChatProvider>> {
         let provider_config = self
@@ -260,44 +245,14 @@ impl LLM {
             .as_ref()
             .ok_or_else(|| OctopusError::Other("Provider config not set".to_string()))?;
 
-        let api_key = self.resolve_api_key();
+        let mut config = agent_core::BrainConfig::default();
+        config.base_url = provider_config.base_url.clone();
+        config.model = self.model_name.clone();
+        config.provider_type = provider_config.to_agent_core_provider_type();
 
-        match provider_config.provider_type {
-            ProviderType::Kimi => {
-                let mut kimi = llm_provider::provider::kimi::Kimi::new(&self.model_name)
-                    .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    kimi = kimi.with_api_key(key);
-                }
-                Ok(Arc::new(kimi))
-            }
-            ProviderType::OpenaiLegacy => {
-                let mut openai =
-                    llm_provider::provider::openai_legacy::OpenAILegacy::new(&self.model_name)
-                        .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    openai = openai.with_api_key(key);
-                }
-                if let Some(ref key) = provider_config.reasoning_key {
-                    openai = openai.with_reasoning_key(key);
-                }
-                Ok(Arc::new(openai))
-            }
-            ProviderType::OpenaiResponses => {
-                let mut openai = llm_provider::provider::openai_responses::OpenAIResponses::new(
-                    &self.model_name,
-                )
-                .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    openai = openai.with_api_key(key);
-                }
-                Ok(Arc::new(openai))
-            }
-            ref other => Err(OctopusError::Other(format!(
-                "Provider type {:?} not yet supported by llm-provider integration",
-                other
-            ))),
-        }
+        config.build_provider().await.map_err(|e| {
+            OctopusError::ChatProvider(ChatProviderError::ProviderError(e.to_string()))
+        })
     }
 }
 
@@ -491,4 +446,49 @@ pub(crate) fn classify_kosong_error(msg: String) -> crate::exception::OctopusErr
         );
     }
     crate::exception::OctopusError::Other(msg)
+}
+
+impl LLMProvider {
+    /// Convert the CLI provider configuration into the shared `agent-core`
+    /// provider type.
+    ///
+    /// Note: `custom_headers` is intentionally not propagated here. The
+    /// underlying `llm-provider` OpenAI builders (`OpenAILegacy`,
+    /// `OpenAIResponses`) do not expose a custom-header API, so the factory
+    /// cannot apply them. Only the Kimi builder supports arbitrary headers,
+    /// which are already covered by subscription identity headers.
+    pub fn to_agent_core_provider_type(&self) -> agent_core::ProviderType {
+        use std::path::PathBuf;
+
+        match self.provider_type {
+            ProviderType::Kimi => {
+                let token_file = self
+                    .oauth
+                    .as_ref()
+                    .map(|r| crate::auth::oauth::credentials_path(&r.key))
+                    .unwrap_or_else(|| PathBuf::from("credentials/kimi-code.json"));
+                agent_core::ProviderType::SubscriptionBased {
+                    protocol: agent_core::SubscriptionProtocol::Kimi,
+                    token_file,
+                    identity: agent_core::ProviderIdentity::kimi_code_default(),
+                    oauth: agent_core::OAuthConfig::kimi_code(),
+                }
+            }
+            ProviderType::OpenaiLegacy => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: self.reasoning_key.clone(),
+            },
+            ProviderType::OpenaiResponses => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiResponses,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: None,
+            },
+            _ => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: self.reasoning_key.clone(),
+            },
+        }
+    }
 }

@@ -12,8 +12,8 @@ use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::soul::approval::{Approval, ApprovalState};
 use crate::soul::brain_bridge::{
-    CliCheckpointPolicy, CliCompactionPolicy, CliInjectionPolicy, CliProviderFactory,
-    CliRecoveryPolicy, CliRetryPolicy, CliStepPolicy, ContextMessageStore,
+    CliCheckpointPolicy, CliCompactionPolicy, CliInjectionPolicy, CliRecoveryPolicy,
+    CliRetryPolicy, CliStepPolicy, ContextMessageStore,
 };
 use crate::soul::compaction::SimpleCompaction;
 use crate::soul::context::Context;
@@ -179,13 +179,6 @@ impl KimiSoul {
         }
 
         let oauth = OAuthManager::new();
-
-        // Bind OAuth manager to the LLM so that build_llm_provider can resolve
-        // live access tokens instead of relying solely on the static api_key.
-        let mut llm = llm;
-        if let Some(ref mut l) = llm {
-            l.oauth = Some(oauth.clone());
-        }
 
         // Dynamic injection state is shared with Brain and updated when toggles change.
         let plan_file_path = plan_session_id.as_ref().map(|id| {
@@ -420,9 +413,6 @@ impl KimiSoul {
             .llm
             .as_ref()
             .ok_or(crate::exception::LLMNotSet::NotSet)?;
-        let provider = llm
-            .build_llm_provider()
-            .map_err(|e| OctopusError::Other(format!("Failed to build chat provider: {e}")))?;
         let message_store = Arc::new(tokio::sync::Mutex::new(ContextMessageStore::new(
             self.context.clone(),
         )));
@@ -435,24 +425,34 @@ impl KimiSoul {
             String::new(),
         ));
         let hook_policy = Arc::new(agent_core::hooks::policy::NoOpHookPolicy);
-        let provider_factory = Arc::new(CliProviderFactory::new(
-            Arc::new(llm.clone()),
-            self.oauth.clone(),
-        ));
         let retry_policy = Arc::new(CliRetryPolicy::new(self.max_retries_per_step));
         let recovery_policy = Arc::new(CliRecoveryPolicy::new(
             self.oauth.clone(),
             Arc::new(llm.clone()),
         ));
+        let provider_type = llm
+            .provider_config
+            .as_ref()
+            .map(|p| p.to_agent_core_provider_type())
+            .unwrap_or_else(|| agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: String::new(),
+                reasoning_key: None,
+            });
+        let base_url = llm
+            .provider_config
+            .as_ref()
+            .map(|p| p.base_url.clone())
+            .unwrap_or_default();
         let brain_config = agent_core::BrainConfig {
             system_prompt: self.agent.system_prompt.clone(),
-            base_url: String::new(),
-            api_key: String::new(),
-            model: String::new(),
+            base_url,
+            model: llm.model_name.clone(),
+            provider_type,
             max_steps_per_turn: self.max_steps_per_turn,
             max_step_attempts: self.max_retries_per_step,
-            provider: Some(provider),
-            provider_factory,
+            provider: None,
+            provider_factory: Arc::new(agent_core::DefaultProviderFactory),
             approval_runtime: Arc::new(agent_core::core::approval::DefaultApprovalRuntime::new(
                 Arc::new(agent_core::core::approval::AutoApprove),
             )),

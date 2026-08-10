@@ -19,7 +19,6 @@ use tracing::{error, info};
 
 use crate::config::Config;
 use crate::faf_party::FafPartyHostService;
-use crate::llm_provider::QqbotProviderFactory;
 use crate::memory::MemoryStore;
 use crate::onebot::types::Action;
 
@@ -381,20 +380,16 @@ impl GroupBrainManager {
                 .system_prompt
                 .clone()
                 .unwrap_or_else(|| self.config.llm.system_prompt.clone()),
-            base_url: self.config.llm.api_url().to_string(),
-            api_key: String::new(),
+            base_url: self.config.llm.api_url.clone(),
             model: self.config.llm.model.clone(),
+            provider_type: self.config.llm.provider.clone(),
             max_steps_per_turn: self.max_steps_per_turn,
             tool_sources,
             ..Default::default()
         };
 
-        let provider_factory =
-            std::sync::Arc::new(QqbotProviderFactory::new(self.config.llm.provider.clone()));
-
         let mut brain = agent_core::BrainBuilder::default()
             .from_config(config)
-            .with_provider_factory(provider_factory)
             .with_system_prompt_policy(std::sync::Arc::new(agent_core::ToolAwareSystemPromptPolicy))
             .build()
             .await?;

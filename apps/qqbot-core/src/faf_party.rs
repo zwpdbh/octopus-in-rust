@@ -17,10 +17,8 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, LlmConfig};
-use crate::llm_provider::QqbotProviderFactory;
 use crate::onebot::types::Action;
 use crate::onebot::ActionTx;
-use agent_core::ProviderFactory;
 
 /// Minimum number of overlapping candidates needed to trigger a 3v3 match.
 const PARTY_SIZE: usize = 6;
@@ -612,14 +610,15 @@ impl FafPartyHostService {
         expression: &str,
         now: DateTime<FixedOffset>,
     ) -> Result<ParseTimeResult> {
-        let factory = QqbotProviderFactory::new(self.llm_config.provider.clone());
         let brain_config = agent_core::BrainConfig {
             model: self.llm_config.model.clone(),
+            base_url: self.llm_config.api_url.clone(),
             system_prompt: self.llm_config.system_prompt.clone(),
+            provider_type: self.llm_config.provider.clone(),
             ..Default::default()
         };
-        let provider = factory
-            .create(&brain_config)
+        let provider = brain_config
+            .build_provider()
             .await
             .context("failed to create LLM provider for time parsing fallback")?;
 

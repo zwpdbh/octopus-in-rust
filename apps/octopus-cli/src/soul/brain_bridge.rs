@@ -350,36 +350,6 @@ fn aggregate_hook_action(
     agent_core::hooks::policy::HookAction::Allow
 }
 
-/// Builds llm-provider providers from the CLI's [`LLM`] configuration.
-///
-/// On construction, it ensures any OAuth token is fresh so that recovered
-/// providers pick up refreshed credentials after a 401.
-pub struct CliProviderFactory {
-    llm: Arc<LLM>,
-    oauth: crate::auth::OAuthManager,
-}
-
-impl CliProviderFactory {
-    pub fn new(llm: Arc<LLM>, oauth: crate::auth::OAuthManager) -> Self {
-        Self { llm, oauth }
-    }
-}
-
-#[async_trait]
-impl agent_core::ProviderFactory for CliProviderFactory {
-    async fn create(
-        &self,
-        _config: &agent_core::BrainConfig,
-    ) -> Result<Arc<dyn llm_provider::ChatProvider>, agent_core::BrainError> {
-        // Ensure the OAuth token is fresh before building the provider.
-        let _ = self.oauth.ensure_fresh(&self.llm, true).await;
-
-        self.llm
-            .build_llm_provider()
-            .map_err(|e| agent_core::BrainError::Llm(e.to_string()))
-    }
-}
-
 /// CLI retry policy with exponential backoff and jitter.
 pub struct CliRetryPolicy {
     max_attempts: usize,

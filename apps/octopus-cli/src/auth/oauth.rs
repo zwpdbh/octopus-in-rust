@@ -68,7 +68,7 @@ fn credentials_dir() -> PathBuf {
     path
 }
 
-fn credentials_path(key: &str) -> PathBuf {
+pub fn credentials_path(key: &str) -> PathBuf {
     let name = key.strip_prefix("oauth/").unwrap_or(key);
     let name = name.split('/').last().unwrap_or(name);
     credentials_dir().join(format!("{}.json", name))
