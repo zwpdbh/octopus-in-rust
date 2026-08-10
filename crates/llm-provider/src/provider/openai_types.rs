@@ -112,3 +112,14 @@ pub struct ChunkChoice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
 }
+
+/// Response from a provider's `/models` endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelsResponse {
+    pub data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelEntry {
+    pub id: String,
+}

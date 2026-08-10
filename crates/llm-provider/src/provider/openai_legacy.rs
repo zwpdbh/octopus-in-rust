@@ -4,8 +4,8 @@ use crate::chat_provider::{
 use crate::message::{ContentPart, FunctionBody, Message, Role, TokenUsage, ToolCall};
 use crate::provider::kimi::create_sse_stream;
 use crate::provider::openai_common::{
-    convert_reqwest_error, convert_status_error, thinking_effort_to_reasoning_effort,
-    tool_to_openai,
+    convert_reqwest_error, convert_status_error, list_openai_models,
+    thinking_effort_to_reasoning_effort, tool_to_openai,
 };
 use crate::provider::openai_types::{
     ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionTool,
@@ -15,6 +15,7 @@ use crate::utils::jsonschema::ensure_property_types;
 use async_trait::async_trait;
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -283,6 +284,16 @@ impl ChatProvider for OpenAILegacy {
                 stream: Box::pin(futures::stream::iter(parts)),
             })
         }
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ChatProviderError> {
+        list_openai_models(
+            &self.http_client,
+            &self.base_url,
+            self.api_key.as_deref(),
+            &HashMap::new(),
+        )
+        .await
     }
 
     fn with_thinking(&self, effort: ThinkingEffort) -> Arc<dyn ChatProvider> {

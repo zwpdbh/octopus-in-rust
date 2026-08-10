@@ -39,6 +39,9 @@ pub trait ChatProvider: Send + Sync {
         history: &[Message],
     ) -> Result<StreamedMessage, ChatProviderError>;
 
+    /// List the models available from this provider.
+    async fn list_models(&self) -> Result<Vec<String>, ChatProviderError>;
+
     fn with_thinking(&self, effort: ThinkingEffort) -> Arc<dyn ChatProvider>;
 }
 

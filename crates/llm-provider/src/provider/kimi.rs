@@ -5,8 +5,8 @@ use crate::message::{
     ContentPart, FunctionBody, Message, Role, TokenUsage, ToolCall, ToolCallPart,
 };
 use crate::provider::openai_common::{
-    convert_reqwest_error, convert_status_error, thinking_effort_to_reasoning_effort,
-    tool_to_openai,
+    convert_reqwest_error, convert_status_error, list_openai_models,
+    thinking_effort_to_reasoning_effort, tool_to_openai,
 };
 use crate::provider::openai_types::{
     ChatCompletionChunk, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse,
@@ -312,6 +312,16 @@ impl ChatProvider for Kimi {
                 stream: Box::pin(futures::stream::iter(parts)),
             })
         }
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ChatProviderError> {
+        list_openai_models(
+            &self.http_client,
+            &self.base_url,
+            self.api_key.as_deref(),
+            &self.headers,
+        )
+        .await
     }
 
     fn with_thinking(&self, effort: ThinkingEffort) -> Arc<dyn ChatProvider> {

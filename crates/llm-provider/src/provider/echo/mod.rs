@@ -76,6 +76,10 @@ impl ChatProvider for EchoChatProvider {
         Ok(build_streamed_message(parts, message_id, usage))
     }
 
+    async fn list_models(&self) -> Result<Vec<String>, ChatProviderError> {
+        Ok(vec!["echo".to_string()])
+    }
+
     fn with_thinking(&self, _effort: ThinkingEffort) -> Arc<dyn ChatProvider> {
         Arc::new(self.clone())
     }
@@ -155,6 +159,10 @@ impl ChatProvider for ScriptedEchoChatProvider {
         }
 
         Ok(build_streamed_message(parts, message_id, usage))
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ChatProviderError> {
+        Ok(vec!["scripted_echo".to_string()])
     }
 
     fn with_thinking(&self, _effort: ThinkingEffort) -> Arc<dyn ChatProvider> {

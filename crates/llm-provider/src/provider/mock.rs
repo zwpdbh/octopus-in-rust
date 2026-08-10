@@ -45,6 +45,10 @@ impl ChatProvider for MockChatProvider {
         })
     }
 
+    async fn list_models(&self) -> Result<Vec<String>, crate::chat_provider::ChatProviderError> {
+        Ok(vec!["mock".to_string()])
+    }
+
     fn with_thinking(&self, _effort: ThinkingEffort) -> Arc<dyn ChatProvider> {
         Arc::new(self.clone())
     }
