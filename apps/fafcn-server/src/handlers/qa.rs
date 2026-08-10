@@ -7,9 +7,11 @@ use agent_core::{
     ProviderIdentity, ProviderType, ToolAwareSystemPromptPolicy,
 };
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{extract::State, response::IntoResponse, Json};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 
 use crate::{
     config::workspace_root,
@@ -185,6 +187,27 @@ pub struct QaResponse {
     pub events: Vec<QaEvent>,
 }
 
+/// Event emitted during a streaming Q&A turn.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind")]
+pub enum QaStreamEvent {
+    TextDelta {
+        delta: String,
+    },
+    ThinkingDelta {
+        delta: String,
+    },
+    ToolCall {
+        name: String,
+        arguments: serde_json::Value,
+    },
+    ToolResult {
+        output: String,
+        is_error: bool,
+    },
+    Done,
+}
+
 /// Run a single question through the agent and collect the answer.
 #[tracing::instrument(skip(config))]
 pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse> {
@@ -228,6 +251,58 @@ pub async fn ask_handler(
 ) -> Result<impl IntoResponse> {
     let resp = ask(&state.qa_config, &req.question).await?;
     Ok(Json(resp))
+}
+
+/// Run a single question through the agent and stream the resulting events.
+#[tracing::instrument(skip(config))]
+pub async fn ask_stream(
+    config: &QaConfig,
+    question: &str,
+) -> Result<impl futures::Stream<Item = std::result::Result<Event, Infallible>>> {
+    let mut brain = create_brain(config).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to build Q&A brain for streaming");
+        e
+    })?;
+
+    let stream = brain
+        .run_turn(question.into())
+        .await
+        .map_err(|e| Error::Agent(BrainError::Other(e.to_string())))?;
+
+    let event_stream = stream
+        .filter_map(|ev| {
+            let qa_event = match ev {
+                BrainEvent::TextPart(text) => Some(QaStreamEvent::TextDelta { delta: text }),
+                BrainEvent::ThinkingPart(text) => {
+                    Some(QaStreamEvent::ThinkingDelta { delta: text })
+                }
+                BrainEvent::ToolCall {
+                    name, arguments, ..
+                } => Some(QaStreamEvent::ToolCall { name, arguments }),
+                BrainEvent::ToolResult {
+                    output, is_error, ..
+                } => Some(QaStreamEvent::ToolResult { output, is_error }),
+                _ => None,
+            };
+            let event = qa_event.and_then(|e| Event::default().json_data(&e).ok());
+            futures::future::ready(event.map(Ok))
+        })
+        .chain(futures::stream::once(async {
+            Ok(Event::default()
+                .json_data(&QaStreamEvent::Done)
+                .unwrap_or_default())
+        }));
+
+    Ok(event_stream)
+}
+
+/// Axum handler for `POST /api/ask/stream`.
+pub async fn ask_stream_handler(
+    State(state): State<AppState>,
+    Json(req): Json<AskRequest>,
+) -> Result<Sse<impl futures::Stream<Item = std::result::Result<Event, Infallible>>>> {
+    let stream = ask_stream(&state.qa_config, &req.question).await?;
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 /// Health check response for `GET /api/health/qa`.

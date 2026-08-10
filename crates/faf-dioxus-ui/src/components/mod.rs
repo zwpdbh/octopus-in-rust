@@ -1,9 +1,13 @@
+pub mod chat;
 pub mod count_slider;
 pub mod graph_view;
 pub mod slider_field;
 pub mod stat;
 pub mod uplot_chart;
 
+pub use chat::{
+    Chat, ChatHistoryItem, ChatInput, ChatMessage, ChatMessageItem, ChatSidebar, ChatWelcome,
+};
 pub use count_slider::CountSlider;
 pub use graph_view::{GraphData, GraphEdgeData, GraphNodeData, GraphView};
 pub use slider_field::SliderField;

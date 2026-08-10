@@ -10,7 +10,7 @@ mod state;
 mod utils;
 mod views;
 
-use views::{Home, Navbar, Simulate};
+use views::{Home, Navbar, Qa, Simulate};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -20,6 +20,8 @@ enum Route {
         Home {},
         #[route("/simulate")]
         Simulate {},
+        #[route("/qa")]
+        Qa {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
