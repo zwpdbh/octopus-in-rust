@@ -10,7 +10,12 @@ use axum::http::StatusCode;
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::workspace_root, error::AppError, llm_factory::ProviderType, state::AppState};
+use crate::{
+    config::workspace_root,
+    error::{Error, Result},
+    llm_factory::ProviderType,
+    state::AppState,
+};
 
 /// Configuration for the Q&A agent, loaded from environment variables.
 #[derive(Clone, Debug)]
@@ -46,7 +51,7 @@ impl QaConfig {
     /// - `FAFCN_PLUGINS_DIR` (default: `data/qqbot-data/plugins`).
     /// - `FAFCN_QA_SYSTEM_PROMPT` (optional).
     /// - `FAFCN_QA_MAX_STEPS` (default: `16`).
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> Result<Self> {
         let root = workspace_root();
         let default_plugins = root.join("data/qqbot-data/plugins");
         let default_token_file = std::env::var("HOME")
@@ -116,7 +121,7 @@ impl QaConfig {
 
 /// Build a `Brain` that loads only the `faf_units_plugin`.
 #[tracing::instrument(skip(config))]
-pub async fn create_brain(config: &QaConfig) -> Result<Brain, BrainError> {
+pub async fn create_brain(config: &QaConfig) -> Result<Brain> {
     tracing::info!(
         provider = ?config.provider_type,
         base_url = %config.base_url,
@@ -144,12 +149,12 @@ pub async fn create_brain(config: &QaConfig) -> Result<Brain, BrainError> {
         config.provider_type.clone(),
     ));
 
-    BrainBuilder::default()
+    Ok(BrainBuilder::default()
         .from_config(brain_config)
         .with_provider_factory(factory)
         .with_system_prompt_policy(Arc::new(ToolAwareSystemPromptPolicy))
         .build()
-        .await
+        .await?)
 }
 
 /// Incoming ask request.
@@ -181,13 +186,13 @@ pub struct QaResponse {
 
 /// Run a single question through the agent and collect the answer.
 #[tracing::instrument(skip(config))]
-pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse, BrainError> {
+pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse> {
     tracing::info!(%question, "running Q&A turn");
     let mut brain = create_brain(config).await?;
     let result = brain
         .run_turn_to_completion(question.into())
         .await
-        .map_err(|e| BrainError::Other(e.to_string()))?;
+        .map_err(|e| Error::Agent(BrainError::Other(e.to_string())))?;
 
     let events: Vec<QaEvent> = result
         .events
@@ -219,7 +224,7 @@ pub async fn ask(config: &QaConfig, question: &str) -> Result<QaResponse, BrainE
 pub async fn ask_handler(
     State(state): State<AppState>,
     Json(req): Json<AskRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse> {
     let resp = ask(&state.qa_config, &req.question).await?;
     Ok(Json(resp))
 }
@@ -241,7 +246,7 @@ pub struct QaHealthResponse {
 /// request or cannot be reached.
 pub async fn health_handler(
     State(state): State<AppState>,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let config = &state.qa_config;
     match crate::llm_factory::verify_provider_auth(config).await {
         Ok(reply) => {

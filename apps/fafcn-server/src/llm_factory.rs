@@ -92,19 +92,28 @@ impl ProviderFactory for FafcnProviderFactory {
     ) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
         match &self.provider_type {
             ProviderType::OpenAiCompatible { api_key } => {
-                build_openai_legacy(brain_config, api_key)
+                build_openai_legacy(brain_config, api_key).map_err(error_to_brain_error)
             }
-            ProviderType::KimiCode { token_file } => build_kimi_code(brain_config, token_file),
+            ProviderType::KimiCode { token_file } => {
+                build_kimi_code(brain_config, token_file).map_err(error_to_brain_error)
+            }
         }
+    }
+}
+
+fn error_to_brain_error(err: crate::error::Error) -> BrainError {
+    match err {
+        crate::error::Error::Agent(be) => be,
+        _ => BrainError::Other(err.to_string()),
     }
 }
 
 fn build_openai_legacy(
     brain_config: &BrainConfig,
     api_key: &str,
-) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
+) -> crate::Result<Arc<dyn llm_provider::ChatProvider>> {
     if brain_config.base_url.is_empty() || brain_config.model.is_empty() {
-        return Err(BrainError::NoProvider);
+        return Err(crate::error::Error::Agent(BrainError::NoProvider));
     }
 
     let mut provider = OpenAILegacy::new(&brain_config.model)
@@ -121,12 +130,9 @@ fn build_openai_legacy(
 fn build_kimi_code(
     brain_config: &BrainConfig,
     token_file: &Path,
-) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
-    let token = read_access_token(token_file)
-        .map_err(|e| BrainError::Other(format!("failed to read kimi-code token: {e}")))?;
-
-    let headers = kimi_code_identity_headers(token_file)
-        .map_err(|e| BrainError::Other(format!("failed to build kimi-code headers: {e}")))?;
+) -> crate::Result<Arc<dyn llm_provider::ChatProvider>> {
+    let token = read_access_token(token_file)?;
+    let headers = kimi_code_identity_headers(token_file)?;
 
     let base_url = if brain_config.base_url.is_empty() {
         "https://api.kimi.com/coding/v1"
@@ -151,7 +157,7 @@ struct OAuthToken {
     access_token: String,
 }
 
-fn read_access_token(token_file: &Path) -> anyhow::Result<String> {
+fn read_access_token(token_file: &Path) -> crate::Result<String> {
     let contents = std::fs::read_to_string(token_file)
         .with_context(|| format!("failed to read token file {}", token_file.display()))?;
     let token: OAuthToken = serde_json::from_str(&contents)
@@ -159,7 +165,7 @@ fn read_access_token(token_file: &Path) -> anyhow::Result<String> {
     Ok(token.access_token)
 }
 
-fn kimi_code_identity_headers(token_file: &Path) -> anyhow::Result<HashMap<String, String>> {
+fn kimi_code_identity_headers(token_file: &Path) -> crate::Result<HashMap<String, String>> {
     // The device id lives next to the credentials directory, e.g.
     // ~/.kimi/credentials/kimi-code.json -> ~/.kimi/device_id
     let device_id_file = token_file
@@ -221,9 +227,7 @@ fn get_sys_release() -> String {
 /// Verify that the configured provider can authenticate and generate a tiny
 /// response. This is intended for health checks: it costs a small number of
 /// tokens, but proves the API key / OAuth token and base URL are working.
-pub async fn verify_provider_auth(
-    config: &crate::handlers::qa::QaConfig,
-) -> anyhow::Result<String> {
+pub async fn verify_provider_auth(config: &crate::handlers::qa::QaConfig) -> crate::Result<String> {
     use llm_provider::{ContentPart, Message, Role, StreamedMessagePart, Tool};
 
     let factory = FafcnProviderFactory::new(config.provider_type.clone());
@@ -240,7 +244,7 @@ pub async fn verify_provider_auth(
     let provider = factory
         .create(&brain_config)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to build provider: {e}"))?;
+        .map_err(crate::error::Error::Agent)?;
 
     let history = vec![Message {
         role: Role::User,
@@ -257,7 +261,9 @@ pub async fn verify_provider_auth(
     let streamed = provider
         .generate(system, &[] as &[Tool], &history)
         .await
-        .map_err(|e| anyhow::anyhow!("provider auth / connectivity check failed: {e}"))?;
+        .map_err(|e| {
+            crate::error::Error::Internal(format!("provider auth / connectivity check failed: {e}"))
+        })?;
 
     let mut reply = String::new();
     let mut stream = streamed.stream;

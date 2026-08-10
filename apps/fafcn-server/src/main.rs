@@ -16,10 +16,10 @@ mod llm_factory;
 mod routes;
 mod state;
 
-use std::sync::Arc;
-
 use anyhow::Context;
 use axum::http::{header, Method};
+use error::Result;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::{
     services::{ServeDir, ServeFile},
@@ -34,7 +34,7 @@ use crate::{config::ServerConfig, state::AppState};
 ///
 /// The returned guard must be kept alive for the lifetime of the process so the
 /// non-blocking file writer flushes before shutdown.
-fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
+fn init_tracing() -> Result<tracing_appender::non_blocking::WorkerGuard> {
     let log_dir = std::path::PathBuf::from("data/logs");
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("failed to create log directory {}", log_dir.display()))?;
@@ -59,7 +59,7 @@ fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     env::load();
     let _tracing_guard = init_tracing()?;
 

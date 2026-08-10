@@ -31,7 +31,7 @@ impl ServerConfig {
     /// - `FAFCN_PORT` — bind port (default: `3000`).
     /// - `FAFCN_WEB_DIST` — built web assets directory.
     /// - `FAFCN_PORTRAITS_DIR` — unit portraits directory.
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> crate::Result<Self> {
         let root = workspace_root();
         Ok(Self {
             port: crate::env::var_or("FAFCN_PORT", "3000").parse()?,

@@ -5,6 +5,8 @@
 
 use std::{path::PathBuf, str::FromStr};
 
+use crate::error::{Error, Result};
+
 /// Load variables from `.env`.
 ///
 /// First tries `apps/fafcn-server/.env` (the crate manifest directory), then
@@ -29,20 +31,21 @@ pub fn var_or(key: &str, default: &str) -> String {
 }
 
 /// Read a required environment variable, returning a clear error if missing.
-pub fn required(key: &str) -> anyhow::Result<String> {
-    std::env::var(key).map_err(|_| anyhow::anyhow!("missing required environment variable: {key}"))
+pub fn required(key: &str) -> Result<String> {
+    std::env::var(key)
+        .map_err(|_| Error::Config(format!("missing required environment variable: {key}")))
 }
 
 /// Parse an environment variable into any `FromStr` type.
 #[allow(dead_code)]
-pub fn parse<T>(key: &str) -> anyhow::Result<T>
+pub fn parse<T>(key: &str) -> Result<T>
 where
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
 {
     let raw = required(key)?;
     raw.parse::<T>()
-        .map_err(|e| anyhow::anyhow!("failed to parse environment variable {key}: {e}"))
+        .map_err(|e| Error::Config(format!("failed to parse environment variable {key}: {e}")))
 }
 
 /// Read a path environment variable, falling back to a default path.

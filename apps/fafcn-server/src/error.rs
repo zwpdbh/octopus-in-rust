@@ -4,41 +4,99 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use std::fmt;
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
-pub enum AppError {
+pub enum Error {
     /// Requested resource was not found.
     NotFound,
+
+    /// Configuration value missing or invalid.
+    Config(String),
+
+    /// I/O failure.
+    Io(std::io::Error),
 
     /// Blueprint lookup or parse failure.
     Blueprint(faf_blueprints::Error),
 
     /// Agent (Q&A) turn failed.
     Agent(agent_core::BrainError),
+
+    /// Catch-all for unexpected internal failures.
+    Internal(String),
 }
 
-impl From<faf_blueprints::Error> for AppError {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::NotFound => write!(f, "not found"),
+            Error::Config(msg) => write!(f, "config error: {msg}"),
+            Error::Io(err) => write!(f, "io error: {err}"),
+            Error::Blueprint(err) => write!(f, "{err}"),
+            Error::Agent(err) => write!(f, "{err}"),
+            Error::Internal(msg) => write!(f, "internal error: {msg}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<std::num::ParseIntError> for Error {
+    fn from(err: std::num::ParseIntError) -> Self {
+        Error::Config(err.to_string())
+    }
+}
+
+impl From<faf_blueprints::Error> for Error {
     fn from(err: faf_blueprints::Error) -> Self {
-        AppError::Blueprint(err)
+        Error::Blueprint(err)
     }
 }
 
-impl From<agent_core::BrainError> for AppError {
+impl From<agent_core::BrainError> for Error {
     fn from(err: agent_core::BrainError) -> Self {
-        AppError::Agent(err)
+        Error::Agent(err)
     }
 }
 
-impl IntoResponse for AppError {
+impl From<anyhow::Error> for Error {
+    fn from(err: anyhow::Error) -> Self {
+        Error::Internal(err.to_string())
+    }
+}
+
+impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
-            AppError::Blueprint(err) => {
+            Error::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+            Error::Config(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("config error: {msg}"),
+            )
+                .into_response(),
+            Error::Io(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("io error: {err}"),
+            )
+                .into_response(),
+            Error::Blueprint(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")).into_response()
             }
-            AppError::Agent(err) => {
+            Error::Agent(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")).into_response()
             }
+            Error::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("internal error: {msg}"),
+            )
+                .into_response(),
         }
     }
 }

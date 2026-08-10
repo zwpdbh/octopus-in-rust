@@ -7,7 +7,7 @@ use axum::{
 use faf_sim_protocol::{SimClientMessage, SimEvent, SimServerMessage};
 use faf_sim_service::SimulationService;
 
-use crate::state::AppState;
+use crate::{error::Result, state::AppState};
 
 /// Upgrade an HTTP connection to a WebSocket and run the simulation.
 pub async fn simulate_ws_handler(
@@ -130,7 +130,10 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket) {
 async fn send_json(
     socket: &mut axum::extract::ws::WebSocket,
     message: &SimServerMessage,
-) -> Result<(), axum::Error> {
+) -> Result<()> {
     let text = serde_json::to_string(message).unwrap_or_default();
-    socket.send(axum::extract::ws::Message::Text(text)).await
+    socket
+        .send(axum::extract::ws::Message::Text(text))
+        .await
+        .map_err(|e| crate::error::Error::Internal(e.to_string()))
 }

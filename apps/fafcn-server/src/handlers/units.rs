@@ -8,7 +8,7 @@ use axum::{
 use faf_blueprints::{TechLevel, UnitBlueprint};
 use serde::Serialize;
 
-use crate::{error::AppError, state::AppState};
+use crate::{error::Result, state::AppState};
 
 /// Summary sent to the frontend for unit selection.
 #[derive(Serialize)]
@@ -75,7 +75,7 @@ pub async fn list_units(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_unit(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse> {
     let blueprint = state.blueprints.get_one_unit_from_search(&id)?;
     Ok(Json(blueprint))
 }
