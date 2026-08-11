@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check workspace
+        run: cargo check --workspace
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # Not denied yet: the workspace has pre-existing clippy warnings.
+      # Tighten to `cargo clippy --workspace --all-targets -- -D warnings`
+      # once they are cleaned up.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets

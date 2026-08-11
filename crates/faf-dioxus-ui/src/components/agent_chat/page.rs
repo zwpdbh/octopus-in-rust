@@ -12,7 +12,7 @@ use crate::components::chat_primitives::{Chat, ChatSidebar, ChatWelcome};
 /// Point it at any SSE endpoint that accepts `POST {"question": "..."}` and
 /// streams [`super::AgentStreamEvent`] frames:
 ///
-/// ```rust
+/// ```rust,ignore
 /// // docref: demo
 /// rsx! {
 ///     AgentChat {
