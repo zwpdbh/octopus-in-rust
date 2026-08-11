@@ -49,7 +49,7 @@ Legend: ✅ Complete · 🔄 Partial · ❌ Not Started
 
 ## Active Task
 
-Create strategic plan for the `faf-party` plugin. See [`docs/plans/16-faf-party-plugin.md`](./docs/plans/16-faf-party-plugin.md).
+Create strategic plan for the `faf-party` plugin.
 
 Current state:
 - [x] Availability parsing semantics defined (Chinese expressions, 22:00 default end, past-time rollover).
@@ -60,7 +60,7 @@ Current state:
 
 ## Previous Task
 
-Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md) and [`docs/plans/15-qqbot-deployment.md`](./docs/plans/15-qqbot-deployment.md).
+Deploy qqbot to AliCloud ECS. See [`tasks/qqbot-aliyun-ecs-deployment.md`](./tasks/qqbot-aliyun-ecs-deployment.md).
 
 State:
 - [x] Deployment plan approved.
@@ -103,6 +103,4 @@ State:
 ## Cross-References
 
 - Project constitution: [`AGENTS.md`](./AGENTS.md)
-- Rewrite tracker: [`docs/tracking/index.md`](./docs/tracking/index.md)
-- Strategic plans: [`docs/plans/00-index.md`](./docs/plans/00-index.md)
-- Feature checklist: [`docs/plans/13-feature-checklist.md`](./docs/plans/13-feature-checklist.md)
+- Knowledge base: [`docs/Q_and_A/`](./docs/Q_and_A/)
