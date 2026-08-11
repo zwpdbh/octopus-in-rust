@@ -6,7 +6,6 @@ mod groups;
 mod health;
 mod llm;
 mod logs;
-mod oauth;
 mod paths;
 mod plugins;
 mod reset;

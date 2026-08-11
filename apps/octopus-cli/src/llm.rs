@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::auth::OAuthManager;
 use crate::config::{Config, LLMModel, LLMProvider, ModelCapability, ProviderType};
-use crate::exception::OctopusError;
+use crate::exception::{ChatProviderError, OctopusError};
 
 #[derive(Debug, Clone)]
 pub struct LLM {
@@ -12,9 +11,6 @@ pub struct LLM {
     pub capabilities: HashSet<ModelCapability>,
     pub model_config: Option<LLMModel>,
     pub provider_config: Option<LLMProvider>,
-    /// OAuth manager for resolving live access tokens.
-    /// If present, takes priority over the static `provider_config.api_key`.
-    pub oauth: Option<OAuthManager>,
 }
 
 pub fn model_display_name(model_name: Option<&str>, model: Option<&LLMModel>) -> String {
@@ -116,7 +112,6 @@ pub fn create_llm(provider: &LLMProvider, model: &LLMModel) -> Option<LLM> {
         capabilities,
         model_config: Some(model.clone()),
         provider_config: Some(provider.clone()),
-        oauth: None,
     })
 }
 
@@ -151,20 +146,20 @@ impl LLM {
         &self,
         system_prompt: Option<&str>,
         messages: &[crate::wire::Message],
-        tools: Option<&[&dyn kosong::tooling::CallableTool]>,
+        tools: Option<&[&dyn llm_provider::tooling::CallableTool]>,
     ) -> crate::exception::Result<ChatCompletion> {
-        let provider = self.build_kosong_provider()?;
-        let kosong_history: Vec<kosong::Message> =
-            messages.iter().map(wire_to_kosong_message).collect();
-        let kosong_tools: Vec<kosong::Tool> = tools
-            .map(|ts| ts.iter().map(|t| wire_to_kosong_tool(*t)).collect())
+        let provider = self.build_provider().await?;
+        let llm_history: Vec<llm_provider::Message> =
+            messages.iter().map(wire_to_llm_message).collect();
+        let llm_tools: Vec<llm_provider::Tool> = tools
+            .map(|ts| ts.iter().map(|t| wire_to_llm_tool(*t)).collect())
             .unwrap_or_default();
 
-        let result = kosong::generate(
+        let result = llm_provider::generate(
             provider.as_ref(),
             system_prompt.unwrap_or(""),
-            &kosong_tools,
-            &kosong_history,
+            &llm_tools,
+            &llm_history,
             None,
             None,
         )
@@ -175,47 +170,47 @@ impl LLM {
             .message
             .tool_calls
             .clone()
-            .map(|tcs| tcs.into_iter().map(kosong_to_wire_tool_call).collect())
+            .map(|tcs| tcs.into_iter().map(llm_to_wire_tool_call).collect())
             .unwrap_or_default();
 
         Ok(ChatCompletion {
             id: result.id,
-            message: kosong_to_wire_message(result.message),
-            usage: result.usage.map(kosong_to_wire_usage),
+            message: llm_to_wire_message(result.message),
+            usage: result.usage.map(llm_to_wire_usage),
             tool_calls,
         })
     }
 
     pub fn generate_streaming<
         'a,
-        MP: FnMut(kosong::StreamedMessagePart) + Send,
-        TC: FnMut(kosong::ToolCall) + Send,
+        MP: FnMut(llm_provider::StreamedMessagePart) + Send,
+        TC: FnMut(llm_provider::ToolCall) + Send,
     >(
         &'a self,
         system_prompt: Option<&'a str>,
         messages: &'a [crate::wire::Message],
-        tools: Option<&'a [&'a dyn kosong::tooling::CallableTool]>,
+        tools: Option<&'a [&'a dyn llm_provider::tooling::CallableTool]>,
         on_message_part: &'a mut MP,
         on_tool_call: &'a mut TC,
     ) -> impl std::future::Future<Output = crate::exception::Result<ChatCompletion>> + Send + 'a
     {
         async move {
-            let provider = self.build_kosong_provider()?;
-            let kosong_history: Vec<kosong::Message> =
-                messages.iter().map(wire_to_kosong_message).collect();
-            let kosong_tools: Vec<kosong::Tool> = tools
-                .map(|ts| ts.iter().map(|t| wire_to_kosong_tool(*t)).collect())
+            let provider = self.build_provider().await?;
+            let llm_history: Vec<llm_provider::Message> =
+                messages.iter().map(wire_to_llm_message).collect();
+            let llm_tools: Vec<llm_provider::Tool> = tools
+                .map(|ts| ts.iter().map(|t| wire_to_llm_tool(*t)).collect())
                 .unwrap_or_default();
 
-            let on_mp: Option<&mut (dyn FnMut(kosong::StreamedMessagePart) + Send)> =
+            let on_mp: Option<&mut (dyn FnMut(llm_provider::StreamedMessagePart) + Send)> =
                 Some(on_message_part);
-            let on_tc: Option<&mut (dyn FnMut(kosong::ToolCall) + Send)> = Some(on_tool_call);
+            let on_tc: Option<&mut (dyn FnMut(llm_provider::ToolCall) + Send)> = Some(on_tool_call);
 
-            let result = kosong::generate(
+            let result = llm_provider::generate(
                 provider.as_ref(),
                 system_prompt.unwrap_or(""),
-                &kosong_tools,
-                &kosong_history,
+                &llm_tools,
+                &llm_history,
                 on_mp,
                 on_tc,
             )
@@ -226,139 +221,100 @@ impl LLM {
                 .message
                 .tool_calls
                 .clone()
-                .map(|tcs| tcs.into_iter().map(kosong_to_wire_tool_call).collect())
+                .map(|tcs| tcs.into_iter().map(llm_to_wire_tool_call).collect())
                 .unwrap_or_default();
 
             Ok(ChatCompletion {
                 id: result.id,
-                message: kosong_to_wire_message(result.message),
-                usage: result.usage.map(kosong_to_wire_usage),
+                message: llm_to_wire_message(result.message),
+                usage: result.usage.map(llm_to_wire_usage),
                 tool_calls,
             })
         }
     }
 
-    /// Resolve the effective API key, preferring OAuth token if available.
-    fn resolve_api_key(&self) -> Option<String> {
-        let provider_config = self.provider_config.as_ref()?;
-        self.oauth
-            .as_ref()
-            .and_then(|o| {
-                o.resolve_api_key(
-                    provider_config.api_key.clone(),
-                    provider_config.oauth.as_ref(),
-                )
-            })
-            .map(|c| c.as_str().to_string())
-    }
-
-    pub(crate) fn build_kosong_provider(
+    /// Build the LLM provider through the shared `agent-core` factory.
+    ///
+    /// This replaces the old per-provider builder logic and uses the same
+    /// `ProviderType` + `DefaultProviderFactory` path as `Brain`.
+    async fn build_provider(
         &self,
-    ) -> crate::exception::Result<Arc<dyn kosong::ChatProvider>> {
+    ) -> crate::exception::Result<Arc<dyn llm_provider::ChatProvider>> {
         let provider_config = self
             .provider_config
             .as_ref()
             .ok_or_else(|| OctopusError::Other("Provider config not set".to_string()))?;
 
-        let api_key = self.resolve_api_key();
+        let mut config = agent_core::BrainConfig::default();
+        config.base_url = provider_config.base_url.clone();
+        config.model = self.model_name.clone();
+        config.provider_type = provider_config.to_agent_core_provider_type();
 
-        match provider_config.provider_type {
-            ProviderType::Kimi => {
-                let mut kimi = kosong::provider::kimi::Kimi::new(&self.model_name)
-                    .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    kimi = kimi.with_api_key(key);
-                }
-                Ok(Arc::new(kimi))
-            }
-            ProviderType::OpenaiLegacy => {
-                let mut openai =
-                    kosong::provider::openai_legacy::OpenAILegacy::new(&self.model_name)
-                        .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    openai = openai.with_api_key(key);
-                }
-                if let Some(ref key) = provider_config.reasoning_key {
-                    openai = openai.with_reasoning_key(key);
-                }
-                Ok(Arc::new(openai))
-            }
-            ProviderType::OpenaiResponses => {
-                let mut openai =
-                    kosong::provider::openai_responses::OpenAIResponses::new(&self.model_name)
-                        .with_base_url(&provider_config.base_url);
-                if let Some(ref key) = api_key {
-                    openai = openai.with_api_key(key);
-                }
-                Ok(Arc::new(openai))
-            }
-            ref other => Err(OctopusError::Other(format!(
-                "Provider type {:?} not yet supported by kosong integration",
-                other
-            ))),
-        }
+        config.build_provider().await.map_err(|e| {
+            OctopusError::ChatProvider(ChatProviderError::ProviderError(e.to_string()))
+        })
     }
 }
 
 // ============================================================================
-// Type conversions: wire <-> kosong
+// Type conversions: wire <-> llm-provider
 // ============================================================================
 
-pub(crate) fn wire_to_kosong_message(msg: &crate::wire::Message) -> kosong::Message {
-    kosong::Message {
+pub(crate) fn wire_to_llm_message(msg: &crate::wire::Message) -> llm_provider::Message {
+    llm_provider::Message {
         role: match msg.role.as_str() {
-            "system" => kosong::Role::System,
-            "user" => kosong::Role::User,
-            "assistant" => kosong::Role::Assistant,
-            "tool" => kosong::Role::Tool,
-            _ => kosong::Role::User,
+            "system" => llm_provider::Role::System,
+            "user" => llm_provider::Role::User,
+            "assistant" => llm_provider::Role::Assistant,
+            "tool" => llm_provider::Role::Tool,
+            _ => llm_provider::Role::User,
         },
         name: None,
-        content: msg
-            .content
-            .iter()
-            .map(wire_to_kosong_content_part)
-            .collect(),
+        content: msg.content.iter().map(wire_to_llm_content_part).collect(),
         tool_calls: msg
             .tool_calls
             .as_ref()
-            .map(|tcs| tcs.iter().map(wire_to_kosong_tool_call).collect()),
+            .map(|tcs| tcs.iter().map(wire_to_llm_tool_call).collect()),
         tool_call_id: msg.tool_call_id.clone(),
         partial: None,
     }
 }
 
-pub(crate) fn wire_to_kosong_content_part(part: &crate::wire::ContentPart) -> kosong::ContentPart {
+pub(crate) fn wire_to_llm_content_part(
+    part: &crate::wire::ContentPart,
+) -> llm_provider::ContentPart {
     match part {
-        crate::wire::ContentPart::Text { text } => kosong::ContentPart::Text { text: text.clone() },
-        crate::wire::ContentPart::ImageUrl { image_url } => kosong::ContentPart::ImageUrl {
-            image_url: kosong::ImageUrl {
+        crate::wire::ContentPart::Text { text } => {
+            llm_provider::ContentPart::Text { text: text.clone() }
+        }
+        crate::wire::ContentPart::ImageUrl { image_url } => llm_provider::ContentPart::ImageUrl {
+            image_url: llm_provider::ImageUrl {
                 url: image_url.url.clone(),
                 detail: None,
             },
         },
-        crate::wire::ContentPart::AudioUrl { audio_url } => kosong::ContentPart::AudioUrl {
-            audio_url: kosong::AudioUrl {
+        crate::wire::ContentPart::AudioUrl { audio_url } => llm_provider::ContentPart::AudioUrl {
+            audio_url: llm_provider::AudioUrl {
                 url: audio_url.url.clone(),
             },
         },
-        crate::wire::ContentPart::VideoUrl { video_url } => kosong::ContentPart::VideoUrl {
-            video_url: kosong::VideoUrl {
+        crate::wire::ContentPart::VideoUrl { video_url } => llm_provider::ContentPart::VideoUrl {
+            video_url: llm_provider::VideoUrl {
                 url: video_url.url.clone(),
             },
         },
-        crate::wire::ContentPart::Think { think } => kosong::ContentPart::Think {
+        crate::wire::ContentPart::Think { think } => llm_provider::ContentPart::Think {
             think: think.clone(),
             encrypted: None,
         },
     }
 }
 
-pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::ToolCall {
-    kosong::ToolCall {
+pub(crate) fn wire_to_llm_tool_call(tc: &crate::wire::ToolCall) -> llm_provider::ToolCall {
+    llm_provider::ToolCall {
         call_type: tc.call_type,
         id: tc.id.clone(),
-        function: kosong::FunctionBody {
+        function: llm_provider::FunctionBody {
             name: tc.function.name.clone(),
             arguments: Some(tc.function.arguments.clone()),
         },
@@ -366,8 +322,10 @@ pub(crate) fn wire_to_kosong_tool_call(tc: &crate::wire::ToolCall) -> kosong::To
     }
 }
 
-pub(crate) fn wire_to_kosong_tool(tool: &dyn kosong::tooling::CallableTool) -> kosong::Tool {
-    kosong::Tool {
+pub(crate) fn wire_to_llm_tool(
+    tool: &dyn llm_provider::tooling::CallableTool,
+) -> llm_provider::Tool {
+    llm_provider::Tool {
         name: tool.name().to_string(),
         description: tool.description().to_string(),
         parameters: tool.parameters(),
@@ -375,43 +333,45 @@ pub(crate) fn wire_to_kosong_tool(tool: &dyn kosong::tooling::CallableTool) -> k
     }
 }
 
-pub(crate) fn kosong_to_wire_message(msg: kosong::Message) -> crate::wire::Message {
+pub(crate) fn llm_to_wire_message(msg: llm_provider::Message) -> crate::wire::Message {
     crate::wire::Message {
         role: match msg.role {
-            kosong::Role::System => "system".to_string(),
-            kosong::Role::User => "user".to_string(),
-            kosong::Role::Assistant => "assistant".to_string(),
-            kosong::Role::Tool => "tool".to_string(),
+            llm_provider::Role::System => "system".to_string(),
+            llm_provider::Role::User => "user".to_string(),
+            llm_provider::Role::Assistant => "assistant".to_string(),
+            llm_provider::Role::Tool => "tool".to_string(),
         },
         content: msg
             .content
             .into_iter()
-            .map(kosong_to_wire_content_part)
+            .map(llm_to_wire_content_part)
             .collect(),
         tool_call_id: msg.tool_call_id,
         tool_calls: msg
             .tool_calls
-            .map(|tcs| tcs.into_iter().map(kosong_to_wire_tool_call).collect()),
+            .map(|tcs| tcs.into_iter().map(llm_to_wire_tool_call).collect()),
     }
 }
 
-pub(crate) fn kosong_to_wire_content_part(part: kosong::ContentPart) -> crate::wire::ContentPart {
+pub(crate) fn llm_to_wire_content_part(
+    part: llm_provider::ContentPart,
+) -> crate::wire::ContentPart {
     match part {
-        kosong::ContentPart::Text { text } => crate::wire::ContentPart::Text { text },
-        kosong::ContentPart::ImageUrl { image_url } => crate::wire::ContentPart::ImageUrl {
+        llm_provider::ContentPart::Text { text } => crate::wire::ContentPart::Text { text },
+        llm_provider::ContentPart::ImageUrl { image_url } => crate::wire::ContentPart::ImageUrl {
             image_url: crate::wire::MediaUrl { url: image_url.url },
         },
-        kosong::ContentPart::AudioUrl { audio_url } => crate::wire::ContentPart::AudioUrl {
+        llm_provider::ContentPart::AudioUrl { audio_url } => crate::wire::ContentPart::AudioUrl {
             audio_url: crate::wire::MediaUrl { url: audio_url.url },
         },
-        kosong::ContentPart::VideoUrl { video_url } => crate::wire::ContentPart::VideoUrl {
+        llm_provider::ContentPart::VideoUrl { video_url } => crate::wire::ContentPart::VideoUrl {
             video_url: crate::wire::MediaUrl { url: video_url.url },
         },
-        kosong::ContentPart::Think { think, .. } => crate::wire::ContentPart::Think { think },
+        llm_provider::ContentPart::Think { think, .. } => crate::wire::ContentPart::Think { think },
     }
 }
 
-pub(crate) fn kosong_to_wire_tool_call(tc: kosong::ToolCall) -> crate::wire::ToolCall {
+pub(crate) fn llm_to_wire_tool_call(tc: llm_provider::ToolCall) -> crate::wire::ToolCall {
     crate::wire::ToolCall {
         id: tc.id,
         call_type: tc.call_type,
@@ -422,7 +382,7 @@ pub(crate) fn kosong_to_wire_tool_call(tc: kosong::ToolCall) -> crate::wire::Too
     }
 }
 
-pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::TokenUsage {
+pub(crate) fn llm_to_wire_usage(usage: llm_provider::TokenUsage) -> crate::wire::TokenUsage {
     crate::wire::TokenUsage {
         input: usage.input(),
         output: usage.output,
@@ -431,8 +391,8 @@ pub(crate) fn kosong_to_wire_usage(usage: kosong::TokenUsage) -> crate::wire::To
 }
 
 #[allow(dead_code)]
-pub(crate) fn kosong_to_wire_tool_result(
-    result: kosong::tooling::ToolResult,
+pub(crate) fn llm_to_wire_tool_result(
+    result: llm_provider::tooling::ToolResult,
 ) -> crate::wire::ToolResult {
     crate::wire::ToolResult {
         tool_call_id: result.tool_call_id,
@@ -454,7 +414,7 @@ pub(crate) fn kosong_to_wire_tool_result(
     }
 }
 
-/// Classify a kosong error string into a specific OctopusError variant.
+/// Classify an llm-provider error string into a specific OctopusError variant.
 pub(crate) fn classify_kosong_error(msg: String) -> crate::exception::OctopusError {
     if msg.starts_with("API connection error:") {
         return crate::exception::OctopusError::APIConnection(
@@ -486,4 +446,49 @@ pub(crate) fn classify_kosong_error(msg: String) -> crate::exception::OctopusErr
         );
     }
     crate::exception::OctopusError::Other(msg)
+}
+
+impl LLMProvider {
+    /// Convert the CLI provider configuration into the shared `agent-core`
+    /// provider type.
+    ///
+    /// Note: `custom_headers` is intentionally not propagated here. The
+    /// underlying `llm-provider` OpenAI builders (`OpenAILegacy`,
+    /// `OpenAIResponses`) do not expose a custom-header API, so the factory
+    /// cannot apply them. Only the Kimi builder supports arbitrary headers,
+    /// which are already covered by subscription identity headers.
+    pub fn to_agent_core_provider_type(&self) -> agent_core::ProviderType {
+        use std::path::PathBuf;
+
+        match self.provider_type {
+            ProviderType::Kimi => {
+                let token_file = self
+                    .oauth
+                    .as_ref()
+                    .map(|r| crate::auth::oauth::credentials_path(&r.key))
+                    .unwrap_or_else(|| PathBuf::from("credentials/kimi-code.json"));
+                agent_core::ProviderType::SubscriptionBased {
+                    protocol: agent_core::SubscriptionProtocol::Kimi,
+                    token_file,
+                    identity: agent_core::ProviderIdentity::kimi_code_default(),
+                    oauth: agent_core::OAuthConfig::kimi_code(),
+                }
+            }
+            ProviderType::OpenaiLegacy => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: self.reasoning_key.clone(),
+            },
+            ProviderType::OpenaiResponses => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiResponses,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: None,
+            },
+            _ => agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: self.api_key.clone().unwrap_or_default(),
+                reasoning_key: self.reasoning_key.clone(),
+            },
+        }
+    }
 }

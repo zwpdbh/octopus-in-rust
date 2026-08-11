@@ -3,23 +3,22 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use brain::{
+use agent_core::{
     control::{GroupRuntimeStatus, ToolRuntimeInfo},
     Brain, BrainConfig, BrainEvent, ExtismPluginSource,
 };
+use anyhow::{Context, Result};
+use async_trait::async_trait;
 use futures_util::StreamExt;
-use kosong::message::{ContentPart, Message, Role};
-use kosong::tooling::ToolReturnValue;
-use kosong::Toolset;
+use llm_provider::message::{ContentPart, Message, Role};
+use llm_provider::tooling::ToolReturnValue;
+use llm_provider::Toolset;
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, info};
 
 use crate::config::Config;
 use crate::faf_party::FafPartyHostService;
-use crate::llm_provider::QqbotProviderFactory;
 use crate::memory::MemoryStore;
 use crate::onebot::types::Action;
 
@@ -49,7 +48,7 @@ fn default_limit() -> usize {
 }
 
 #[async_trait]
-impl kosong::tooling::CallableTool2 for RecentMessagesTool {
+impl llm_provider::tooling::CallableTool2 for RecentMessagesTool {
     type Params = RecentMessagesParams;
 
     fn name(&self) -> &str {
@@ -371,41 +370,37 @@ impl GroupBrainManager {
             .filter_plugins(installed.iter().map(|s| s.as_str()))
             .into_iter()
             .collect();
-        let tool_source: std::sync::Arc<dyn brain::ToolSource> =
+        let tool_source: std::sync::Arc<dyn agent_core::ToolSource> =
             std::sync::Arc::new(ExtismPluginSource::with_filter(&self.plugin_dir, allowed));
 
-        let tool_sources: Vec<std::sync::Arc<dyn brain::ToolSource>> = vec![tool_source];
+        let tool_sources: Vec<std::sync::Arc<dyn agent_core::ToolSource>> = vec![tool_source];
 
         let config = BrainConfig {
             system_prompt: profile
                 .system_prompt
                 .clone()
                 .unwrap_or_else(|| self.config.llm.system_prompt.clone()),
-            base_url: self.config.llm.api_url().to_string(),
-            api_key: String::new(),
+            base_url: self.config.llm.api_url.clone(),
             model: self.config.llm.model.clone(),
+            provider_type: self.config.llm.provider.clone(),
             max_steps_per_turn: self.max_steps_per_turn,
             tool_sources,
             ..Default::default()
         };
 
-        let provider_factory =
-            std::sync::Arc::new(QqbotProviderFactory::new(self.config.llm.provider.clone()));
-
-        let mut brain = brain::BrainBuilder::default()
+        let mut brain = agent_core::BrainBuilder::default()
             .from_config(config)
-            .with_provider_factory(provider_factory)
-            .with_system_prompt_policy(std::sync::Arc::new(brain::ToolAwareSystemPromptPolicy))
+            .with_system_prompt_policy(std::sync::Arc::new(agent_core::ToolAwareSystemPromptPolicy))
             .build()
             .await?;
         brain.register_tool(
-            Box::new(kosong::tooling::CallableTool2Adapter::new(
+            Box::new(llm_provider::tooling::CallableTool2Adapter::new(
                 RecentMessagesTool::new(self.memory.clone(), group_id),
             )),
             "host",
         );
         brain.register_tool(
-            Box::new(kosong::tooling::CallableTool2Adapter::new(
+            Box::new(llm_provider::tooling::CallableTool2Adapter::new(
                 crate::faf_party::FafPartyStatusTool::new(self.faf_party.state_store(), group_id),
             )),
             "host",

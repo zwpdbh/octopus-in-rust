@@ -1,196 +1,89 @@
-# Octopus — Rust Rewrite of `kimi-cli`
+# Octopus
 
-> **One-line pitch**: A ground-up rewrite of the Kimi CLI agent into a unified Rust workspace.  
-> **Current Phase**: Phase 1 — 1:1 Python-to-Rust rewrite  
-> **Last Updated**: 2026-06-12
+> A personal Rust agent platform: a single workspace that grew from a faithful
+> rewrite of [kimi-cli](https://github.com/MoonshotAI/kimi-cli) into a full
+> agent ecosystem — a terminal coding agent, a reusable agent runtime, a QQ
+> group bot, and a FAF game-companion web app.
 
----
-
-## What This Project Is
-
-`kimi-cli` is a Python AI-agent command-line interface. **Octopus** consolidates the core runtime, the LLM client crate, plugins, and documentation tooling into a single Rust workspace.
-
-| Original | Language | Octopus Replacement |
-|----------|----------|---------------------|
-| `kimi-cli` (core runtime) | Python | `octopus-cli` (Tokio + clap) |
-| `kimi-cli` LLM/model layer | Python | `kosong` (standalone LLM crate) |
-| `kimi-cli` plugin loader | Python | `qqbot-plugins/example-http` + discovery in `octopus-cli` |
-| Documentation cross-reference | Manual | `docref` (docref tool) |
-
-**Strategy**: 1:1 port first, refactor later.
+**Stack**: Rust (edition 2024), Tokio, Axum, Dioxus 0.7 (WASM), ratatui, Extism (WASM plugins), serde, clap.
 
 ---
 
-## LLM Agent Project Health Checklist
+## What's Inside
 
-> **Purpose**: This is not a feature checklist. It is a **structural and management compliance checklist**.  
-> Any LLM entering this project must verify these items before and during work.  
-> If any item is violated, fix it before proceeding.
+### Applications (`apps/`)
 
-### 🔴 Pre-Flight Check (Do This First)
+| App | Binary | What it does |
+|-----|--------|--------------|
+| `octopus-cli` | `octopus` | Terminal AI coding agent — a faithful Rust rewrite of `kimi-cli`. ratatui TUI, JSON-RPC wire protocol over stdio, hand-rolled MCP client (child processes over stdio), hooks engine, approval runtime, OAuth device flow, and a tool-use agent loop with 10 tool namespaces (shell, file, web, plan, background tasks, ...). |
+| `qqbot` | `qqbot` | Supervisor CLI for the QQ bot service: init/daemon/doctor/health/logs/status, manages SnowLuma (OneBot) and `qqbot-core`. Deployed on AliCloud ECS via Docker + systemd. |
+| `qqbot-core` | — | QQ bot runtime: OneBot v11 over WebSocket with auto-reconnect, per-group LLM brains with group memory, Extism WASM plugin tools, Unix-domain control socket, SIGHUP reload. |
+| `fafcn-server` | `fafcn-server` | Axum backend for the FAF community app: units API, build-order simulation streamed over WebSocket, LLM Q&A streamed over SSE (agent + `faf-units` WASM plugin). |
+| `fafcn-web` | — | Dioxus 0.7 frontend compiled to WASM: unit browser, build-plan editor, live simulation view, streaming agent Q&A chat. |
+| `faf-sim-cli` | `faf-sim` | CLI for the deterministic FAF build-queue economy simulator. |
+| `breakout` | — | Breakout game in Bevy, used to explore debug-stepping. |
 
-Run these checks **before writing any code** after a reconnect:
+### Libraries (`crates/`)
 
-- [ ] **Constitution loaded**: Read [`AGENTS.md`](./AGENTS.md) for architecture decisions, naming rules, coding standards.
-- [ ] **Status loaded**: Read [`STATUS.md`](./STATUS.md) for current phase, active task, blockers.
-- [ ] **Task spec loaded**: If an active task exists, read `tasks/<active-task>.md` for detailed task context.
-- [ ] **Real state verified**: Run `./scripts/project-status.sh` to confirm build/test/git state matches `STATUS.md`.
+| Crate | Purpose |
+|-------|---------|
+| `agent-core` | Reusable agent runtime (`Brain`): streaming turn events, multi-step tool-use loop, retry/recovery/checkpoint policies, approval runtime, system-prompt policies, Extism WASM plugin tools. Consumed by `octopus-cli`, `qqbot-core`, and `fafcn-server`. |
+| `llm-provider` | LLM provider abstraction: OpenAI-compatible (legacy + responses) and Kimi subscription protocols, streaming messages, tool calls, token usage, mock/echo providers for tests. |
+| `faf-blueprints` / `faf-game-engine` / `faf-units` | FAF domain layer: raw unit data parsing, unit computation helpers, high-level game features. |
+| `faf-sim-protocol` / `faf-sim-service` | Simulation event protocol and streaming simulation service. |
+| `faf-dioxus-ui` | Reusable Dioxus components: `chat_primitives` (presentational chat UI), `agent_chat` (config-driven streaming chat page: SSE client, session state, localStorage), markdown renderer, charts. |
+| `faf-downloader` | CLI for downloading and persisting FAF unit data. |
+| `qqbot-config` | Shared qqbot configuration types. |
 
-> ⚠️ **All four must pass. Do not code if any are missing.**
+### Plugins (`plugins/`)
 
-### 🟡 Structural Compliance Check (Verify These Files Exist)
+Extism WASM plugins (`extism-pdk`, `#[plugin_fn]`) loaded by the agent runtime as sandboxed tools:
 
-These files form the project's management backbone. If any are missing, recreate them:
+- `faf-units` — query and compare FAF units (used by the Q&A agent and qqbot).
+- `faf-party` — parse FAF party availability and manage candidate state.
+- `example-http` — reference plugin implementation.
 
-| File | Purpose | Must Exist |
-|------|---------|------------|
-| `AGENTS.md` | Project constitution (rules, conventions, locked decisions) | ✅ |
-| `STATUS.md` | Current operational status (phase, active task, blockers) | ✅ |
-| `tasks/<active>.md` | Detailed spec for the in-progress task | ✅ when active |
-| `tasks/completed/` | Archive directory for finished tasks | ✅ |
-| `scripts/project-status.sh` | Automated build/test/git state reporter | ✅ |
-| `tasks/_template.md` | Template for new task specs | ✅ |
-| `docs/tracking/index.md` | 1:1 rewrite tracker | ✅ |
-| `docs/plans/00-index.md` | Strategic plan series index | ✅ |
-| `docs/plans/13-feature-checklist.md` | P0/P1/P2 feature tracker | ✅ |
+### Tooling
 
-### 🟢 Ongoing Session Compliance (Check Throughout Work)
-
-During every session, verify:
-
-- [ ] **Task scope**: Only work on the active task in `STATUS.md`. Do not drift into other phases.
-- [ ] **State updates**: Update task spec's "Completed Steps" in real time. Update `STATUS.md` at session end.
-- [ ] **Compile gate**: `cargo check --workspace` passes after every meaningful change.
-- [ ] **Test gate**: `cargo test -p octopus-cli` passes before declaring progress.
-- [ ] **Crate boundaries**: Protocol/event types live in the right crate; `kosong` stays independent of `octopus-cli` specifics.
-- [ ] **No schema changes**: Do NOT introduce breaking config or wire-protocol changes without documenting them.
-- [ ] **Git hygiene**: Check `git status --short`. No unintended files modified.
-
-### 🔵 Session End Compliance (Before Stopping)
-
-Before ending any session, run this checklist:
-
-- [ ] Task spec updated with all completed steps and decisions made?
-- [ ] `STATUS.md` updated if task status, blockers, or phase changed?
-- [ ] `./scripts/project-status.sh` output saved or noted in task spec?
-- [ ] `cargo check --workspace` passes?
-- [ ] `cargo test -p octopus-cli` passes (or new tests added + passing)?
-- [ ] All modified files are intentional? (review `git status`)
-
----
-
-## Project Status at a Glance
-
-```text
-Phase 1 — 1:1 Python-to-Rust Rewrite
-├── Core / CLI Entry        🔄
-├── Soul (Agent Core)       🔄
-├── Tools                   🔄
-├── Wire / Messaging        🔄
-├── Session Management      🔄
-├── Config / Exceptions     🔄
-├── LLM Integration         🔄
-├── Auth / OAuth            ✅
-├── UI / Shell              🔄
-├── Web / Visualizer        ❌
-├── Background Tasks        🔄
-├── Subagents               ✅
-├── Hooks                   ✅
-├── MCP Client              ✅
-├── ACP Server              ❌
-├── Utils                   🔄
-├── Telemetry               ✅
-├── Notifications           🔄
-└── Plugins                 ✅
-```
-
-- **Compilation**: `cargo check --workspace` ✅ passes
-- **Tests**: `cargo test -p octopus-cli` 23 tests passing
-- **Active Task**: *TBD — pending next priority* (see [`STATUS.md`](./STATUS.md))
-
-For full operational status, read [`STATUS.md`](./STATUS.md).
-
----
-
-## Architecture Decisions (Locked — Do Not Change Without Approval)
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Language | Rust edition 2024 (plugins currently 2021) | Single toolchain, type safety across boundaries |
-| Async runtime | Tokio | Used throughout `octopus-cli` and `kosong` |
-| CLI framework | clap | Standard Rust CLI parsing |
-| LLM crate | `kosong` | Standalone crate decoupled from CLI specifics |
-| Plugin model | WASM-compatible dynamic crates | `qqbot-plugins/example-http` is the reference implementation |
-| Config format | TOML | Matches `kimi-cli` and Rust ecosystem conventions |
-| Wire protocol | JSON-RPC over stdio | Matches `kimi-cli` wire protocol |
-| Rewrite strategy | 1:1 structure first | Port faithfully, then refactor |
-
-Full conventions and coding standards: [`AGENTS.md`](./AGENTS.md).
+- `xtask/` — workspace automation commands.
+- `scripts/` — project status reporter, qqbot release/deploy helpers, systemd unit.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Verify workspace compiles
+# Verify the workspace compiles and tests pass
 cargo check --workspace
+cargo test --workspace
 
-# Run octopus-cli tests
-cargo test -p octopus-cli
+# Run the terminal agent
+cargo run -p octopus-cli
 
-# Get automated project state (compilation, tests, git, active tasks)
+# Run the FAF web app (backend on :3000, frontend via dx)
+cargo run -p fafcn-server
+cd apps/fafcn-web && dx serve
+
+# QQ bot supervisor (see docs/Q_and_A/qqbot for setup)
+cargo run -p qqbot -- --help
+
+# Automated project state (build/test/git)
 ./scripts/project-status.sh
 ```
 
 ---
 
-## Workspace Layout
-
-```
-octopus/
-├── AGENTS.md              ← Project constitution (rules, conventions, decisions)
-├── STATUS.md              ← Current operational status (phase, task, blockers)
-├── README.md              ← This file (compliance checklist + overview)
-├── Cargo.toml             ← Workspace manifest
-│
-├── octopus-cli/           ← Main CLI runtime
-├── kosong/                ← Standalone LLM / model crate
-├── qqbot-plugins/         ← Plugin crates
-│   ├── example-http/      ← Reference plugin implementation
-│   └── summary/           ← Default qqbot plugin: conversation summary
-├── docref/                ← Documentation cross-reference tool
-├── qqbot/                 ← QQ bot supervisor (SnowLuma + Wasm plugins)
-└── qqbot-core/            ← QQ bot runtime with Wasm plugin host
-
-├── tasks/                 ← Active task specs
-│   ├── _template.md
-│   └── completed/         ← Finished tasks
-│
-├── scripts/               ← Automation
-│   └── project-status.sh  ← Build/test/git state reporter
-│
-├── docs/
-│   ├── plans/             ← Strategic plans (00-index, 13-feature-checklist)
-│   ├── tracking/          ← 1:1 rewrite tracker (index.md + per-area files)
-│   ├── Q_and_A/           ← Deep-dive docs (e.g., hook-system)
-│   └── todo/              ← Scratch notes and comparisons
-│
-└── .git/                  ← Repository metadata
-```
-
----
-
-## Reference Map
+## Project Docs
 
 | Need | File |
 |------|------|
-| Coding conventions, error handling, naming rules | [`AGENTS.md`](./AGENTS.md) |
-| What phase we're in, what's blocked | [`STATUS.md`](./STATUS.md) |
-| Detailed spec for current task | `tasks/<active-task>.md` |
-| 1:1 rewrite tracker | [`docs/tracking/index.md`](./docs/tracking/index.md) |
-| Strategic plans and feature checklist | [`docs/plans/00-index.md`](./docs/plans/00-index.md) |
-| Hook system deep-dive | [`docs/Q_and_A/hook-system/01-index.md`](./docs/Q_and_A/hook-system/01-index.md) |
-| Bootstrap template for future projects | [`_template.md`](./_template.md) |
+| Coding conventions and locked decisions | [`AGENTS.md`](./AGENTS.md) |
+| Current phase, active task, blockers | [`STATUS.md`](./STATUS.md) |
+| Task specs | `tasks/` (`tasks/completed/` for archive) |
+| Rust patterns cookbook | [`docs/Q_and_A/cookbook/`](./docs/Q_and_A/cookbook/) |
+| Hook system deep-dive | [`docs/Q_and_A/hook-system/`](./docs/Q_and_A/hook-system/) |
+| kimi-cli architecture tour | [`docs/Q_and_A/kimi-cli-tour/`](./docs/Q_and_A/kimi-cli-tour/) |
+| QQ bot operator guide | [`docs/Q_and_A/qqbot/`](./docs/Q_and_A/qqbot/) |
 
 ---
 

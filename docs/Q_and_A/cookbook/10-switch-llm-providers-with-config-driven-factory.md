@@ -2,7 +2,7 @@
 
 ## Problem
 
-`qqbot-core` originally talked to a single LLM backend through `brain::DefaultProviderFactory`, which only understands `base_url`, `api_key`, and `model`. When we tried to migrate the bot from a static Moonshot API key to the user's **kimi-code quota**, we hit three limitations:
+`qqbot-core` originally talked to a single LLM backend through `agent_core::DefaultProviderFactory`, which only understands `base_url`, `api_key`, and `model`. When we tried to migrate the bot from a static Moonshot API key to the user's **kimi-code quota**, we hit three limitations:
 
 1. **kimi-code uses OAuth device-flow credentials**, not a static `sk-...` key. The token lives in `~/.kimi/credentials/kimi-code.json` and must be refreshed.
 2. **kimi-code requires extra identity headers** (`User-Agent`, `X-Msh-Platform`, `X-Msh-Device-Id`, etc.) that the generic OpenAI-compatible providers did not need.
@@ -12,7 +12,7 @@ An early refactor introduced a separate `ProviderImplementation` enum that mirro
 
 ## Solution
 
-Model the provider choice as a **tagged config enum**, then implement `brain::ProviderFactory` to build the concrete `kosong::ChatProvider` from that enum.
+Model the provider choice as a **tagged config enum**, then implement `agent_core::ProviderFactory` to build the concrete `llm_provider::ChatProvider` from that enum.
 
 ### 1. Tag the config with a sum type
 
@@ -70,7 +70,7 @@ impl ProviderFactory for QqbotProviderFactory {
     async fn create(
         &self,
         brain_config: &BrainConfig,
-    ) -> Result<Arc<dyn kosong::ChatProvider>, BrainError> {
+    ) -> Result<Arc<dyn llm_provider::ChatProvider>, BrainError> {
         let token = auth_token(&self.provider)
             .await
             .map_err(|e| BrainError::Other(e.to_string()))?;
@@ -99,7 +99,7 @@ fn build_kimi_provider(
     base_url: &str,
     token: String,
     headers: HashMap<String, String>,
-) -> Arc<dyn kosong::ChatProvider> {
+) -> Arc<dyn llm_provider::ChatProvider> {
     let mut provider = Kimi::new(&brain_config.model)
         .with_base_url(base_url)
         .with_api_key(token)
@@ -113,10 +113,10 @@ fn build_kimi_provider(
 
 ### 3. Let the underlying provider carry custom headers
 
-The `kosong::Kimi` provider gained a builder method for arbitrary headers:
+The `llm_provider::Kimi` provider gained a builder method for arbitrary headers:
 
 ```rust
-// crates/kosong/src/provider/kimi.rs ~line 82 — Kimi::with_header
+// crates/llm-provider/src/provider/kimi.rs ~line 82 — Kimi::with_header
 pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
     self.headers.insert(name.into(), value.into());
     self
@@ -126,7 +126,7 @@ pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) 
 These headers are applied to every outgoing request:
 
 ```rust
-// crates/kosong/src/provider/kimi.rs ~line 240 — request header loop (abbreviated)
+// crates/llm-provider/src/provider/kimi.rs ~line 240 — request header loop (abbreviated)
 for (name, value) in &self.headers {
     req_builder = req_builder.header(name, value);
 }
@@ -139,7 +139,7 @@ for (name, value) in &self.headers {
 let provider_factory =
     std::sync::Arc::new(QqbotProviderFactory::new(self.config.llm.provider.clone()));
 
-let mut brain = brain::BrainBuilder::default()
+let mut brain = agent_core::BrainBuilder::default()
     .from_config(config)
     .with_provider_factory(provider_factory)
     .build()
@@ -158,18 +158,18 @@ let mut brain = brain::BrainBuilder::default()
 | Construction | Hard-coded in `DefaultProviderFactory` | `QqbotProviderFactory` driven by config |
 | Extensibility | Update two enums | Add one variant + one match arm |
 
-The factory pattern keeps `brain` generic. `Brain` only needs a `dyn ProviderFactory`; it does not know whether the provider is kimi-code, OpenAI, or a local proxy. Because `BrainConfig.build_provider()` calls the factory, the Brain can also rebuild the provider later — for example, after an OAuth token refresh.
+The factory pattern keeps `agent-core` generic. `Brain` only needs a `dyn ProviderFactory`; it does not know whether the provider is kimi-code, OpenAI, or a local proxy. Because `BrainConfig.build_provider()` calls the factory, the Brain can also rebuild the provider later — for example, after an OAuth token refresh.
 
 ## When to Use
 
 - You have **multiple LLM backends** with different authentication or header requirements.
-- The core library (`brain`, `kosong`) should stay provider-agnostic.
+- The core library (`agent-core`, `llm-provider`) should stay provider-agnostic.
 - Provider construction requires **async I/O** (OAuth refresh, reading device IDs, etc.).
 - You want configuration errors to surface at **deserialization time** via tagged enums.
 
 ## When NOT to Use
 
-- You only ever target one provider. `brain::DefaultProviderFactory` is simpler.
+- You only ever target one provider. `agent_core::DefaultProviderFactory` is simpler.
 - Provider construction is synchronous and trivial. A plain builder at the call site is less indirection.
 - You want runtime plugin loading of providers from unknown third parties. A trait object registry is more flexible than a closed config enum.
 

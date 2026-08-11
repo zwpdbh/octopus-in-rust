@@ -132,7 +132,7 @@ Rust follows Python's pattern of keeping **config and runtime credentials separa
 | **Runtime** | `OAuthManager` cache | ✅ Yes | Disk → memory cache |
 | **Runtime** | `LLM.oauth` | ✅ Yes | Bound at `KimiSoul` startup |
 
-The `LLM` stores an `OAuthManager` clone so that every `build_kosong_provider()` call can resolve the **live** credential:
+The `LLM` stores an `OAuthManager` clone so that every `build_llm_provider()` call can resolve the **live** credential:
 
 ```rust
 // File: octopus-cli/src/llm.rs
@@ -169,7 +169,7 @@ pub fn resolve_api_key(
 }
 ```
 
-And `build_kosong_provider` calls it before every LLM request:
+And `build_llm_provider` calls it before every LLM request:
 
 ```rust
 // File: octopus-cli/src/llm.rs
@@ -253,7 +253,7 @@ pub async fn ensure_fresh(&self, llm: &LLM, force: bool) -> Result<bool> {
 - `Ok(false)` — no OAuth configured, no token on disk, or refresh not needed yet
 - `Err(...)` — refresh failed (e.g., refresh token rejected)
 
-**Crucially, `ensure_fresh` does NOT return the token string.** It only updates the in-memory cache inside `OAuthManager`. The next call to `build_kosong_provider()` will pick up the new token automatically via `resolve_api_key()`.
+**Crucially, `ensure_fresh` does NOT return the token string.** It only updates the in-memory cache inside `OAuthManager`. The next call to `build_llm_provider()` will pick up the new token automatically via `resolve_api_key()`.
 
 This is **resilient token management**:
 
@@ -265,9 +265,9 @@ This is **resilient token management**:
 
 🐍 **Python's way:** `ensure_fresh` mutates the live HTTP client's `api_key` in-place (`runtime.llm.chat_provider.client.api_key = new_token`).
 
-🦀 **Rust's way:** `ensure_fresh` mutates the `OAuthManager` cache only. The provider is rebuilt on every LLM call, so the fresh token is picked up naturally at `build_kosong_provider()` time. No live client mutation needed.
+🦀 **Rust's way:** `ensure_fresh` mutates the `OAuthManager` cache only. The provider is rebuilt on every LLM call, so the fresh token is picked up naturally at `build_llm_provider()` time. No live client mutation needed.
 
-✨ **Where Rust shines:** **No live object mutation.** Because `build_kosong_provider()` creates a new kosong provider each time, credential resolution is a pure function of `LLM` state. In Python, mutating the HTTP client in-place creates a hidden side effect that can surprise callers holding references to the client.
+✨ **Where Rust shines:** **No live object mutation.** Because `build_llm_provider()` creates a new LLM provider each time, credential resolution is a pure function of `LLM` state. In Python, mutating the HTTP client in-place creates a hidden side effect that can surprise callers holding references to the client.
 
 ---
 

@@ -35,7 +35,7 @@ impl McpTool {
 }
 
 #[async_trait]
-impl kosong::tooling::CallableTool for McpTool {
+impl llm_provider::tooling::CallableTool for McpTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -53,17 +53,22 @@ impl kosong::tooling::CallableTool for McpTool {
             .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}))
     }
 
-    async fn call_raw(&self, arguments: serde_json::Value) -> kosong::tooling::ToolReturnValue {
+    async fn call_raw(
+        &self,
+        arguments: serde_json::Value,
+    ) -> llm_provider::tooling::ToolReturnValue {
         match self.client.call_tool(&self.name, arguments).await {
             Ok(result) => {
                 let text = result.to_text();
                 if result.is_error.unwrap_or(false) {
-                    kosong::tooling::ToolReturnValue::error(text)
+                    llm_provider::tooling::ToolReturnValue::error(text)
                 } else {
-                    kosong::tooling::ToolReturnValue::ok(text)
+                    llm_provider::tooling::ToolReturnValue::ok(text)
                 }
             }
-            Err(e) => kosong::tooling::ToolReturnValue::error(format!("MCP tool error: {}", e)),
+            Err(e) => {
+                llm_provider::tooling::ToolReturnValue::error(format!("MCP tool error: {}", e))
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use agent_core::control::{ControlRequest, ControlResponse, GroupRuntimeStatus, ToolRuntimeInfo};
 use anyhow::{Context, Result};
-use brain::control::{ControlRequest, ControlResponse, GroupRuntimeStatus, ToolRuntimeInfo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::{timeout, Duration};

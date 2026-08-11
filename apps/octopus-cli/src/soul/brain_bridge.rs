@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::hooks::{HookEngine, HookEvent};
-use crate::llm::{LLM, kosong_to_wire_message, wire_to_kosong_message};
+use crate::llm::{LLM, llm_to_wire_message, wire_to_llm_message};
 use crate::notifications::llm::build_notification_message;
 use crate::notifications::manager::NotificationManager;
 use crate::soul::compaction::{SimpleCompaction, should_auto_compact};
@@ -26,24 +26,24 @@ impl ContextMessageStore {
 }
 
 #[async_trait::async_trait]
-impl brain::session::store::MessageStore for ContextMessageStore {
-    async fn push(&mut self, message: kosong::Message) {
-        let wire_message = kosong_to_wire_message(message);
+impl agent_core::session::store::MessageStore for ContextMessageStore {
+    async fn push(&mut self, message: llm_provider::Message) {
+        let wire_message = llm_to_wire_message(message);
         let mut ctx = self.context.lock().await;
         if let Err(e) = ctx.append_message(wire_message).await {
             tracing::error!("Failed to persist message: {}", e);
         }
     }
 
-    async fn history(&self) -> Vec<kosong::Message> {
+    async fn history(&self) -> Vec<llm_provider::Message> {
         let ctx = self.context.lock().await;
-        let messages: Vec<kosong::Message> =
-            ctx.history().iter().map(wire_to_kosong_message).collect();
+        let messages: Vec<llm_provider::Message> =
+            ctx.history().iter().map(wire_to_llm_message).collect();
         // Merge adjacent user messages to match the CLI's normalize_history behavior.
-        let mut normalized: Vec<kosong::Message> = Vec::new();
+        let mut normalized: Vec<llm_provider::Message> = Vec::new();
         for msg in messages {
             if let Some(last) = normalized.last_mut() {
-                if last.role == kosong::Role::User && msg.role == kosong::Role::User {
+                if last.role == llm_provider::Role::User && msg.role == llm_provider::Role::User {
                     last.content.extend(msg.content);
                     continue;
                 }
@@ -53,9 +53,9 @@ impl brain::session::store::MessageStore for ContextMessageStore {
         normalized
     }
 
-    async fn set_history(&mut self, history: Vec<kosong::Message>) {
+    async fn set_history(&mut self, history: Vec<llm_provider::Message>) {
         let wire_history: Vec<wire::Message> =
-            history.into_iter().map(kosong_to_wire_message).collect();
+            history.into_iter().map(llm_to_wire_message).collect();
         let mut ctx = self.context.lock().await;
         let _ = ctx.replace_history(wire_history).await;
     }
@@ -99,11 +99,14 @@ impl CliCompactionPolicy {
 }
 
 #[async_trait::async_trait]
-impl brain::session::compaction::CompactionPolicy for CliCompactionPolicy {
-    async fn maybe_compact(&self, history: &[kosong::Message]) -> Option<Vec<kosong::Message>> {
+impl agent_core::session::compaction::CompactionPolicy for CliCompactionPolicy {
+    async fn maybe_compact(
+        &self,
+        history: &[llm_provider::Message],
+    ) -> Option<Vec<llm_provider::Message>> {
         let wire_history: Vec<wire::Message> = history
             .iter()
-            .map(|m| kosong_to_wire_message(m.clone()))
+            .map(|m| llm_to_wire_message(m.clone()))
             .collect();
         let token_count = crate::soul::context::estimate_text_tokens(&wire_history);
 
@@ -125,7 +128,7 @@ impl brain::session::compaction::CompactionPolicy for CliCompactionPolicy {
                 result
                     .messages
                     .into_iter()
-                    .map(|m| wire_to_kosong_message(&m))
+                    .map(|m| wire_to_llm_message(&m))
                     .collect(),
             ),
             Err(e) => {
@@ -185,11 +188,11 @@ impl CliInjectionPolicy {
 }
 
 #[async_trait::async_trait]
-impl brain::session::injection::InjectionPolicy for CliInjectionPolicy {
-    async fn inject(&self, history: &[kosong::Message]) -> Vec<kosong::Message> {
+impl agent_core::session::injection::InjectionPolicy for CliInjectionPolicy {
+    async fn inject(&self, history: &[llm_provider::Message]) -> Vec<llm_provider::Message> {
         let wire_history: Vec<wire::Message> = history
             .iter()
-            .map(|m| kosong_to_wire_message(m.clone()))
+            .map(|m| llm_to_wire_message(m.clone()))
             .collect();
 
         let (plan_mode, effective_afk, persisted_afk, plan_file_path, pending_plan_activation) = {
@@ -239,7 +242,7 @@ impl brain::session::injection::InjectionPolicy for CliInjectionPolicy {
 
         injections
             .into_iter()
-            .map(|m| wire_to_kosong_message(&m))
+            .map(|m| wire_to_llm_message(&m))
             .collect()
     }
 }
@@ -262,8 +265,8 @@ impl CliHookPolicy {
 }
 
 #[async_trait::async_trait]
-impl brain::hooks::policy::HookPolicy for CliHookPolicy {
-    async fn on_user_prompt_submit(&self, prompt: &str) -> brain::hooks::policy::HookAction {
+impl agent_core::hooks::policy::HookPolicy for CliHookPolicy {
+    async fn on_user_prompt_submit(&self, prompt: &str) -> agent_core::hooks::policy::HookAction {
         let event =
             HookEvent::user_prompt_submit(&self.session_id, self.cwd.to_string_lossy(), prompt);
         let results = self.engine.trigger(event).await;
@@ -275,7 +278,7 @@ impl brain::hooks::policy::HookPolicy for CliHookPolicy {
         tool_name: &str,
         tool_input: &serde_json::Value,
         tool_call_id: &str,
-    ) -> brain::hooks::policy::HookAction {
+    ) -> agent_core::hooks::policy::HookAction {
         let input_map = match tool_input.as_object() {
             Some(obj) => obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             None => std::collections::HashMap::new(),
@@ -338,43 +341,13 @@ impl brain::hooks::policy::HookPolicy for CliHookPolicy {
 
 fn aggregate_hook_action(
     results: Vec<crate::hooks::runner::HookResult>,
-) -> brain::hooks::policy::HookAction {
+) -> agent_core::hooks::policy::HookAction {
     for result in results {
         if let crate::hooks::runner::HookAction::Block(reason) = result.action {
-            return brain::hooks::policy::HookAction::Block { reason };
+            return agent_core::hooks::policy::HookAction::Block { reason };
         }
     }
-    brain::hooks::policy::HookAction::Allow
-}
-
-/// Builds kosong providers from the CLI's [`LLM`] configuration.
-///
-/// On construction, it ensures any OAuth token is fresh so that recovered
-/// providers pick up refreshed credentials after a 401.
-pub struct CliProviderFactory {
-    llm: Arc<LLM>,
-    oauth: crate::auth::OAuthManager,
-}
-
-impl CliProviderFactory {
-    pub fn new(llm: Arc<LLM>, oauth: crate::auth::OAuthManager) -> Self {
-        Self { llm, oauth }
-    }
-}
-
-#[async_trait]
-impl brain::ProviderFactory for CliProviderFactory {
-    async fn create(
-        &self,
-        _config: &brain::BrainConfig,
-    ) -> Result<Arc<dyn kosong::ChatProvider>, brain::BrainError> {
-        // Ensure the OAuth token is fresh before building the provider.
-        let _ = self.oauth.ensure_fresh(&self.llm, true).await;
-
-        self.llm
-            .build_kosong_provider()
-            .map_err(|e| brain::BrainError::Llm(e.to_string()))
-    }
+    agent_core::hooks::policy::HookAction::Allow
 }
 
 /// CLI retry policy with exponential backoff and jitter.
@@ -389,12 +362,12 @@ impl CliRetryPolicy {
 }
 
 #[async_trait]
-impl brain::RetryPolicy for CliRetryPolicy {
+impl agent_core::RetryPolicy for CliRetryPolicy {
     fn max_attempts(&self) -> usize {
         self.max_attempts
     }
 
-    fn should_retry(&self, error: &brain::BrainError, attempt: usize) -> Option<Duration> {
+    fn should_retry(&self, error: &agent_core::BrainError, attempt: usize) -> Option<Duration> {
         if attempt > self.max_attempts {
             return None;
         }
@@ -422,21 +395,21 @@ impl CliRecoveryPolicy {
 }
 
 #[async_trait]
-impl brain::RecoveryPolicy for CliRecoveryPolicy {
-    async fn recover(&self, error: &brain::BrainError) -> brain::RecoveryAction {
+impl agent_core::RecoveryPolicy for CliRecoveryPolicy {
+    async fn recover(&self, error: &agent_core::BrainError) -> agent_core::RecoveryAction {
         if error.is_auth_failure() {
             // Try to refresh the token before the factory rebuilds the provider.
             let _ = self.oauth.ensure_fresh(&self.llm, true).await;
-            return brain::RecoveryAction::RefreshProvider;
+            return agent_core::RecoveryAction::RefreshProvider;
         }
 
         if error.is_transient() {
-            return brain::RecoveryAction::Retry {
+            return agent_core::RecoveryAction::Retry {
                 wait: Duration::from_secs(1),
             };
         }
 
-        brain::RecoveryAction::Abort
+        agent_core::RecoveryAction::Abort
     }
 }
 
@@ -463,16 +436,16 @@ impl CliCheckpointPolicy {
 }
 
 #[async_trait::async_trait]
-impl brain::core::checkpoint::CheckpointPolicy for CliCheckpointPolicy {
+impl agent_core::core::checkpoint::CheckpointPolicy for CliCheckpointPolicy {
     async fn checkpoint(
         &self,
-        _ctx: &brain::core::step::StepContext,
-        _history: &[kosong::Message],
-    ) -> Result<brain::core::events::CheckpointId, brain::BrainError> {
+        _ctx: &agent_core::core::step::StepContext,
+        _history: &[llm_provider::Message],
+    ) -> Result<agent_core::core::events::CheckpointId, agent_core::BrainError> {
         let mut ctx = self.context.lock().await;
         ctx.checkpoint(self.checkpoint_with_user_message)
             .await
-            .map_err(|e| brain::BrainError::Other(e.to_string()))?;
+            .map_err(|e| agent_core::BrainError::Other(e.to_string()))?;
         let id = ctx.n_checkpoints() - 1;
         self.denwa_renji.lock().unwrap().set_n_checkpoints(id + 1);
         Ok(id)
@@ -480,16 +453,16 @@ impl brain::core::checkpoint::CheckpointPolicy for CliCheckpointPolicy {
 
     async fn revert_to(
         &self,
-        id: brain::core::events::CheckpointId,
-    ) -> Result<Vec<kosong::Message>, brain::BrainError> {
+        id: agent_core::core::events::CheckpointId,
+    ) -> Result<Vec<llm_provider::Message>, agent_core::BrainError> {
         let mut ctx = self.context.lock().await;
         ctx.revert_to(id)
             .await
-            .map_err(|e| brain::BrainError::Other(e.to_string()))?;
-        Ok(ctx.history().iter().map(wire_to_kosong_message).collect())
+            .map_err(|e| agent_core::BrainError::Other(e.to_string()))?;
+        Ok(ctx.history().iter().map(wire_to_llm_message).collect())
     }
 
-    async fn current(&self) -> Option<brain::core::events::CheckpointId> {
+    async fn current(&self) -> Option<agent_core::core::events::CheckpointId> {
         Some(self.context.lock().await.n_checkpoints().saturating_sub(1))
     }
 }
@@ -540,12 +513,12 @@ impl CliStepPolicy {
 }
 
 #[async_trait::async_trait]
-impl brain::core::step::StepPolicy for CliStepPolicy {
+impl agent_core::core::step::StepPolicy for CliStepPolicy {
     async fn before_step(
         &self,
-        _ctx: &brain::core::step::StepContext,
-        history: &mut Vec<kosong::Message>,
-    ) -> Result<(), brain::BrainError> {
+        _ctx: &agent_core::core::step::StepContext,
+        history: &mut Vec<llm_provider::Message>,
+    ) -> Result<(), agent_core::BrainError> {
         let turn_id = self
             .current_turn_id
             .lock()
@@ -564,7 +537,7 @@ impl brain::core::step::StepPolicy for CliStepPolicy {
             let notifs = self.notification_manager.claim_for_sink("llm", 8);
             for view in notifs {
                 let msg = build_notification_message(&view);
-                history.push(wire_to_kosong_message(&msg));
+                history.push(wire_to_llm_message(&msg));
                 let event = HookEvent::notification(
                     &self.session_id,
                     &cwd,
@@ -585,10 +558,10 @@ impl brain::core::step::StepPolicy for CliStepPolicy {
 
     async fn after_step(
         &self,
-        _ctx: &brain::core::step::StepContext,
-        outcome: &brain::core::step::StepOutcome,
-        tool_results: &[kosong::tooling::ToolResult],
-    ) -> Result<brain::core::step::StepControl, brain::BrainError> {
+        _ctx: &agent_core::core::step::StepContext,
+        outcome: &agent_core::core::step::StepOutcome,
+        tool_results: &[llm_provider::tooling::ToolResult],
+    ) -> Result<agent_core::core::step::StepControl, agent_core::BrainError> {
         let current_calls = self.toolset.end_step();
 
         let any_error = tool_results.iter().any(|r| r.return_value.is_error);
@@ -599,7 +572,7 @@ impl brain::core::step::StepPolicy for CliStepPolicy {
                 dr.fetch_pending_dmail()
             };
             *self.last_tool_calls.lock().unwrap() = current_calls;
-            return Ok(brain::core::step::StepControl::Stop {
+            return Ok(agent_core::core::step::StepControl::Stop {
                 final_text: String::new(),
             });
         }
@@ -632,20 +605,20 @@ impl brain::core::step::StepPolicy for CliStepPolicy {
                 tool_call_id: None,
                 tool_calls: None,
             };
-            return Ok(brain::core::step::StepControl::RewindToCheckpoint {
+            return Ok(agent_core::core::step::StepControl::RewindToCheckpoint {
                 checkpoint_id: dmail.checkpoint_id,
-                inject_messages: vec![wire_to_kosong_message(&inject)],
+                inject_messages: vec![wire_to_llm_message(&inject)],
             });
         }
 
         *self.last_tool_calls.lock().unwrap() = current_calls;
 
         match outcome {
-            brain::core::step::StepOutcome::Continue => {
-                Ok(brain::core::step::StepControl::Continue)
+            agent_core::core::step::StepOutcome::Continue => {
+                Ok(agent_core::core::step::StepControl::Continue)
             }
-            brain::core::step::StepOutcome::Final { text } => {
-                Ok(brain::core::step::StepControl::Stop {
+            agent_core::core::step::StepOutcome::Final { text } => {
+                Ok(agent_core::core::step::StepControl::Stop {
                     final_text: text.clone(),
                 })
             }

@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use agent_core::ProviderType;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -66,119 +68,37 @@ pub struct LlmConfig {
     pub model: String,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    pub api_url: String,
     #[serde(flatten)]
-    pub provider: LlmProviderConfig,
+    pub provider: ProviderType,
 }
 
 impl LlmConfig {
-    pub fn api_url(&self) -> &str {
-        match &self.provider {
-            LlmProviderConfig::OpenAiCompatible { api_url, .. } => api_url,
-            LlmProviderConfig::KimiCode { api_url, .. } => api_url,
-        }
-    }
-
     fn validate(&self) -> anyhow::Result<()> {
         if self.model.is_empty() {
             anyhow::bail!("llm.model must not be empty");
         }
+        if self.api_url.is_empty() {
+            anyhow::bail!("llm.api_url must not be empty");
+        }
         match &self.provider {
-            LlmProviderConfig::OpenAiCompatible { api_url, auth } => {
-                if api_url.is_empty() {
-                    anyhow::bail!("llm.api_url must not be empty");
-                }
-                auth.validate()?;
-            }
-            LlmProviderConfig::KimiCode {
-                api_url,
-                token_file,
-                ..
-            } => {
-                if api_url.is_empty() {
-                    anyhow::bail!("llm.api_url must not be empty");
-                }
-                if token_file.is_empty() {
-                    anyhow::bail!("llm.token_file must not be empty for kimi_code provider");
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "provider_type", rename_all = "snake_case")]
-pub enum LlmProviderConfig {
-    /// Generic OpenAI-compatible endpoint (Moonshot, DeepSeek, OpenAI, etc.).
-    OpenAiCompatible {
-        api_url: String,
-        #[serde(flatten)]
-        auth: AuthConfig,
-    },
-    /// Kimi Code managed endpoint using OAuth device-flow credentials.
-    KimiCode {
-        api_url: String,
-        token_file: String,
-        #[serde(flatten)]
-        identity: KimiCodeIdentity,
-    },
-}
-
-/// Authentication method for an OpenAI-compatible provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "auth_type", rename_all = "snake_case")]
-pub enum AuthConfig {
-    ApiKey { api_key: String },
-    OAuth { token_file: String },
-}
-
-impl AuthConfig {
-    fn validate(&self) -> anyhow::Result<()> {
-        match self {
-            AuthConfig::ApiKey { api_key } => {
+            ProviderType::ApiBased { api_key, .. } => {
                 if api_key.is_empty() {
-                    anyhow::bail!("llm.api_key must not be empty when auth_type = 'api_key'");
+                    anyhow::bail!("llm.api_key must not be empty when provider_type = 'api_based'");
                 }
             }
-            AuthConfig::OAuth { token_file } => {
-                if token_file.is_empty() {
-                    anyhow::bail!("llm.token_file must not be empty when auth_type = 'oauth'");
+            ProviderType::SubscriptionBased { token_file, .. } => {
+                if token_file.as_os_str().is_empty() {
+                    anyhow::bail!(
+                        "llm.token_file must not be empty when provider_type = 'subscription_based'"
+                    );
                 }
             }
         }
         Ok(())
     }
-}
-
-/// Identity headers required by the kimi-code coding endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KimiCodeIdentity {
-    #[serde(default = "default_kimi_code_home")]
-    pub home_dir: String,
-    #[serde(default = "default_kimi_code_version")]
-    pub version: String,
-    #[serde(default = "default_kimi_code_product")]
-    pub user_agent_product: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthConfig {
-    pub provider: String,
-    pub token_file: String,
 }
 
 fn default_system_prompt() -> String {
     "You are a helpful assistant summarizing a QQ group conversation.".to_string()
-}
-
-fn default_kimi_code_home() -> String {
-    "~/.kimi".to_string()
-}
-
-fn default_kimi_code_version() -> String {
-    "0.1.1".to_string()
-}
-
-fn default_kimi_code_product() -> String {
-    "kimi-code-cli".to_string()
 }

@@ -122,7 +122,7 @@ System PATH
              │
              ├── .venv/        (uv-managed virtualenv)
              ├── src/kimi_cli/  (your forked source code)
-             └── packages/kosong/src/  (local dependencies)
+             └── packages/llm-provider/src/  (local dependencies)
 ```
 
 | Aspect | Official `kimi` | Forked `mykimi` |

@@ -73,7 +73,7 @@ This means our design must support **both** paths simultaneously: typed tools fo
 
 ### 5. Schema semantics
 
-`kosong::CallableTool::parameters()` returns **only** the inner parameters JSON Schema:
+`llm_provider::CallableTool::parameters()` returns **only** the inner parameters JSON Schema:
 
 ```json
 {
@@ -82,18 +82,18 @@ This means our design must support **both** paths simultaneously: typed tools fo
 }
 ```
 
-`kosong::Tool` already has separate `name` and `description` fields, so there is no double-wrapping. This is the correct semantic shape.
+`llm_provider::Tool` already has separate `name` and `description` fields, so there is no double-wrapping. This is the correct semantic shape.
 
 ## Solution
 
-Use kosong's built-in two-layer design:
+Use llm-provider's built-in two-layer design:
 
 1. **`CallableTool`** — the object-safe trait the registry stores. `parameters()` returns **only** the parameters JSON Schema.
 2. **`CallableTool2`** — a developer-facing trait with an associated `Params` type bounded by `DeserializeOwned + JsonSchema + Send`. It is never stored directly.
 3. **`CallableTool2Adapter<T>`** — a concrete generic struct that bridges `CallableTool2` → `CallableTool`, mechanically deriving the schema and handling deserialization.
 
 ```rust
-use kosong::async_trait;
+use llm_provider::async_trait;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -199,8 +199,8 @@ toolset.register_typed(ShellTool::new(bg_manager));
 `KimiToolset::register_typed` wraps the tool in `CallableTool2Adapter` automatically:
 
 ```rust
-pub fn register_typed<T: kosong::tooling::CallableTool2 + 'static>(&mut self, tool: T) {
-    self.register(Box::new(kosong::tooling::CallableTool2Adapter::new(tool)));
+pub fn register_typed<T: llm_provider::tooling::CallableTool2 + 'static>(&mut self, tool: T) {
+    self.register(Box::new(llm_provider::tooling::CallableTool2Adapter::new(tool)));
 }
 ```
 
@@ -221,7 +221,7 @@ WASM plugins, MCP tools, and wire-external tools implement `CallableTool` direct
 
 ```rust
 #[async_trait]
-impl kosong::tooling::CallableTool for WasmPluginTool {
+impl llm_provider::tooling::CallableTool for WasmPluginTool {
     fn parameters(&self) -> Value {
         // From plugin manifest — already parameters-only JSON Schema.
         self.schema.clone()
@@ -237,7 +237,7 @@ Callers using `Box<dyn CallableTool>` or iterating over `&dyn CallableTool` requ
 ## Migration checklist
 
 1. Add `schemars::JsonSchema` to every params struct derive.
-2. Replace `impl Tool for X` with `impl CallableTool2 for X` (from `kosong::tooling`).
+2. Replace `impl Tool for X` with `impl CallableTool2 for X` (from `llm_provider::tooling`).
 3. Add `type Params = YourParams;`.
 4. Rename `call(&self, arguments: Value)` → `call_typed(&self, params: Self::Params)`.
 5. Change return type from `Result<String, String>` to `ToolReturnValue` (use `ToolReturnValue::ok(...)` / `::error(...)`).
@@ -258,4 +258,4 @@ Callers using `Box<dyn CallableTool>` or iterating over `&dyn CallableTool` requ
 ## Related
 
 - [03-newtype-adapter-enforce-construction-invariant.md](./03-newtype-adapter-enforce-construction-invariant.md) — the newtype wrapper technique used for `KimiToolsetHandle`.
-- `kosong/src/tooling.rs` — the kosong crate owns `CallableTool`, `CallableTool2`, and `CallableTool2Adapter`.
+- `llm-provider/src/tooling.rs` — the llm-provider crate owns `CallableTool`, `CallableTool2`, and `CallableTool2Adapter`.

@@ -1,0 +1,21 @@
+[package]
+name = "llm-provider"
+version = "0.1.0"
+edition = "2024"
+authors = ["Octopus Team"]
+description = "LLM/provider abstraction layer for Octopus"
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+schemars = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

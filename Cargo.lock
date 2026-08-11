@@ -104,6 +104,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dirs 5.0.1",
+ "extism",
+ "futures",
+ "llm-provider",
+ "rand 0.10.1",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2302,26 +2324,6 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
-]
-
-[[package]]
-name = "brain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "dirs 5.0.1",
- "extism",
- "futures",
- "kosong",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "tracing",
 ]
 
 [[package]]
@@ -4727,9 +4729,11 @@ dependencies = [
  "petgraph 0.8.3",
  "plotters",
  "plotters-canvas",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -4832,18 +4836,24 @@ dependencies = [
 name = "fafcn-server"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
  "anyhow",
+ "async-trait",
  "axum 0.7.9",
+ "dotenvy",
  "faf-blueprints",
  "faf-sim-protocol",
  "faf-sim-service",
- "faf-units",
+ "futures",
+ "llm-provider",
  "serde",
  "serde_json",
  "tokio",
  "tower-http 0.5.2",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -6690,22 +6700,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4933f3f57a8e9d9da04db23fb153356ecaf00cbd14aee46279c33dc80925c37"
 
 [[package]]
-name = "kosong"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "reqwest 0.12.28",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
 name = "ktx2"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6930,6 +6924,22 @@ name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
+name = "llm-provider"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "reqwest 0.12.28",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
 
 [[package]]
 name = "lock_api"
@@ -8005,12 +8015,12 @@ dependencies = [
 name = "octopus-cli"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
  "anyhow",
  "arboard",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
- "brain",
  "chrono",
  "clap",
  "config",
@@ -8022,8 +8032,8 @@ dependencies = [
  "futures",
  "glob",
  "indexmap",
- "kosong",
  "lazy_static",
+ "llm-provider",
  "minijinja",
  "oauth2",
  "once_cell",
@@ -8968,17 +8978,17 @@ dependencies = [
 name = "qqbot"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
  "anyhow",
- "brain",
  "clap",
  "daemonize",
  "dotenvy",
  "futures",
  "http 1.4.0",
  "libc",
+ "llm-provider",
  "nix 0.29.0",
  "qqbot-config",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
@@ -9004,14 +9014,14 @@ dependencies = [
 name = "qqbot-core"
 version = "0.1.0"
 dependencies = [
+ "agent-core",
  "anyhow",
  "async-trait",
- "brain",
  "chrono",
  "extism",
  "futures-util",
  "http 1.4.0",
- "kosong",
+ "llm-provider",
  "qqbot-config",
  "reqwest 0.12.28",
  "schemars",
@@ -10636,6 +10646,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11411,6 +11427,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.18",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]

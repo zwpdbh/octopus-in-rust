@@ -6,14 +6,14 @@ use crate::auth::OAuthManager;
 use crate::config::Config;
 use crate::exception::{LLMNotSet, LLMNotSupported, MaxStepsReached, OctopusError, Result};
 use crate::hooks::{HookEngine, HookEvent};
-use crate::llm::{LLM, kosong_to_wire_usage};
+use crate::llm::{LLM, llm_to_wire_usage};
 use crate::notifications::llm::extract_notification_ids;
 use crate::notifications::manager::NotificationManager;
 use crate::session::Session;
 use crate::soul::approval::{Approval, ApprovalState};
 use crate::soul::brain_bridge::{
-    CliCheckpointPolicy, CliCompactionPolicy, CliInjectionPolicy, CliProviderFactory,
-    CliRecoveryPolicy, CliRetryPolicy, CliStepPolicy, ContextMessageStore,
+    CliCheckpointPolicy, CliCompactionPolicy, CliInjectionPolicy, CliRecoveryPolicy,
+    CliRetryPolicy, CliStepPolicy, ContextMessageStore,
 };
 use crate::soul::compaction::SimpleCompaction;
 use crate::soul::context::Context;
@@ -46,7 +46,7 @@ pub struct KimiSoul {
     pub denwa_renji: std::sync::Arc<std::sync::Mutex<crate::soul::agent::DenwaRenji>>,
     pub skills: crate::skills::SkillRegistry,
     pub bg_manager: crate::background::BackgroundTaskManager,
-    pub brain: Option<brain::Brain>,
+    pub brain: Option<agent_core::Brain>,
     injection_policy: Arc<CliInjectionPolicy>,
     step_policy: Arc<CliStepPolicy>,
     checkpoint_policy: Arc<CliCheckpointPolicy>,
@@ -179,13 +179,6 @@ impl KimiSoul {
         }
 
         let oauth = OAuthManager::new();
-
-        // Bind OAuth manager to the LLM so that build_kosong_provider can resolve
-        // live access tokens instead of relying solely on the static api_key.
-        let mut llm = llm;
-        if let Some(ref mut l) = llm {
-            l.oauth = Some(oauth.clone());
-        }
 
         // Dynamic injection state is shared with Brain and updated when toggles change.
         let plan_file_path = plan_session_id.as_ref().map(|id| {
@@ -411,7 +404,7 @@ impl KimiSoul {
         result
     }
 
-    async fn ensure_brain(&mut self) -> Result<&mut brain::Brain> {
+    async fn ensure_brain(&mut self) -> Result<&mut agent_core::Brain> {
         if self.brain.is_some() {
             return Ok(self.brain.as_mut().unwrap());
         }
@@ -420,9 +413,6 @@ impl KimiSoul {
             .llm
             .as_ref()
             .ok_or(crate::exception::LLMNotSet::NotSet)?;
-        let provider = llm
-            .build_kosong_provider()
-            .map_err(|e| OctopusError::Other(format!("Failed to build chat provider: {e}")))?;
         let message_store = Arc::new(tokio::sync::Mutex::new(ContextMessageStore::new(
             self.context.clone(),
         )));
@@ -434,27 +424,37 @@ impl KimiSoul {
             self.config.loop_control.reserved_context_size,
             String::new(),
         ));
-        let hook_policy = Arc::new(brain::hooks::policy::NoOpHookPolicy);
-        let provider_factory = Arc::new(CliProviderFactory::new(
-            Arc::new(llm.clone()),
-            self.oauth.clone(),
-        ));
+        let hook_policy = Arc::new(agent_core::hooks::policy::NoOpHookPolicy);
         let retry_policy = Arc::new(CliRetryPolicy::new(self.max_retries_per_step));
         let recovery_policy = Arc::new(CliRecoveryPolicy::new(
             self.oauth.clone(),
             Arc::new(llm.clone()),
         ));
-        let brain_config = brain::BrainConfig {
+        let provider_type = llm
+            .provider_config
+            .as_ref()
+            .map(|p| p.to_agent_core_provider_type())
+            .unwrap_or_else(|| agent_core::ProviderType::ApiBased {
+                protocol: agent_core::ApiProtocol::OpenAiLegacy,
+                api_key: String::new(),
+                reasoning_key: None,
+            });
+        let base_url = llm
+            .provider_config
+            .as_ref()
+            .map(|p| p.base_url.clone())
+            .unwrap_or_default();
+        let brain_config = agent_core::BrainConfig {
             system_prompt: self.agent.system_prompt.clone(),
-            base_url: String::new(),
-            api_key: String::new(),
-            model: String::new(),
+            base_url,
+            model: llm.model_name.clone(),
+            provider_type,
             max_steps_per_turn: self.max_steps_per_turn,
             max_step_attempts: self.max_retries_per_step,
-            provider: Some(provider),
-            provider_factory,
-            approval_runtime: Arc::new(brain::core::approval::DefaultApprovalRuntime::new(
-                Arc::new(brain::core::approval::AutoApprove),
+            provider: None,
+            provider_factory: Arc::new(agent_core::DefaultProviderFactory),
+            approval_runtime: Arc::new(agent_core::core::approval::DefaultApprovalRuntime::new(
+                Arc::new(agent_core::core::approval::AutoApprove),
             )),
             tool_sources: Vec::new(),
             toolset: Some(Arc::new(crate::soul::toolset::KimiToolsetHandle(
@@ -468,12 +468,14 @@ impl KimiSoul {
             recovery_policy,
             step_policy: Some(self.step_policy.clone()),
             checkpoint_policy: Some(self.checkpoint_policy.clone()),
-            system_prompt_policy: Arc::new(brain::core::system_prompt::DefaultSystemPromptPolicy),
+            system_prompt_policy: Arc::new(
+                agent_core::core::system_prompt::DefaultSystemPromptPolicy,
+            ),
             tool_result_transformer: None,
             event_policy: None,
         };
         self.brain = Some(
-            brain::Brain::new(brain_config)
+            agent_core::Brain::new(brain_config)
                 .map_err(|e| OctopusError::Other(format!("Brain initialization failed: {e}")))?,
         );
         Ok(self.brain.as_mut().unwrap())
@@ -744,11 +746,11 @@ impl KimiSoul {
 
         while let Some(event) = stream.next().await {
             match event {
-                brain::BrainEvent::TextPart(text) => {
+                agent_core::BrainEvent::TextPart(text) => {
                     assistant_content.push(ContentPart::Text { text: text.clone() });
                     wire_send(crate::wire::WireEvent::TextPart(TextPart { text }));
                 }
-                brain::BrainEvent::ThinkingPart(think) => {
+                agent_core::BrainEvent::ThinkingPart(think) => {
                     assistant_content.push(ContentPart::Think {
                         think: think.clone(),
                     });
@@ -756,7 +758,7 @@ impl KimiSoul {
                         think,
                     }));
                 }
-                brain::BrainEvent::ToolResult {
+                agent_core::BrainEvent::ToolResult {
                     id,
                     output,
                     is_error,
@@ -774,8 +776,8 @@ impl KimiSoul {
                     wire_send(crate::wire::WireEvent::ToolResult(wire_result.clone()));
                     tool_results.push(wire_result);
                 }
-                brain::BrainEvent::Usage { usage } => {
-                    let wire_usage = kosong_to_wire_usage(usage);
+                agent_core::BrainEvent::Usage { usage } => {
+                    let wire_usage = llm_to_wire_usage(usage);
                     {
                         let mut ctx = self.context.lock().await;
                         ctx.update_token_count(wire_usage.input)
@@ -793,7 +795,7 @@ impl KimiSoul {
                     };
                     wire_send(crate::wire::WireEvent::StatusUpdate(status_update));
                 }
-                brain::BrainEvent::Error(e) => {
+                agent_core::BrainEvent::Error(e) => {
                     return Err(crate::llm::classify_kosong_error(e));
                 }
                 _ => {}

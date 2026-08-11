@@ -11,8 +11,8 @@ opt-level = 3
 [workspace]
 members = [
     "apps/octopus-cli",
-    "crates/kosong",
-    "crates/brain",
+    "crates/llm-provider",
+    "crates/agent-core",
     "crates/faf-units",
     "crates/faf-dioxus-ui",
     "crates/faf-blueprints",
@@ -41,8 +41,8 @@ faf-sim-protocol = { path = "crates/faf-sim-protocol" }
 faf-game-engine = { path = "crates/faf-game-engine" }
 faf-units = { path = "crates/faf-units" }
 faf-sim-service = { path = "crates/faf-sim-service" }
-kosong = { path = "crates/kosong" }
-brain = { path = "crates/brain" }
+llm-provider = { path = "crates/llm-provider" }
+agent-core = { path = "crates/agent-core" }
 qqbot-config = { path = "crates/qqbot-config" }
 
 # Common external crates
@@ -57,6 +57,7 @@ burn = { version = "0.21", default-features = false, features = [
     "autodiff",
 ] }
 chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
 console_error_panic_hook = "0.1"
 clap = { version = "4", features = ["derive"] }
 dioxus = { version = "0.7", default-features = false, features = [

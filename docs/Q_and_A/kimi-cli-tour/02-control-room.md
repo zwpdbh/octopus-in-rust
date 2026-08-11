@@ -167,50 +167,50 @@ This is **resilience engineering**. If the LLM API flakes, the soul waits and re
 
 ```rust
 // File: octopus-cli/src/soul/kimisoul.rs
-let provider = llm.build_kosong_provider()?;
-let kosong_history: Vec<kosong::Message> =
-    history.iter().map(crate::llm::wire_to_kosong_message).collect();
+let provider = llm.build_llm_provider()?;
+let llm_history: Vec<llm_provider::Message> =
+    history.iter().map(crate::llm::wire_to_llm_message).collect();
 
-let mut on_message_part = |part: kosong::StreamedMessagePart| {
-    use kosong::chat_provider::Part;
+let mut on_message_part = |part: llm_provider::StreamedMessagePart| {
+    use llm_provider::chat_provider::Part;
     match part {
         Part::Content(cp) => {
-            let wire_cp = crate::llm::kosong_to_wire_content_part(cp);
+            let wire_cp = crate::llm::llm_to_wire_content_part(cp);
             wire_send(WireEvent::ContentPart(wire_cp));  // Broadcast to UI in real-time!
         }
         Part::ToolCall(_) | Part::ToolCallPart(_) => {}
     }
 };
 
-let step_result = kosong::step_with_callbacks(
+let step_result = llm_provider::step_with_callbacks(
     provider.as_ref(),
     &self.agent.system_prompt,
     &KimiToolsetHandle(self.toolset.clone()),
-    &kosong_history,
+    &llm_history,
     Some(&mut on_message_part),
-    Some(Arc::new(|result: &kosong::ToolResult| {
-        wire_send(WireEvent::ToolResult(kosong_to_wire_tool_result(result)));
+    Some(Arc::new(|result: &llm_provider::ToolResult| {
+        wire_send(WireEvent::ToolResult(llm_to_wire_tool_result(result)));
     })),
 )
 .await;
 ```
 
-Notice `kosong::step` — this is the **high-level step abstraction** from the `kosong` crate. It streams LLM output, parses tool calls on the fly, and dispatches them concurrently. The soul doesn't manually juggle `tokio::spawn` handles or `join_all` anymore.
+Notice `llm_provider::step` — this is the **high-level step abstraction** from the `llm-provider` crate. It streams LLM output, parses tool calls on the fly, and dispatches them concurrently. The soul doesn't manually juggle `tokio::spawn` handles or `join_all` anymore.
 
 🐍 **Python's way:** Python `kimisoul` calls `kosong.step()` directly. The Python `kosong` library handles streaming and early tool dispatch internally.
 
-🦀 **Rust's way:** We now mirror Python exactly: `kimisoul` delegates to `kosong::step`, then calls `step_result.tool_results().await` to gather finished tools. The manual streaming logic that existed in earlier versions of the Rust rewrite has been replaced by the same abstraction.
+🦀 **Rust's way:** We now mirror Python exactly: `kimisoul` delegates to `llm_provider::step`, then calls `step_result.tool_results().await` to gather finished tools. The manual streaming logic that existed in earlier versions of the Rust rewrite has been replaced by the same abstraction.
 
-✨ **Where Rust shines:** **Construction-invariant safety.** The `on_tool_result` callback is passed to `kosong::step_with_callbacks` at call time, not via a mutable setter. This eliminates a race condition where fast tools could finish before a late-registered callback was installed. If it compiles, the callback is guaranteed to exist before any tool runs.
+✨ **Where Rust shines:** **Construction-invariant safety.** The `on_tool_result` callback is passed to `llm_provider::step_with_callbacks` at call time, not via a mutable setter. This eliminates a race condition where fast tools could finish before a late-registered callback was installed. If it compiles, the callback is guaranteed to exist before any tool runs.
 
 ---
 
 ## 🛠️ Tool Execution: Concurrent & Early
 
-When the LLM emits a tool call, `kosong::step_with_callbacks` dispatches it immediately via `KimiToolsetHandle`:
+When the LLM emits a tool call, `llm_provider::step_with_callbacks` dispatches it immediately via `KimiToolsetHandle`:
 
 ```rust
-// Inside kosong::step (kosong/src/step.rs)
+// Inside llm_provider::step (llm-provider/src/step.rs)
 let mut on_tool_call = |tool_call: ToolCall| {
     let id = tool_call.id.clone();
     let result = toolset.handle(&tool_call);
@@ -228,7 +228,7 @@ And inside `KimiToolsetHandle::handle`:
 ```rust
 let handle = tokio::spawn(async move {
     let result = inner.handle_inner(&tool_call).await;
-    // result is already a kosong::ToolResult — no conversion needed
+    // result is already a llm_provider::ToolResult — no conversion needed
     result
 });
 ```
@@ -237,7 +237,7 @@ Tools are executed **as soon as they're parsed from the stream**, before the LLM
 
 🐍 **Python's way:** Python `kosong.step` also dispatches tools eagerly via `asyncio.create_task`. Results are gathered later with `await result.tool_results()`.
 
-🦀 **Rust's way:** `kosong::step_with_callbacks` spawns each tool via `tokio::spawn` the moment its JSON is complete. The `KimiToolsetHandle` bridges `KimiToolset` to kosong's `Toolset` trait. The wire callback lives in `kimisoul.rs`, outside the toolset entirely.
+🦀 **Rust's way:** `llm_provider::step_with_callbacks` spawns each tool via `tokio::spawn` the moment its JSON is complete. The `KimiToolsetHandle` bridges `KimiToolset` to llm-provider's `Toolset` trait. The wire callback lives in `kimisoul.rs`, outside the toolset entirely.
 
 ✨ **Where Rust shines:** **Fearless concurrency + type-safe ordering.** The borrow checker ensures `toolset` (an `Arc<KimiToolset>`) is safely shared across tasks. And because the eager callback is passed directly to `step_with_callbacks` — not stored in a mutable field — the compiler guarantees it exists before any task is spawned. In Python, a late `set_on_tool_result` call creates a race window that the language cannot detect.
 

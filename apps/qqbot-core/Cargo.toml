@@ -22,8 +22,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-brain = { workspace = true }
+agent-core = { workspace = true }
 qqbot-config = { workspace = true }
 schemars = { workspace = true }
-kosong = { workspace = true }
+llm-provider = { workspace = true }
 async-trait = { workspace = true }

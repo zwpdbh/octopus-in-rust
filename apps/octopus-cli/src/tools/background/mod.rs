@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use kosong::tooling::{CallableTool2, ToolReturnValue};
+use llm_provider::tooling::{CallableTool2, ToolReturnValue};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

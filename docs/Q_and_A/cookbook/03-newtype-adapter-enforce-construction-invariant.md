@@ -37,7 +37,7 @@ This is a **logical ordering bug**, not a memory-safety bug. The Rust borrow che
 
 Move the callback from a mutable setter into a **parameter of the single function that orchestrates everything**. The compiler then enforces that you cannot start the step — and therefore cannot spawn any tasks — without first providing the callback.
 
-In our case, `kosong::step_with_callbacks` accepts `on_tool_result` as a parameter:
+In our case, `llm_provider::step_with_callbacks` accepts `on_tool_result` as a parameter:
 
 ```rust
 pub async fn step_with_callbacks(
@@ -58,14 +58,14 @@ self.toolset.begin_step(self.last_tool_calls.clone(), self.current_step_no, turn
 
 // The callback is REQUIRED at call time.
 // You literally cannot call step_with_callbacks without deciding what it is.
-let step_result = kosong::step_with_callbacks(
+let step_result = llm_provider::step_with_callbacks(
     provider.as_ref(),
     &self.agent.system_prompt,
     &KimiToolsetHandle(self.toolset.clone()),
-    &kosong_history,
+    &llm_history,
     Some(&mut on_message_part),
-    Some(Arc::new(|result: &kosong::ToolResult| {
-        let wire_result = kosong_to_wire_tool_result(result);
+    Some(Arc::new(|result: &llm_provider::ToolResult| {
+        let wire_result = llm_to_wire_tool_result(result);
         wire_send(WireEvent::ToolResult(wire_result));
     })),
 )
@@ -79,28 +79,28 @@ The `KimiToolsetHandle` newtype wrapper exists so that `Toolset::handle` can clo
 ```rust
 pub struct KimiToolsetHandle(pub Arc<KimiToolset>);
 
-impl kosong::Toolset for KimiToolsetHandle {
-    fn tools(&self) -> Vec<kosong::Tool> { /* ... */ }
-    fn handle(&self, tool_call: &kosong::ToolCall) -> kosong::HandleResult { /* ... */ }
+impl llm_provider::Toolset for KimiToolsetHandle {
+    fn tools(&self) -> Vec<llm_provider::Tool> { /* ... */ }
+    fn handle(&self, tool_call: &llm_provider::ToolCall) -> llm_provider::HandleResult { /* ... */ }
 }
 ```
 
 ## Why This Works
 
-By moving the callback from a mutable field on `KimiToolset` to a parameter of `kosong::step_with_callbacks`, we enforce a **temporal invariant** at the API level:
+By moving the callback from a mutable field on `KimiToolset` to a parameter of `llm_provider::step_with_callbacks`, we enforce a **temporal invariant** at the API level:
 
 | Before (setter) | After (parameter) |
 |---|---|
 | `toolset.set_on_tool_result(Some(cb))` after spawning | `on_tool_result: Some(cb)` passed to `step_with_callbacks` |
 | Race window: tasks spawn → callback set | Impossible: `step_with_callbacks` receives the callback before it spawns any tasks |
 
-The `KimiToolsetHandle` newtype is still a useful pattern — it bridges `Arc<KimiToolset>` to `kosong::Toolset` while keeping the adapter minimal. But the critical safety property now comes from the function signature of `step_with_callbacks`, not from the adapter's constructor.
+The `KimiToolsetHandle` newtype is still a useful pattern — it bridges `Arc<KimiToolset>` to `llm_provider::Toolset` while keeping the adapter minimal. But the critical safety property now comes from the function signature of `step_with_callbacks`, not from the adapter's constructor.
 
 ## When to Use
 
 - You have a **two-phase initialization** where phase 2 must happen before phase 1's side effects become visible.
 - The inner type is shared via `Arc` and called from spawned tasks where you cannot control completion order.
-- You are bridging two domains (e.g., `wire` types ↔ `kosong` types) and need an adapter to hold an `Arc` for task spawning.
+- You are bridging two domains (e.g., `wire` types ↔ `llm-provider` types) and need an adapter to hold an `Arc` for task spawning.
 - You want to **remove mutable interior state** (`Mutex<Option<T>>`) from a type that conceptually should be configuration, not state.
 
 ## When NOT to Use
@@ -110,7 +110,7 @@ The `KimiToolsetHandle` newtype is still a useful pattern — it bridges `Arc<Ki
 
 ## Relation to Other Patterns
 
-- **Phantom types** (`KimiToolset<Idle>` vs `KimiToolset<Stepping>`) can enforce the same ordering, but they fight `dyn` trait objects. If `kosong::step_with_callbacks` took `&T` instead of `&dyn Toolset`, phantom types would be the more rigorous choice.
+- **Phantom types** (`KimiToolset<Idle>` vs `KimiToolset<Stepping>`) can enforce the same ordering, but they fight `dyn` trait objects. If `llm_provider::step_with_callbacks` took `&T` instead of `&dyn Toolset`, phantom types would be the more rigorous choice.
 - **RAII guards** (`let _guard`) solve the opposite problem: keeping a value alive until scope end. This pattern solves the problem of ensuring a value exists *before* scope entry.
 - **Builder pattern**: `StepBuilder::new(toolset).with_callback(cb).run()` achieves the same invariant with more flexibility. Use it when there are many optional parameters.
 
@@ -118,4 +118,4 @@ The `KimiToolsetHandle` newtype is still a useful pattern — it bridges `Arc<Ki
 
 **File:** `octopus-cli/src/soul/kimisoul.rs`
 
-`KimiToolset` no longer has an `on_tool_result` field or `set_on_tool_result` method. The wire-specific eager-callback concern lives entirely in the `step_with_callbacks` call site, which is invoked fresh for each step. The `KimiToolsetHandle` wrapper bridges `Arc<KimiToolset>` to `kosong::Toolset` so that tool execution can be spawned into tasks.
+`KimiToolset` no longer has an `on_tool_result` field or `set_on_tool_result` method. The wire-specific eager-callback concern lives entirely in the `step_with_callbacks` call site, which is invoked fresh for each step. The `KimiToolsetHandle` wrapper bridges `Arc<KimiToolset>` to `llm_provider::Toolset` so that tool execution can be spawned into tasks.

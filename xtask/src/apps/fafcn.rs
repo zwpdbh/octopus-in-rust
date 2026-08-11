@@ -1,7 +1,11 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
-use std::process::Stdio;
 
 use crate::cargo;
+
+/// Plugins the fafcn-server backend expects to find on disk.
+const REQUIRED_PLUGINS: &[&str] = &["data/qqbot-data/plugins/faf_units_plugin.wasm"];
 
 /// Run a fafcn-specific command.
 pub fn run(command: &str, _rest: &[String]) -> Result<()> {
@@ -21,24 +25,25 @@ pub fn run(command: &str, _rest: &[String]) -> Result<()> {
 }
 
 fn run_backend() -> Result<()> {
-    let log_path = std::path::PathBuf::from("data/logs/fafcn-server.log");
-    std::fs::create_dir_all(log_path.parent().unwrap())
-        .with_context(|| format!("failed to create log directory {}", log_path.display()))?;
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("failed to open log file {}", log_path.display()))?;
+    ensure_plugins()?;
 
     let mut cmd = cargo::command();
     cmd.args(["run", "--package", "fafcn-server"]);
-    cmd.stdout(Stdio::from(log_file.try_clone()?))
-        .stderr(Stdio::from(log_file));
+
+    // Keep dependency noise (reqwest, hyper, extism, wasmtime, rustls) at info/warn
+    // while still showing debug output from the application crates.  Respect any
+    // RUST_LOG the user already has set.
+    if std::env::var_os("RUST_LOG").is_none() {
+        cmd.env(
+            "RUST_LOG",
+            "info,fafcn_server=debug,agent_core=debug,llm_provider=debug,reqwest=warn,hyper=warn,hyper_util=warn,rustls=warn,extism=warn,wasmtime=warn",
+        );
+    }
 
     println!("Starting fafcn backend...");
-    println!("Server log: {}", log_path.display());
     let mut child = cmd.spawn().context("failed to spawn fafcn-server")?;
     println!("Server PID: {}", child.id());
+
     let status = child.wait().context("failed to wait for fafcn-server")?;
     if !status.success() {
         anyhow::bail!("fafcn-server exited with status: {status}");
@@ -57,4 +62,32 @@ fn run_frontend() -> Result<()> {
         anyhow::bail!("dx serve exited with status: {status}");
     }
     Ok(())
+}
+
+/// Verify that all WASM plugins required by the backend exist.
+fn ensure_plugins() -> Result<()> {
+    let mut missing = Vec::new();
+    for path in REQUIRED_PLUGINS {
+        if !Path::new(path).is_file() {
+            missing.push(*path);
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    eprintln!("Missing WASM plugin(s) required by the fafcn-server backend:");
+    for path in &missing {
+        eprintln!("  - {path}");
+    }
+    eprintln!();
+    eprintln!("Build and install them with:");
+    eprintln!("  cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown");
+    eprintln!("  mkdir -p data/qqbot-data/plugins");
+    eprintln!(
+        "  cp target/wasm32-unknown-unknown/release/faf_units_plugin.wasm data/qqbot-data/plugins/"
+    );
+
+    anyhow::bail!("missing required plugins");
 }

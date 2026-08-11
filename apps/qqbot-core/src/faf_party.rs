@@ -8,19 +8,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, TimeZone};
 use extism::{CompiledPlugin, Manifest, Plugin, PluginBuilder, Wasm};
 use futures_util::StreamExt;
-use kosong::chat_provider::Part;
-use kosong::message::{ContentPart, Message, Role};
-use kosong::tooling::ToolReturnValue;
+use llm_provider::chat_provider::Part;
+use llm_provider::message::{ContentPart, Message, Role};
+use llm_provider::tooling::ToolReturnValue;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, LlmConfig};
-use crate::llm_provider::QqbotProviderFactory;
 use crate::onebot::types::Action;
 use crate::onebot::ActionTx;
-use brain::ProviderFactory;
 
 /// Minimum number of overlapping candidates needed to trigger a 3v3 match.
 const PARTY_SIZE: usize = 6;
@@ -181,7 +179,7 @@ pub struct FafPartyStatusParams {
 }
 
 #[async_trait]
-impl kosong::tooling::CallableTool2 for FafPartyStatusTool {
+impl llm_provider::tooling::CallableTool2 for FafPartyStatusTool {
     type Params = FafPartyStatusParams;
 
     fn name(&self) -> &str {
@@ -612,14 +610,15 @@ impl FafPartyHostService {
         expression: &str,
         now: DateTime<FixedOffset>,
     ) -> Result<ParseTimeResult> {
-        let factory = QqbotProviderFactory::new(self.llm_config.provider.clone());
-        let brain_config = brain::BrainConfig {
+        let brain_config = agent_core::BrainConfig {
             model: self.llm_config.model.clone(),
+            base_url: self.llm_config.api_url.clone(),
             system_prompt: self.llm_config.system_prompt.clone(),
+            provider_type: self.llm_config.provider.clone(),
             ..Default::default()
         };
-        let provider = factory
-            .create(&brain_config)
+        let provider = brain_config
+            .build_provider()
             .await
             .context("failed to create LLM provider for time parsing fallback")?;
 
