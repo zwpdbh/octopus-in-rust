@@ -1,5 +1,7 @@
 # Octopus
 
+[![CI](https://github.com/zwpdbh/octopus-in-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zwpdbh/octopus-in-rust/actions/workflows/ci.yml)
+
 > A personal Rust agent platform: a single workspace that grew from a faithful
 > rewrite of [kimi-cli](https://github.com/MoonshotAI/kimi-cli) into a full
 > agent ecosystem — a terminal coding agent, a reusable agent runtime, a QQ

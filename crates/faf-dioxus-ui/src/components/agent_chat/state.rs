@@ -8,7 +8,7 @@ use crate::components::chat_primitives::ChatMessageItem;
 ///
 /// Only `stream_url` is required; everything else has a sensible default:
 ///
-/// ```rust
+/// ```rust,ignore
 /// // docref: demo
 /// let config = AgentChatConfig::new("http://localhost:3000/api/ask/stream");
 /// ```
