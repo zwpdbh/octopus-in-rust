@@ -4,7 +4,9 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 /// Render markdown text as Dioxus elements styled with Tailwind classes.
 #[component]
 pub fn Markdown(text: String) -> Element {
-    let nodes = use_memo(move || parse_markdown(&text));
+    // Track `text` as a reactive dependency so the rendered output updates
+    // when the caller streams in new content (plain props are not reactive).
+    let nodes = use_memo(use_reactive!(|text| parse_markdown(&text)));
     rsx! {
         div { class: "text-neutral-200 break-words leading-relaxed", {render_nodes(&nodes.read())} }
     }

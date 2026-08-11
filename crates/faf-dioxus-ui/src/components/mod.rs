@@ -1,4 +1,5 @@
-pub mod chat;
+pub mod agent_chat;
+pub mod chat_primitives;
 pub mod count_slider;
 pub mod graph_view;
 pub mod markdown;
@@ -6,7 +7,11 @@ pub mod slider_field;
 pub mod stat;
 pub mod uplot_chart;
 
-pub use chat::{
+pub use agent_chat::{
+    stream_agent_events, use_agent_chat, AgentChat, AgentChatConfig, AgentChatController,
+    AgentChatSessions, AgentStreamEvent, ChatSession,
+};
+pub use chat_primitives::{
     Chat, ChatHistory, ChatHistoryItem, ChatInputArea, ChatMessage, ChatMessageItem, ChatSidebar,
     ChatWelcome, ToolCall,
 };

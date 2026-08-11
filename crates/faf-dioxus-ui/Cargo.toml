@@ -16,4 +16,5 @@ pulldown-cmark = "0.12"
 plotters = { version = "0.3.7", default-features = false, features = ["line_series", "full_palette"] }
 plotters-canvas = "0.3"
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["console", "CustomEvent", "Document", "DomRectReadOnly", "Element", "Event", "EventTarget", "HtmlElement", "ResizeObserver", "ResizeObserverEntry", "Window", "Location"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { workspace = true, features = ["console", "CustomEvent", "Document", "DomRectReadOnly", "Element", "Event", "EventTarget", "HtmlElement", "ResizeObserver", "ResizeObserverEntry", "Window", "Location", "Storage", "Headers", "Request", "RequestInit", "Response", "ReadableStream", "ReadableStreamDefaultReader"] }
