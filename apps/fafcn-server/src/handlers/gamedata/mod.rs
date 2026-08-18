@@ -36,11 +36,20 @@ pub async fn get_manifest(State(state): State<AppState>) -> Result<Json<Manifest
 /// `GET /api/gamedata/status` — abridged mirror state for the web page.
 pub async fn get_status(State(state): State<AppState>) -> Result<Json<StatusResponse>> {
     let store = state.gamedata.clone();
-    let manifest = tokio::task::spawn_blocking(move || store.read_manifest())
-        .await
-        .map_err(|e| Error::Internal(format!("task join error: {e}")))??;
+    let client_dir = state.gamedata_client_dir.clone();
+    let (manifest, client_tag) = tokio::task::spawn_blocking(move || {
+        let manifest = store.read_manifest()?;
+        let tag = std::fs::read_to_string(client_dir.join("VERSION"))
+            .ok()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        Ok::<_, Error>((manifest, tag))
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("task join error: {e}")))??;
     Ok(Json(StatusResponse {
         manifest: manifest.map(|m| m.summary()),
+        client_tag,
     }))
 }
 
@@ -145,6 +154,9 @@ pub async fn download_client(
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{filename}\""),
             ),
+            // The file on disk is replaced by `xtask fafcn file-sync` at any
+            // time; never let a browser serve a stale cached build.
+            (header::CACHE_CONTROL, "no-store".to_string()),
         ],
         patched,
     ))

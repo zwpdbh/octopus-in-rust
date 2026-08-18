@@ -1,8 +1,11 @@
-//! eframe GUI for non-technical players: pick the gamedata folder (or let
-//! auto-detect find it), click one button, done.
+//! eframe GUI for non-technical players.
+//!
+//! 同步 tab (the default): pick the gamedata folder (or let auto-detect find
+//! it), click one button, done. 上传 tab: for VPN-having uploaders to publish
+//! a new patch set with the group token.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{channel, Receiver},
     thread,
 };
@@ -13,20 +16,28 @@ use eframe::egui;
 use crate::{
     config::ClientConfig,
     sync::{self, SyncProgress, SyncSummary},
+    upload::{self, UploadProgress, UploadSummary},
+    version,
 };
 
 /// Launch the GUI. Blocks until the window closes.
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([560.0, 480.0])
-            .with_min_inner_size([480.0, 400.0]),
+            .with_inner_size([560.0, 520.0])
+            .with_min_inner_size([480.0, 440.0]),
         ..Default::default()
     };
+    let title = format!("fafcn-sync · {}", crate::BUILD_TAG);
     eframe::run_native(
-        "fafcn-sync",
+        &title,
         options,
         Box::new(|cc| {
+            // Force dark theme: egui defaults to following the OS theme
+            // (light on most Windows), which makes the status colors
+            // unreadable and clashes with the fafcn-web UI.
+            cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
             install_cjk_font(cc);
             Ok(Box::new(SyncApp::new()))
         }),
@@ -96,9 +107,27 @@ impl GuiLang {
     }
 }
 
+/// The two app tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Sync,
+    Upload,
+}
+
+/// What the background worker is doing (or did last).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionState {
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+}
+
 /// Translatable GUI strings.
 #[derive(Debug, Clone, Copy)]
 enum Txt {
+    TabSync,
+    TabUpload,
     ServerLabel,
     DirLabel,
     Browse,
@@ -109,10 +138,28 @@ enum Txt {
     SyncNow,
     Syncing,
     IdleHint,
+    TokenLabel,
+    PatchVersionLabel,
+    UploaderLabel,
+    UploadNow,
+    Uploading,
+    UploadHint,
+    MissingPrefix,
+    FieldServer,
+    FieldDir,
+    FieldToken,
+    FieldPatchVersion,
+    FieldUploader,
+    VersionAuto,
+    VersionUndetected,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
     match (txt, lang) {
+        (Txt::TabSync, GuiLang::Zh) => "同步",
+        (Txt::TabSync, GuiLang::En) => "Sync",
+        (Txt::TabUpload, GuiLang::Zh) => "上传",
+        (Txt::TabUpload, GuiLang::En) => "Upload",
         (Txt::ServerLabel, GuiLang::Zh) => "镜像地址",
         (Txt::ServerLabel, GuiLang::En) => "Mirror address",
         (Txt::DirLabel, GuiLang::Zh) => "gamedata 目录",
@@ -137,10 +184,43 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::Syncing, GuiLang::En) => "Syncing…",
         (Txt::IdleHint, GuiLang::Zh) => "确认镜像地址和目录后,点击“开始同步”。",
         (Txt::IdleHint, GuiLang::En) => "Check the mirror address and folder, then click \"Sync now\".",
+        (Txt::TokenLabel, GuiLang::Zh) => "上传令牌",
+        (Txt::TokenLabel, GuiLang::En) => "Upload token",
+        (Txt::PatchVersionLabel, GuiLang::Zh) => "补丁版本",
+        (Txt::PatchVersionLabel, GuiLang::En) => "Patch version",
+        (Txt::UploaderLabel, GuiLang::Zh) => "玩家",
+        (Txt::UploaderLabel, GuiLang::En) => "Player",
+        (Txt::UploadNow, GuiLang::Zh) => "开始上传",
+        (Txt::UploadNow, GuiLang::En) => "Start upload",
+        (Txt::Uploading, GuiLang::Zh) => "正在上传…",
+        (Txt::Uploading, GuiLang::En) => "Uploading…",
+        (Txt::UploadHint, GuiLang::Zh) => {
+            "仅供有 VPN 的上传者使用:先从官方渠道下载最新补丁到 gamedata 目录,再在此处上传。令牌请向服务器部署者索取。"
+        }
+        (Txt::UploadHint, GuiLang::En) => {
+            "For VPN-having uploaders only: download the latest patch into your gamedata folder via the official channel first, then upload it here. Ask the server admin for the token."
+        }
+        (Txt::MissingPrefix, GuiLang::Zh) => "还需要填写:",
+        (Txt::MissingPrefix, GuiLang::En) => "Still needed: ",
+        (Txt::FieldServer, GuiLang::Zh) => "镜像地址",
+        (Txt::FieldServer, GuiLang::En) => "mirror address",
+        (Txt::FieldDir, GuiLang::Zh) => "gamedata 目录",
+        (Txt::FieldDir, GuiLang::En) => "gamedata folder",
+        (Txt::FieldToken, GuiLang::Zh) => "上传令牌",
+        (Txt::FieldToken, GuiLang::En) => "upload token",
+        (Txt::FieldPatchVersion, GuiLang::Zh) => "补丁版本",
+        (Txt::FieldPatchVersion, GuiLang::En) => "patch version",
+        (Txt::FieldUploader, GuiLang::Zh) => "玩家",
+        (Txt::FieldUploader, GuiLang::En) => "player",
+        (Txt::VersionAuto, GuiLang::Zh) => "(从 lua.nx2 自动检测)",
+        (Txt::VersionAuto, GuiLang::En) => "(auto-detected from lua.nx2)",
+        (Txt::VersionUndetected, GuiLang::Zh) => "无法自动检测,请手动填写",
+        (Txt::VersionUndetected, GuiLang::En) => "could not auto-detect; enter manually",
     }
 }
 
-/// Interpolated log lines.
+// --- Interpolated log lines ---
+
 fn log_manifest(lang: GuiLang, patch: &str, files: usize, mb: f64, uploader: &str) -> String {
     match lang {
         GuiLang::Zh => {
@@ -170,7 +250,7 @@ fn log_file(lang: GuiLang, index: usize, count: usize, path: &str) -> String {
     }
 }
 
-fn log_done(lang: GuiLang, files: usize) -> String {
+fn log_sync_done(lang: GuiLang, files: usize) -> String {
     match lang {
         GuiLang::Zh => {
             if files == 0 {
@@ -189,34 +269,105 @@ fn log_done(lang: GuiLang, files: usize) -> String {
     }
 }
 
-fn log_failed(lang: GuiLang, err: &str) -> String {
+fn log_scanned(lang: GuiLang, files: usize, mb: f64) -> String {
     match lang {
-        GuiLang::Zh => format!("同步失败:{err}"),
-        GuiLang::En => format!("Sync failed: {err}"),
+        GuiLang::Zh => format!("本地共 {files} 个文件,{mb:.1} MB"),
+        GuiLang::En => format!("Found {files} file(s), {mb:.1} MB total"),
     }
 }
 
-/// Messages from the background sync worker to the UI.
-enum WorkerMsg {
-    Progress(SyncProgress),
-    Finished(Result<SyncSummary, String>),
+fn log_needed(lang: GuiLang, needed: usize) -> String {
+    match (lang, needed) {
+        (_, 0) => match lang {
+            GuiLang::Zh => "服务器已有全部文件,无需上传。".to_string(),
+            GuiLang::En => "Server already has every file — nothing to upload.".to_string(),
+        },
+        (GuiLang::Zh, _) => format!("服务器需要 {needed} 个文件,开始上传…"),
+        (GuiLang::En, _) => format!("Server needs {needed} file(s), uploading…"),
+    }
 }
 
-/// What the sync worker is doing right now.
-enum SyncState {
-    Idle,
-    Running,
-    Succeeded,
-    Failed,
+fn log_uploaded_file(lang: GuiLang, index: usize, count: usize, path: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("[{index}/{count}] 已上传 {path}"),
+        GuiLang::En => format!("[{index}/{count}] uploaded {path}"),
+    }
+}
+
+fn log_committed(lang: GuiLang, files: usize) -> String {
+    match lang {
+        GuiLang::Zh => format!("清单已提交({files} 个文件)"),
+        GuiLang::En => format!("Manifest committed ({files} files)"),
+    }
+}
+
+fn log_upload_done(lang: GuiLang, patch: &str, files: usize, mb: f64) -> String {
+    match lang {
+        GuiLang::Zh => {
+            if files == 0 {
+                format!("上传完成:服务器已有全部文件,补丁 {patch} 已重新发布。")
+            } else {
+                format!("上传完成:共上传 {files} 个文件({mb:.1} MB),补丁 {patch} 已发布,所有人现在都可以同步了!")
+            }
+        }
+        GuiLang::En => {
+            if files == 0 {
+                format!(
+                    "Upload complete: server already had everything; patch {patch} republished."
+                )
+            } else {
+                format!("Upload complete — {files} file(s) ({mb:.1} MB) sent; patch {patch} is live for everyone!")
+            }
+        }
+    }
+}
+
+fn log_failed(lang: GuiLang, err: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("操作失败:{err}"),
+        GuiLang::En => format!("Failed: {err}"),
+    }
+}
+
+fn txt_server_newer(lang: GuiLang, server: &str, local: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("服务器已有更新的补丁 {server}(你的是 {local}),无需上传"),
+        GuiLang::En => {
+            format!("Server already has newer patch {server} (yours is {local}); nothing to upload")
+        }
+    }
+}
+
+/// Messages from a background worker to the UI.
+enum WorkerMsg {
+    Sync(SyncProgress),
+    Upload(UploadProgress),
+    SyncDone(Result<SyncSummary, String>),
+    UploadDone(Result<UploadSummary, String>),
 }
 
 struct SyncApp {
     lang: GuiLang,
+    tab: Tab,
+    // Shared fields (same values for both tabs).
     server: String,
     dir: String,
-    state: SyncState,
+    // Upload-only fields.
+    token: String,
+    patch_version: String,
+    uploader: String,
+    // Patch version auto-detected from lua.nx2 (recomputed when dir changes).
+    detected_version: Option<String>,
+    version_dir: String,
+    // Server's current patch version (fetched while on the upload tab).
+    server_version: Option<String>,
+    status_rx: Option<Receiver<Option<String>>>,
+    last_status_check: String,
+    // Per-tab action state.
+    sync_state: ActionState,
+    upload_state: ActionState,
     worker: Option<Receiver<WorkerMsg>>,
-    /// (installed, total) files in the current run, for the progress bar.
+    /// (done, total) files for the progress bar of the running action.
     progress: (usize, usize),
     log: Vec<String>,
 }
@@ -232,24 +383,38 @@ impl SyncApp {
             .unwrap_or_default();
         Self {
             lang: GuiLang::from_config(cfg.lang.as_deref()),
+            tab: Tab::Sync,
             server: cfg.server.unwrap_or_default(),
             dir,
-            state: SyncState::Idle,
+            token: cfg.upload_token.unwrap_or_default(),
+            patch_version: String::new(),
+            uploader: cfg.uploader.unwrap_or_default(),
+            detected_version: None,
+            version_dir: String::new(),
+            server_version: None,
+            status_rx: None,
+            last_status_check: String::new(),
+            sync_state: ActionState::Idle,
+            upload_state: ActionState::Idle,
             worker: None,
             progress: (0, 0),
             log: Vec::new(),
         }
     }
 
+    fn busy(&self) -> bool {
+        self.worker.is_some()
+    }
+
     fn start_sync(&mut self) {
         let server = self.server.trim().trim_end_matches('/').to_string();
         let dir = PathBuf::from(self.dir.trim());
-        let lang = self.lang;
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
         self.log.clear();
-        self.state = SyncState::Running;
+        self.sync_state = ActionState::Running;
+        let cfg = self.persisted_config();
 
         thread::spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
@@ -257,17 +422,61 @@ impl SyncApp {
                 .build()
                 .expect("tokio runtime")
                 .block_on(sync::sync_gamedata(&server, &dir, &mut |event| {
-                    let _ = tx.send(WorkerMsg::Progress(event));
+                    let _ = tx.send(WorkerMsg::Sync(event));
                 }))
                 .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(WorkerMsg::Finished(result));
-            // Persist working settings for next launch.
-            let mut cfg = ClientConfig::load();
-            cfg.server = Some(server);
-            cfg.gamedata_dir = Some(dir);
-            cfg.lang = Some(lang.code().to_string());
+            let _ = tx.send(WorkerMsg::SyncDone(result));
             let _ = cfg.save();
         });
+    }
+
+    fn start_upload(&mut self) {
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        let dir = PathBuf::from(self.dir.trim());
+        let token = self.token.trim().to_string();
+        let patch_version = self.effective_patch_version().unwrap_or_default();
+        let uploader = self.uploader.trim().to_string();
+        let (tx, rx) = channel();
+        self.worker = Some(rx);
+        self.progress = (0, 0);
+        self.log.clear();
+        self.upload_state = ActionState::Running;
+        let cfg = self.persisted_config();
+
+        thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(upload::upload_gamedata(
+                    &server,
+                    &token,
+                    &dir,
+                    &patch_version,
+                    &uploader,
+                    &mut |event| {
+                        let _ = tx.send(WorkerMsg::Upload(event));
+                    },
+                ))
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(WorkerMsg::UploadDone(result));
+            let _ = cfg.save();
+        });
+    }
+
+    /// Current field values as they should be remembered on disk.
+    fn persisted_config(&self) -> ClientConfig {
+        let mut cfg = ClientConfig::load();
+        cfg.server = Some(self.server.trim().trim_end_matches('/').to_string());
+        cfg.gamedata_dir = Some(PathBuf::from(self.dir.trim()));
+        cfg.lang = Some(self.lang.code().to_string());
+        if !self.token.trim().is_empty() {
+            cfg.upload_token = Some(self.token.trim().to_string());
+        }
+        if !self.uploader.trim().is_empty() {
+            cfg.uploader = Some(self.uploader.trim().to_string());
+        }
+        cfg
     }
 
     fn drain_worker(&mut self, ctx: &egui::Context) {
@@ -275,7 +484,7 @@ impl SyncApp {
         if let Some(rx) = &self.worker {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    WorkerMsg::Progress(SyncProgress::ManifestLoaded {
+                    WorkerMsg::Sync(SyncProgress::ManifestLoaded {
                         patch_version,
                         uploader,
                         file_count,
@@ -289,7 +498,7 @@ impl SyncApp {
                             &uploader,
                         ));
                     }
-                    WorkerMsg::Progress(SyncProgress::PlanReady {
+                    WorkerMsg::Sync(SyncProgress::PlanReady {
                         downloads,
                         total_bytes,
                     }) => {
@@ -297,18 +506,50 @@ impl SyncApp {
                         self.log
                             .push(log_plan(self.lang, downloads, total_bytes as f64 / 1e6));
                     }
-                    WorkerMsg::Progress(SyncProgress::FileInstalled { path, index, count }) => {
+                    WorkerMsg::Sync(SyncProgress::FileInstalled { path, index, count }) => {
                         self.progress = (index, count);
                         self.log.push(log_file(self.lang, index, count, &path));
                     }
-                    WorkerMsg::Finished(Ok(summary)) => {
-                        self.log.push(log_done(self.lang, summary.downloaded_files));
-                        self.state = SyncState::Succeeded;
+                    WorkerMsg::SyncDone(Ok(summary)) => {
+                        self.log
+                            .push(log_sync_done(self.lang, summary.downloaded_files));
+                        self.sync_state = ActionState::Succeeded;
                         finished = true;
                     }
-                    WorkerMsg::Finished(Err(err)) => {
+                    WorkerMsg::SyncDone(Err(err)) => {
                         self.log.push(log_failed(self.lang, &err));
-                        self.state = SyncState::Failed;
+                        self.sync_state = ActionState::Failed;
+                        finished = true;
+                    }
+                    WorkerMsg::Upload(UploadProgress::Scanned { files, total_bytes }) => {
+                        self.log
+                            .push(log_scanned(self.lang, files, total_bytes as f64 / 1e6));
+                    }
+                    WorkerMsg::Upload(UploadProgress::Needed { needed }) => {
+                        self.progress = (0, needed);
+                        self.log.push(log_needed(self.lang, needed));
+                    }
+                    WorkerMsg::Upload(UploadProgress::FileUploaded { path, index, count }) => {
+                        self.progress = (index, count);
+                        self.log
+                            .push(log_uploaded_file(self.lang, index, count, &path));
+                    }
+                    WorkerMsg::Upload(UploadProgress::Committed { files, .. }) => {
+                        self.log.push(log_committed(self.lang, files));
+                    }
+                    WorkerMsg::UploadDone(Ok(summary)) => {
+                        self.log.push(log_upload_done(
+                            self.lang,
+                            &summary.patch_version,
+                            summary.uploaded_files,
+                            summary.uploaded_bytes as f64 / 1e6,
+                        ));
+                        self.upload_state = ActionState::Succeeded;
+                        finished = true;
+                    }
+                    WorkerMsg::UploadDone(Err(err)) => {
+                        self.log.push(log_failed(self.lang, &err));
+                        self.upload_state = ActionState::Failed;
                         finished = true;
                     }
                 }
@@ -337,16 +578,199 @@ impl SyncApp {
             Some((egui::Color32::LIGHT_RED, tr(self.lang, Txt::DirMissing)))
         }
     }
+
+    fn shared_fields(&mut self, ui: &mut egui::Ui) {
+        let busy = self.busy();
+        ui.label(tr(self.lang, Txt::ServerLabel));
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server)
+                    .hint_text("https://your-mirror-address")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.add_space(4.0);
+
+        ui.label(tr(self.lang, Txt::DirLabel));
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.dir)
+                    .hint_text(r"C:\ProgramData\FAForever\gamedata")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.horizontal(|ui| {
+                if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        self.dir = path.to_string_lossy().into_owned();
+                    }
+                }
+                if ui.button(tr(self.lang, Txt::Detect)).clicked() {
+                    if let Some(path) = sync::autodetect_gamedata_dir() {
+                        self.dir = path.to_string_lossy().into_owned();
+                    }
+                }
+            });
+        });
+        if let Some((color, text)) = self.folder_status() {
+            ui.colored_label(color, text);
+        }
+    }
+
+    /// Patch version detected from `lua.nx2` (cached, refreshed on dir change).
+    fn detected_patch_version(&mut self) -> Option<String> {
+        if self.version_dir != self.dir {
+            self.version_dir = self.dir.clone();
+            self.detected_version = version::detect_patch_version(Path::new(self.dir.trim()));
+        }
+        self.detected_version.clone()
+    }
+
+    /// The version that would be uploaded: detected wins, manual is fallback.
+    fn effective_patch_version(&mut self) -> Option<String> {
+        self.detected_patch_version().or_else(|| {
+            let manual = self.patch_version.trim();
+            if manual.is_empty() {
+                None
+            } else {
+                Some(manual.to_string())
+            }
+        })
+    }
+
+    /// Kick off a one-shot fetch of the server's patch version when the
+    /// upload tab is showing and the server address changed.
+    fn maybe_refresh_server_version(&mut self) {
+        if self.tab != Tab::Upload {
+            return;
+        }
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        if server.is_empty() || self.last_status_check == server {
+            return;
+        }
+        self.last_status_check = server.clone();
+        let (tx, rx) = channel();
+        self.status_rx = Some(rx);
+        thread::spawn(move || {
+            let version = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(async move {
+                    let url = crate::api::api_url(&server, "manifest.json");
+                    let resp = reqwest::get(url).await.ok()?;
+                    if !resp.status().is_success() {
+                        return None;
+                    }
+                    resp.json::<fafcn_gamedata::Manifest>()
+                        .await
+                        .ok()?
+                        .patch_version
+                        .into()
+                });
+            let _ = tx.send(version);
+        });
+    }
+
+    /// Some(true) when the server already has a strictly newer patch.
+    fn server_is_newer(&mut self) -> bool {
+        let local = self.effective_patch_version();
+        match (self.server_version.as_deref(), local.as_deref()) {
+            (Some(server), Some(local)) => {
+                version::compare_versions(server, local) == Some(std::cmp::Ordering::Greater)
+            }
+            _ => false,
+        }
+    }
+
+    /// Fields still missing for the current tab's action, as localized names.
+    fn missing_fields(&mut self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.server.trim().is_empty() {
+            missing.push(tr(self.lang, Txt::FieldServer));
+        }
+        if !PathBuf::from(self.dir.trim()).is_dir() {
+            missing.push(tr(self.lang, Txt::FieldDir));
+        }
+        if self.tab == Tab::Upload {
+            if self.token.trim().is_empty() {
+                missing.push(tr(self.lang, Txt::FieldToken));
+            }
+            if self.effective_patch_version().is_none() {
+                missing.push(tr(self.lang, Txt::FieldPatchVersion));
+            }
+            if self.uploader.trim().is_empty() {
+                missing.push(tr(self.lang, Txt::FieldUploader));
+            }
+        }
+        missing
+    }
+
+    fn action_button(&mut self, ui: &mut egui::Ui) {
+        let busy = self.busy();
+        let missing = self.missing_fields();
+        let server_newer = self.tab == Tab::Upload && self.server_is_newer();
+        let can_run = !busy && missing.is_empty() && !server_newer;
+        let running = match self.tab {
+            Tab::Sync => self.sync_state == ActionState::Running,
+            Tab::Upload => self.upload_state == ActionState::Running,
+        };
+        let label = match (self.tab, running) {
+            (Tab::Sync, true) => tr(self.lang, Txt::Syncing),
+            (Tab::Sync, false) => tr(self.lang, Txt::SyncNow),
+            (Tab::Upload, true) => tr(self.lang, Txt::Uploading),
+            (Tab::Upload, false) => tr(self.lang, Txt::UploadNow),
+        };
+        if ui
+            .add_enabled(
+                can_run,
+                egui::Button::new(label).min_size(egui::vec2(f32::INFINITY, 40.0)),
+            )
+            .clicked()
+        {
+            match self.tab {
+                Tab::Sync => self.start_sync(),
+                Tab::Upload => self.start_upload(),
+            }
+        }
+        // Explain exactly why the button is disabled.
+        if !busy && server_newer {
+            let server_v = self.server_version.clone().unwrap_or_default();
+            let local_v = self.effective_patch_version().unwrap_or_default();
+            ui.colored_label(
+                egui::Color32::LIGHT_GREEN,
+                txt_server_newer(self.lang, &server_v, &local_v),
+            );
+        } else if !busy && !missing.is_empty() {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                format!(
+                    "{}{}",
+                    tr(self.lang, Txt::MissingPrefix),
+                    missing.join(", ")
+                ),
+            );
+        } else if self.tab == Tab::Sync && self.sync_state == ActionState::Idle {
+            ui.label(tr(self.lang, Txt::IdleHint));
+        }
+    }
 }
 
 impl eframe::App for SyncApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_worker(ctx);
-        let running = matches!(self.state, SyncState::Running);
+        if let Some(rx) = &self.status_rx {
+            if let Ok(version) = rx.try_recv() {
+                self.server_version = version;
+                self.status_rx = None;
+            }
+        }
+        self.maybe_refresh_server_version();
+        let busy = self.busy();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("fafcn-sync");
+                ui.label(egui::RichText::new(crate::BUILD_TAG).small().weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = match self.lang {
                         GuiLang::Zh => "EN",
@@ -360,63 +784,66 @@ impl eframe::App for SyncApp {
                     }
                 });
             });
-            ui.add_space(8.0);
 
-            ui.label(tr(self.lang, Txt::ServerLabel));
-            ui.add_enabled_ui(!running, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.server)
-                        .hint_text("https://your-mirror-address")
-                        .desired_width(f32::INFINITY),
-                );
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Sync, tr(self.lang, Txt::TabSync));
+                ui.selectable_value(&mut self.tab, Tab::Upload, tr(self.lang, Txt::TabUpload));
             });
-            ui.add_space(4.0);
+            ui.separator();
 
-            ui.label(tr(self.lang, Txt::DirLabel));
-            ui.add_enabled_ui(!running, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.dir)
-                        .hint_text(r"C:\ProgramData\FAForever\gamedata")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button(tr(self.lang, Txt::Browse)).clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.dir = path.to_string_lossy().into_owned();
-                        }
-                    }
-                    if ui.button(tr(self.lang, Txt::Detect)).clicked() {
-                        if let Some(path) = sync::autodetect_gamedata_dir() {
-                            self.dir = path.to_string_lossy().into_owned();
-                        }
-                    }
+            self.shared_fields(ui);
+
+            if self.tab == Tab::Upload {
+                ui.add_space(4.0);
+                ui.label(tr(self.lang, Txt::TokenLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.token)
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    );
                 });
-            });
-            if let Some((color, text)) = self.folder_status() {
-                ui.colored_label(color, text);
+                let detected = self.detected_patch_version();
+                ui.horizontal(|ui| {
+                    ui.label(tr(self.lang, Txt::PatchVersionLabel));
+                    match &detected {
+                        Some(v) => {
+                            ui.strong(v);
+                            ui.label(
+                                egui::RichText::new(tr(self.lang, Txt::VersionAuto))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                        None => {
+                            ui.add_enabled_ui(!busy, |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.patch_version)
+                                        .hint_text("3825")
+                                        .desired_width(120.0),
+                                );
+                            });
+                            ui.label(
+                                egui::RichText::new(tr(self.lang, Txt::VersionUndetected))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                    }
+                    ui.label(tr(self.lang, Txt::UploaderLabel));
+                    ui.add_enabled_ui(!busy, |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
+                    });
+                });
+                ui.label(
+                    egui::RichText::new(tr(self.lang, Txt::UploadHint))
+                        .small()
+                        .weak(),
+                );
             }
             ui.add_space(12.0);
 
-            let can_sync = !running
-                && !self.server.trim().is_empty()
-                && PathBuf::from(self.dir.trim()).is_dir();
-            let button_text = if running {
-                tr(self.lang, Txt::Syncing)
-            } else {
-                tr(self.lang, Txt::SyncNow)
-            };
-            if ui
-                .add_enabled(
-                    can_sync,
-                    egui::Button::new(button_text).min_size(egui::vec2(f32::INFINITY, 40.0)),
-                )
-                .clicked()
-            {
-                self.start_sync();
-            }
-            if matches!(self.state, SyncState::Idle) {
-                ui.label(tr(self.lang, Txt::IdleHint));
-            }
+            self.action_button(ui);
 
             let (done, total) = self.progress;
             if total > 0 {

@@ -68,6 +68,10 @@ pub struct ManifestSummary {
 pub struct StatusResponse {
     /// Current mirror contents; `None` when nothing has been uploaded yet.
     pub manifest: Option<ManifestSummary>,
+    /// Build tag of the sync client binary currently served, so the web page
+    /// can show users which build they will download.
+    #[serde(default)]
+    pub client_tag: Option<String>,
 }
 
 /// Request of `POST /api/gamedata/upload/check`: which of these files the

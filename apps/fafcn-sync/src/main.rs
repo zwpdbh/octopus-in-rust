@@ -18,6 +18,14 @@ mod config;
 mod gui;
 mod sync;
 mod upload;
+mod version;
+
+/// Build tag stamped by `xtask fafcn file-sync` (shown in the GUI title and
+/// on the /sync page so users can tell builds apart).
+pub const BUILD_TAG: &str = match option_env!("FAFCN_SYNC_BUILD_TAG") {
+    Some(tag) => tag,
+    None => "dev",
+};
 
 use std::path::PathBuf;
 
@@ -70,8 +78,9 @@ pub struct UploadArgs {
     pub dir: PathBuf,
 
     /// FAF patch version these files correspond to (e.g. "3825").
+    /// Auto-detected from lua.nx2 when omitted.
     #[arg(long)]
-    pub patch_version: String,
+    pub patch_version: Option<String>,
 
     /// Your display name, shown on the status page.
     #[arg(long)]

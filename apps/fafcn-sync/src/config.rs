@@ -22,6 +22,12 @@ pub struct ClientConfig {
     /// GUI language ("zh" / "en"), remembered across launches.
     #[serde(default)]
     pub lang: Option<String>,
+    /// Upload token for the uploader (remembered locally).
+    #[serde(default)]
+    pub upload_token: Option<String>,
+    /// Uploader display name (remembered locally).
+    #[serde(default)]
+    pub uploader: Option<String>,
 }
 
 impl ClientConfig {

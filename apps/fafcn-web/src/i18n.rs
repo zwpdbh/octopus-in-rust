@@ -241,6 +241,9 @@ pub enum Text {
     SyncStepResync,
     SyncStepPlay,
     SyncClientNote,
+    UploadHint,
+    ClientVersion,
+    ClientVersionMissing,
 }
 
 impl Text {
@@ -491,6 +494,17 @@ impl Text {
                 "客户端只会下载与镜像清单哈希不一致的文件;每次下载都会校验,且绝不会删除你的文件。\
                  如果镜像看起来过时(查看上方“更新时间”),请提醒有 VPN 的玩家上传最新补丁。"
             }
+            (Text::UploadHint, Lang::En) => {
+                "Players with VPN access: download the same client, open the \"Upload\" tab, \
+                 enter the group token and select your gamedata folder to publish the latest patch."
+            }
+            (Text::UploadHint, Lang::Zh) => {
+                "有 VPN 的玩家:下载同一个客户端,打开“上传”页,输入群组令牌并选择 gamedata 目录,即可发布最新补丁。"
+            }
+            (Text::ClientVersion, Lang::En) => "Client build",
+            (Text::ClientVersion, Lang::Zh) => "客户端版本",
+            (Text::ClientVersionMissing, Lang::En) => "unknown (rebuild with: cargo xtask fafcn file-sync)",
+            (Text::ClientVersionMissing, Lang::Zh) => "未知(请运行 cargo xtask fafcn file-sync 重新构建)",
         }
     }
 }

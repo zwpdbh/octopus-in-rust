@@ -50,7 +50,7 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
   - Remember server + gamedata dir + language in a small config file; server defaults to the value embedded in the downloaded binary (remembered config wins over embedded).
   - Display the server manifest's `patch_version` and `last-updated` so the user can judge freshness themselves; always tell the user how to fall back to the official channel.
 - **Web page (`apps/fafcn-web`)**: one new `/sync` page — client download link + server status (patch version, last updated, file count/size, staleness indicator).
-- **Upload helper**: a simple `fafcn-sync upload --token ... --dir ...` subcommand in the same client binary (no separate tool for uploaders).
+- **Upload helper**: an 上传 tab in the same GUI client (token + folder picker + patch version + name + progress), plus the `fafcn-sync upload` CLI subcommand — one exe for both roles.
 
 ### Out of Scope
 
@@ -106,5 +106,7 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 | 2026-08-18 | CLI client first, shipped as single `.exe` | Best effort/UX ratio; Dioxus desktop GUI deferred. |
 | 2026-08-18 | GUI (eframe) is the default client UX; CLI kept as subcommands | Most FAF players are non-technical: double-click → auto-detected folder → one sync button. Dioxus desktop was rejected because wry/WebView2 cannot cross-compile from Linux; eframe (winit+glow) cross-compiles to `x86_64-pc-windows-gnu` cleanly. Windows release uses the GUI subsystem (no console window); CLI mode re-attaches to the parent console. |
 | 2026-08-18 | Mirror address embedded into the client binary per download (PE/ELF overlay) | Non-technical players must never type a URL. Alternatives rejected: zip-with-config (extraction is error-prone for the audience), custom protocol handler (requires registry writes). Appended overlay data is ignored by both loaders; remembered config takes precedence so power users can still switch mirrors. |
+| 2026-08-18 | Upload lives in the client (GUI tab + CLI), not as web drag-drop | Uploads are rare and done by the technical, VPN-having player; browser folder-upload in WASM (traversal, 700MB hashing, no fetch upload progress) is high-complexity for the wrong path. The /sync page shows uploader instructions instead. |
+| 2026-08-18 | Patch version auto-detected from `lua.nx2` (`lua/version.lua` — it's a ZIP); server rejects strictly older uploads (409) | The version is ground truth from the game data, so users never type it (manual entry is fallback only). The GUI also pre-checks the server manifest and disables upload with an explanation when the server is newer; the commit-time server guard is the authoritative enforcement. |
 | 2026-08-18 | Never delete local files not in manifest; download-to-temp + atomic rename | Client must never break a working game install. |
 | 2026-08-18 | User upload is the only source of gamedata; no server-side fetching from official channels | The required patch files are not reliably downloadable from FAF's open-source GitHub repos; automated staleness checks are deferred until we investigate how the official client detects new patches (see Implementation Notes; source at `/home/zw/code/faf_related/official_faf_stack/downlords-faf-client`). |

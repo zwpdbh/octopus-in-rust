@@ -21,6 +21,7 @@ serde = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 toml = { workspace = true }
 walkdir = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

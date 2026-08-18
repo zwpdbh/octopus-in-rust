@@ -31,6 +31,9 @@ pub enum Error {
     /// Client sent an invalid request.
     BadRequest(String),
 
+    /// Request conflicts with current server state.
+    Conflict(String),
+
     /// Feature is not configured on this server.
     Unavailable(String),
 
@@ -48,6 +51,7 @@ impl fmt::Display for Error {
             Error::Agent(err) => write!(f, "{err}"),
             Error::Unauthorized => write!(f, "unauthorized"),
             Error::BadRequest(msg) => write!(f, "bad request: {msg}"),
+            Error::Conflict(msg) => write!(f, "conflict: {msg}"),
             Error::Unavailable(msg) => write!(f, "unavailable: {msg}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
         }
@@ -107,6 +111,9 @@ impl IntoResponse for Error {
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
             Error::BadRequest(msg) => {
                 (StatusCode::BAD_REQUEST, format!("bad request: {msg}")).into_response()
+            }
+            Error::Conflict(msg) => {
+                (StatusCode::CONFLICT, format!("conflict: {msg}")).into_response()
             }
             Error::Unavailable(msg) => (
                 StatusCode::SERVICE_UNAVAILABLE,

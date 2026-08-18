@@ -83,9 +83,14 @@ fn run_frontend() -> Result<()> {
 /// Release is the default: debug builds keep a console window (see the
 /// `windows_subsystem` gate in fafcn-sync's main.rs), which is exactly what
 /// we do NOT want to publish to non-technical players.
+///
+/// Every build is stamped with a fresh tag (compiled into the exe AND
+/// written to a VERSION file the status endpoint serves), so users can
+/// verify the /sync page and their download match.
 fn build_file_sync(rest: &[String]) -> Result<()> {
     let release = !rest.iter().any(|a| a == "--debug");
     ensure_windows_cross_toolchain()?;
+    let tag = new_build_tag();
 
     let mut cmd = cargo::command();
     cmd.args([
@@ -98,8 +103,9 @@ fn build_file_sync(rest: &[String]) -> Result<()> {
     if release {
         cmd.arg("--release");
     }
+    cmd.env("FAFCN_SYNC_BUILD_TAG", &tag);
     println!(
-        "Building fafcn-sync for {SYNC_CLIENT_TARGET} ({})...",
+        "Building fafcn-sync for {SYNC_CLIENT_TARGET} ({}) with tag {tag}...",
         crate::project::profile_str(release)
     );
     cargo::run(&mut cmd).context("fafcn-sync build failed")?;
@@ -112,9 +118,26 @@ fn build_file_sync(rest: &[String]) -> Result<()> {
     let dest = dest_dir.join(SYNC_CLIENT_FILE_NAME);
     std::fs::copy(&built, &dest)
         .with_context(|| format!("failed to copy {built} to {}", dest.display()))?;
+    std::fs::write(dest_dir.join("VERSION"), format!("{tag}\n"))
+        .context("failed to write VERSION file")?;
 
     println!("Installed {built} -> {}", dest.display());
+    println!("Build tag: {tag} (shown on the /sync page and in the client title bar)");
     Ok(())
+}
+
+/// A unique-per-build tag: timestamp + random suffix, e.g. `dev-68f3a1c2-9b4e`.
+fn new_build_tag() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let rand = RandomState::new().build_hasher().finish();
+    format!("dev-{:08x}-{:04x}", secs as u32, (rand as u16))
 }
 
 /// Verify the Rust Windows target and the MinGW linker are installed.

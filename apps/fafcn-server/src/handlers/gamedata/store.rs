@@ -128,6 +128,7 @@ impl GamedataStore {
         if req.files.is_empty() {
             return Err(Error::BadRequest("file list must not be empty".to_string()));
         }
+        self.guard_against_downgrade(&req.patch_version)?;
         for entry in &req.files {
             validate_relative_path(&entry.path).map_err(|e| Error::BadRequest(e.to_string()))?;
             if !self.stored_file_matches(entry)? {
@@ -150,6 +151,27 @@ impl GamedataStore {
         fs::write(&tmp, json)?;
         fs::rename(&tmp, self.manifest_path())?;
         Ok(manifest)
+    }
+
+    /// Refuse to publish a patch that is strictly older than the one already
+    /// on the server (numeric comparison; skipped for non-numeric versions).
+    fn guard_against_downgrade(&self, new_version: &str) -> Result<()> {
+        let Some(existing) = self.read_manifest()? else {
+            return Ok(());
+        };
+        let (Ok(new), Ok(old)) = (
+            new_version.trim().parse::<u64>(),
+            existing.patch_version.trim().parse::<u64>(),
+        ) else {
+            return Ok(());
+        };
+        if new < old {
+            return Err(Error::Conflict(format!(
+                "server already has newer patch {} (yours is {new_version}); nothing to upload",
+                existing.patch_version
+            )));
+        }
+        Ok(())
     }
 
     /// True when `files/<path>` exists with matching size and hash.
@@ -232,6 +254,29 @@ mod tests {
             files: vec![entry_for(b"nope")],
         });
         assert!(result.is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn commit_rejects_older_patch_version() {
+        let (root, store) = temp_store();
+        let bytes = b"patch-bytes";
+        let entry = entry_for(bytes);
+        store.store_upload("faf.scd", &entry.sha256, bytes).unwrap();
+        let commit = |version: &str| {
+            store.commit(&UploadCommitRequest {
+                patch_version: version.to_string(),
+                uploader: "tester".to_string(),
+                files: vec![entry.clone()],
+            })
+        };
+
+        commit("3837").unwrap();
+        // Same version is allowed (re-publish), older is rejected, newer allowed.
+        assert!(commit("3837").is_ok());
+        let downgraded = commit("3825");
+        assert!(matches!(downgraded, Err(Error::Conflict(_))));
+        assert!(commit("3900").is_ok());
         fs::remove_dir_all(&root).unwrap();
     }
 

@@ -20,6 +20,11 @@ pub fn Sync() -> Element {
             .map_err(|e| e.to_string())
     });
 
+    let client_tag = match status.read().as_ref() {
+        Some(Ok(resp)) => resp.client_tag.clone(),
+        _ => None,
+    };
+
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans",
             div { class: "max-w-2xl mx-auto px-6 py-8 flex flex-col gap-6",
@@ -71,6 +76,13 @@ pub fn Sync() -> Element {
                         href: "{client_download_url}",
                         "{t.t(Text::DownloadClient)}"
                     }
+                    p { class: "mt-2 text-xs text-neutral-500 font-mono",
+                        "{t.t(Text::ClientVersion)}: "
+                        {match &client_tag {
+                            Some(tag) => rsx! { span { class: "text-green-400", "{tag}" } },
+                            None => rsx! { span { "{t.t(Text::ClientVersionMissing)}" } },
+                        }}
+                    }
                     ol { class: "list-decimal list-inside mt-4 space-y-2 text-sm text-neutral-300",
                         li { "{t.t(Text::SyncStepDownload)}" }
                         li { "{t.t(Text::SyncStepFirstRun)}" }
@@ -78,6 +90,7 @@ pub fn Sync() -> Element {
                         li { "{t.t(Text::SyncStepPlay)}" }
                     }
                     p { class: "mt-4 text-xs text-neutral-500", "{t.t(Text::SyncClientNote)}" }
+                    p { class: "mt-2 text-xs text-neutral-500", "{t.t(Text::UploadHint)}" }
                 }
             }
         }
