@@ -136,6 +136,39 @@ pub fn Sync() -> Element {
                     p { class: "mt-4 text-xs text-neutral-500", "{t.t(Text::SyncClientNote)}" }
                     p { class: "mt-2 text-xs text-neutral-500", "{t.t(Text::UploadHint)}" }
                 }
+
+                // FAF client installer download (faf-client channel).
+                div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-5",
+                    h2 { class: "text-lg font-semibold text-white mb-3", "{t.t(Text::FafClientTitle)}" }
+                    p { class: "text-sm text-neutral-400 mb-3", "{t.t(Text::FafClientDesc)}" }
+                    match faf_client.read().as_ref() {
+                        None => rsx! {
+                            p { class: "text-neutral-400 text-sm", "{t.t(Text::Loading)}" }
+                        },
+                        Some(Err(err)) => rsx! {
+                            p { class: "text-red-400 text-sm", "{t.t(Text::LoadStatusFailed)}{err}" }
+                        },
+                        Some(Ok(None)) => rsx! {
+                            p { class: "text-neutral-500 text-sm", "{t.t(Text::ChannelNotPublished)}" }
+                        },
+                        Some(Ok(Some(manifest))) => rsx! {
+                            p { class: "text-xs text-neutral-400 mb-3",
+                                "{t.t(Text::PatchVersion)}: "
+                                span { class: "text-white font-mono", "{manifest.patch_version}" }
+                                " · {t.t(Text::UploadedBy)}: {manifest.uploader}"
+                            }
+                            div { class: "flex flex-wrap gap-3",
+                                for file in &manifest.files {
+                                    a {
+                                        class: "inline-block px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm transition-colors",
+                                        href: crate::net::api_url(&format!("/api/gamedata/channels/faf-client/files/{}", file.path)),
+                                        "{t.t(Text::DownloadFafClient)} ({file.path})"
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
             }
         }
     }

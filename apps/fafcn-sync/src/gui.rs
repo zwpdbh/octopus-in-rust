@@ -107,11 +107,12 @@ impl GuiLang {
     }
 }
 
-/// The two app tabs.
+/// The app tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Sync,
-    Upload,
+    UploadPatch,
+    UploadClient,
 }
 
 /// What the background worker is doing (or did last).
@@ -127,7 +128,8 @@ enum ActionState {
 #[derive(Debug, Clone, Copy)]
 enum Txt {
     TabSync,
-    TabUpload,
+    TabUploadPatch,
+    TabUploadClient,
     ServerLabel,
     DirLabel,
     Browse,
@@ -157,7 +159,6 @@ enum Txt {
     ChannelGamedata,
     ChannelMapGenerator,
     ChannelFafClient,
-    ClientSectionTitle,
     UploadClientNow,
     VersionLabel,
     FieldClientFile,
@@ -167,8 +168,10 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
     match (txt, lang) {
         (Txt::TabSync, GuiLang::Zh) => "同步",
         (Txt::TabSync, GuiLang::En) => "Sync",
-        (Txt::TabUpload, GuiLang::Zh) => "上传",
-        (Txt::TabUpload, GuiLang::En) => "Upload",
+        (Txt::TabUploadPatch, GuiLang::Zh) => "上传补丁",
+        (Txt::TabUploadPatch, GuiLang::En) => "Upload patch",
+        (Txt::TabUploadClient, GuiLang::Zh) => "上传客户端",
+        (Txt::TabUploadClient, GuiLang::En) => "Upload client",
         (Txt::ServerLabel, GuiLang::Zh) => "镜像地址",
         (Txt::ServerLabel, GuiLang::En) => "Mirror address",
         (Txt::DirLabel, GuiLang::Zh) => "FAForever 目录",
@@ -235,8 +238,6 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::ChannelMapGenerator, GuiLang::En) => "map-generator",
         (Txt::ChannelFafClient, GuiLang::Zh) => "FAF 客户端",
         (Txt::ChannelFafClient, GuiLang::En) => "FAF client",
-        (Txt::ClientSectionTitle, GuiLang::Zh) => "FAF 客户端安装包",
-        (Txt::ClientSectionTitle, GuiLang::En) => "FAF client installer",
         (Txt::UploadClientNow, GuiLang::Zh) => "上传安装包",
         (Txt::UploadClientNow, GuiLang::En) => "Upload installer",
         (Txt::VersionLabel, GuiLang::Zh) => "版本",
@@ -379,17 +380,32 @@ fn log_channel_skipped(lang: GuiLang, channel: &str, reason: &str) -> String {
     }
 }
 
-fn log_upload_done(lang: GuiLang, published: &[String]) -> String {
+fn log_upload_done(lang: GuiLang, published: &[crate::upload::PublishedChannel]) -> String {
+    // The faf-client installer is downloaded from the website, not synced —
+    // point players there instead of at the sync tool.
+    if published
+        .iter()
+        .all(|p| p.channel == fafcn_gamedata::CHANNEL_FAF_CLIENT)
+    {
+        let version = published.first().map(|p| p.version.as_str()).unwrap_or("");
+        return match lang {
+            GuiLang::Zh => format!(
+                "上传完成,FAF 客户端 {version} 已发布!玩家们现在可以在网站的补丁同步页下载它。"
+            ),
+            GuiLang::En => format!(
+                "Upload complete — FAF client {version} is live! Players can now download it from the sync page."
+            ),
+        };
+    }
+    let list = published
+        .iter()
+        .map(|p| format!("{} {}", p.channel, p.version))
+        .collect::<Vec<_>>()
+        .join(", ");
     match lang {
-        GuiLang::Zh => format!(
-            "上传完成,已发布:{},所有人现在都可以同步了!",
-            published.join(", ")
-        ),
+        GuiLang::Zh => format!("上传完成,已发布:{list},所有人现在都可以同步了!"),
         GuiLang::En => {
-            format!(
-                "Upload complete — published: {}. It's live for everyone!",
-                published.join(", ")
-            )
+            format!("Upload complete — published: {list}. It's live for everyone to sync!")
         }
     }
 }
@@ -735,28 +751,49 @@ impl SyncApp {
         });
         ui.add_space(4.0);
 
-        ui.label(tr(self.lang, Txt::DirLabel));
-        ui.add_enabled_ui(!busy, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.dir)
-                    .hint_text(r"C:\ProgramData\FAForever")
-                    .desired_width(f32::INFINITY),
-            );
-            ui.horizontal(|ui| {
-                if ui.button(tr(self.lang, Txt::Browse)).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        self.dir = path.to_string_lossy().into_owned();
+        // The FAForever folder is only needed for sync and patch upload.
+        if self.tab != Tab::UploadClient {
+            ui.label(tr(self.lang, Txt::DirLabel));
+            ui.add_enabled_ui(!busy, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.dir)
+                        .hint_text(r"C:\ProgramData\FAForever")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            self.dir = path.to_string_lossy().into_owned();
+                        }
                     }
-                }
-                if ui.button(tr(self.lang, Txt::Detect)).clicked() {
-                    if let Some(path) = sync::autodetect_faf_dir() {
-                        self.dir = path.to_string_lossy().into_owned();
+                    if ui.button(tr(self.lang, Txt::Detect)).clicked() {
+                        if let Some(path) = sync::autodetect_faf_dir() {
+                            self.dir = path.to_string_lossy().into_owned();
+                        }
                     }
-                }
+                });
             });
-        });
-        if let Some((color, text)) = self.folder_status() {
-            ui.colored_label(color, text);
+            if let Some((color, text)) = self.folder_status() {
+                ui.colored_label(color, text);
+            }
+        }
+
+        // Token + player name are needed by both upload tabs.
+        if self.tab != Tab::Sync {
+            ui.label(tr(self.lang, Txt::TokenLabel));
+            ui.add_enabled_ui(!busy, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.token)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(self.lang, Txt::UploaderLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
+                });
+            });
         }
     }
 
@@ -784,9 +821,9 @@ impl SyncApp {
     }
 
     /// Kick off a one-shot fetch of the server's patch version when the
-    /// upload tab is showing and the server address changed.
+    /// patch upload tab is showing and the server address changed.
     fn maybe_refresh_server_version(&mut self) {
-        if self.tab != Tab::Upload {
+        if self.tab != Tab::UploadPatch {
             return;
         }
         let server = self.server.trim().trim_end_matches('/').to_string();
@@ -852,6 +889,9 @@ impl SyncApp {
 
     /// Fields still missing for the current tab's action, as localized names.
     fn missing_fields(&mut self) -> Vec<&'static str> {
+        if self.tab == Tab::UploadClient {
+            return self.client_missing_fields();
+        }
         let mut missing = Vec::new();
         if self.server.trim().is_empty() {
             missing.push(tr(self.lang, Txt::FieldServer));
@@ -859,7 +899,7 @@ impl SyncApp {
         if !self.faf_root().is_dir() {
             missing.push(tr(self.lang, Txt::FieldDir));
         }
-        if self.tab == Tab::Upload {
+        if self.tab == Tab::UploadPatch {
             if self.token.trim().is_empty() {
                 missing.push(tr(self.lang, Txt::FieldToken));
             }
@@ -876,17 +916,19 @@ impl SyncApp {
     fn action_button(&mut self, ui: &mut egui::Ui) {
         let busy = self.busy();
         let missing = self.missing_fields();
-        let server_newer = self.tab == Tab::Upload && self.server_is_newer();
+        let server_newer = self.tab == Tab::UploadPatch && self.server_is_newer();
         let can_run = !busy && missing.is_empty() && !server_newer;
         let running = match self.tab {
             Tab::Sync => self.sync_state == ActionState::Running,
-            Tab::Upload => self.upload_state == ActionState::Running,
+            Tab::UploadPatch | Tab::UploadClient => self.upload_state == ActionState::Running,
         };
         let label = match (self.tab, running) {
             (Tab::Sync, true) => tr(self.lang, Txt::Syncing),
             (Tab::Sync, false) => tr(self.lang, Txt::SyncNow),
-            (Tab::Upload, true) => tr(self.lang, Txt::Uploading),
-            (Tab::Upload, false) => tr(self.lang, Txt::UploadNow),
+            (Tab::UploadPatch, true) => tr(self.lang, Txt::Uploading),
+            (Tab::UploadPatch, false) => tr(self.lang, Txt::UploadNow),
+            (Tab::UploadClient, true) => tr(self.lang, Txt::Uploading),
+            (Tab::UploadClient, false) => tr(self.lang, Txt::UploadClientNow),
         };
         if ui
             .add_enabled(
@@ -897,7 +939,8 @@ impl SyncApp {
         {
             match self.tab {
                 Tab::Sync => self.start_sync(),
-                Tab::Upload => self.start_upload(),
+                Tab::UploadPatch => self.start_upload(),
+                Tab::UploadClient => self.start_upload_client(),
             }
         }
         // Explain exactly why the button is disabled.
@@ -955,22 +998,23 @@ impl eframe::App for SyncApp {
 
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Sync, tr(self.lang, Txt::TabSync));
-                ui.selectable_value(&mut self.tab, Tab::Upload, tr(self.lang, Txt::TabUpload));
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::UploadPatch,
+                    tr(self.lang, Txt::TabUploadPatch),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::UploadClient,
+                    tr(self.lang, Txt::TabUploadClient),
+                );
             });
             ui.separator();
 
             self.shared_fields(ui);
 
-            if self.tab == Tab::Upload {
+            if self.tab == Tab::UploadPatch {
                 ui.add_space(4.0);
-                ui.label(tr(self.lang, Txt::TokenLabel));
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.token)
-                            .password(true)
-                            .desired_width(f32::INFINITY),
-                    );
-                });
                 let detected = self.detected_patch_version();
                 ui.horizontal(|ui| {
                     ui.label(tr(self.lang, Txt::PatchVersionLabel));
@@ -998,10 +1042,6 @@ impl eframe::App for SyncApp {
                             );
                         }
                     }
-                    ui.label(tr(self.lang, Txt::UploaderLabel));
-                    ui.add_enabled_ui(!busy, |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
-                    });
                 });
                 // Map generator version (auto-detected; informational only).
                 ui.horizontal(|ui| {
@@ -1024,17 +1064,18 @@ impl eframe::App for SyncApp {
                         .small()
                         .weak(),
                 );
+            }
 
-                // FAF client installer upload (faf-client channel).
-                ui.separator();
-                ui.label(egui::RichText::new(tr(self.lang, Txt::ClientSectionTitle)).strong());
+            if self.tab == Tab::UploadClient {
+                ui.add_space(4.0);
+                ui.label(tr(self.lang, Txt::FieldClientFile));
                 ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.client_file)
+                            .hint_text(r"D:\Downloads\dfc_windows_1_6_3.exe")
+                            .desired_width(f32::INFINITY),
+                    );
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.client_file)
-                                .hint_text(r"D:\Downloads\dfc_windows_1_6_3.exe")
-                                .desired_width(f32::INFINITY),
-                        );
                         if ui.button(tr(self.lang, Txt::Browse)).clicked() {
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
                                 let name = path
@@ -1060,32 +1101,6 @@ impl eframe::App for SyncApp {
                         );
                     });
                 });
-                let client_missing = self.client_missing_fields();
-                let can_run = !busy && client_missing.is_empty();
-                let label = if self.upload_state == ActionState::Running {
-                    tr(self.lang, Txt::Uploading)
-                } else {
-                    tr(self.lang, Txt::UploadClientNow)
-                };
-                if ui
-                    .add_enabled(
-                        can_run,
-                        egui::Button::new(label).min_size(egui::vec2(f32::INFINITY, 32.0)),
-                    )
-                    .clicked()
-                {
-                    self.start_upload_client();
-                }
-                if !busy && !client_missing.is_empty() {
-                    ui.colored_label(
-                        egui::Color32::YELLOW,
-                        format!(
-                            "{}{}",
-                            tr(self.lang, Txt::MissingPrefix),
-                            client_missing.join(", ")
-                        ),
-                    );
-                }
             }
             ui.add_space(12.0);
 

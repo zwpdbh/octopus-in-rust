@@ -69,14 +69,22 @@ pub enum UploadProgress {
     },
 }
 
+/// One channel that was published by an upload.
+pub struct PublishedChannel {
+    /// Channel id (e.g. "gamedata", "faf-client").
+    pub channel: String,
+    /// Published version.
+    pub version: String,
+}
+
 /// What a finished upload did.
 pub struct UploadSummary {
     /// Files actually uploaded across all channels.
     pub uploaded_files: usize,
     /// Bytes uploaded.
     pub uploaded_bytes: u64,
-    /// Published channels as `channel version` strings.
-    pub published: Vec<String>,
+    /// Published channels.
+    pub published: Vec<PublishedChannel>,
 }
 
 /// Run the CLI `upload-client` subcommand: publish one FAF client installer.
@@ -118,7 +126,7 @@ pub async fn run_client(args: UploadClientArgs) -> Result<()> {
     )
     .await?;
     for published in &summary.published {
-        println!("Published {published}");
+        println!("Published {} {}", published.channel, published.version);
     }
 
     cfg.server = Some(server);
@@ -190,7 +198,10 @@ pub async fn upload_faf_client(
     Ok(UploadSummary {
         uploaded_files: files,
         uploaded_bytes: bytes,
-        published: vec![format!("{} {version}", fafcn_gamedata::CHANNEL_FAF_CLIENT)],
+        published: vec![PublishedChannel {
+            channel: fafcn_gamedata::CHANNEL_FAF_CLIENT.to_string(),
+            version: version.to_string(),
+        }],
     })
 }
 
@@ -224,7 +235,7 @@ pub async fn run(args: UploadArgs) -> Result<()> {
     )
     .await?;
     for published in &summary.published {
-        println!("Published {published}");
+        println!("Published {} {}", published.channel, published.version);
     }
 
     cfg.server = Some(server);
@@ -264,9 +275,10 @@ pub async fn upload_gamedata(
             upload_channel(&http, server, token, &plan, uploader, progress).await?;
         summary.uploaded_files += files;
         summary.uploaded_bytes += bytes;
-        summary
-            .published
-            .push(format!("{} {}", plan.channel, plan.version));
+        summary.published.push(PublishedChannel {
+            channel: plan.channel.to_string(),
+            version: plan.version.clone(),
+        });
     }
     Ok(summary)
 }
