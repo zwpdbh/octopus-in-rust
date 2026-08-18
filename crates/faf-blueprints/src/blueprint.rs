@@ -85,9 +85,13 @@ impl UnitBlueprint {
 
 impl FafBlueprints {
     pub fn new() -> Result<Self> {
-        let blueprint = FafBlueprints {
-            index: FafUnitIndex::default()?,
+        // The units file path defaults to a compile-time repo location; allow
+        // deployments to override it so the binary can run outside the repo.
+        let index = match std::env::var("FAFCN_UNITS_FILE") {
+            Ok(path) => FafUnitIndex::new(path.into())?,
+            Err(_) => FafUnitIndex::default()?,
         };
+        let blueprint = FafBlueprints { index };
         println!("loaded {} units", blueprint.index.units.len());
         Ok(blueprint)
     }
