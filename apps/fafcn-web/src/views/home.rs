@@ -34,6 +34,11 @@ pub fn Home() -> Element {
                     div { class: "flex flex-wrap items-center justify-center gap-4",
                         Link {
                             class: "px-6 py-3 rounded bg-blue-700 hover:bg-blue-600 text-white font-semibold transition-colors",
+                            to: Route::Guide {},
+                            "{t.t(Text::HomeCtaGuide)}"
+                        }
+                        Link {
+                            class: "px-6 py-3 rounded bg-neutral-700 hover:bg-neutral-600 text-white font-semibold transition-colors",
                             to: Route::Sync {},
                             "{t.t(Text::HomeCtaSync)}"
                         }
@@ -51,6 +56,46 @@ pub fn Home() -> Element {
                         }
                     }
                 }
+            }
+
+            // Why Supreme Commander: detail-driven vignettes, not marketing.
+            div { class: "max-w-5xl mx-auto px-6 pt-14",
+                h2 { class: "text-2xl font-bold text-white mb-6 text-center",
+                    "{t.t(Text::HomeWhyTitle)}"
+                }
+                div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
+                    Vignette {
+                        title: t.t(Text::VigReclaimTitle),
+                        body: t.t(Text::VigReclaimBody),
+                        punch: t.t(Text::VigReclaimPunch),
+                    }
+                    Vignette {
+                        title: t.t(Text::VigZoomTitle),
+                        body: t.t(Text::VigZoomBody),
+                        punch: t.t(Text::VigZoomPunch),
+                    }
+                    Vignette {
+                        title: t.t(Text::VigPhysicsTitle),
+                        body: t.t(Text::VigPhysicsBody),
+                        punch: t.t(Text::VigPhysicsPunch),
+                    }
+                    Vignette {
+                        title: t.t(Text::VigExpTitle),
+                        body: t.t(Text::VigExpBody),
+                        punch: t.t(Text::VigExpPunch),
+                    }
+                    Vignette {
+                        title: t.t(Text::VigAcuTitle),
+                        body: t.t(Text::VigAcuBody),
+                        punch: t.t(Text::VigAcuPunch),
+                    }
+                    Vignette {
+                        title: t.t(Text::VigCommunityTitle),
+                        body: t.t(Text::VigCommunityBody),
+                        punch: t.t(Text::VigCommunityPunch),
+                    }
+                }
+                p { class: "text-xs text-neutral-500 mt-6 text-center", "{t.t(Text::WhyPriceNote)}" }
             }
 
             // Feature cards linking to the app's pages.
@@ -104,6 +149,18 @@ pub fn Home() -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+/// One why-SupCom vignette: bold title, detailed body, insider punchline.
+#[component]
+fn Vignette(title: &'static str, body: &'static str, punch: &'static str) -> Element {
+    rsx! {
+        div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-5",
+            h3 { class: "text-base font-semibold text-amber-300 mb-2", "{title}" }
+            p { class: "text-sm text-neutral-300 leading-relaxed mb-3", "{body}" }
+            p { class: "text-xs text-neutral-500 italic", "{punch}" }
         }
     }
 }

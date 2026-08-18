@@ -15,6 +15,7 @@ pub fn Navbar() -> Element {
                 }
                 div { class: "flex-1" }
                 NavLink { to: Route::Home {}, label: t.t(Text::NavHome) }
+                NavLink { to: Route::Guide {}, label: t.t(Text::NavGuide) }
                 NavLink { to: Route::Units {}, label: t.t(Text::NavUnits) }
                 NavLink { to: Route::Simulate {}, label: t.t(Text::NavSimulate) }
                 NavLink { to: Route::Qa {}, label: t.t(Text::NavQa) }

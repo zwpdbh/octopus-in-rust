@@ -137,6 +137,40 @@ pub enum Text {
     HomeQQTitle,
     HomeQQDesc,
     HomeQQCopied,
+    HomeWhyTitle,
+    VigReclaimTitle,
+    VigReclaimBody,
+    VigReclaimPunch,
+    VigZoomTitle,
+    VigZoomBody,
+    VigZoomPunch,
+    VigPhysicsTitle,
+    VigPhysicsBody,
+    VigPhysicsPunch,
+    VigExpTitle,
+    VigExpBody,
+    VigExpPunch,
+    VigAcuTitle,
+    VigAcuBody,
+    VigAcuPunch,
+    VigCommunityTitle,
+    VigCommunityBody,
+    VigCommunityPunch,
+    WhyPriceNote,
+    HomeCtaGuide,
+    NavGuide,
+    GuideTitle,
+    GuideIntro,
+    GuideStep1Title,
+    GuideStep1Mirror,
+    GuideStep1Github,
+    GuideStep1GithubBtn,
+    GuideStep1Note,
+    GuideStep2Title,
+    GuideStep2Desc,
+    GuideStep2Btn,
+    GuideStep3Title,
+    GuideStep3Desc,
 
     // Unit comparison panel.
     CompareTitle,
@@ -328,6 +362,165 @@ impl Text {
             (Text::HomeQQDesc, Lang::Zh) => "组队、求助、第一时间获取补丁更新,都在 QQ 群。",
             (Text::HomeQQCopied, Lang::En) => "Copied!",
             (Text::HomeQQCopied, Lang::Zh) => "已复制!",
+
+            // Home: why play FAF.
+            // Home: why Supreme Commander is one of a kind.
+            (Text::HomeWhyTitle, Lang::En) => "Supreme Commander, one of a kind",
+            (Text::HomeWhyTitle, Lang::Zh) => "最高指挥官,独一无二",
+
+            (Text::VigReclaimTitle, Lang::En) => "The battlefield is a mine",
+            (Text::VigReclaimTitle, Lang::Zh) => "战场即矿场",
+            (Text::VigReclaimBody, Lang::En) => {
+                "When a battle ends, the wreckage doesn't vanish — every unit can be \
+                 reclaimed for mass. The army you just destroyed is paying for your next \
+                 wave, and in high-level play, whoever vacuums up the experimental wreck \
+                 usually wins."
+            }
+            (Text::VigReclaimBody, Lang::Zh) => {
+                "一场会战结束,满地残骸不会消失——它们可以被回收,直到最后一克质量。\
+                 你刚打赢的那波团战,是对手的部队在为你下一波进攻买单。\
+                 高手对决里,抢到实验级残骸往往就是胜负手。"
+            }
+            (Text::VigReclaimPunch, Lang::En) => {
+                "In other RTS games wreckage is a visual effect. In FAF, wreckage is the economy."
+            }
+            (Text::VigReclaimPunch, Lang::Zh) => "在别的 RTS 里,残骸是特效;在 FAF 里,残骸是经济。",
+
+            (Text::VigZoomTitle, Lang::En) => "From muzzle flash to theater view",
+            (Text::VigZoomTitle, Lang::Zh) => "从炮口到战区",
+            (Text::VigZoomBody, Lang::En) => {
+                "One scroll takes you from a single tank's muzzle flash to a seamless view \
+                 of the entire theater. You never need a minimap — the map itself is your \
+                 command console, and every flanking move across 40km of front is yours to see."
+            }
+            (Text::VigZoomBody, Lang::Zh) => {
+                "滚轮一滑,视野从一辆坦克的炮口火光无缝拉到整个战场俯瞰——你不需要小地图,\
+                 地图本身就是指挥台。40 公里的战线上,每一次迂回、每一条补给线都尽收眼底。"
+            }
+            (Text::VigZoomPunch, Lang::En) => "Other RTS zoom the camera. FAF zooms the war.",
+            (Text::VigZoomPunch, Lang::Zh) => "别的 RTS 缩放的是镜头,FAF 缩放的是战争。",
+
+            (Text::VigPhysicsTitle, Lang::En) => "Every shell is real",
+            (Text::VigPhysicsTitle, Lang::Zh) => "每一发炮弹都是真的",
+            (Text::VigPhysicsBody, Lang::En) => {
+                "Nothing is hit-scan here: shells arc over hills, miss, and can be dodged; \
+                 shields physically block fire; a launched nuke can be shot down mid-flight \
+                 by anti-nuke — you can watch the intercept bloom in the sky."
+            }
+            (Text::VigPhysicsBody, Lang::Zh) => {
+                "这里没有“命中即判定”:炮弹会翻山、会打偏、会被机动躲开;护盾真的在挡炮弹;\
+                 核弹升空后,可以被反导系统在半空击坠——你甚至能看到拦截弹撞上核弹的那朵云。"
+            }
+            (Text::VigPhysicsPunch, Lang::En) => {
+                "Your defense line isn't a stat sheet. It's a fortification you watch do its job."
+            }
+            (Text::VigPhysicsPunch, Lang::Zh) => "你的防线不是数值,是你眼睁睁看着它工作的工事。",
+
+            (Text::VigExpTitle, Lang::En) => "Experimentals aren't units, they're events",
+            (Text::VigExpTitle, Lang::Zh) => "实验级不是单位,是事件",
+            (Text::VigExpBody, Lang::En) => {
+                "When a Monkeylord's laser sweeps your base, a Galactic Colossus steps into \
+                 your line, or Mavor shells cross half the map — that's not a strong unit \
+                 spawning, it's the climax of the match. And the wrecks they leave are \
+                 worth a fortune."
+            }
+            (Text::VigExpBody, Lang::Zh) => {
+                "当猴王的激光扫过基地、银河巨像踏进防线、灭世者的炮弹跨越半张地图砸下来——\
+                 那不是“一个强力单位出场”,那是整场比赛的高潮。\
+                 而终结它们留下的残骸,同样价值连城。"
+            }
+            (Text::VigExpPunch, Lang::En) => {
+                "Other games call it an ultimate unit. FAF players just say \"it's here.\""
+            }
+            (Text::VigExpPunch, Lang::Zh) => "别的游戏叫它终极兵种,FAF 玩家只说两个字:“来了”。",
+
+            (Text::VigAcuTitle, Lang::En) => "Your commander fights on the field",
+            (Text::VigAcuTitle, Lang::Zh) => "指挥官亲自下场",
+            (Text::VigAcuBody, Lang::En) => {
+                "Your ACU is no icon in the base: it lays your first factory with its own \
+                 hands, tanks fire on the front line, and can teleport behind enemy lines. \
+                 Its death is a nuclear detonation that flips games — and its wreck is \
+                 still worth fighting over."
+            }
+            (Text::VigAcuBody, Lang::Zh) => {
+                "你的 ACU 不是基地里的一个图标:它亲手铺下你的第一座工厂,顶在前线吸收火力,\
+                 还能升级传送门奇袭敌后。它倒下时的核爆足以改写整局比赛——\
+                 而它留下的残骸,依然是双方疯抢的目标。"
+            }
+            (Text::VigAcuPunch, Lang::En) => {
+                "Not many games let the king die on the battlefield. This is one of them."
+            }
+            (Text::VigAcuPunch, Lang::Zh) => "国王也会战死沙场的游戏不多,这就是其中之一。",
+
+            (Text::VigCommunityTitle, Lang::En) => "A game patched for 15 years",
+            (Text::VigCommunityTitle, Lang::Zh) => "一款打了 15 年补丁的游戏",
+            (Text::VigCommunityBody, Lang::En) => {
+                "After the official servers shut down, the players took over and run it to \
+                 this day: monthly balance patches, ladder matchmaking, co-op campaign, \
+                 replays, a map generator. A 2007 engine still renders thousands of units \
+                 without breaking a sweat."
+            }
+            (Text::VigCommunityBody, Lang::Zh) => {
+                "官方服务器关停之后,玩家自己把它运营到今天:每月平衡性补丁、天梯匹配、\
+                 合作战役、录像回放、地图生成器。2007 年的引擎,\
+                 如今依然流畅跑出数千单位的钢铁洪流。"
+            }
+            (Text::VigCommunityPunch, Lang::En) => {
+                "It's not just an old game. It's a living community."
+            }
+            (Text::VigCommunityPunch, Lang::Zh) => "它不只是一款老游戏,它是一个活着的社区。",
+
+            (Text::WhyPriceNote, Lang::En) => {
+                "FAF is free; you need a copy of Supreme Commander: Forged Alliance \
+                 (dirt cheap on Steam sales)."
+            }
+            (Text::WhyPriceNote, Lang::Zh) => {
+                "FAF 免费,需拥有《最高指挥官:钢铁联盟》正版(Steam 常年白菜价)。"
+            }
+            (Text::HomeCtaGuide, Lang::En) => "Get started guide",
+            (Text::HomeCtaGuide, Lang::Zh) => "新手上路指南",
+
+            // Navbar: guide.
+            (Text::NavGuide, Lang::En) => "Guide",
+            (Text::NavGuide, Lang::Zh) => "指南",
+
+            // Onboarding guide.
+            (Text::GuideTitle, Lang::En) => "Getting started",
+            (Text::GuideTitle, Lang::Zh) => "新手指南",
+            (Text::GuideIntro, Lang::En) => {
+                "Three steps to play FAF: install the client → sync patches → launch with an accelerator."
+            }
+            (Text::GuideIntro, Lang::Zh) => "三步上手 FAF:装客户端 → 同步补丁 → 开加速器开战。",
+            (Text::GuideStep1Title, Lang::En) => "Step 1: Download & install the FAF client",
+            (Text::GuideStep1Title, Lang::Zh) => "第一步:下载并安装 FAF 客户端",
+            (Text::GuideStep1Mirror, Lang::En) => "Download from our mirror (recommended, fast in China):",
+            (Text::GuideStep1Mirror, Lang::Zh) => "从本站镜像下载(推荐,国内高速):",
+            (Text::GuideStep1Github, Lang::En) => "No installer mirrored yet — download from GitHub:",
+            (Text::GuideStep1Github, Lang::Zh) => "镜像暂未上传客户端,请前往 GitHub 下载:",
+            (Text::GuideStep1GithubBtn, Lang::En) => "Go to GitHub releases",
+            (Text::GuideStep1GithubBtn, Lang::Zh) => "前往 GitHub releases",
+            (Text::GuideStep1Note, Lang::En) => "After install, register and log in your FAF account.",
+            (Text::GuideStep1Note, Lang::Zh) => "安装后注册并登录 FAF 账号即可。",
+            (Text::GuideStep2Title, Lang::En) => "Step 2: Sync patches & map generator",
+            (Text::GuideStep2Title, Lang::Zh) => "第二步:同步补丁与地图生成器",
+            (Text::GuideStep2Desc, Lang::En) => {
+                "Download our sync client, double-click it, and hit \"Sync now\" — it updates \
+                 the gamedata patches and the map generator for you automatically."
+            }
+            (Text::GuideStep2Desc, Lang::Zh) => {
+                "下载本站同步客户端,双击运行,点“开始同步”,即可自动完成 gamedata 补丁与地图生成器更新。"
+            }
+            (Text::GuideStep2Btn, Lang::En) => "Go to patch sync",
+            (Text::GuideStep2Btn, Lang::Zh) => "前往补丁同步页",
+            (Text::GuideStep3Title, Lang::En) => "Step 3: Launch your accelerator, then play!",
+            (Text::GuideStep3Title, Lang::Zh) => "第三步:开加速器,开战!",
+            (Text::GuideStep3Desc, Lang::En) => {
+                "Direct connections to FAF servers are slow from China. Start your accelerator \
+                 (e.g. GI, Qiyou), accelerate Forged Alliance Forever, then launch the FAF client."
+            }
+            (Text::GuideStep3Desc, Lang::Zh) => {
+                "国内直连 FAF 服务器延迟高。先启动加速器(如 GI、奇游),加速 Forged Alliance Forever,再启动 FAF 客户端开始游戏。"
+            }
 
             // Unit comparison panel.
             (Text::CompareTitle, Lang::En) => "Unit comparison",

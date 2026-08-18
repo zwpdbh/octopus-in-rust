@@ -12,7 +12,7 @@ mod state;
 mod utils;
 mod views;
 
-use views::{Home, Navbar, Qa, Simulate, Sync, Units};
+use views::{Guide, Home, Navbar, Qa, Simulate, Sync, Units};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -28,6 +28,8 @@ enum Route {
         Qa {},
         #[route("/sync")]
         Sync {},
+        #[route("/onboarding")]
+        Guide {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
