@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use faf_blueprints::ConstructionPlan;
 
+use crate::i18n::{self, Text};
+
 #[component]
 pub fn JsonPlanEditor(
     plan: Signal<ConstructionPlan>,
@@ -9,6 +11,7 @@ pub fn JsonPlanEditor(
     let mut json_text = use_signal(|| serialize_plan(&plan.read()));
     let mut error = use_signal(|| String::new());
     let mut copied = use_signal(|| false);
+    let t = i18n::use_t();
 
     use_effect(move || {
         json_text.set(serialize_plan(&plan.read()));
@@ -17,7 +20,7 @@ pub fn JsonPlanEditor(
     rsx! {
         div { class: "flex-1 flex flex-col min-h-0 gap-3",
             div { class: "flex items-center gap-2 shrink-0",
-                span { class: "text-xs text-neutral-400", "Edit the plan JSON below." }
+                span { class: "text-xs text-neutral-400", "{t.t(Text::EditPlanJson)}" }
                 button {
                     class: if disabled { "px-2 py-1 text-xs rounded bg-neutral-700 text-neutral-500 cursor-not-allowed" } else { "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-sm" },
                     disabled,
@@ -28,7 +31,7 @@ pub fn JsonPlanEditor(
                             copied.set(true);
                         }
                     },
-                    if *copied.read() { "Copied!" } else { "Copy" }
+                    if *copied.read() { "{t.t(Text::Copied)}" } else { "{t.t(Text::Copy)}" }
                 }
             }
             textarea {
@@ -46,7 +49,7 @@ pub fn JsonPlanEditor(
                                 error.set(String::new());
                             }
                             Err(err) => {
-                                error.set(format!("Invalid JSON: {err}"));
+                                error.set(format!("{}{err}", t.t(Text::InvalidJson)));
                             }
                         }
                     }

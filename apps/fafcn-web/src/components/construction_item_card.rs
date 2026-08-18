@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use faf_blueprints::{ConstructionAction, ConstructionPlan, UnitBlueprint};
 
 use crate::components::{AssignmentTarget, UnitBlock, UnitSummary};
+use crate::i18n::{self, Text};
 
 #[component]
 pub fn ConstructionItemCard(
@@ -78,11 +79,12 @@ pub fn ConstructionItemCard(
     let target_summary = Some(UnitSummary::from_blueprint(item.target()));
     let builder_count = item.builders().len() as u32;
     let target_count = group_size as u32;
+    let t = i18n::use_t();
 
     rsx! {
         div { class: "w-full p-2 rounded-lg bg-neutral-800/50 border border-neutral-700 text-sm",
             div { class: "flex items-center justify-between mb-1.5",
-                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "Queue Item #{display_index}" }
+                span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{t.t(Text::QueueItemPrefix)}{display_index}" }
                 button {
                     class: if disabled { "px-2 py-0.5 rounded bg-red-900/20 text-red-300/50 text-xs cursor-not-allowed" } else { "px-2 py-0.5 rounded bg-red-900/40 hover:bg-red-900/60 text-red-300 text-xs transition-colors" },
                     disabled,
@@ -92,19 +94,19 @@ pub fn ConstructionItemCard(
             }
             div { class: "flex flex-col gap-1.5",
                 UnitBlock {
-                    label: "Builder".to_string(),
+                    label: t.t(Text::Builder).to_string(),
                     unit: builder_summary,
                     count: builder_count,
-                    hint: "Requires build power".to_string(),
+                    hint: t.t(Text::HintBuildPower).to_string(),
                     disabled,
                     on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingBuilder { start: start_index as u32, end: end_index as u32 }),
                     on_count: adjust_builders,
                 }
                 UnitBlock {
-                    label: "Target".to_string(),
+                    label: t.t(Text::Target).to_string(),
                     unit: target_summary,
                     count: target_count,
-                    hint: "Drop any unit".to_string(),
+                    hint: t.t(Text::HintDropAny).to_string(),
                     disabled,
                     on_click: move |_| on_assign_slot.call(AssignmentTarget::ExistingTarget { start: start_index as u32, end: end_index as u32 }),
                     on_count: adjust_targets,

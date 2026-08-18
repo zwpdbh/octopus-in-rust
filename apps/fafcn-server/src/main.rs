@@ -7,6 +7,8 @@
 //! - `GET /api/portraits/:id` — unit portrait image.
 //! - `GET /ws/simulate` — WebSocket to run a simulation and stream events.
 //! - `POST /api/ask` — ask the FAF Q&A agent.
+//! - `GET /api/gamedata/manifest.json` / `GET /api/gamedata/files/*` — gamedata mirror.
+//! - `POST /api/gamedata/upload/*` — token-gated gamedata upload.
 
 mod config;
 mod env;
@@ -84,14 +86,19 @@ async fn main() -> Result<()> {
         portraits_dir: Arc::new(server_config.portraits_dir),
         assets_dir: Arc::new(server_config.assets_dir.clone()),
         qa_config,
+        gamedata: Arc::new(crate::handlers::gamedata::GamedataStore::new(
+            server_config.gamedata_dir.clone(),
+            server_config.gamedata_upload_token.clone(),
+        )?),
+        gamedata_client_dir: Arc::new(server_config.gamedata_client_dir.clone()),
     };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([header::CONTENT_TYPE]);
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
-    let app = routes::router()
+    let app = routes::router(&server_config.gamedata_dir)
         .fallback_service(
             ServeDir::new(state.assets_dir.as_ref())
                 .fallback(ServeFile::new(state.assets_dir.join("index.html"))),

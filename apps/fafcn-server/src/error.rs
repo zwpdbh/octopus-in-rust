@@ -25,6 +25,18 @@ pub enum Error {
     /// Agent (Q&A) turn failed.
     Agent(agent_core::BrainError),
 
+    /// Missing or invalid upload credential.
+    Unauthorized,
+
+    /// Client sent an invalid request.
+    BadRequest(String),
+
+    /// Request conflicts with current server state.
+    Conflict(String),
+
+    /// Feature is not configured on this server.
+    Unavailable(String),
+
     /// Catch-all for unexpected internal failures.
     Internal(String),
 }
@@ -37,6 +49,10 @@ impl fmt::Display for Error {
             Error::Io(err) => write!(f, "io error: {err}"),
             Error::Blueprint(err) => write!(f, "{err}"),
             Error::Agent(err) => write!(f, "{err}"),
+            Error::Unauthorized => write!(f, "unauthorized"),
+            Error::BadRequest(msg) => write!(f, "bad request: {msg}"),
+            Error::Conflict(msg) => write!(f, "conflict: {msg}"),
+            Error::Unavailable(msg) => write!(f, "unavailable: {msg}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -92,6 +108,18 @@ impl IntoResponse for Error {
             Error::Agent(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")).into_response()
             }
+            Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+            Error::BadRequest(msg) => {
+                (StatusCode::BAD_REQUEST, format!("bad request: {msg}")).into_response()
+            }
+            Error::Conflict(msg) => {
+                (StatusCode::CONFLICT, format!("conflict: {msg}")).into_response()
+            }
+            Error::Unavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("unavailable: {msg}"),
+            )
+                .into_response(),
             Error::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("internal error: {msg}"),

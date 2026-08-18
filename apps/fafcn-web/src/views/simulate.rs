@@ -8,6 +8,7 @@ use crate::components::{
     JsonPlanEditor, QueueItemCreator, QueueItemList, SimulationControls, SimulationStatus,
     UnitSelectorModal, UnitSummary,
 };
+use crate::i18n::{self, Text};
 use crate::state::{load_plan_from_storage, save_plan_to_storage};
 
 const DEFAULT_PLAN: &str = r#"{
@@ -31,7 +32,7 @@ fn default_plan() -> ConstructionPlan {
 #[component]
 pub fn Simulate() -> Element {
     let units = use_resource(move || async move {
-        Request::get("http://localhost:3000/api/units")
+        Request::get(&crate::net::api_url("/api/units"))
             .send()
             .await
             .map_err(|e| e.to_string())?
@@ -54,6 +55,7 @@ pub fn Simulate() -> Element {
     let mut status_msg = use_signal(|| String::new());
     let mut sim_time = use_signal(|| 0.0_f64);
     let mut connection = use_sim_connection();
+    let t = i18n::use_t();
 
     // Persist plan changes to localStorage.
     use_effect(move || {
@@ -73,14 +75,14 @@ pub fn Simulate() -> Element {
         Some(Err(err)) => {
             return rsx! {
                 div { class: "flex items-center justify-center h-full text-red-400",
-                    "Failed to load units: {err}"
+                    "{t.t(Text::LoadUnitsFailed)}{err}"
                 }
             };
         }
         None => {
             return rsx! {
                 div { class: "flex items-center justify-center h-full text-neutral-400",
-                    "Loading units..."
+                    "{t.t(Text::Loading)}"
                 }
             };
         }
@@ -258,10 +260,10 @@ pub fn Simulate() -> Element {
                 div { class: "flex-1 overflow-hidden flex flex-col",
                     div { class: "flex-1 overflow-hidden flex flex-col p-4 border-b border-neutral-800 bg-neutral-900/30",
                         div { class: "flex items-center gap-2 mb-3 shrink-0",
-                            h3 { class: "text-sm font-semibold text-white", "Construction Plan" }
+                            h3 { class: "text-sm font-semibold text-white", "{t.t(Text::ConstructionPlan)}" }
                             button {
                                 class: "px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors font-mono shadow-sm",
-                                title: if *show_json_editor.read() { "Show cards" } else { "Show JSON" },
+                                title: if *show_json_editor.read() { t.t(Text::ShowCards) } else { t.t(Text::ShowJson) },
                                 onclick: move |_| show_json_editor.set(!show_json_editor()),
                                 if *show_json_editor.read() { "☰" } else { "{{ }}" }
                             }

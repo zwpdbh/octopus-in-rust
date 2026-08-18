@@ -29,6 +29,8 @@ members = [
     "apps/breakout",
     "crates/faf-sim-service",
     "crates/faf-sim-protocol", "apps/fafcn-web",
+    "crates/fafcn-gamedata",
+    "apps/fafcn-sync",
 ]
 resolver = "3"
 
@@ -41,6 +43,7 @@ faf-sim-protocol = { path = "crates/faf-sim-protocol" }
 faf-game-engine = { path = "crates/faf-game-engine" }
 faf-units = { path = "crates/faf-units" }
 faf-sim-service = { path = "crates/faf-sim-service" }
+fafcn-gamedata = { path = "crates/fafcn-gamedata" }
 llm-provider = { path = "crates/llm-provider" }
 agent-core = { path = "crates/agent-core" }
 qqbot-config = { path = "crates/qqbot-config" }

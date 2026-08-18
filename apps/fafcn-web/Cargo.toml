@@ -9,6 +9,7 @@ dioxus = { workspace = true, features = ["web", "router"] }
 faf-blueprints = { workspace = true }
 faf-dioxus-ui = { workspace = true }
 faf-sim-protocol = { workspace = true }
+fafcn-gamedata = { workspace = true }
 gloo-net = { workspace = true }
 js-sys = "0.3"
 serde = { workspace = true }

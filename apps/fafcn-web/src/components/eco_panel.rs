@@ -3,6 +3,8 @@ use faf_blueprints::{ConstructionPlan, PlayerEcoMetrics};
 
 use faf_dioxus_ui::SliderField;
 
+use crate::i18n::{self, Text};
+
 #[component]
 pub fn EcoPanel(
     plan: Signal<ConstructionPlan>,
@@ -16,11 +18,13 @@ pub fn EcoPanel(
         });
     }
 
+    let t = i18n::use_t();
+
     rsx! {
         div { class: "flex flex-col gap-3 min-w-[260px] p-3 rounded-lg border border-neutral-700 bg-neutral-900/80",
-            h3 { class: "text-sm font-semibold text-white", "Eco Settings" }
+            h3 { class: "text-sm font-semibold text-white", "{t.t(Text::EcoSettings)}" }
             SliderField {
-                label: "Mass production".to_string(),
+                label: t.t(Text::MassProduction).to_string(),
                 value: plan.read().player_eco().mass_generate_rate,
                 min: 1.0,
                 max: 200.0,
@@ -29,7 +33,7 @@ pub fn EcoPanel(
                 on_change: move |v: f64| update(plan, |eco| eco.mass_generate_rate = v.clamp(1.0, 200.0)),
             }
             SliderField {
-                label: "Energy production".to_string(),
+                label: t.t(Text::EnergyProduction).to_string(),
                 value: plan.read().player_eco().energy_generate_rate,
                 min: 20.0,
                 max: 2000.0,
@@ -38,7 +42,7 @@ pub fn EcoPanel(
                 on_change: move |v: f64| update(plan, |eco| eco.energy_generate_rate = v.clamp(20.0, 2000.0)),
             }
             SliderField {
-                label: "Mass storage".to_string(),
+                label: t.t(Text::MassStorage).to_string(),
                 value: plan.read().player_eco().mass_in_storage,
                 min: 0.0,
                 max: 10000.0,
@@ -50,7 +54,7 @@ pub fn EcoPanel(
                 }),
             }
             SliderField {
-                label: "Energy storage".to_string(),
+                label: t.t(Text::EnergyStorage).to_string(),
                 value: plan.read().player_eco().energy_in_storage,
                 min: 0.0,
                 max: 50000.0,

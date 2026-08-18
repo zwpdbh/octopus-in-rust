@@ -1,0 +1,27 @@
+[package]
+name = "fafcn-sync"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "CLI client to sync FAF gamedata patch files from a fafcn-server mirror."
+license = "MIT"
+
+[[bin]]
+name = "fafcn-sync"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+fafcn-gamedata = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+rfd = "0.17"
+serde = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+toml = { workspace = true }
+walkdir = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

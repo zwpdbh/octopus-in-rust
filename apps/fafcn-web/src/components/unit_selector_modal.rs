@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::components::{UnitSelector, UnitSummary};
+use crate::i18n::{self, Text};
 
 /// What slot the user is picking a unit for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub fn UnitSelectorModal(
     on_select: EventHandler<UnitSummary>,
     on_close: EventHandler<()>,
 ) -> Element {
+    let t = i18n::use_t();
     if !open {
         return rsx! {};
     }
@@ -51,7 +53,7 @@ pub fn UnitSelectorModal(
             div { class: "w-[900px] h-[80vh] bg-neutral-900 rounded-lg border border-neutral-700 shadow-2xl overflow-hidden flex flex-col",
                 onclick: move |e| e.stop_propagation(),
                 div { class: "flex items-center justify-between px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0",
-                    h3 { class: "text-sm font-semibold text-white", "Select Unit" }
+                    h3 { class: "text-sm font-semibold text-white", "{t.t(Text::SelectUnit)}" }
                     button {
                         class: "px-2 py-1 text-lg leading-none text-neutral-400 hover:text-white transition-colors",
                         onclick: move |_| on_close.call(()),

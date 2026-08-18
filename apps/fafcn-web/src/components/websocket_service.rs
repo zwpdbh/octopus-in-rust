@@ -22,8 +22,7 @@ impl SimConnection {
         on_event: impl FnMut(SimEvent) + 'static,
         on_status: impl FnMut(String) + 'static,
     ) -> Result<Self, JsValue> {
-        // Hardcoded for local development against fafcn-server.
-        let url = "ws://localhost:3000/ws/simulate";
+        let url = crate::net::ws_url("/ws/simulate");
 
         let ws = WebSocket::new(&url)?;
 

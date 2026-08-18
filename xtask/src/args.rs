@@ -68,10 +68,16 @@ pub fn print_fafcn_help() {
         "             The server writes logs to data/logs/fafcn-server.log and prints them to the console"
     );
     println!("  frontend   Start the Dioxus dev server (dx serve --platform web)");
+    println!("  file-sync  Cross-compile the fafcn-sync CLI for Windows and install");
+    println!("             it under data/faf-gamedata/client/ so the /sync download");
+    println!("             link serves players a real Windows binary");
+    println!("             Options: --debug  Debug profile (release is the default;");
+    println!("                      debug builds keep a console window on Windows)");
     println!();
     println!("Examples:");
     println!("  cargo xtask fafcn backend");
     println!("  cargo xtask fafcn frontend");
+    println!("  cargo xtask fafcn file-sync");
 }
 
 pub fn print_faf_sim_help() {

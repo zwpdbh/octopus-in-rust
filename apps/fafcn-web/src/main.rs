@@ -6,11 +6,13 @@
 use dioxus::prelude::*;
 
 mod components;
+mod i18n;
+mod net;
 mod state;
 mod utils;
 mod views;
 
-use views::{Home, Navbar, Qa, Simulate};
+use views::{Home, Navbar, Qa, Simulate, Sync};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -22,6 +24,8 @@ enum Route {
         Simulate {},
         #[route("/qa")]
         Qa {},
+        #[route("/sync")]
+        Sync {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -33,6 +37,7 @@ fn main() {
 
 #[component]
 fn App() -> Element {
+    i18n::use_provide_lang();
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }

@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use faf_dioxus_ui::CountSlider;
 
 use crate::components::UnitSummary;
+use crate::i18n::{self, Text};
 
 /// A builder or target slot with portrait, name, count slider, and hint.
 #[component]
@@ -21,6 +22,10 @@ pub fn UnitBlock(
         "w-12 h-12 p-1 rounded bg-black border border-neutral-600 flex items-center justify-center transition-colors hover:border-neutral-400 self-center"
     };
 
+    let portrait_src = unit.as_ref().map(|u| crate::net::portrait_url(&u.id));
+    let t = i18n::use_t();
+    let select_hint = t.t(Text::ClickToSelectUnit);
+
     rsx! {
         div { class: "flex flex-col gap-1.5 p-1.5 rounded bg-neutral-800/50 border border-neutral-700",
             span { class: "text-[10px] uppercase tracking-wide text-neutral-500", "{label}" }
@@ -32,10 +37,10 @@ pub fn UnitBlock(
                         on_click.call(());
                     }
                 },
-                title: "Click to select a unit",
+                title: "{select_hint}",
                 if let Some(ref u) = unit {
                     img {
-                        src: "http://localhost:3000/api/portraits/{u.id.to_ascii_uppercase()}",
+                        src: portrait_src.clone().unwrap_or_default(),
                         alt: "{u.name}",
                         class: "w-full h-full object-contain",
                     }

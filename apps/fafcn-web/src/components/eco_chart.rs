@@ -45,63 +45,73 @@ pub fn mass_scaling_active(s: &EcoSnapshot) -> bool {
 const ONE: fn(&EcoSnapshot) -> f64 = |_s: &EcoSnapshot| 1.0;
 
 use crate::components::SnapshotDetails;
+use crate::i18n::{self, Text};
 
 #[component]
 pub fn EcoChart(data: Signal<Vec<EcoSnapshot>>, latest: Option<EcoSnapshot>) -> Element {
+    let t = i18n::use_t();
     let tabs = vec![
         ChartTab {
-            label: "Energy budget".to_string(),
+            label: t.t(Text::EnergyBudget).to_string(),
             series: vec![
                 ChartSeries::new(
-                    "Income",
+                    t.t(Text::Income),
                     RGBColor(34, 197, 94),
                     ChartMetric::new(|s: &EcoSnapshot| s.production_per_second_energy),
                 ),
                 ChartSeries::new(
-                    "Maintenance",
+                    t.t(Text::Maintenance),
                     RGBColor(234, 179, 8),
                     ChartMetric::new(|s: &EcoSnapshot| s.maintenance_consumption_per_second_energy),
                 ),
                 ChartSeries::new(
-                    "Available",
+                    t.t(Text::Available),
                     RGBColor(59, 130, 246),
                     ChartMetric::new(energy_available),
                 ),
                 ChartSeries::new(
-                    "Drain",
+                    t.t(Text::Drain),
                     RGBColor(239, 68, 68),
                     ChartMetric::new(|s: &EcoSnapshot| s.energy_drain),
                 ),
-                ChartSeries::new("Net", RGBColor(168, 85, 247), ChartMetric::new(energy_net)),
+                ChartSeries::new(
+                    t.t(Text::Net),
+                    RGBColor(168, 85, 247),
+                    ChartMetric::new(energy_net),
+                ),
             ],
         },
         ChartTab {
-            label: "Mass budget".to_string(),
+            label: t.t(Text::MassBudget).to_string(),
             series: vec![
                 ChartSeries::new(
-                    "Gross income",
+                    t.t(Text::GrossIncome),
                     RGBColor(156, 163, 175),
                     ChartMetric::new(|s: &EcoSnapshot| s.production_per_second_mass),
                 )
                 .with_dash([4.0, 4.0]),
                 ChartSeries::new(
-                    "Scaled income",
+                    t.t(Text::ScaledIncome),
                     RGBColor(59, 130, 246),
                     ChartMetric::new(scaled_mass_income),
                 ),
                 ChartSeries::new(
-                    "Drain",
+                    t.t(Text::Drain),
                     RGBColor(239, 68, 68),
                     ChartMetric::new(|s: &EcoSnapshot| s.mass_drain),
                 ),
-                ChartSeries::new("Net", RGBColor(34, 197, 94), ChartMetric::new(mass_net)),
+                ChartSeries::new(
+                    t.t(Text::Net),
+                    RGBColor(34, 197, 94),
+                    ChartMetric::new(mass_net),
+                ),
             ],
         },
         ChartTab {
-            label: "Efficiency".to_string(),
+            label: t.t(Text::Efficiency).to_string(),
             series: vec![
                 ChartSeries::new(
-                    "Energy efficiency",
+                    t.t(Text::Efficiency),
                     RGBColor(59, 130, 246),
                     ChartMetric::new(energy_efficiency),
                 ),
@@ -110,35 +120,35 @@ pub fn EcoChart(data: Signal<Vec<EcoSnapshot>>, latest: Option<EcoSnapshot>) -> 
             ],
         },
         ChartTab {
-            label: "Mass storage".to_string(),
+            label: t.t(Text::MassStorage).to_string(),
             series: vec![
                 ChartSeries::new(
-                    "Current",
+                    t.t(Text::Current),
                     RGBColor(99, 102, 241),
                     ChartMetric::new(|s: &EcoSnapshot| s.mass_storage),
                 ),
                 ChartSeries::new(
-                    "Cap",
+                    t.t(Text::Cap),
                     RGBColor(168, 85, 247),
                     ChartMetric::new(|s: &EcoSnapshot| s.mass_storage_cap),
                 ),
             ],
         },
         ChartTab {
-            label: "Energy storage".to_string(),
+            label: t.t(Text::EnergyStorage).to_string(),
             series: vec![
                 ChartSeries::new(
-                    "Current",
+                    t.t(Text::Current),
                     RGBColor(14, 165, 233),
                     ChartMetric::new(|s: &EcoSnapshot| s.energy_storage),
                 ),
                 ChartSeries::new(
-                    "Cap",
+                    t.t(Text::Cap),
                     RGBColor(236, 72, 153),
                     ChartMetric::new(|s: &EcoSnapshot| s.energy_storage_cap),
                 ),
                 ChartSeries::new(
-                    "Maintenance threshold",
+                    t.t(Text::MaintenanceThreshold),
                     RGBColor(249, 115, 22),
                     ChartMetric::new(|s: &EcoSnapshot| s.maintenance_consumption_per_second_energy),
                 )
@@ -146,17 +156,17 @@ pub fn EcoChart(data: Signal<Vec<EcoSnapshot>>, latest: Option<EcoSnapshot>) -> 
             ],
         },
         ChartTab {
-            label: "Mass spent".to_string(),
+            label: t.t(Text::MassSpent).to_string(),
             series: vec![ChartSeries::new(
-                "Total mass spent",
+                t.t(Text::TotalMassSpent),
                 RGBColor(34, 197, 94),
                 ChartMetric::new(|s: &EcoSnapshot| s.total_mass_spent),
             )],
         },
         ChartTab {
-            label: "Energy spent".to_string(),
+            label: t.t(Text::EnergySpent).to_string(),
             series: vec![ChartSeries::new(
-                "Total energy spent",
+                t.t(Text::TotalEnergySpent),
                 RGBColor(249, 115, 22),
                 ChartMetric::new(|s: &EcoSnapshot| s.total_energy_spent),
             )],

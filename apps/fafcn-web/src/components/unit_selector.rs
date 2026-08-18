@@ -3,6 +3,7 @@ use faf_blueprints::TechLevel;
 use std::collections::HashSet;
 
 use crate::components::{UnitIcon, UnitSummary};
+use crate::i18n::{self, Text};
 use crate::utils::{tech_level_short, CATEGORY_ORDER, FACTION_ORDER};
 
 /// Reusable unit picker with search, faction/kind/tech filters, and category grid.
@@ -12,6 +13,7 @@ pub fn UnitSelector(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary
     let active_factions = use_signal(HashSet::<String>::new);
     let active_kinds = use_signal(HashSet::<String>::new);
     let active_techs = use_signal(HashSet::<String>::new);
+    let t = i18n::use_t();
 
     let filtered: Vec<UnitSummary> = units
         .into_iter()
@@ -40,7 +42,7 @@ pub fn UnitSelector(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary
                 input {
                     class: "flex-1 min-w-[12rem] max-w-sm px-3 py-1.5 bg-neutral-800 border border-neutral-700 rounded text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-blue-500",
                     r#type: "text",
-                    placeholder: "Search units...",
+                    placeholder: t.t(Text::SearchUnits),
                     value: "{query.read()}",
                     oninput: move |e| query.set(e.value()),
                 }
@@ -142,6 +144,7 @@ fn FilterButton(
 
 #[component]
 fn CategoryGrid(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary>) -> Element {
+    let t = i18n::use_t();
     let mut by_category: std::collections::HashMap<String, Vec<UnitSummary>> =
         std::collections::HashMap::new();
     for unit in units {
@@ -160,12 +163,12 @@ fn CategoryGrid(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary>) -
     rsx! {
         div { class: "flex flex-wrap gap-4 items-start content-start",
             if ordered.is_empty() {
-                div { class: "text-neutral-500 text-sm text-center py-8 w-full", "No units match the current filters." }
+                div { class: "text-neutral-500 text-sm text-center py-8 w-full", "{t.t(Text::NoUnitsMatch)}" }
             }
             for (category, units) in ordered {
                 CategoryPanel {
                     key: "{category}",
-                    category,
+                    category: i18n::translate_category(&category, t.0),
                     units,
                     on_select,
                 }
