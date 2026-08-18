@@ -109,21 +109,6 @@ pub fn translate_category(category: &str, lang: Lang) -> String {
     .to_string()
 }
 
-/// Translate a server-provided unit kind badge.
-pub fn translate_kind(kind: &str, lang: Lang) -> String {
-    if lang == Lang::En {
-        return kind.to_string();
-    }
-    match kind {
-        "Base" => "基地",
-        "Land" => "陆军",
-        "Air" => "空军",
-        "Naval" => "海军",
-        other => return other.to_string(),
-    }
-    .to_string()
-}
-
 /// Every translatable UI string, grouped by area.
 ///
 /// Adding a variant without both translations is a compile error — that is
@@ -141,6 +126,18 @@ pub enum Text {
     HomeTitle,
     HomeSubtitle,
 
+    // Unit comparison panel.
+    CompareTitle,
+    CompareEmpty,
+    CompareClear,
+    CompareRemove,
+    CompareQuickStats,
+    CompareTotalMass,
+    CompareTotalEnergy,
+    MassShort,
+    EnergyShort,
+    BuildTimeShort,
+
     // Common.
     Loading,
     Save,
@@ -156,13 +153,11 @@ pub enum Text {
     SearchUnits,
     NoUnitsMatch,
     SelectUnit,
-    SelectUnitDetail,
     ClickToSelectUnit,
     LoadUnitsFailed,
     MassCost,
     EnergyCost,
     BuildTime,
-    BuildPower,
 
     // Simulate: eco panel + stats.
     EcoSettings,
@@ -281,6 +276,30 @@ impl Text {
                 "为 FAF 中文玩家提供的工具:单位对比、建造模拟、问答,以及 gamedata 补丁镜像。请从上方导航栏选择功能。"
             }
 
+            // Unit comparison panel.
+            (Text::CompareTitle, Lang::En) => "Unit comparison",
+            (Text::CompareTitle, Lang::Zh) => "单位对比",
+            (Text::CompareEmpty, Lang::En) => {
+                "Click units on the left to compare them (multi-select supported)."
+            }
+            (Text::CompareEmpty, Lang::Zh) => "点击左侧单位进行对比(可多选)。",
+            (Text::CompareClear, Lang::En) => "Clear",
+            (Text::CompareClear, Lang::Zh) => "清空",
+            (Text::CompareRemove, Lang::En) => "Remove",
+            (Text::CompareRemove, Lang::Zh) => "移除",
+            (Text::CompareQuickStats, Lang::En) => "Quick stats",
+            (Text::CompareQuickStats, Lang::Zh) => "合计",
+            (Text::CompareTotalMass, Lang::En) => "Total mass",
+            (Text::CompareTotalMass, Lang::Zh) => "总质量",
+            (Text::CompareTotalEnergy, Lang::En) => "Total energy",
+            (Text::CompareTotalEnergy, Lang::Zh) => "总能量",
+            (Text::MassShort, Lang::En) => "M",
+            (Text::MassShort, Lang::Zh) => "质量",
+            (Text::EnergyShort, Lang::En) => "E",
+            (Text::EnergyShort, Lang::Zh) => "能量",
+            (Text::BuildTimeShort, Lang::En) => "BT",
+            (Text::BuildTimeShort, Lang::Zh) => "时间",
+
             // Common.
             (Text::Loading, Lang::En) => "Loading...",
             (Text::Loading, Lang::Zh) => "正在加载…",
@@ -308,8 +327,6 @@ impl Text {
             (Text::NoUnitsMatch, Lang::Zh) => "没有符合筛选条件的单位。",
             (Text::SelectUnit, Lang::En) => "Select Unit",
             (Text::SelectUnit, Lang::Zh) => "选择单位",
-            (Text::SelectUnitDetail, Lang::En) => "Select a unit to view details.",
-            (Text::SelectUnitDetail, Lang::Zh) => "选择一个单位查看详情。",
             (Text::ClickToSelectUnit, Lang::En) => "Click to select a unit",
             (Text::ClickToSelectUnit, Lang::Zh) => "点击选择单位",
             (Text::LoadUnitsFailed, Lang::En) => "Failed to load units: ",
@@ -320,8 +337,6 @@ impl Text {
             (Text::EnergyCost, Lang::Zh) => "能量",
             (Text::BuildTime, Lang::En) => "Build Time",
             (Text::BuildTime, Lang::Zh) => "建造时间",
-            (Text::BuildPower, Lang::En) => "Build Power",
-            (Text::BuildPower, Lang::Zh) => "建造力",
 
             // Simulate: eco panel + stats.
             (Text::EcoSettings, Lang::En) => "Eco Settings",
