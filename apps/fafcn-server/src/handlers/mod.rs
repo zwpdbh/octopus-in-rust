@@ -1,5 +1,6 @@
 //! HTTP and WebSocket request handlers grouped by feature.
 
+pub mod gamedata;
 pub mod portraits;
 pub mod qa;
 pub mod simulate;

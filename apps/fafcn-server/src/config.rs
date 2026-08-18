@@ -22,6 +22,15 @@ pub struct ServerConfig {
 
     /// Directory containing unit portrait PNGs.
     pub portraits_dir: PathBuf,
+
+    /// Root directory of the gamedata mirror (manifest, files, incoming).
+    pub gamedata_dir: PathBuf,
+
+    /// Directory containing downloadable sync client binaries.
+    pub gamedata_client_dir: PathBuf,
+
+    /// Bearer token required for gamedata uploads; `None` disables upload.
+    pub gamedata_upload_token: Option<String>,
 }
 
 impl ServerConfig {
@@ -31,8 +40,15 @@ impl ServerConfig {
     /// - `FAFCN_PORT` — bind port (default: `3000`).
     /// - `FAFCN_WEB_DIST` — built web assets directory.
     /// - `FAFCN_PORTRAITS_DIR` — unit portraits directory.
+    /// - `FAFCN_GAMEDATA_DIR` — gamedata mirror root (default: `data/faf-gamedata`).
+    /// - `FAFCN_GAMEDATA_CLIENT_DIR` — sync client binaries (default: `<gamedata>/client`).
+    /// - `FAFCN_GAMEDATA_UPLOAD_TOKEN` — bearer token for uploads (optional).
     pub fn from_env() -> crate::Result<Self> {
         let root = workspace_root();
+        let gamedata_dir =
+            crate::env::path_or("FAFCN_GAMEDATA_DIR", root.join("data/faf-gamedata"));
+        let gamedata_client_dir =
+            crate::env::path_or("FAFCN_GAMEDATA_CLIENT_DIR", gamedata_dir.join("client"));
         Ok(Self {
             port: crate::env::var_or("FAFCN_PORT", "3000").parse()?,
             assets_dir: crate::env::path_or(
@@ -43,6 +59,9 @@ impl ServerConfig {
                 "FAFCN_PORTRAITS_DIR",
                 root.join("assets/icons/units"),
             ),
+            gamedata_dir,
+            gamedata_client_dir,
+            gamedata_upload_token: crate::env::var("FAFCN_GAMEDATA_UPLOAD_TOKEN"),
         })
     }
 }

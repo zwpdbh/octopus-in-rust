@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use faf_blueprints::{ConstructionAction, ConstructionPlan};
 
 use crate::components::{AssignmentTarget, ConstructionItemCard};
+use crate::i18n::{self, Text};
 
 /// Group consecutive identical construction actions into half-open index ranges.
 fn group_identical_actions(queue: &[ConstructionAction]) -> Vec<(usize, usize)> {
@@ -29,10 +30,11 @@ pub fn QueueItemList(
 ) -> Element {
     let items = plan.read().building_queue().to_vec();
     let groups = group_identical_actions(&items);
+    let t = i18n::use_t();
     rsx! {
         div { class: "flex-1 min-h-0 overflow-auto pr-1",
             if items.is_empty() {
-                div { class: "text-neutral-500 text-sm text-center py-8", "No items in the queue yet. Use the New Item panel on the left to add one." }
+                div { class: "text-neutral-500 text-sm text-center py-8", "{t.t(Text::EmptyQueue)}" }
             }
             div { class: "grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 content-start",
                 for (start , end) in groups {

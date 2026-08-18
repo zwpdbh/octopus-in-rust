@@ -1,37 +1,45 @@
 use dioxus::prelude::*;
 use faf_sim_protocol::EcoSnapshot;
 
+use crate::i18n::{self, Text};
+
 #[component]
 pub fn EcoStats(eco: Signal<Option<EcoSnapshot>>) -> Element {
+    let t = i18n::use_t();
+    let (mass_income, mass_drain, mass_storage, energy_income, energy_drain, energy_storage) = (
+        t.t(Text::MassIncome),
+        t.t(Text::MassDrain),
+        t.t(Text::MassStorage),
+        t.t(Text::EnergyIncome),
+        t.t(Text::EnergyDrain),
+        t.t(Text::EnergyStorage),
+    );
     let stats: Vec<(&str, String)> = eco.read().as_ref().map_or_else(
         || {
             vec![
-                ("Mass Income", "—".to_string()),
-                ("Mass Drain", "—".to_string()),
-                ("Mass Storage", "—".to_string()),
-                ("Energy Income", "—".to_string()),
-                ("Energy Drain", "—".to_string()),
-                ("Energy Storage", "—".to_string()),
+                (mass_income, "—".to_string()),
+                (mass_drain, "—".to_string()),
+                (mass_storage, "—".to_string()),
+                (energy_income, "—".to_string()),
+                (energy_drain, "—".to_string()),
+                (energy_storage, "—".to_string()),
             ]
         },
         |s| {
             vec![
+                (mass_income, format!("{:.1}", s.production_per_second_mass)),
+                (mass_drain, format!("{:.1}", s.mass_drain)),
                 (
-                    "Mass Income",
-                    format!("{:.1}", s.production_per_second_mass),
-                ),
-                ("Mass Drain", format!("{:.1}", s.mass_drain)),
-                (
-                    "Mass Storage",
+                    mass_storage,
                     format!("{:.1} / {:.1}", s.mass_storage, s.mass_storage_cap),
                 ),
                 (
-                    "Energy Income",
+                    energy_income,
                     format!("{:.1}", s.production_per_second_energy),
                 ),
-                ("Energy Drain", format!("{:.1}", s.energy_drain)),
+                (energy_drain, format!("{:.1}", s.energy_drain)),
                 (
-                    "Energy Storage",
+                    energy_storage,
                     format!("{:.1} / {:.1}", s.energy_storage, s.energy_storage_cap),
                 ),
             ]

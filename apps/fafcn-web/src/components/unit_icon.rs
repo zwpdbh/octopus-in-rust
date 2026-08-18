@@ -14,6 +14,7 @@ pub fn UnitIcon(
     let id = unit.id.clone();
     let name = unit.name.clone();
     let glow = faction_glow_class(&faction);
+    let portrait_src = crate::net::portrait_url(&id);
     let strategic_src = unit
         .strategic_icon_name
         .as_deref()
@@ -26,7 +27,7 @@ pub fn UnitIcon(
             title: "{name}",
             onclick: move |_| on_select.call(unit.clone()),
             img {
-                src: "http://localhost:3000/api/portraits/{id.to_ascii_uppercase()}",
+                src: "{portrait_src}",
                 alt: "{name}",
                 class: "w-full h-full object-contain block",
             }

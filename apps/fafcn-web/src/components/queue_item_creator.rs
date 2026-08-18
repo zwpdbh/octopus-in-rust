@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::components::{UnitBlock, UnitSummary};
+use crate::i18n::{self, Text};
 
 #[component]
 pub fn QueueItemCreator(
@@ -14,6 +15,7 @@ pub fn QueueItemCreator(
     #[props(default = false)] disabled: bool,
 ) -> Element {
     let save_disabled = disabled || draft_builder.read().is_none() || draft_target.read().is_none();
+    let t = i18n::use_t();
     let clear_class = if disabled {
         "flex-1 px-3 py-1.5 text-sm rounded bg-neutral-800 text-neutral-500 border border-neutral-700 cursor-not-allowed"
     } else {
@@ -22,21 +24,21 @@ pub fn QueueItemCreator(
 
     rsx! {
         div { class: "flex flex-col gap-3",
-            h3 { class: "text-sm font-semibold text-white", "New Item" }
+            h3 { class: "text-sm font-semibold text-white", "{t.t(Text::NewItem)}" }
             UnitBlock {
-                label: "Builder".to_string(),
+                label: t.t(Text::Builder).to_string(),
                 unit: draft_builder.read().clone(),
                 count: *draft_builder_count.read(),
-                hint: "Requires build power".to_string(),
+                hint: t.t(Text::HintBuildPower).to_string(),
                 disabled,
                 on_click: move |_| on_assign_slot.call(crate::components::AssignmentTarget::NewBuilder),
                 on_count: move |v: u32| draft_builder_count.set(v),
             }
             UnitBlock {
-                label: "Target".to_string(),
+                label: t.t(Text::Target).to_string(),
                 unit: draft_target.read().clone(),
                 count: *draft_target_count.read(),
-                hint: "Drop any unit".to_string(),
+                hint: t.t(Text::HintDropAny).to_string(),
                 disabled,
                 on_click: move |_| on_assign_slot.call(crate::components::AssignmentTarget::NewTarget),
                 on_count: move |v: u32| draft_target_count.set(v),
@@ -50,7 +52,7 @@ pub fn QueueItemCreator(
                             on_save.call(());
                         }
                     },
-                    "Save"
+                    "{t.t(Text::Save)}"
                 }
                 button {
                     class: "{clear_class}",
@@ -60,7 +62,7 @@ pub fn QueueItemCreator(
                             on_clear.call(());
                         }
                     },
-                    "Clear"
+                    "{t.t(Text::Clear)}"
                 }
             }
         }

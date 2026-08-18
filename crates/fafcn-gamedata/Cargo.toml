@@ -1,0 +1,14 @@
+[package]
+name = "fafcn-gamedata"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Shared manifest and API types for the FAF gamedata sync service."
+license = "MIT"
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

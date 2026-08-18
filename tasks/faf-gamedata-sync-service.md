@@ -20,7 +20,10 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 - **Server (`apps/fafcn-server`)**: new `/api/gamedata/*` route group:
   - `GET /api/gamedata/manifest.json` — anonymous read of the current manifest.
   - `GET /api/gamedata/files/<path>` — static file download with HTTP range support.
-  - `POST /api/gamedata/upload` — token-authenticated upload (Bearer token from env config); client submits sha256 + size first so the server can skip files it already has.
+  - `GET /api/gamedata/client/<file>` — sync client download; the server patches the binary per request with an embedded config block (`fafcn-gamedata::overlay`: JSON + length + magic appended as PE/ELF overlay data) containing the mirror's own origin (`X-Forwarded-Proto` + `Host`), so the player's client starts with 镜像地址 pre-filled — no manual setup.
+  - `POST /api/gamedata/upload/check` — token-authed; uploader submits the full `{path, size, sha256}` list, server replies which files it still needs (dedup / cheap resume).
+  - `POST /api/gamedata/upload/file` — token-authed; raw body + `x-gamedata-path` / `x-gamedata-sha256` headers; server hash-verifies before storing.
+  - `POST /api/gamedata/upload/commit` — token-authed; server verifies every listed file is present with matching hash, then atomically regenerates the manifest.
   - `GET /api/gamedata/status` — patch version (as declared by the uploader), file count, total size, last-updated, uploader name.
 - **Storage layout** (filesystem, under a configurable `FAFCN_GAMEDATA_DIR`, default `data/faf-gamedata/`):
   ```
@@ -39,12 +42,13 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
     ]
   }
   ```
-- **Sync client (`apps/fafcn-sync`, new small CLI binary, ships as a single downloadable `.exe`)**:
-  - Locate the FAF `gamedata` dir (auto-detect common install paths, `--dir` override, remember in a small config file).
-  - Fetch manifest → hash local files → download missing/mismatched files to a temp dir → verify sha256 → atomic rename into `gamedata`.
+- **Sync client (`apps/fafcn-sync`, ships as a single downloadable `.exe`)**:
+  - **GUI (default, double-click)**: eframe-based, for non-technical players — mirror address field, gamedata folder field with native folder picker + auto-detect (`FAForever\gamedata` containing `.nx2` files), one big sync button, progress bar + log, Chinese/English toggle (Chinese default). Windows release builds are GUI-subsystem (no console window).
+  - **CLI (`fafcn-sync sync`)**: same sync engine for terminal/automation use; on Windows release it re-attaches to the parent console.
+  - Hash-diff against the manifest → download missing/mismatched files to a temp dir → verify sha256 → atomic rename into `gamedata`.
   - Never write in place; never delete local files not in the manifest (report them only).
+  - Remember server + gamedata dir + language in a small config file; server defaults to the value embedded in the downloaded binary (remembered config wins over embedded).
   - Display the server manifest's `patch_version` and `last-updated` so the user can judge freshness themselves; always tell the user how to fall back to the official channel.
-  - Exit code + human-readable summary of what changed.
 - **Web page (`apps/fafcn-web`)**: one new `/sync` page — client download link + server status (patch version, last updated, file count/size, staleness indicator).
 - **Upload helper**: a simple `fafcn-sync upload --token ... --dir ...` subcommand in the same client binary (no separate tool for uploaders).
 
@@ -59,16 +63,16 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 
 ## Acceptance Criteria
 
-- [ ] `GET /api/gamedata/manifest.json` returns a valid manifest; regenerates after every upload.
-- [ ] `GET /api/gamedata/files/<path>` serves files with range support and correct sizes.
-- [ ] Upload without a valid token is rejected (401); upload with token stores files under `files/` via atomic rename and updates the manifest.
-- [ ] `fafcn-sync sync` on a fresh machine downloads all manifest files, verifies hashes, and places them in the target `gamedata` dir.
-- [ ] `fafcn-sync sync` on an up-to-date machine downloads nothing (hash diff is empty).
-- [ ] A corrupted local file is detected by hash and re-downloaded; a failed download never leaves a partial file in `gamedata`.
-- [ ] `/sync` page shows current status and a client download link.
-- [ ] Tests added or updated (manifest generation, hash diff logic, upload auth).
-- [ ] `cargo check --workspace` passes.
-- [ ] `cargo test --workspace` passes.
+- [x] `GET /api/gamedata/manifest.json` returns a valid manifest; regenerates after every upload.
+- [x] `GET /api/gamedata/files/<path>` serves files with range support and correct sizes.
+- [x] Upload without a valid token is rejected (401); upload with token stores files under `files/` via atomic rename and updates the manifest.
+- [x] `fafcn-sync sync` on a fresh machine downloads all manifest files, verifies hashes, and places them in the target `gamedata` dir.
+- [x] `fafcn-sync sync` on an up-to-date machine downloads nothing (hash diff is empty).
+- [x] A corrupted local file is detected by hash and re-downloaded; a failed download never leaves a partial file in `gamedata`.
+- [x] `/sync` page shows current status and a client download link.
+- [x] Tests added or updated (manifest generation, hash diff logic, upload auth).
+- [x] `cargo check --workspace` passes.
+- [x] `cargo test --workspace` passes.
 
 ## Implementation Notes
 
@@ -83,12 +87,14 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 
 ## Completed Steps
 
-- [ ] Shared manifest types crate/module.
-- [ ] Server manifest/files/upload/status endpoints + storage layout.
-- [ ] `fafcn-sync` CLI client (`sync` + `upload` subcommands).
-- [ ] `/sync` page in `fafcn-web`.
-- [ ] `.env.example` / config docs updated.
+- [x] Shared manifest types crate/module (`crates/fafcn-gamedata`).
+- [x] Server manifest/files/upload/status endpoints + storage layout (`apps/fafcn-server/src/handlers/gamedata/`).
+- [x] `fafcn-sync` client (`apps/fafcn-sync`): GUI (eframe, double-click) + CLI (`sync` + `upload` subcommands).
+- [x] `/sync` page in `fafcn-web`.
+- [x] `.env.example` / config docs updated.
+- [x] End-to-end smoke test (local): token auth 401, upload + commit, sync to empty dir byte-identical, no-op re-sync, corrupt file re-downloaded, extra files untouched, dedup re-upload, HTTP 206 range downloads.
 - [ ] End-to-end test on a real FAF install.
+- [x] Windows release build of `fafcn-sync` published under `/api/gamedata/client/` (via `cargo xtask fafcn file-sync`, cross-compiles to `x86_64-pc-windows-gnu`; use `--release` for distribution).
 
 ## Decisions Made
 
@@ -98,5 +104,7 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 | 2026-08-18 | Manifest + sha256 diff sync, whole-file downloads only | At this size delta sync/P2P/chunking are unnecessary complexity; the manifest-diff is what eliminates the "which file do I need" problem. |
 | 2026-08-18 | Single shared upload token instead of user accounts | Friend-group scale; uploaders are trusted because they effectively patch everyone's game. |
 | 2026-08-18 | CLI client first, shipped as single `.exe` | Best effort/UX ratio; Dioxus desktop GUI deferred. |
+| 2026-08-18 | GUI (eframe) is the default client UX; CLI kept as subcommands | Most FAF players are non-technical: double-click → auto-detected folder → one sync button. Dioxus desktop was rejected because wry/WebView2 cannot cross-compile from Linux; eframe (winit+glow) cross-compiles to `x86_64-pc-windows-gnu` cleanly. Windows release uses the GUI subsystem (no console window); CLI mode re-attaches to the parent console. |
+| 2026-08-18 | Mirror address embedded into the client binary per download (PE/ELF overlay) | Non-technical players must never type a URL. Alternatives rejected: zip-with-config (extraction is error-prone for the audience), custom protocol handler (requires registry writes). Appended overlay data is ignored by both loaders; remembered config takes precedence so power users can still switch mirrors. |
 | 2026-08-18 | Never delete local files not in manifest; download-to-temp + atomic rename | Client must never break a working game install. |
 | 2026-08-18 | User upload is the only source of gamedata; no server-side fetching from official channels | The required patch files are not reliably downloadable from FAF's open-source GitHub repos; automated staleness checks are deferred until we investigate how the official client detects new patches (see Implementation Notes; source at `/home/zw/code/faf_related/official_faf_stack/downlords-faf-client`). |
