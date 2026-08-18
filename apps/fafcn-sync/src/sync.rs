@@ -14,8 +14,8 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use fafcn_gamedata::{
     channel_subdir, compare_version_strings, map_generator_jar_version, sha256_bytes, sha256_file,
-    validate_relative_path, FileEntry, Manifest, CHANNELS, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR,
-    MAP_GENERATOR_KEEP,
+    validate_relative_path, FileEntry, Manifest, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR,
+    MAP_GENERATOR_KEEP, SYNC_CHANNELS,
 };
 use walkdir::WalkDir;
 
@@ -162,7 +162,7 @@ pub async fn sync_gamedata(
         extra_files: Vec::new(),
     };
 
-    for channel in CHANNELS {
+    for channel in SYNC_CHANNELS {
         progress(SyncProgress::ChannelStarted {
             channel: channel.to_string(),
         });

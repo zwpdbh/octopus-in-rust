@@ -14,13 +14,21 @@ pub const CHANNEL_GAMEDATA: &str = "gamedata";
 /// Channel id for the map generator jars.
 pub const CHANNEL_MAP_GENERATOR: &str = "map-generator";
 
+/// Channel id for the FAF client installer (mirror-only: players download it
+/// from the web page; it is NOT synced into the FAForever folder).
+pub const CHANNEL_FAF_CLIENT: &str = "faf-client";
+
 /// All known channel ids (rejected at the API boundary otherwise).
-pub const CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR];
+pub const CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_FAF_CLIENT];
+
+/// Channels the sync client syncs into the FAForever folder.
+pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR];
 
 /// The only gamedata files players actually need mirrored.
 pub const GAMEDATA_SYNC_FILES: &[&str] = &["env.nx2", "units.nx2", "textures.nx2"];
 
 /// Subfolder (below the FAForever root) each channel syncs into.
+/// Mirror-only channels (faf-client) return `None`.
 pub fn channel_subdir(channel: &str) -> Option<&'static str> {
     match channel {
         CHANNEL_GAMEDATA => Some("gamedata"),
@@ -34,6 +42,44 @@ pub const MAP_GENERATOR_JAR_PREFIX: &str = "MapGenerator_";
 
 /// How many recent map generator versions to keep (server and client).
 pub const MAP_GENERATOR_KEEP: usize = 3;
+
+/// Extract a dotted version from a file name, e.g. `dfc_windows_1_6_3.exe`
+/// or `downlords-faf-client-1.6.3.exe` → `1.6.3`. Returns the first run of
+/// digits separated by `.`/`_` containing at least two numeric parts.
+pub fn detect_version_from_filename(file_name: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    let mut current = String::new();
+    let flush = |current: &mut String, best: &mut Option<String>| {
+        let parts: Vec<&str> = current
+            .split(['.', '_'])
+            .filter(|p| !p.is_empty())
+            .collect();
+        if parts.len() >= 2 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
+            let candidate = parts.join(".");
+            let better = match (
+                &best,
+                compare_version_strings(&candidate, best.as_deref().unwrap_or("0")),
+            ) {
+                (None, _) => true,
+                (Some(_), Some(std::cmp::Ordering::Greater)) => true,
+                _ => false,
+            };
+            if better {
+                *best = Some(candidate);
+            }
+        }
+        current.clear();
+    };
+    for c in file_name.chars() {
+        if c.is_ascii_digit() || c == '.' || c == '_' {
+            current.push(c);
+        } else {
+            flush(&mut current, &mut best);
+        }
+    }
+    flush(&mut current, &mut best);
+    best
+}
 
 /// Extract the version string from a `MapGenerator_<version>.jar` file name.
 pub fn map_generator_jar_version(file_name: &str) -> Option<String> {
@@ -74,6 +120,23 @@ pub fn compare_version_strings(a: &str, b: &str) -> Option<std::cmp::Ordering> {
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    fn version_from_filename() {
+        assert_eq!(
+            detect_version_from_filename("dfc_windows_1_6_3.exe").as_deref(),
+            Some("1.6.3")
+        );
+        assert_eq!(
+            detect_version_from_filename("downlords-faf-client-1.6.10.exe").as_deref(),
+            Some("1.6.10")
+        );
+        assert_eq!(
+            detect_version_from_filename("MapGenerator_1.22.1.jar").as_deref(),
+            Some("1.22.1")
+        );
+        assert_eq!(detect_version_from_filename("faf-client.exe"), None);
+    }
 
     #[test]
     fn jar_version_parsing() {

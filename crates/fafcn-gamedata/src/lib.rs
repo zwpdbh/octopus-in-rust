@@ -11,8 +11,10 @@ mod overlay;
 mod path;
 
 pub use channels::{
-    channel_subdir, compare_version_strings, map_generator_jar_version, CHANNELS, CHANNEL_GAMEDATA,
+    channel_subdir, compare_version_strings, detect_version_from_filename,
+    map_generator_jar_version, CHANNELS, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA,
     CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP,
+    SYNC_CHANNELS,
 };
 pub use error::{Error, Result};
 pub use hash::{sha256_bytes, sha256_file};

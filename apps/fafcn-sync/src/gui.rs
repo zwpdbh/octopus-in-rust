@@ -156,6 +156,11 @@ enum Txt {
     GeneratorMissing,
     ChannelGamedata,
     ChannelMapGenerator,
+    ChannelFafClient,
+    ClientSectionTitle,
+    UploadClientNow,
+    VersionLabel,
+    FieldClientFile,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -228,6 +233,16 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::ChannelGamedata, GuiLang::En) => "gamedata",
         (Txt::ChannelMapGenerator, GuiLang::Zh) => "地图生成器",
         (Txt::ChannelMapGenerator, GuiLang::En) => "map-generator",
+        (Txt::ChannelFafClient, GuiLang::Zh) => "FAF 客户端",
+        (Txt::ChannelFafClient, GuiLang::En) => "FAF client",
+        (Txt::ClientSectionTitle, GuiLang::Zh) => "FAF 客户端安装包",
+        (Txt::ClientSectionTitle, GuiLang::En) => "FAF client installer",
+        (Txt::UploadClientNow, GuiLang::Zh) => "上传安装包",
+        (Txt::UploadClientNow, GuiLang::En) => "Upload installer",
+        (Txt::VersionLabel, GuiLang::Zh) => "版本",
+        (Txt::VersionLabel, GuiLang::En) => "Version",
+        (Txt::FieldClientFile, GuiLang::Zh) => "安装包文件",
+        (Txt::FieldClientFile, GuiLang::En) => "installer file",
     }
 }
 
@@ -237,6 +252,7 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
 fn channel_name(lang: GuiLang, channel: &str) -> &'static str {
     match channel {
         fafcn_gamedata::CHANNEL_MAP_GENERATOR => tr(lang, Txt::ChannelMapGenerator),
+        fafcn_gamedata::CHANNEL_FAF_CLIENT => tr(lang, Txt::ChannelFafClient),
         _ => tr(lang, Txt::ChannelGamedata),
     }
 }
@@ -412,6 +428,9 @@ struct SyncApp {
     token: String,
     patch_version: String,
     uploader: String,
+    // Installer-upload fields (faf-client channel).
+    client_file: String,
+    client_version: String,
     // Patch version auto-detected from lua.nx2 (recomputed when dir changes).
     detected_version: Option<String>,
     detected_generator: Option<String>,
@@ -447,6 +466,8 @@ impl SyncApp {
             token: cfg.upload_token.unwrap_or_default(),
             patch_version: String::new(),
             uploader: cfg.uploader.unwrap_or_default(),
+            client_file: String::new(),
+            client_version: String::new(),
             detected_version: None,
             detected_generator: None,
             version_dir: String::new(),
@@ -521,6 +542,40 @@ impl SyncApp {
                     } else {
                         Some(patch_version.as_str())
                     },
+                    &uploader,
+                    &mut |event| {
+                        let _ = tx.send(WorkerMsg::Upload(event));
+                    },
+                ))
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(WorkerMsg::UploadDone(result));
+            let _ = cfg.save();
+        });
+    }
+
+    fn start_upload_client(&mut self) {
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        let token = self.token.trim().to_string();
+        let file = PathBuf::from(self.client_file.trim());
+        let version = self.client_version.trim().to_string();
+        let uploader = self.uploader.trim().to_string();
+        let (tx, rx) = channel();
+        self.worker = Some(rx);
+        self.progress = (0, 0);
+        self.log.clear();
+        self.upload_state = ActionState::Running;
+        let cfg = self.persisted_config();
+
+        thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(upload::upload_faf_client(
+                    &server,
+                    &token,
+                    &file,
+                    &version,
                     &uploader,
                     &mut |event| {
                         let _ = tx.send(WorkerMsg::Upload(event));
@@ -774,6 +829,27 @@ impl SyncApp {
         }
     }
 
+    /// Fields still missing for the installer upload, as localized names.
+    fn client_missing_fields(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.server.trim().is_empty() {
+            missing.push(tr(self.lang, Txt::FieldServer));
+        }
+        if self.token.trim().is_empty() {
+            missing.push(tr(self.lang, Txt::FieldToken));
+        }
+        if !PathBuf::from(self.client_file.trim()).is_file() {
+            missing.push(tr(self.lang, Txt::FieldClientFile));
+        }
+        if self.client_version.trim().is_empty() {
+            missing.push(tr(self.lang, Txt::VersionLabel));
+        }
+        if self.uploader.trim().is_empty() {
+            missing.push(tr(self.lang, Txt::FieldUploader));
+        }
+        missing
+    }
+
     /// Fields still missing for the current tab's action, as localized names.
     fn missing_fields(&mut self) -> Vec<&'static str> {
         let mut missing = Vec::new();
@@ -948,6 +1024,68 @@ impl eframe::App for SyncApp {
                         .small()
                         .weak(),
                 );
+
+                // FAF client installer upload (faf-client channel).
+                ui.separator();
+                ui.label(egui::RichText::new(tr(self.lang, Txt::ClientSectionTitle)).strong());
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.client_file)
+                                .hint_text(r"D:\Downloads\dfc_windows_1_6_3.exe")
+                                .desired_width(f32::INFINITY),
+                        );
+                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                let name = path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                if let Some(v) = fafcn_gamedata::detect_version_from_filename(&name)
+                                {
+                                    self.client_version = v;
+                                }
+                                self.client_file = path.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(self.lang, Txt::VersionLabel));
+                    ui.add_enabled_ui(!busy, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.client_version)
+                                .hint_text("1.6.3")
+                                .desired_width(120.0),
+                        );
+                    });
+                });
+                let client_missing = self.client_missing_fields();
+                let can_run = !busy && client_missing.is_empty();
+                let label = if self.upload_state == ActionState::Running {
+                    tr(self.lang, Txt::Uploading)
+                } else {
+                    tr(self.lang, Txt::UploadClientNow)
+                };
+                if ui
+                    .add_enabled(
+                        can_run,
+                        egui::Button::new(label).min_size(egui::vec2(f32::INFINITY, 32.0)),
+                    )
+                    .clicked()
+                {
+                    self.start_upload_client();
+                }
+                if !busy && !client_missing.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "{}{}",
+                            tr(self.lang, Txt::MissingPrefix),
+                            client_missing.join(", ")
+                        ),
+                    );
+                }
             }
             ui.add_space(12.0);
 

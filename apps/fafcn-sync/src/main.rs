@@ -48,6 +48,8 @@ enum Command {
     Sync(SyncArgs),
     /// Upload a new gamedata patch set to the mirror (VPN/downloaders only).
     Upload(UploadArgs),
+    /// Upload a FAF client installer to the mirror (VPN/downloaders only).
+    UploadClient(UploadClientArgs),
 }
 
 /// Arguments for `fafcn-sync sync`.
@@ -87,12 +89,37 @@ pub struct UploadArgs {
     pub uploader: Option<String>,
 }
 
+/// Arguments for `fafcn-sync upload-client`.
+#[derive(Debug, Args)]
+pub struct UploadClientArgs {
+    /// Mirror base URL, e.g. https://fafcn.example.com. Remembered after first use.
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Group upload token (ask the person who deployed the server).
+    #[arg(long)]
+    pub token: String,
+
+    /// Path to the downloaded installer (e.g. dfc_windows_1_6_3.exe).
+    #[arg(long)]
+    pub file: PathBuf,
+
+    /// Client version (auto-detected from the file name when omitted).
+    #[arg(long)]
+    pub version: Option<String>,
+
+    /// Your display name, shown on the status page.
+    #[arg(long)]
+    pub uploader: Option<String>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None | Some(Command::Gui) => gui::run(),
         Some(Command::Sync(args)) => run_cli(sync::run(args)),
         Some(Command::Upload(args)) => run_cli(upload::run(args)),
+        Some(Command::UploadClient(args)) => run_cli(upload::run_client(args)),
     }
 }
 

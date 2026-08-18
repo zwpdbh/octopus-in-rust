@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use fafcn_gamedata::StatusResponse;
+use fafcn_gamedata::{Manifest, StatusResponse};
 use gloo_net::http::Request;
 
 use crate::i18n::{self, Text};
@@ -8,6 +8,7 @@ use crate::i18n::{self, Text};
 fn channel_title(t: i18n::T, name: &str) -> &'static str {
     match name {
         fafcn_gamedata::CHANNEL_MAP_GENERATOR => t.t(Text::ChannelMapGenerator),
+        fafcn_gamedata::CHANNEL_FAF_CLIENT => t.t(Text::FafClientTitle),
         _ => t.t(Text::ChannelGamedata),
     }
 }
@@ -25,6 +26,22 @@ pub fn Sync() -> Element {
             .map_err(|e| e.to_string())?
             .json::<StatusResponse>()
             .await
+            .map_err(|e| e.to_string())
+    });
+    // The faf-client manifest carries the installer file list for download links.
+    let faf_client = use_resource(move || async move {
+        let resp = Request::get(&crate::net::api_url(
+            "/api/gamedata/channels/faf-client/manifest.json",
+        ))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+        if resp.status() == 404 {
+            return Ok(None);
+        }
+        resp.json::<Manifest>()
+            .await
+            .map(Some)
             .map_err(|e| e.to_string())
     });
 

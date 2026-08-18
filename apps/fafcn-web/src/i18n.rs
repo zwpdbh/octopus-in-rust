@@ -60,20 +60,17 @@ pub fn use_lang_signal() -> Signal<Lang> {
 }
 
 fn load_initial_lang() -> Lang {
+    // Chinese is the default (target audience is Chinese players); an
+    // explicit toggle is remembered in localStorage and wins.
     let Some(window) = web_sys::window() else {
-        return Lang::En;
+        return Lang::Zh;
     };
     if let Some(storage) = window.local_storage().ok().flatten() {
         if let Ok(Some(v)) = storage.get_item(STORAGE_KEY) {
-            return if v == "zh" { Lang::Zh } else { Lang::En };
+            return if v == "en" { Lang::En } else { Lang::Zh };
         }
     }
-    let browser = window.navigator().language().unwrap_or_default();
-    if browser.to_lowercase().starts_with("zh") {
-        Lang::Zh
-    } else {
-        Lang::En
-    }
+    Lang::Zh
 }
 
 fn save_lang(lang: Lang) {
@@ -123,8 +120,23 @@ pub enum Text {
     NavSync,
 
     // Home page.
-    HomeTitle,
-    HomeSubtitle,
+    HomeHeroKicker,
+    HomeHeroTitle,
+    HomeHeroSubtitle,
+    HomeCtaSync,
+    HomeCtaQQ,
+    HomeFeaturesTitle,
+    FeatureUnitsTitle,
+    FeatureUnitsDesc,
+    FeatureSimTitle,
+    FeatureSimDesc,
+    FeatureQaTitle,
+    FeatureQaDesc,
+    FeatureSyncTitle,
+    FeatureSyncDesc,
+    HomeQQTitle,
+    HomeQQDesc,
+    HomeQQCopied,
 
     // Unit comparison panel.
     CompareTitle,
@@ -247,6 +259,9 @@ pub enum Text {
     ChannelGamedata,
     ChannelMapGenerator,
     ChannelNotPublished,
+    FafClientTitle,
+    FafClientDesc,
+    DownloadFafClient,
 }
 
 impl Text {
@@ -266,15 +281,53 @@ impl Text {
             (Text::NavSync, Lang::Zh) => "补丁同步",
 
             // Home page.
-            (Text::HomeTitle, Lang::En) => "fafcn — Forged Alliance Forever, China community hub",
-            (Text::HomeTitle, Lang::Zh) => "fafcn — FAF 中文社区工具站",
-            (Text::HomeSubtitle, Lang::En) => {
-                "Tools for Chinese FAF players: unit comparison, build-order simulator, \
-                 Q&A, and the gamedata patch mirror. Pick a feature from the navigation bar above."
+            (Text::HomeHeroKicker, Lang::En) => "FORGED ALLIANCE FOREVER · 中文社区",
+            (Text::HomeHeroKicker, Lang::Zh) => "FORGED ALLIANCE FOREVER · 中文社区",
+            (Text::HomeHeroTitle, Lang::En) => "The Chinese FAF Community Hub",
+            (Text::HomeHeroTitle, Lang::Zh) => "FAF 中文社区工具站",
+            (Text::HomeHeroSubtitle, Lang::En) => {
+                "Built for Chinese commanders: a blazing-fast patch mirror, plus unit \
+                 comparison, build-order simulator and Q&A."
             }
-            (Text::HomeSubtitle, Lang::Zh) => {
-                "为 FAF 中文玩家提供的工具:单位对比、建造模拟、问答,以及 gamedata 补丁镜像。请从上方导航栏选择功能。"
+            (Text::HomeHeroSubtitle, Lang::Zh) => {
+                "为中国指挥官打造:补丁镜像秒速下载,更有单位对比、建造模拟与问答工具。"
             }
+            (Text::HomeCtaSync, Lang::En) => "Get the sync client",
+            (Text::HomeCtaSync, Lang::Zh) => "下载同步客户端",
+            (Text::HomeCtaQQ, Lang::En) => "Join our QQ group",
+            (Text::HomeCtaQQ, Lang::Zh) => "加入 QQ 群",
+            (Text::HomeFeaturesTitle, Lang::En) => "Community tools",
+            (Text::HomeFeaturesTitle, Lang::Zh) => "社区工具",
+            (Text::FeatureUnitsTitle, Lang::En) => "Unit comparison",
+            (Text::FeatureUnitsTitle, Lang::Zh) => "单位对比",
+            (Text::FeatureUnitsDesc, Lang::En) => {
+                "The full unit database — multi-select and compare mass, energy and build time."
+            }
+            (Text::FeatureUnitsDesc, Lang::Zh) => "全单位数据库,多选对比质量、能量与建造时间。",
+            (Text::FeatureSimTitle, Lang::En) => "Build simulator",
+            (Text::FeatureSimTitle, Lang::Zh) => "建造模拟",
+            (Text::FeatureSimDesc, Lang::En) => {
+                "Plan your build order and watch the economy play out in real time."
+            }
+            (Text::FeatureSimDesc, Lang::Zh) => "编排建造顺序,实时模拟经济曲线。",
+            (Text::FeatureQaTitle, Lang::En) => "Q&A",
+            (Text::FeatureQaTitle, Lang::Zh) => "问答",
+            (Text::FeatureQaDesc, Lang::En) => "Ask anything about FAF units and economy.",
+            (Text::FeatureQaDesc, Lang::Zh) => "询问任何 FAF 单位与经济学问题。",
+            (Text::FeatureSyncTitle, Lang::En) => "Patch sync",
+            (Text::FeatureSyncTitle, Lang::Zh) => "补丁同步",
+            (Text::FeatureSyncDesc, Lang::En) => {
+                "One-click gamedata & map generator sync — no more QQ file passing."
+            }
+            (Text::FeatureSyncDesc, Lang::Zh) => "gamedata 与地图生成器一键同步,告别 QQ 传文件。",
+            (Text::HomeQQTitle, Lang::En) => "Join the Chinese community",
+            (Text::HomeQQTitle, Lang::Zh) => "加入中文社区",
+            (Text::HomeQQDesc, Lang::En) => {
+                "Team up, get help, and hear about patch updates first — all in our QQ group."
+            }
+            (Text::HomeQQDesc, Lang::Zh) => "组队、求助、第一时间获取补丁更新,都在 QQ 群。",
+            (Text::HomeQQCopied, Lang::En) => "Copied!",
+            (Text::HomeQQCopied, Lang::Zh) => "已复制!",
 
             // Unit comparison panel.
             (Text::CompareTitle, Lang::En) => "Unit comparison",
@@ -547,6 +600,14 @@ impl Text {
             (Text::ChannelMapGenerator, Lang::Zh) => "地图生成器",
             (Text::ChannelNotPublished, Lang::En) => "not published yet",
             (Text::ChannelNotPublished, Lang::Zh) => "未发布",
+            (Text::FafClientTitle, Lang::En) => "FAF client",
+            (Text::FafClientTitle, Lang::Zh) => "FAF 客户端",
+            (Text::FafClientDesc, Lang::En) => {
+                "Official client installer mirrored from GitHub releases."
+            }
+            (Text::FafClientDesc, Lang::Zh) => "官方客户端安装包镜像(来自 GitHub releases)。",
+            (Text::DownloadFafClient, Lang::En) => "Download FAF client",
+            (Text::DownloadFafClient, Lang::Zh) => "下载 FAF 客户端",
         }
     }
 }
