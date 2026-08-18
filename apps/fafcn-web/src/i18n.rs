@@ -132,9 +132,14 @@ pub fn translate_kind(kind: &str, lang: Lang) -> String {
 pub enum Text {
     // Navbar.
     NavHome,
+    NavUnits,
     NavSimulate,
     NavQa,
     NavSync,
+
+    // Home page.
+    HomeTitle,
+    HomeSubtitle,
 
     // Common.
     Loading,
@@ -256,12 +261,25 @@ impl Text {
             // Navbar.
             (Text::NavHome, Lang::En) => "Home",
             (Text::NavHome, Lang::Zh) => "首页",
+            (Text::NavUnits, Lang::En) => "Units",
+            (Text::NavUnits, Lang::Zh) => "单位对比",
             (Text::NavSimulate, Lang::En) => "Simulate",
             (Text::NavSimulate, Lang::Zh) => "建造模拟",
             (Text::NavQa, Lang::En) => "Q&A",
             (Text::NavQa, Lang::Zh) => "问答",
             (Text::NavSync, Lang::En) => "Sync",
             (Text::NavSync, Lang::Zh) => "补丁同步",
+
+            // Home page.
+            (Text::HomeTitle, Lang::En) => "fafcn — Forged Alliance Forever, China community hub",
+            (Text::HomeTitle, Lang::Zh) => "fafcn — FAF 中文社区工具站",
+            (Text::HomeSubtitle, Lang::En) => {
+                "Tools for Chinese FAF players: unit comparison, build-order simulator, \
+                 Q&A, and the gamedata patch mirror. Pick a feature from the navigation bar above."
+            }
+            (Text::HomeSubtitle, Lang::Zh) => {
+                "为 FAF 中文玩家提供的工具:单位对比、建造模拟、问答,以及 gamedata 补丁镜像。请从上方导航栏选择功能。"
+            }
 
             // Common.
             (Text::Loading, Lang::En) => "Loading...",
