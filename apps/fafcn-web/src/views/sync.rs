@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use fafcn_gamedata::StatusResponse;
+use fafcn_gamedata::{Manifest, StatusResponse};
 use gloo_net::http::Request;
 
 use crate::i18n::{self, Text};
@@ -8,6 +8,7 @@ use crate::i18n::{self, Text};
 fn channel_title(t: i18n::T, name: &str) -> &'static str {
     match name {
         fafcn_gamedata::CHANNEL_MAP_GENERATOR => t.t(Text::ChannelMapGenerator),
+        fafcn_gamedata::CHANNEL_FAF_CLIENT => t.t(Text::FafClientTitle),
         _ => t.t(Text::ChannelGamedata),
     }
 }
@@ -25,6 +26,22 @@ pub fn Sync() -> Element {
             .map_err(|e| e.to_string())?
             .json::<StatusResponse>()
             .await
+            .map_err(|e| e.to_string())
+    });
+    // The faf-client manifest carries the installer file list for download links.
+    let faf_client = use_resource(move || async move {
+        let resp = Request::get(&crate::net::api_url(
+            "/api/gamedata/channels/faf-client/manifest.json",
+        ))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+        if resp.status() == 404 {
+            return Ok(None);
+        }
+        resp.json::<Manifest>()
+            .await
+            .map(Some)
             .map_err(|e| e.to_string())
     });
 
@@ -118,6 +135,39 @@ pub fn Sync() -> Element {
                     }
                     p { class: "mt-4 text-xs text-neutral-500", "{t.t(Text::SyncClientNote)}" }
                     p { class: "mt-2 text-xs text-neutral-500", "{t.t(Text::UploadHint)}" }
+                }
+
+                // FAF client installer download (faf-client channel).
+                div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-5",
+                    h2 { class: "text-lg font-semibold text-white mb-3", "{t.t(Text::FafClientTitle)}" }
+                    p { class: "text-sm text-neutral-400 mb-3", "{t.t(Text::FafClientDesc)}" }
+                    match faf_client.read().as_ref() {
+                        None => rsx! {
+                            p { class: "text-neutral-400 text-sm", "{t.t(Text::Loading)}" }
+                        },
+                        Some(Err(err)) => rsx! {
+                            p { class: "text-red-400 text-sm", "{t.t(Text::LoadStatusFailed)}{err}" }
+                        },
+                        Some(Ok(None)) => rsx! {
+                            p { class: "text-neutral-500 text-sm", "{t.t(Text::ChannelNotPublished)}" }
+                        },
+                        Some(Ok(Some(manifest))) => rsx! {
+                            p { class: "text-xs text-neutral-400 mb-3",
+                                "{t.t(Text::PatchVersion)}: "
+                                span { class: "text-white font-mono", "{manifest.patch_version}" }
+                                " · {t.t(Text::UploadedBy)}: {manifest.uploader}"
+                            }
+                            div { class: "flex flex-wrap gap-3",
+                                for file in &manifest.files {
+                                    a {
+                                        class: "inline-block px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm transition-colors",
+                                        href: crate::net::api_url(&format!("/api/gamedata/channels/faf-client/files/{}", file.path)),
+                                        "{t.t(Text::DownloadFafClient)} ({file.path})"
+                                    }
+                                }
+                            }
+                        },
+                    }
                 }
             }
         }

@@ -28,6 +28,7 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 - **Channel definitions** (shared in `crates/fafcn-gamedata/src/channels.rs`):
   - `gamedata` — only `env.nx2`, `units.nx2`, `textures.nx2` (the files players actually struggle to download), version from `lua.nx2`.
   - `map-generator` — newest 3 `MapGenerator_*.jar` (semver sort), version = newest jar.
+  - `faf-client` — mirror-only (NOT synced into FAForever): the downlords-faf-client installer from GitHub releases, uploaded as a single file by an uploader; players download it via a link on the /sync page. Version auto-detected from the installer filename (`dfc_windows_1_6_3.exe` → `1.6.3`).
 - **Storage layout** (filesystem, under a configurable `FAFCN_GAMEDATA_DIR`, default `data/faf-gamedata/`):
   ```
   data/faf-gamedata/
@@ -97,8 +98,8 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 - [x] `fafcn-sync` client (`apps/fafcn-sync`): GUI (eframe, double-click) + CLI (`sync` + `upload` subcommands).
 - [x] `/sync` page in `fafcn-web`.
 - [x] `.env.example` / config docs updated.
-- [x] End-to-end smoke test (local): token auth 401, upload + commit, sync to empty dir byte-identical, no-op re-sync, corrupt file re-downloaded, extra files untouched, dedup re-upload, HTTP 206 range downloads, downgrade rejection (409), build tag in exe + status, channel E2E (gamedata filtered to 3 files, map-generator newest-3 jars, jar pruning).
-- [ ] End-to-end test on a real FAF install.
+- [x] End-to-end smoke test (local): token auth 401, upload + commit, sync to empty dir byte-identical, no-op re-sync, corrupt file re-downloaded, extra files untouched, dedup re-upload, HTTP 206 range downloads, downgrade rejection (409), build tag in exe + status, channel E2E (gamedata filtered to 3 files, map-generator newest-3 jars, jar pruning), faf-client installer E2E (auto version detect, byte-identical download, 409 on older).
+- [ ] End-to-end test on a real FAF install (with a real downlords-faf-client installer).
 - [x] Windows release build of `fafcn-sync` published under `/api/gamedata/client/` (via `cargo xtask fafcn file-sync`, cross-compiles to `x86_64-pc-windows-gnu`; use `--release` for distribution).
 
 ## Decisions Made
@@ -114,5 +115,6 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 | 2026-08-18 | Upload lives in the client (GUI tab + CLI), not as web drag-drop | Uploads are rare and done by the technical, VPN-having player; browser folder-upload in WASM (traversal, 700MB hashing, no fetch upload progress) is high-complexity for the wrong path. The /sync page shows uploader instructions instead. |
 | 2026-08-18 | Patch version auto-detected from `lua.nx2` (`lua/version.lua` — it's a ZIP); server rejects strictly older uploads (409) | The version is ground truth from the game data, so users never type it (manual entry is fallback only). The GUI also pre-checks the server manifest and disables upload with an explanation when the server is newer; the commit-time server guard is the authoritative enforcement. |
 | 2026-08-18 | Two sync channels rooted at the FAForever folder: gamedata filtered to env/units/textures.nx2; map-generator keeps newest 3 jars (semver sort, pruned locally beyond that) | Player feedback: these are the only files they actually struggle to download. Version compare generalized to dotted-numeric (`1.22.10` > `1.22.1`). gamedata still never deletes extras; jar pruning is scoped strictly to the `MapGenerator_*.jar` pattern. |
+| 2026-08-18 | FAF client installer is a mirror-only channel, not part of folder sync | Most players don't need it, and an installer is downloaded-and-run, not synced into FAForever. Reuses the full channel machinery (dedup, downgrade guard); upload via GUI installer section or `fafcn-sync upload-client`; download via a plain link on the /sync page. |
 | 2026-08-18 | Never delete local files not in manifest; download-to-temp + atomic rename | Client must never break a working game install. |
 | 2026-08-18 | User upload is the only source of gamedata; no server-side fetching from official channels | The required patch files are not reliably downloadable from FAF's open-source GitHub repos; automated staleness checks are deferred until we investigate how the official client detects new patches (see Implementation Notes; source at `/home/zw/code/faf_related/official_faf_stack/downlords-faf-client`). |

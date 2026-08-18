@@ -60,20 +60,17 @@ pub fn use_lang_signal() -> Signal<Lang> {
 }
 
 fn load_initial_lang() -> Lang {
+    // Chinese is the default (target audience is Chinese players); an
+    // explicit toggle is remembered in localStorage and wins.
     let Some(window) = web_sys::window() else {
-        return Lang::En;
+        return Lang::Zh;
     };
     if let Some(storage) = window.local_storage().ok().flatten() {
         if let Ok(Some(v)) = storage.get_item(STORAGE_KEY) {
-            return if v == "zh" { Lang::Zh } else { Lang::En };
+            return if v == "en" { Lang::En } else { Lang::Zh };
         }
     }
-    let browser = window.navigator().language().unwrap_or_default();
-    if browser.to_lowercase().starts_with("zh") {
-        Lang::Zh
-    } else {
-        Lang::En
-    }
+    Lang::Zh
 }
 
 fn save_lang(lang: Lang) {
@@ -109,21 +106,6 @@ pub fn translate_category(category: &str, lang: Lang) -> String {
     .to_string()
 }
 
-/// Translate a server-provided unit kind badge.
-pub fn translate_kind(kind: &str, lang: Lang) -> String {
-    if lang == Lang::En {
-        return kind.to_string();
-    }
-    match kind {
-        "Base" => "基地",
-        "Land" => "陆军",
-        "Air" => "空军",
-        "Naval" => "海军",
-        other => return other.to_string(),
-    }
-    .to_string()
-}
-
 /// Every translatable UI string, grouped by area.
 ///
 /// Adding a variant without both translations is a compile error — that is
@@ -132,9 +114,75 @@ pub fn translate_kind(kind: &str, lang: Lang) -> String {
 pub enum Text {
     // Navbar.
     NavHome,
+    NavUnits,
     NavSimulate,
     NavQa,
     NavSync,
+
+    // Home page.
+    HomeHeroKicker,
+    HomeHeroTitle,
+    HomeHeroSubtitle,
+    HomeCtaSync,
+    HomeCtaQQ,
+    HomeFeaturesTitle,
+    FeatureUnitsTitle,
+    FeatureUnitsDesc,
+    FeatureSimTitle,
+    FeatureSimDesc,
+    FeatureQaTitle,
+    FeatureQaDesc,
+    FeatureSyncTitle,
+    FeatureSyncDesc,
+    HomeQQTitle,
+    HomeQQDesc,
+    HomeQQCopied,
+    HomeWhyTitle,
+    VigReclaimTitle,
+    VigReclaimBody,
+    VigReclaimPunch,
+    VigZoomTitle,
+    VigZoomBody,
+    VigZoomPunch,
+    VigPhysicsTitle,
+    VigPhysicsBody,
+    VigPhysicsPunch,
+    VigExpTitle,
+    VigExpBody,
+    VigExpPunch,
+    VigAcuTitle,
+    VigAcuBody,
+    VigAcuPunch,
+    VigCommunityTitle,
+    VigCommunityBody,
+    VigCommunityPunch,
+    WhyPriceNote,
+    HomeCtaGuide,
+    NavGuide,
+    GuideTitle,
+    GuideIntro,
+    GuideStep1Title,
+    GuideStep1Mirror,
+    GuideStep1Github,
+    GuideStep1GithubBtn,
+    GuideStep1Note,
+    GuideStep2Title,
+    GuideStep2Desc,
+    GuideStep2Btn,
+    GuideStep3Title,
+    GuideStep3Desc,
+
+    // Unit comparison panel.
+    CompareTitle,
+    CompareEmpty,
+    CompareClear,
+    CompareRemove,
+    CompareQuickStats,
+    CompareTotalMass,
+    CompareTotalEnergy,
+    MassShort,
+    EnergyShort,
+    BuildTimeShort,
 
     // Common.
     Loading,
@@ -151,13 +199,11 @@ pub enum Text {
     SearchUnits,
     NoUnitsMatch,
     SelectUnit,
-    SelectUnitDetail,
     ClickToSelectUnit,
     LoadUnitsFailed,
     MassCost,
     EnergyCost,
     BuildTime,
-    BuildPower,
 
     // Simulate: eco panel + stats.
     EcoSettings,
@@ -247,6 +293,9 @@ pub enum Text {
     ChannelGamedata,
     ChannelMapGenerator,
     ChannelNotPublished,
+    FafClientTitle,
+    FafClientDesc,
+    DownloadFafClient,
 }
 
 impl Text {
@@ -256,12 +305,246 @@ impl Text {
             // Navbar.
             (Text::NavHome, Lang::En) => "Home",
             (Text::NavHome, Lang::Zh) => "首页",
+            (Text::NavUnits, Lang::En) => "Units",
+            (Text::NavUnits, Lang::Zh) => "单位对比",
             (Text::NavSimulate, Lang::En) => "Simulate",
             (Text::NavSimulate, Lang::Zh) => "建造模拟",
             (Text::NavQa, Lang::En) => "Q&A",
             (Text::NavQa, Lang::Zh) => "问答",
             (Text::NavSync, Lang::En) => "Sync",
             (Text::NavSync, Lang::Zh) => "补丁同步",
+
+            // Home page.
+            (Text::HomeHeroKicker, Lang::En) => "FORGED ALLIANCE FOREVER · 中文社区",
+            (Text::HomeHeroKicker, Lang::Zh) => "FORGED ALLIANCE FOREVER · 中文社区",
+            (Text::HomeHeroTitle, Lang::En) => "The Chinese FAF Community Hub",
+            (Text::HomeHeroTitle, Lang::Zh) => "FAF 中文社区工具站",
+            (Text::HomeHeroSubtitle, Lang::En) => {
+                "Built for Chinese commanders: a blazing-fast patch mirror, plus unit \
+                 comparison, build-order simulator and Q&A."
+            }
+            (Text::HomeHeroSubtitle, Lang::Zh) => {
+                "为中国指挥官打造:补丁镜像秒速下载,更有单位对比、建造模拟与问答工具。"
+            }
+            (Text::HomeCtaSync, Lang::En) => "Get the sync client",
+            (Text::HomeCtaSync, Lang::Zh) => "下载同步客户端",
+            (Text::HomeCtaQQ, Lang::En) => "Join our QQ group",
+            (Text::HomeCtaQQ, Lang::Zh) => "加入 QQ 群",
+            (Text::HomeFeaturesTitle, Lang::En) => "Community tools",
+            (Text::HomeFeaturesTitle, Lang::Zh) => "社区工具",
+            (Text::FeatureUnitsTitle, Lang::En) => "Unit comparison",
+            (Text::FeatureUnitsTitle, Lang::Zh) => "单位对比",
+            (Text::FeatureUnitsDesc, Lang::En) => {
+                "The full unit database — multi-select and compare mass, energy and build time."
+            }
+            (Text::FeatureUnitsDesc, Lang::Zh) => "全单位数据库,多选对比质量、能量与建造时间。",
+            (Text::FeatureSimTitle, Lang::En) => "Build simulator",
+            (Text::FeatureSimTitle, Lang::Zh) => "建造模拟",
+            (Text::FeatureSimDesc, Lang::En) => {
+                "Plan your build order and watch the economy play out in real time."
+            }
+            (Text::FeatureSimDesc, Lang::Zh) => "编排建造顺序,实时模拟经济曲线。",
+            (Text::FeatureQaTitle, Lang::En) => "Q&A",
+            (Text::FeatureQaTitle, Lang::Zh) => "问答",
+            (Text::FeatureQaDesc, Lang::En) => "Ask anything about FAF units and economy.",
+            (Text::FeatureQaDesc, Lang::Zh) => "询问任何 FAF 单位与经济学问题。",
+            (Text::FeatureSyncTitle, Lang::En) => "Patch sync",
+            (Text::FeatureSyncTitle, Lang::Zh) => "补丁同步",
+            (Text::FeatureSyncDesc, Lang::En) => {
+                "One-click gamedata & map generator sync — no more QQ file passing."
+            }
+            (Text::FeatureSyncDesc, Lang::Zh) => "gamedata 与地图生成器一键同步,告别 QQ 传文件。",
+            (Text::HomeQQTitle, Lang::En) => "Join the Chinese community",
+            (Text::HomeQQTitle, Lang::Zh) => "加入中文社区",
+            (Text::HomeQQDesc, Lang::En) => {
+                "Team up, get help, and hear about patch updates first — all in our QQ group."
+            }
+            (Text::HomeQQDesc, Lang::Zh) => "组队、求助、第一时间获取补丁更新,都在 QQ 群。",
+            (Text::HomeQQCopied, Lang::En) => "Copied!",
+            (Text::HomeQQCopied, Lang::Zh) => "已复制!",
+
+            // Home: why play FAF.
+            // Home: why Supreme Commander is one of a kind.
+            (Text::HomeWhyTitle, Lang::En) => "Supreme Commander, one of a kind",
+            (Text::HomeWhyTitle, Lang::Zh) => "最高指挥官,独一无二",
+
+            (Text::VigReclaimTitle, Lang::En) => "The battlefield is a mine",
+            (Text::VigReclaimTitle, Lang::Zh) => "战场即矿场",
+            (Text::VigReclaimBody, Lang::En) => {
+                "When a battle ends, the wreckage doesn't vanish — every unit can be \
+                 reclaimed for mass. The army you just destroyed is paying for your next \
+                 wave, and in high-level play, whoever vacuums up the experimental wreck \
+                 usually wins."
+            }
+            (Text::VigReclaimBody, Lang::Zh) => {
+                "一场会战结束,满地残骸不会消失——它们可以被回收,直到最后一克质量。\
+                 你刚打赢的那波团战,是对手的部队在为你下一波进攻买单。\
+                 高手对决里,抢到实验级残骸往往就是胜负手。"
+            }
+            (Text::VigReclaimPunch, Lang::En) => {
+                "In other RTS games wreckage is a visual effect. In FAF, wreckage is the economy."
+            }
+            (Text::VigReclaimPunch, Lang::Zh) => "在别的 RTS 里,残骸是特效;在 FAF 里,残骸是经济。",
+
+            (Text::VigZoomTitle, Lang::En) => "From muzzle flash to theater view",
+            (Text::VigZoomTitle, Lang::Zh) => "从炮口到战区",
+            (Text::VigZoomBody, Lang::En) => {
+                "One scroll takes you from a single tank's muzzle flash to a seamless view \
+                 of the entire theater. You never need a minimap — the map itself is your \
+                 command console, and every flanking move across 40km of front is yours to see."
+            }
+            (Text::VigZoomBody, Lang::Zh) => {
+                "滚轮一滑,视野从一辆坦克的炮口火光无缝拉到整个战场俯瞰——你不需要小地图,\
+                 地图本身就是指挥台。40 公里的战线上,每一次迂回、每一条补给线都尽收眼底。"
+            }
+            (Text::VigZoomPunch, Lang::En) => "Other RTS zoom the camera. FAF zooms the war.",
+            (Text::VigZoomPunch, Lang::Zh) => "别的 RTS 缩放的是镜头,FAF 缩放的是战争。",
+
+            (Text::VigPhysicsTitle, Lang::En) => "Every shell is real",
+            (Text::VigPhysicsTitle, Lang::Zh) => "每一发炮弹都是真的",
+            (Text::VigPhysicsBody, Lang::En) => {
+                "Nothing is hit-scan here: shells arc over hills, miss, and can be dodged; \
+                 shields physically block fire; a launched nuke can be shot down mid-flight \
+                 by anti-nuke — you can watch the intercept bloom in the sky."
+            }
+            (Text::VigPhysicsBody, Lang::Zh) => {
+                "这里没有“命中即判定”:炮弹会翻山、会打偏、会被机动躲开;护盾真的在挡炮弹;\
+                 核弹升空后,可以被反导系统在半空击坠——你甚至能看到拦截弹撞上核弹的那朵云。"
+            }
+            (Text::VigPhysicsPunch, Lang::En) => {
+                "Your defense line isn't a stat sheet. It's a fortification you watch do its job."
+            }
+            (Text::VigPhysicsPunch, Lang::Zh) => "你的防线不是数值,是你眼睁睁看着它工作的工事。",
+
+            (Text::VigExpTitle, Lang::En) => "Experimentals aren't units, they're events",
+            (Text::VigExpTitle, Lang::Zh) => "实验级不是单位,是事件",
+            (Text::VigExpBody, Lang::En) => {
+                "When a Monkeylord's laser sweeps your base, a Galactic Colossus steps into \
+                 your line, or Mavor shells cross half the map — that's not a strong unit \
+                 spawning, it's the climax of the match. And the wrecks they leave are \
+                 worth a fortune."
+            }
+            (Text::VigExpBody, Lang::Zh) => {
+                "当猴王的激光扫过基地、银河巨像踏进防线、灭世者的炮弹跨越半张地图砸下来——\
+                 那不是“一个强力单位出场”,那是整场比赛的高潮。\
+                 而终结它们留下的残骸,同样价值连城。"
+            }
+            (Text::VigExpPunch, Lang::En) => {
+                "Other games call it an ultimate unit. FAF players just say \"it's here.\""
+            }
+            (Text::VigExpPunch, Lang::Zh) => "别的游戏叫它终极兵种,FAF 玩家只说两个字:“来了”。",
+
+            (Text::VigAcuTitle, Lang::En) => "Your commander fights on the field",
+            (Text::VigAcuTitle, Lang::Zh) => "指挥官亲自下场",
+            (Text::VigAcuBody, Lang::En) => {
+                "Your ACU is no icon in the base: it lays your first factory with its own \
+                 hands, tanks fire on the front line, and can teleport behind enemy lines. \
+                 Its death is a nuclear detonation that flips games — and its wreck is \
+                 still worth fighting over."
+            }
+            (Text::VigAcuBody, Lang::Zh) => {
+                "你的 ACU 不是基地里的一个图标:它亲手铺下你的第一座工厂,顶在前线吸收火力,\
+                 还能升级传送门奇袭敌后。它倒下时的核爆足以改写整局比赛——\
+                 而它留下的残骸,依然是双方疯抢的目标。"
+            }
+            (Text::VigAcuPunch, Lang::En) => {
+                "Not many games let the king die on the battlefield. This is one of them."
+            }
+            (Text::VigAcuPunch, Lang::Zh) => "国王也会战死沙场的游戏不多,这就是其中之一。",
+
+            (Text::VigCommunityTitle, Lang::En) => "A game patched for 15 years",
+            (Text::VigCommunityTitle, Lang::Zh) => "一款打了 15 年补丁的游戏",
+            (Text::VigCommunityBody, Lang::En) => {
+                "After the official servers shut down, the players took over and run it to \
+                 this day: monthly balance patches, ladder matchmaking, co-op campaign, \
+                 replays, a map generator. A 2007 engine still renders thousands of units \
+                 without breaking a sweat."
+            }
+            (Text::VigCommunityBody, Lang::Zh) => {
+                "官方服务器关停之后,玩家自己把它运营到今天:每月平衡性补丁、天梯匹配、\
+                 合作战役、录像回放、地图生成器。2007 年的引擎,\
+                 如今依然流畅跑出数千单位的钢铁洪流。"
+            }
+            (Text::VigCommunityPunch, Lang::En) => {
+                "It's not just an old game. It's a living community."
+            }
+            (Text::VigCommunityPunch, Lang::Zh) => "它不只是一款老游戏,它是一个活着的社区。",
+
+            (Text::WhyPriceNote, Lang::En) => {
+                "FAF is free; you need a copy of Supreme Commander: Forged Alliance \
+                 (dirt cheap on Steam sales)."
+            }
+            (Text::WhyPriceNote, Lang::Zh) => {
+                "FAF 免费,需拥有《最高指挥官:钢铁联盟》正版(Steam 常年白菜价)。"
+            }
+            (Text::HomeCtaGuide, Lang::En) => "Get started guide",
+            (Text::HomeCtaGuide, Lang::Zh) => "新手上路指南",
+
+            // Navbar: guide.
+            (Text::NavGuide, Lang::En) => "Guide",
+            (Text::NavGuide, Lang::Zh) => "指南",
+
+            // Onboarding guide.
+            (Text::GuideTitle, Lang::En) => "Getting started",
+            (Text::GuideTitle, Lang::Zh) => "新手指南",
+            (Text::GuideIntro, Lang::En) => {
+                "Three steps to play FAF: install the client → sync patches → launch with an accelerator."
+            }
+            (Text::GuideIntro, Lang::Zh) => "三步上手 FAF:装客户端 → 同步补丁 → 开加速器开战。",
+            (Text::GuideStep1Title, Lang::En) => "Step 1: Download & install the FAF client",
+            (Text::GuideStep1Title, Lang::Zh) => "第一步:下载并安装 FAF 客户端",
+            (Text::GuideStep1Mirror, Lang::En) => "Download from our mirror (recommended, fast in China):",
+            (Text::GuideStep1Mirror, Lang::Zh) => "从本站镜像下载(推荐,国内高速):",
+            (Text::GuideStep1Github, Lang::En) => "No installer mirrored yet — download from GitHub:",
+            (Text::GuideStep1Github, Lang::Zh) => "镜像暂未上传客户端,请前往 GitHub 下载:",
+            (Text::GuideStep1GithubBtn, Lang::En) => "Go to GitHub releases",
+            (Text::GuideStep1GithubBtn, Lang::Zh) => "前往 GitHub releases",
+            (Text::GuideStep1Note, Lang::En) => "After install, register and log in your FAF account.",
+            (Text::GuideStep1Note, Lang::Zh) => "安装后注册并登录 FAF 账号即可。",
+            (Text::GuideStep2Title, Lang::En) => "Step 2: Sync patches & map generator",
+            (Text::GuideStep2Title, Lang::Zh) => "第二步:同步补丁与地图生成器",
+            (Text::GuideStep2Desc, Lang::En) => {
+                "Download our sync client, double-click it, and hit \"Sync now\" — it updates \
+                 the gamedata patches and the map generator for you automatically."
+            }
+            (Text::GuideStep2Desc, Lang::Zh) => {
+                "下载本站同步客户端,双击运行,点“开始同步”,即可自动完成 gamedata 补丁与地图生成器更新。"
+            }
+            (Text::GuideStep2Btn, Lang::En) => "Go to patch sync",
+            (Text::GuideStep2Btn, Lang::Zh) => "前往补丁同步页",
+            (Text::GuideStep3Title, Lang::En) => "Step 3: Launch your accelerator, then play!",
+            (Text::GuideStep3Title, Lang::Zh) => "第三步:开加速器,开战!",
+            (Text::GuideStep3Desc, Lang::En) => {
+                "Direct connections to FAF servers are slow from China. Start your accelerator \
+                 (e.g. GI, Qiyou), accelerate Forged Alliance Forever, then launch the FAF client."
+            }
+            (Text::GuideStep3Desc, Lang::Zh) => {
+                "国内直连 FAF 服务器延迟高。先启动加速器(如 GI、奇游),加速 Forged Alliance Forever,再启动 FAF 客户端开始游戏。"
+            }
+
+            // Unit comparison panel.
+            (Text::CompareTitle, Lang::En) => "Unit comparison",
+            (Text::CompareTitle, Lang::Zh) => "单位对比",
+            (Text::CompareEmpty, Lang::En) => {
+                "Click units on the left to compare them (multi-select supported)."
+            }
+            (Text::CompareEmpty, Lang::Zh) => "点击左侧单位进行对比(可多选)。",
+            (Text::CompareClear, Lang::En) => "Clear",
+            (Text::CompareClear, Lang::Zh) => "清空",
+            (Text::CompareRemove, Lang::En) => "Remove",
+            (Text::CompareRemove, Lang::Zh) => "移除",
+            (Text::CompareQuickStats, Lang::En) => "Quick stats",
+            (Text::CompareQuickStats, Lang::Zh) => "合计",
+            (Text::CompareTotalMass, Lang::En) => "Total mass",
+            (Text::CompareTotalMass, Lang::Zh) => "总质量",
+            (Text::CompareTotalEnergy, Lang::En) => "Total energy",
+            (Text::CompareTotalEnergy, Lang::Zh) => "总能量",
+            (Text::MassShort, Lang::En) => "M",
+            (Text::MassShort, Lang::Zh) => "质量",
+            (Text::EnergyShort, Lang::En) => "E",
+            (Text::EnergyShort, Lang::Zh) => "能量",
+            (Text::BuildTimeShort, Lang::En) => "BT",
+            (Text::BuildTimeShort, Lang::Zh) => "时间",
 
             // Common.
             (Text::Loading, Lang::En) => "Loading...",
@@ -290,8 +573,6 @@ impl Text {
             (Text::NoUnitsMatch, Lang::Zh) => "没有符合筛选条件的单位。",
             (Text::SelectUnit, Lang::En) => "Select Unit",
             (Text::SelectUnit, Lang::Zh) => "选择单位",
-            (Text::SelectUnitDetail, Lang::En) => "Select a unit to view details.",
-            (Text::SelectUnitDetail, Lang::Zh) => "选择一个单位查看详情。",
             (Text::ClickToSelectUnit, Lang::En) => "Click to select a unit",
             (Text::ClickToSelectUnit, Lang::Zh) => "点击选择单位",
             (Text::LoadUnitsFailed, Lang::En) => "Failed to load units: ",
@@ -302,8 +583,6 @@ impl Text {
             (Text::EnergyCost, Lang::Zh) => "能量",
             (Text::BuildTime, Lang::En) => "Build Time",
             (Text::BuildTime, Lang::Zh) => "建造时间",
-            (Text::BuildPower, Lang::En) => "Build Power",
-            (Text::BuildPower, Lang::Zh) => "建造力",
 
             // Simulate: eco panel + stats.
             (Text::EcoSettings, Lang::En) => "Eco Settings",
@@ -514,6 +793,14 @@ impl Text {
             (Text::ChannelMapGenerator, Lang::Zh) => "地图生成器",
             (Text::ChannelNotPublished, Lang::En) => "not published yet",
             (Text::ChannelNotPublished, Lang::Zh) => "未发布",
+            (Text::FafClientTitle, Lang::En) => "FAF client",
+            (Text::FafClientTitle, Lang::Zh) => "FAF 客户端",
+            (Text::FafClientDesc, Lang::En) => {
+                "Official client installer mirrored from GitHub releases."
+            }
+            (Text::FafClientDesc, Lang::Zh) => "官方客户端安装包镜像(来自 GitHub releases)。",
+            (Text::DownloadFafClient, Lang::En) => "Download FAF client",
+            (Text::DownloadFafClient, Lang::Zh) => "下载 FAF 客户端",
         }
     }
 }

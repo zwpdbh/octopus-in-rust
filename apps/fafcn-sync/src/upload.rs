@@ -21,7 +21,7 @@ use fafcn_gamedata::{
     CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
 
-use crate::{api, config::ClientConfig, version, UploadArgs};
+use crate::{api, config::ClientConfig, version, UploadArgs, UploadClientArgs};
 
 /// Progress events emitted while uploading.
 pub enum UploadProgress {
@@ -69,14 +69,140 @@ pub enum UploadProgress {
     },
 }
 
+/// One channel that was published by an upload.
+pub struct PublishedChannel {
+    /// Channel id (e.g. "gamedata", "faf-client").
+    pub channel: String,
+    /// Published version.
+    pub version: String,
+}
+
 /// What a finished upload did.
 pub struct UploadSummary {
     /// Files actually uploaded across all channels.
     pub uploaded_files: usize,
     /// Bytes uploaded.
     pub uploaded_bytes: u64,
-    /// Published channels as `channel version` strings.
-    pub published: Vec<String>,
+    /// Published channels.
+    pub published: Vec<PublishedChannel>,
+}
+
+/// Run the CLI `upload-client` subcommand: publish one FAF client installer.
+pub async fn run_client(args: UploadClientArgs) -> Result<()> {
+    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let server = api::resolve_server(args.server, &cfg)?;
+    let uploader = args
+        .uploader
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let version = match args.version {
+        Some(v) => v,
+        None => {
+            let name = args
+                .file
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let detected =
+                fafcn_gamedata::detect_version_from_filename(&name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "could not detect the client version from {name}; pass --version"
+                    )
+                })?;
+            println!("Auto-detected client version: {detected}");
+            detected
+        }
+    };
+    println!("Mirror: {server}");
+
+    let summary = upload_faf_client(
+        &server,
+        &args.token,
+        &args.file,
+        &version,
+        &uploader,
+        &mut print_progress,
+    )
+    .await?;
+    for published in &summary.published {
+        println!("Published {} {}", published.channel, published.version);
+    }
+
+    cfg.server = Some(server);
+    cfg.save()?;
+    Ok(())
+}
+
+/// Progress printer shared by the CLI upload subcommands.
+fn print_progress(event: UploadProgress) {
+    match event {
+        UploadProgress::ChannelStarted { channel } => println!("== {channel} =="),
+        UploadProgress::ChannelSkipped { channel, reason } => {
+            println!("skipping {channel}: {reason}")
+        }
+        UploadProgress::Scanned { files, total_bytes } => {
+            println!("found {files} file(s), {:.1} MB", total_bytes as f64 / 1e6)
+        }
+        UploadProgress::Needed { needed } => {
+            if needed == 0 {
+                println!("server already has every file");
+            } else {
+                println!("server needs {needed} file(s):");
+            }
+        }
+        UploadProgress::FileUploaded { path, index, count } => {
+            println!("[{index}/{count}] {path}")
+        }
+        UploadProgress::Committed {
+            patch_version,
+            files,
+            ..
+        } => {
+            println!("committed: {patch_version} ({files} files)")
+        }
+    }
+}
+
+/// Upload one FAF client installer file to the `faf-client` channel.
+pub async fn upload_faf_client(
+    server: &str,
+    token: &str,
+    file: &Path,
+    version: &str,
+    uploader: &str,
+    progress: &mut dyn FnMut(UploadProgress),
+) -> Result<UploadSummary> {
+    if !file.is_file() {
+        anyhow::bail!("{} is not a file", file.display());
+    }
+    if version.trim().is_empty() {
+        anyhow::bail!("client version must not be empty");
+    }
+    if uploader.trim().is_empty() {
+        anyhow::bail!("uploader name must not be empty");
+    }
+    let source_dir = file
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", file.display()))?
+        .to_path_buf();
+    let plan = ChannelPlan {
+        channel: fafcn_gamedata::CHANNEL_FAF_CLIENT,
+        source_dir,
+        version: version.to_string(),
+        entries: vec![hash_file(file.parent().unwrap(), file)?],
+    };
+
+    let http = reqwest::Client::new();
+    let (files, bytes) = upload_channel(&http, server, token, &plan, uploader, progress).await?;
+    Ok(UploadSummary {
+        uploaded_files: files,
+        uploaded_bytes: bytes,
+        published: vec![PublishedChannel {
+            channel: fafcn_gamedata::CHANNEL_FAF_CLIENT.to_string(),
+            version: version.to_string(),
+        }],
+    })
 }
 
 /// One channel's upload plan: what to publish under which version.
@@ -105,40 +231,11 @@ pub async fn run(args: UploadArgs) -> Result<()> {
         &args.dir,
         args.patch_version.as_deref(),
         &uploader,
-        &mut |event| match event {
-            UploadProgress::ChannelStarted { channel } => println!("== {channel} =="),
-            UploadProgress::ChannelSkipped { channel, reason } => {
-                println!("skipping {channel}: {reason}")
-            }
-            UploadProgress::Scanned {
-                files, total_bytes, ..
-            } => {
-                println!("found {files} file(s), {:.1} MB", total_bytes as f64 / 1e6)
-            }
-            UploadProgress::Needed { needed, .. } => {
-                if needed == 0 {
-                    println!("server already has every file");
-                } else {
-                    println!("server needs {needed} file(s):");
-                }
-            }
-            UploadProgress::FileUploaded {
-                path, index, count, ..
-            } => {
-                println!("[{index}/{count}] {path}")
-            }
-            UploadProgress::Committed {
-                patch_version,
-                files,
-                ..
-            } => {
-                println!("committed: {patch_version} ({files} files)")
-            }
-        },
+        &mut print_progress,
     )
     .await?;
     for published in &summary.published {
-        println!("Published {published}");
+        println!("Published {} {}", published.channel, published.version);
     }
 
     cfg.server = Some(server);
@@ -178,9 +275,10 @@ pub async fn upload_gamedata(
             upload_channel(&http, server, token, &plan, uploader, progress).await?;
         summary.uploaded_files += files;
         summary.uploaded_bytes += bytes;
-        summary
-            .published
-            .push(format!("{} {}", plan.channel, plan.version));
+        summary.published.push(PublishedChannel {
+            channel: plan.channel.to_string(),
+            version: plan.version.clone(),
+        });
     }
     Ok(summary)
 }

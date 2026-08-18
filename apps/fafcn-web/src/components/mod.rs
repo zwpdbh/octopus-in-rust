@@ -1,3 +1,4 @@
+mod comparison_panel;
 mod construction_item_card;
 mod eco_chart;
 mod eco_panel;
@@ -15,6 +16,7 @@ mod unit_selector_modal;
 mod unit_summary;
 mod websocket_service;
 
+pub use comparison_panel::ComparisonPanel;
 pub use construction_item_card::ConstructionItemCard;
 pub use eco_chart::EcoChart;
 pub use eco_panel::EcoPanel;

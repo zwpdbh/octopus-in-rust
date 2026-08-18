@@ -7,8 +7,15 @@ use crate::i18n::{self, Text};
 use crate::utils::{tech_level_short, CATEGORY_ORDER, FACTION_ORDER};
 
 /// Reusable unit picker with search, faction/kind/tech filters, and category grid.
+///
+/// `selected` is an optional display-only set of highlighted unit ids; the
+/// picker itself stays single-select (callers decide what a click means).
 #[component]
-pub fn UnitSelector(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary>) -> Element {
+pub fn UnitSelector(
+    units: Vec<UnitSummary>,
+    on_select: EventHandler<UnitSummary>,
+    #[props(default)] selected: HashSet<String>,
+) -> Element {
     let mut query = use_signal(String::new);
     let active_factions = use_signal(HashSet::<String>::new);
     let active_kinds = use_signal(HashSet::<String>::new);
@@ -53,7 +60,7 @@ pub fn UnitSelector(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary
                 }
             }
             div { class: "flex-1 overflow-auto p-4",
-                CategoryGrid { units: filtered, on_select }
+                CategoryGrid { units: filtered, on_select, selected }
             }
         }
     }
@@ -143,7 +150,11 @@ fn FilterButton(
 }
 
 #[component]
-fn CategoryGrid(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary>) -> Element {
+fn CategoryGrid(
+    units: Vec<UnitSummary>,
+    on_select: EventHandler<UnitSummary>,
+    #[props(default)] selected: HashSet<String>,
+) -> Element {
     let t = i18n::use_t();
     let mut by_category: std::collections::HashMap<String, Vec<UnitSummary>> =
         std::collections::HashMap::new();
@@ -171,6 +182,7 @@ fn CategoryGrid(units: Vec<UnitSummary>, on_select: EventHandler<UnitSummary>) -
                     category: i18n::translate_category(&category, t.0),
                     units,
                     on_select,
+                    selected: selected.clone(),
                 }
             }
         }
@@ -182,6 +194,7 @@ fn CategoryPanel(
     category: String,
     units: Vec<UnitSummary>,
     on_select: EventHandler<UnitSummary>,
+    #[props(default)] selected: HashSet<String>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -208,6 +221,7 @@ fn CategoryPanel(
                                 units: units.iter().filter(|u| u.faction.to_lowercase() == faction.to_lowercase() && u.tech_level == *tech).cloned().collect::<Vec<_>>(),
                                 faction,
                                 on_select,
+                                selected: selected.clone(),
                             }
                         }
                     }
@@ -222,6 +236,7 @@ fn TechCell(
     units: Vec<UnitSummary>,
     faction: &'static str,
     on_select: EventHandler<UnitSummary>,
+    #[props(default)] selected: HashSet<String>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -233,7 +248,7 @@ fn TechCell(
                     key: "{unit.id}",
                     unit: unit.clone(),
                     faction: faction.to_string(),
-                    selected: false,
+                    selected: selected.contains(&unit.id),
                     on_select,
                 }
             }
