@@ -66,12 +66,21 @@ pub struct ManifestSummary {
 /// Response of `GET /api/gamedata/status`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResponse {
-    /// Current mirror contents; `None` when nothing has been uploaded yet.
-    pub manifest: Option<ManifestSummary>,
+    /// Per-channel mirror state (gamedata, map-generator).
+    pub channels: Vec<ChannelStatus>,
     /// Build tag of the sync client binary currently served, so the web page
     /// can show users which build they will download.
     #[serde(default)]
     pub client_tag: Option<String>,
+}
+
+/// Mirror state of one sync channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelStatus {
+    /// Channel id (e.g. "gamedata", "map-generator").
+    pub name: String,
+    /// Current channel contents; `None` when nothing has been uploaded yet.
+    pub manifest: Option<ManifestSummary>,
 }
 
 /// Request of `POST /api/gamedata/upload/check`: which of these files the

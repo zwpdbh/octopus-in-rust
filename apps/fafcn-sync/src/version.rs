@@ -30,12 +30,20 @@ fn parse_version_lua(text: &str) -> Option<String> {
     Some(version.to_string())
 }
 
-/// Compare two patch versions numerically. Returns `None` when either side
-/// is not a plain number (comparison is then meaningless).
-pub fn compare_versions(a: &str, b: &str) -> Option<std::cmp::Ordering> {
-    let a: u64 = a.trim().parse().ok()?;
-    let b: u64 = b.trim().parse().ok()?;
-    Some(a.cmp(&b))
+/// The newest map generator version found below the FAForever root
+/// (`map_generator/MapGenerator_*.jar`).
+pub fn detect_generator_version(faf_root: &Path) -> Option<String> {
+    let mut versions: Vec<String> = std::fs::read_dir(faf_root.join("map_generator"))
+        .ok()?
+        .filter_map(|item| {
+            let name = item.ok()?.file_name().to_string_lossy().into_owned();
+            fafcn_gamedata::map_generator_jar_version(&name)
+        })
+        .collect();
+    versions.sort_by(|a, b| {
+        fafcn_gamedata::compare_version_strings(b, a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    versions.into_iter().next()
 }
 
 #[cfg(test)]
@@ -83,11 +91,14 @@ end
     }
 
     #[test]
-    fn compares_numeric_versions() {
-        use std::cmp::Ordering::*;
-        assert_eq!(compare_versions("3837", "3836"), Some(Greater));
-        assert_eq!(compare_versions("3837", "3837"), Some(Equal));
-        assert_eq!(compare_versions("3825", "3837"), Some(Less));
-        assert_eq!(compare_versions("abc", "3837"), None);
+    fn detects_generator_version() {
+        let dir = std::env::temp_dir().join(format!("fafcn-gen-test-{}", std::process::id()));
+        let gen = dir.join("map_generator");
+        std::fs::create_dir_all(&gen).unwrap();
+        std::fs::write(gen.join("MapGenerator_1.22.0.jar"), b"a").unwrap();
+        std::fs::write(gen.join("MapGenerator_1.22.1.jar"), b"b").unwrap();
+        std::fs::write(gen.join("MapGenerator_1.9.9.jar"), b"c").unwrap();
+        assert_eq!(detect_generator_version(&dir).as_deref(), Some("1.22.1"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -4,6 +4,14 @@ use gloo_net::http::Request;
 
 use crate::i18n::{self, Text};
 
+/// Localized channel display title.
+fn channel_title(t: i18n::T, name: &str) -> &'static str {
+    match name {
+        fafcn_gamedata::CHANNEL_MAP_GENERATOR => t.t(Text::ChannelMapGenerator),
+        _ => t.t(Text::ChannelGamedata),
+    }
+}
+
 /// Gamedata mirror status and sync-client download page.
 #[component]
 pub fn Sync() -> Element {
@@ -41,30 +49,43 @@ pub fn Sync() -> Element {
                         Some(Err(err)) => rsx! {
                             p { class: "text-red-400 text-sm", "{t.t(Text::LoadStatusFailed)}{err}" }
                         },
-                        Some(Ok(resp)) => match &resp.manifest {
-                            None => rsx! {
-                                p { class: "text-amber-400 text-sm", "{t.t(Text::MirrorEmpty)}" }
-                            },
-                            Some(m) => {
-                                let last_updated =
-                                    m.last_updated.format("%Y-%m-%d %H:%M UTC").to_string();
-                                let total_mb = format!("{:.1} MB", m.total_size as f64 / 1e6);
-                                rsx! {
-                                dl { class: "grid grid-cols-2 gap-y-2 text-sm",
-                                    dt { class: "text-neutral-400", "{t.t(Text::PatchVersion)}" }
-                                    dd { class: "text-white font-mono", "{m.patch_version}" }
-                                    dt { class: "text-neutral-400", "{t.t(Text::LastUpdated)}" }
-                                    dd { class: "text-white font-mono", "{last_updated}" }
-                                    dt { class: "text-neutral-400", "{t.t(Text::UploadedBy)}" }
-                                    dd { class: "text-white", "{m.uploader}" }
-                                    dt { class: "text-neutral-400", "{t.t(Text::FileCount)}" }
-                                    dd { class: "text-white", "{m.file_count}" }
-                                    dt { class: "text-neutral-400", "{t.t(Text::TotalSize)}" }
-                                    dd { class: "text-white", "{total_mb}" }
+                        Some(Ok(resp)) => {
+                            let all_empty = resp.channels.iter().all(|c| c.manifest.is_none());
+                            rsx! {
+                                if all_empty {
+                                    p { class: "text-amber-400 text-sm", "{t.t(Text::MirrorEmpty)}" }
                                 }
+                                for ch in &resp.channels {
+                                    div { class: "mb-3 last:mb-0",
+                                        h3 { class: "text-sm font-semibold text-blue-300 mb-2", {channel_title(t, &ch.name)} }
+                                        match &ch.manifest {
+                                            None => rsx! {
+                                                p { class: "text-neutral-500 text-xs", "{t.t(Text::ChannelNotPublished)}" }
+                                            },
+                                            Some(m) => {
+                                                let last_updated =
+                                                    m.last_updated.format("%Y-%m-%d %H:%M UTC").to_string();
+                                                let total_mb = format!("{:.1} MB", m.total_size as f64 / 1e6);
+                                                rsx! {
+                                                    dl { class: "grid grid-cols-2 gap-y-1.5 text-xs",
+                                                        dt { class: "text-neutral-400", "{t.t(Text::PatchVersion)}" }
+                                                        dd { class: "text-white font-mono", "{m.patch_version}" }
+                                                        dt { class: "text-neutral-400", "{t.t(Text::LastUpdated)}" }
+                                                        dd { class: "text-white font-mono", "{last_updated}" }
+                                                        dt { class: "text-neutral-400", "{t.t(Text::UploadedBy)}" }
+                                                        dd { class: "text-white", "{m.uploader}" }
+                                                        dt { class: "text-neutral-400", "{t.t(Text::FileCount)}" }
+                                                        dd { class: "text-white", "{m.file_count}" }
+                                                        dt { class: "text-neutral-400", "{t.t(Text::TotalSize)}" }
+                                                        dd { class: "text-white", "{total_mb}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            },
-                        },
+                            }
+                        }
                     }
                 }
 
@@ -78,10 +99,16 @@ pub fn Sync() -> Element {
                     }
                     p { class: "mt-2 text-xs text-neutral-500 font-mono",
                         "{t.t(Text::ClientVersion)}: "
-                        {match &client_tag {
-                            Some(tag) => rsx! { span { class: "text-green-400", "{tag}" } },
-                            None => rsx! { span { "{t.t(Text::ClientVersionMissing)}" } },
-                        }}
+                        {
+                            match &client_tag {
+                                Some(tag) => rsx! {
+                                    span { class: "text-green-400", "{tag}" }
+                                },
+                                None => rsx! {
+                                    span { "{t.t(Text::ClientVersionMissing)}" }
+                                },
+                            }
+                        }
                     }
                     ol { class: "list-decimal list-inside mt-4 space-y-2 text-sm text-neutral-300",
                         li { "{t.t(Text::SyncStepDownload)}" }

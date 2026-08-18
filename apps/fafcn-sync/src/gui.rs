@@ -5,7 +5,7 @@
 //! a new patch set with the group token.
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::mpsc::{channel, Receiver},
     thread,
 };
@@ -152,6 +152,10 @@ enum Txt {
     FieldUploader,
     VersionAuto,
     VersionUndetected,
+    GeneratorVersion,
+    GeneratorMissing,
+    ChannelGamedata,
+    ChannelMapGenerator,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -162,19 +166,19 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::TabUpload, GuiLang::En) => "Upload",
         (Txt::ServerLabel, GuiLang::Zh) => "镜像地址",
         (Txt::ServerLabel, GuiLang::En) => "Mirror address",
-        (Txt::DirLabel, GuiLang::Zh) => "gamedata 目录",
-        (Txt::DirLabel, GuiLang::En) => "gamedata folder",
+        (Txt::DirLabel, GuiLang::Zh) => "FAForever 目录",
+        (Txt::DirLabel, GuiLang::En) => "FAForever folder",
         (Txt::Browse, GuiLang::Zh) => "浏览…",
         (Txt::Browse, GuiLang::En) => "Browse…",
         (Txt::Detect, GuiLang::Zh) => "自动检测",
         (Txt::Detect, GuiLang::En) => "Auto-detect",
-        (Txt::DirValid, GuiLang::Zh) => "有效的 FAF gamedata 目录",
-        (Txt::DirValid, GuiLang::En) => "Valid FAF gamedata folder",
+        (Txt::DirValid, GuiLang::Zh) => "有效的 FAForever 目录",
+        (Txt::DirValid, GuiLang::En) => "Valid FAForever folder",
         (Txt::DirSuspicious, GuiLang::Zh) => {
-            "注意:该目录看起来不像 FAF gamedata 目录(应为 FAForever\\gamedata 且包含 .nx2 文件)"
+            "注意:该目录看起来不像 FAForever 目录(应包含 gamedata 子目录及 .nx2 文件)"
         }
         (Txt::DirSuspicious, GuiLang::En) => {
-            "Warning: this doesn't look like a FAF gamedata folder (expected FAForever\\gamedata containing .nx2 files)"
+            "Warning: this doesn't look like the FAForever folder (expected a gamedata subfolder containing .nx2 files)"
         }
         (Txt::DirMissing, GuiLang::Zh) => "错误:目录不存在",
         (Txt::DirMissing, GuiLang::En) => "Error: folder does not exist",
@@ -204,8 +208,8 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::MissingPrefix, GuiLang::En) => "Still needed: ",
         (Txt::FieldServer, GuiLang::Zh) => "镜像地址",
         (Txt::FieldServer, GuiLang::En) => "mirror address",
-        (Txt::FieldDir, GuiLang::Zh) => "gamedata 目录",
-        (Txt::FieldDir, GuiLang::En) => "gamedata folder",
+        (Txt::FieldDir, GuiLang::Zh) => "FAForever 目录",
+        (Txt::FieldDir, GuiLang::En) => "FAForever folder",
         (Txt::FieldToken, GuiLang::Zh) => "上传令牌",
         (Txt::FieldToken, GuiLang::En) => "upload token",
         (Txt::FieldPatchVersion, GuiLang::Zh) => "补丁版本",
@@ -216,19 +220,58 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::VersionAuto, GuiLang::En) => "(auto-detected from lua.nx2)",
         (Txt::VersionUndetected, GuiLang::Zh) => "无法自动检测,请手动填写",
         (Txt::VersionUndetected, GuiLang::En) => "could not auto-detect; enter manually",
+        (Txt::GeneratorVersion, GuiLang::Zh) => "地图生成器",
+        (Txt::GeneratorVersion, GuiLang::En) => "map generator",
+        (Txt::GeneratorMissing, GuiLang::Zh) => "未安装,上传时跳过",
+        (Txt::GeneratorMissing, GuiLang::En) => "not installed; skipped on upload",
+        (Txt::ChannelGamedata, GuiLang::Zh) => "游戏数据",
+        (Txt::ChannelGamedata, GuiLang::En) => "gamedata",
+        (Txt::ChannelMapGenerator, GuiLang::Zh) => "地图生成器",
+        (Txt::ChannelMapGenerator, GuiLang::En) => "map-generator",
     }
 }
 
 // --- Interpolated log lines ---
 
-fn log_manifest(lang: GuiLang, patch: &str, files: usize, mb: f64, uploader: &str) -> String {
+/// Localized display name for a channel id.
+fn channel_name(lang: GuiLang, channel: &str) -> &'static str {
+    match channel {
+        fafcn_gamedata::CHANNEL_MAP_GENERATOR => tr(lang, Txt::ChannelMapGenerator),
+        _ => tr(lang, Txt::ChannelGamedata),
+    }
+}
+
+fn log_channel_started(lang: GuiLang, channel: &str) -> String {
+    format!("—— {} ——", channel_name(lang, channel))
+}
+
+fn log_channel_empty(lang: GuiLang, channel: &str) -> String {
     match lang {
-        GuiLang::Zh => {
-            format!("镜像补丁版本 {patch}({files} 个文件,{mb:.1} MB),由 {uploader} 上传")
-        }
-        GuiLang::En => {
-            format!("Mirror patch {patch} ({files} files, {mb:.1} MB), uploaded by {uploader}")
-        }
+        GuiLang::Zh => format!("镜像还没有{},请上传者先发布", channel_name(lang, channel)),
+        GuiLang::En => format!(
+            "mirror has no {} yet — ask an uploader to publish it",
+            channel_name(lang, channel)
+        ),
+    }
+}
+
+fn log_manifest(
+    lang: GuiLang,
+    channel: &str,
+    patch: &str,
+    files: usize,
+    mb: f64,
+    uploader: &str,
+) -> String {
+    match lang {
+        GuiLang::Zh => format!(
+            "{}版本 {patch}({files} 个文件,{mb:.1} MB),由 {uploader} 上传",
+            channel_name(lang, channel)
+        ),
+        GuiLang::En => format!(
+            "{} {patch} ({files} files, {mb:.1} MB), uploaded by {uploader}",
+            channel_name(lang, channel)
+        ),
     }
 }
 
@@ -236,7 +279,7 @@ fn log_plan(lang: GuiLang, downloads: usize, mb: f64) -> String {
     match (lang, downloads) {
         (_, 0) => match lang {
             GuiLang::Zh => "已是最新,无需下载。".to_string(),
-            GuiLang::En => "Everything is up to date — nothing to download.".to_string(),
+            GuiLang::En => "up to date — nothing to download.".to_string(),
         },
         (GuiLang::Zh, _) => format!("需要下载 {downloads} 个文件,共 {mb:.1} MB"),
         (GuiLang::En, _) => format!("Downloading {downloads} file(s), {mb:.1} MB total"),
@@ -247,6 +290,13 @@ fn log_file(lang: GuiLang, index: usize, count: usize, path: &str) -> String {
     match lang {
         GuiLang::Zh => format!("[{index}/{count}] 已安装 {path}"),
         GuiLang::En => format!("[{index}/{count}] installed {path}"),
+    }
+}
+
+fn log_pruned(lang: GuiLang, path: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("已清理旧版本:{path}"),
+        GuiLang::En => format!("pruned old version: {path}"),
     }
 }
 
@@ -294,30 +344,36 @@ fn log_uploaded_file(lang: GuiLang, index: usize, count: usize, path: &str) -> S
     }
 }
 
-fn log_committed(lang: GuiLang, files: usize) -> String {
+fn log_committed(lang: GuiLang, channel: &str, files: usize) -> String {
     match lang {
-        GuiLang::Zh => format!("清单已提交({files} 个文件)"),
-        GuiLang::En => format!("Manifest committed ({files} files)"),
+        GuiLang::Zh => format!("{}清单已提交({files} 个文件)", channel_name(lang, channel)),
+        GuiLang::En => {
+            format!(
+                "{} manifest committed ({files} files)",
+                channel_name(lang, channel)
+            )
+        }
     }
 }
 
-fn log_upload_done(lang: GuiLang, patch: &str, files: usize, mb: f64) -> String {
+fn log_channel_skipped(lang: GuiLang, channel: &str, reason: &str) -> String {
     match lang {
-        GuiLang::Zh => {
-            if files == 0 {
-                format!("上传完成:服务器已有全部文件,补丁 {patch} 已重新发布。")
-            } else {
-                format!("上传完成:共上传 {files} 个文件({mb:.1} MB),补丁 {patch} 已发布,所有人现在都可以同步了!")
-            }
-        }
+        GuiLang::Zh => format!("跳过{}:{reason}", channel_name(lang, channel)),
+        GuiLang::En => format!("skipping {}: {reason}", channel_name(lang, channel)),
+    }
+}
+
+fn log_upload_done(lang: GuiLang, published: &[String]) -> String {
+    match lang {
+        GuiLang::Zh => format!(
+            "上传完成,已发布:{},所有人现在都可以同步了!",
+            published.join(", ")
+        ),
         GuiLang::En => {
-            if files == 0 {
-                format!(
-                    "Upload complete: server already had everything; patch {patch} republished."
-                )
-            } else {
-                format!("Upload complete — {files} file(s) ({mb:.1} MB) sent; patch {patch} is live for everyone!")
-            }
+            format!(
+                "Upload complete — published: {}. It's live for everyone!",
+                published.join(", ")
+            )
         }
     }
 }
@@ -358,6 +414,7 @@ struct SyncApp {
     uploader: String,
     // Patch version auto-detected from lua.nx2 (recomputed when dir changes).
     detected_version: Option<String>,
+    detected_generator: Option<String>,
     version_dir: String,
     // Server's current patch version (fetched while on the upload tab).
     server_version: Option<String>,
@@ -378,7 +435,8 @@ impl SyncApp {
         let dir = cfg
             .gamedata_dir
             .clone()
-            .or_else(sync::autodetect_gamedata_dir)
+            .map(sync::normalize_faf_dir)
+            .or_else(sync::autodetect_faf_dir)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
         Self {
@@ -390,6 +448,7 @@ impl SyncApp {
             patch_version: String::new(),
             uploader: cfg.uploader.unwrap_or_default(),
             detected_version: None,
+            detected_generator: None,
             version_dir: String::new(),
             server_version: None,
             status_rx: None,
@@ -406,9 +465,14 @@ impl SyncApp {
         self.worker.is_some()
     }
 
+    /// The FAForever root from the dir field (tolerates a gamedata subpath).
+    fn faf_root(&self) -> PathBuf {
+        sync::normalize_faf_dir(PathBuf::from(self.dir.trim()))
+    }
+
     fn start_sync(&mut self) {
         let server = self.server.trim().trim_end_matches('/').to_string();
-        let dir = PathBuf::from(self.dir.trim());
+        let dir = self.faf_root();
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
@@ -432,9 +496,9 @@ impl SyncApp {
 
     fn start_upload(&mut self) {
         let server = self.server.trim().trim_end_matches('/').to_string();
-        let dir = PathBuf::from(self.dir.trim());
+        let dir = self.faf_root();
         let token = self.token.trim().to_string();
-        let patch_version = self.effective_patch_version().unwrap_or_default();
+        let patch_version = self.patch_version.trim().to_string();
         let uploader = self.uploader.trim().to_string();
         let (tx, rx) = channel();
         self.worker = Some(rx);
@@ -452,7 +516,11 @@ impl SyncApp {
                     &server,
                     &token,
                     &dir,
-                    &patch_version,
+                    if patch_version.is_empty() {
+                        None
+                    } else {
+                        Some(patch_version.as_str())
+                    },
                     &uploader,
                     &mut |event| {
                         let _ = tx.send(WorkerMsg::Upload(event));
@@ -468,7 +536,7 @@ impl SyncApp {
     fn persisted_config(&self) -> ClientConfig {
         let mut cfg = ClientConfig::load();
         cfg.server = Some(self.server.trim().trim_end_matches('/').to_string());
-        cfg.gamedata_dir = Some(PathBuf::from(self.dir.trim()));
+        cfg.gamedata_dir = Some(self.faf_root());
         cfg.lang = Some(self.lang.code().to_string());
         if !self.token.trim().is_empty() {
             cfg.upload_token = Some(self.token.trim().to_string());
@@ -484,7 +552,14 @@ impl SyncApp {
         if let Some(rx) = &self.worker {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    WorkerMsg::Sync(SyncProgress::ChannelStarted { channel }) => {
+                        self.log.push(log_channel_started(self.lang, &channel));
+                    }
+                    WorkerMsg::Sync(SyncProgress::ChannelEmpty { channel }) => {
+                        self.log.push(log_channel_empty(self.lang, &channel));
+                    }
                     WorkerMsg::Sync(SyncProgress::ManifestLoaded {
+                        channel,
                         patch_version,
                         uploader,
                         file_count,
@@ -492,6 +567,7 @@ impl SyncApp {
                     }) => {
                         self.log.push(log_manifest(
                             self.lang,
+                            &channel,
                             &patch_version,
                             file_count,
                             total_bytes as f64 / 1e6,
@@ -501,14 +577,20 @@ impl SyncApp {
                     WorkerMsg::Sync(SyncProgress::PlanReady {
                         downloads,
                         total_bytes,
+                        ..
                     }) => {
                         self.progress = (0, downloads);
                         self.log
                             .push(log_plan(self.lang, downloads, total_bytes as f64 / 1e6));
                     }
-                    WorkerMsg::Sync(SyncProgress::FileInstalled { path, index, count }) => {
+                    WorkerMsg::Sync(SyncProgress::FileInstalled {
+                        path, index, count, ..
+                    }) => {
                         self.progress = (index, count);
                         self.log.push(log_file(self.lang, index, count, &path));
+                    }
+                    WorkerMsg::Sync(SyncProgress::Pruned { path, .. }) => {
+                        self.log.push(log_pruned(self.lang, &path));
                     }
                     WorkerMsg::SyncDone(Ok(summary)) => {
                         self.log
@@ -521,29 +603,36 @@ impl SyncApp {
                         self.sync_state = ActionState::Failed;
                         finished = true;
                     }
-                    WorkerMsg::Upload(UploadProgress::Scanned { files, total_bytes }) => {
+                    WorkerMsg::Upload(UploadProgress::ChannelStarted { channel }) => {
+                        self.log.push(log_channel_started(self.lang, &channel));
+                    }
+                    WorkerMsg::Upload(UploadProgress::ChannelSkipped { channel, reason }) => {
+                        self.log
+                            .push(log_channel_skipped(self.lang, &channel, &reason));
+                    }
+                    WorkerMsg::Upload(UploadProgress::Scanned {
+                        files, total_bytes, ..
+                    }) => {
                         self.log
                             .push(log_scanned(self.lang, files, total_bytes as f64 / 1e6));
                     }
-                    WorkerMsg::Upload(UploadProgress::Needed { needed }) => {
+                    WorkerMsg::Upload(UploadProgress::Needed { needed, .. }) => {
                         self.progress = (0, needed);
                         self.log.push(log_needed(self.lang, needed));
                     }
-                    WorkerMsg::Upload(UploadProgress::FileUploaded { path, index, count }) => {
+                    WorkerMsg::Upload(UploadProgress::FileUploaded {
+                        path, index, count, ..
+                    }) => {
                         self.progress = (index, count);
                         self.log
                             .push(log_uploaded_file(self.lang, index, count, &path));
                     }
-                    WorkerMsg::Upload(UploadProgress::Committed { files, .. }) => {
-                        self.log.push(log_committed(self.lang, files));
+                    WorkerMsg::Upload(UploadProgress::Committed { channel, files, .. }) => {
+                        self.log.push(log_committed(self.lang, &channel, files));
                     }
                     WorkerMsg::UploadDone(Ok(summary)) => {
-                        self.log.push(log_upload_done(
-                            self.lang,
-                            &summary.patch_version,
-                            summary.uploaded_files,
-                            summary.uploaded_bytes as f64 / 1e6,
-                        ));
+                        self.log
+                            .push(log_upload_done(self.lang, &summary.published));
                         self.upload_state = ActionState::Succeeded;
                         finished = true;
                     }
@@ -569,8 +658,8 @@ impl SyncApp {
         if dir.is_empty() {
             return None;
         }
-        let path = PathBuf::from(dir);
-        if sync::is_valid_gamedata_dir(&path) {
+        let path = self.faf_root();
+        if sync::is_valid_faf_dir(&path) {
             Some((egui::Color32::LIGHT_GREEN, tr(self.lang, Txt::DirValid)))
         } else if path.is_dir() {
             Some((egui::Color32::YELLOW, tr(self.lang, Txt::DirSuspicious)))
@@ -595,7 +684,7 @@ impl SyncApp {
         ui.add_enabled_ui(!busy, |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.dir)
-                    .hint_text(r"C:\ProgramData\FAForever\gamedata")
+                    .hint_text(r"C:\ProgramData\FAForever")
                     .desired_width(f32::INFINITY),
             );
             ui.horizontal(|ui| {
@@ -605,7 +694,7 @@ impl SyncApp {
                     }
                 }
                 if ui.button(tr(self.lang, Txt::Detect)).clicked() {
-                    if let Some(path) = sync::autodetect_gamedata_dir() {
+                    if let Some(path) = sync::autodetect_faf_dir() {
                         self.dir = path.to_string_lossy().into_owned();
                     }
                 }
@@ -620,7 +709,9 @@ impl SyncApp {
     fn detected_patch_version(&mut self) -> Option<String> {
         if self.version_dir != self.dir {
             self.version_dir = self.dir.clone();
-            self.detected_version = version::detect_patch_version(Path::new(self.dir.trim()));
+            let root = PathBuf::from(self.dir.trim());
+            self.detected_version = version::detect_patch_version(&root.join("gamedata"));
+            self.detected_generator = version::detect_generator_version(&root);
         }
         self.detected_version.clone()
     }
@@ -656,7 +747,7 @@ impl SyncApp {
                 .build()
                 .expect("tokio runtime")
                 .block_on(async move {
-                    let url = crate::api::api_url(&server, "manifest.json");
+                    let url = crate::api::api_url(&server, "channels/gamedata/manifest.json");
                     let resp = reqwest::get(url).await.ok()?;
                     if !resp.status().is_success() {
                         return None;
@@ -676,7 +767,8 @@ impl SyncApp {
         let local = self.effective_patch_version();
         match (self.server_version.as_deref(), local.as_deref()) {
             (Some(server), Some(local)) => {
-                version::compare_versions(server, local) == Some(std::cmp::Ordering::Greater)
+                fafcn_gamedata::compare_version_strings(server, local)
+                    == Some(std::cmp::Ordering::Greater)
             }
             _ => false,
         }
@@ -688,7 +780,7 @@ impl SyncApp {
         if self.server.trim().is_empty() {
             missing.push(tr(self.lang, Txt::FieldServer));
         }
-        if !PathBuf::from(self.dir.trim()).is_dir() {
+        if !self.faf_root().is_dir() {
             missing.push(tr(self.lang, Txt::FieldDir));
         }
         if self.tab == Tab::Upload {
@@ -834,6 +926,22 @@ impl eframe::App for SyncApp {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
                     });
+                });
+                // Map generator version (auto-detected; informational only).
+                ui.horizontal(|ui| {
+                    ui.label(tr(self.lang, Txt::GeneratorVersion));
+                    match &self.detected_generator {
+                        Some(v) => {
+                            ui.strong(v);
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new(tr(self.lang, Txt::GeneratorMissing))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                    }
                 });
                 ui.label(
                     egui::RichText::new(tr(self.lang, Txt::UploadHint))

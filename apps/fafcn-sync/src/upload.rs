@@ -1,26 +1,45 @@
 //! Gamedata upload core, shared by the CLI and the GUI.
 //!
-//! Flow: hash the local directory → ask the server which files it still needs
-//! → upload only those → commit the manifest. Re-running after an interrupted
-//! upload therefore resumes cheaply.
+//! Publishes every channel from the local `FAForever` root:
+//!
+//! - `gamedata`: only [`GAMEDATA_SYNC_FILES`] (the big patch archives),
+//!   versioned by the FAF patch version from `lua.nx2`.
+//! - `map-generator`: the newest [`MAP_GENERATOR_KEEP`] `MapGenerator_*.jar`
+//!   files, versioned by the newest jar.
+//!
+//! Flow per channel: hash local files → ask the server which it still needs
+//! → upload only those → commit the manifest. Re-running after an
+//! interrupted upload therefore resumes cheaply.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use fafcn_gamedata::{
-    sha256_file, validate_relative_path, FileEntry, Manifest, UploadCheckRequest,
-    UploadCheckResponse, UploadCommitRequest,
+    compare_version_strings, map_generator_jar_version, sha256_file, validate_relative_path,
+    FileEntry, Manifest, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
+    CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
-use walkdir::WalkDir;
 
-use crate::{api, config::ClientConfig, sync::relative_slash_path, UploadArgs};
+use crate::{api, config::ClientConfig, version, UploadArgs};
 
 /// Progress events emitted while uploading.
 pub enum UploadProgress {
-    /// The local directory was hashed.
+    /// Started working on a channel.
+    ChannelStarted {
+        /// Channel id.
+        channel: String,
+    },
+    /// A channel was skipped (e.g. no map generator installed locally).
+    ChannelSkipped {
+        /// Channel id.
+        channel: String,
+        /// Why it was skipped.
+        reason: String,
+    },
+    /// The channel's local files were hashed.
     Scanned {
-        /// Number of files found.
+        /// Number of files to publish.
         files: usize,
         /// Total size in bytes.
         total_bytes: u64,
@@ -39,9 +58,11 @@ pub enum UploadProgress {
         /// Total files in this run.
         count: usize,
     },
-    /// The manifest was committed; the mirror is live.
+    /// The manifest was committed; the channel is live.
     Committed {
-        /// Published patch version.
+        /// Channel id.
+        channel: String,
+        /// Published version.
         patch_version: String,
         /// Files in the manifest.
         files: usize,
@@ -50,12 +71,20 @@ pub enum UploadProgress {
 
 /// What a finished upload did.
 pub struct UploadSummary {
-    /// Files actually uploaded (0 = server already had everything).
+    /// Files actually uploaded across all channels.
     pub uploaded_files: usize,
     /// Bytes uploaded.
     pub uploaded_bytes: u64,
-    /// Published patch version.
-    pub patch_version: String,
+    /// Published channels as `channel version` strings.
+    pub published: Vec<String>,
+}
+
+/// One channel's upload plan: what to publish under which version.
+struct ChannelPlan {
+    channel: &'static str,
+    source_dir: std::path::PathBuf,
+    version: String,
+    entries: Vec<FileEntry>,
 }
 
 /// Run the CLI `upload` subcommand (prints progress to stdout).
@@ -67,94 +96,205 @@ pub async fn run(args: UploadArgs) -> Result<()> {
         .or_else(|| std::env::var("USERNAME").ok())
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "unknown".to_string());
-    let patch_version = match args.patch_version {
-        Some(v) => v,
-        None => {
-            let detected = crate::version::detect_patch_version(&args.dir).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "could not detect the patch version from {}/lua.nx2; pass --patch-version",
-                    args.dir.display()
-                )
-            })?;
-            println!("Auto-detected patch version: {detected}");
-            detected
-        }
-    };
-    println!("Mirror:  {server}");
-    println!("Source:  {}", args.dir.display());
+    println!("Mirror:    {server}");
+    println!("FAForever: {}", args.dir.display());
 
     let summary = upload_gamedata(
         &server,
         &args.token,
         &args.dir,
-        &patch_version,
+        args.patch_version.as_deref(),
         &uploader,
         &mut |event| match event {
-            UploadProgress::Scanned { files, total_bytes } => {
-                println!(
-                    "Found {files} file(s), {:.1} MB total.",
-                    total_bytes as f64 / 1e6
-                );
+            UploadProgress::ChannelStarted { channel } => println!("== {channel} =="),
+            UploadProgress::ChannelSkipped { channel, reason } => {
+                println!("skipping {channel}: {reason}")
             }
-            UploadProgress::Needed { needed } => {
+            UploadProgress::Scanned {
+                files, total_bytes, ..
+            } => {
+                println!("found {files} file(s), {:.1} MB", total_bytes as f64 / 1e6)
+            }
+            UploadProgress::Needed { needed, .. } => {
                 if needed == 0 {
-                    println!("Server already has every file — nothing to upload.");
+                    println!("server already has every file");
                 } else {
-                    println!("Server needs {needed} file(s):");
+                    println!("server needs {needed} file(s):");
                 }
             }
-            UploadProgress::FileUploaded { path, index, count } => {
-                println!("[{index}/{count}] {path}");
+            UploadProgress::FileUploaded {
+                path, index, count, ..
+            } => {
+                println!("[{index}/{count}] {path}")
             }
             UploadProgress::Committed {
                 patch_version,
                 files,
+                ..
             } => {
-                println!("Manifest committed: patch {patch_version}, {files} files.");
+                println!("committed: {patch_version} ({files} files)")
             }
         },
     )
     .await?;
-    println!(
-        "Published patch {} — the mirror is now live for everyone.",
-        summary.patch_version
-    );
+    for published in &summary.published {
+        println!("Published {published}");
+    }
 
     cfg.server = Some(server);
+    cfg.gamedata_dir = Some(args.dir);
     cfg.save()?;
     Ok(())
 }
 
-/// Upload the complete gamedata set under `dir` to the mirror, reporting
-/// progress. Only files the server lacks (or has with a different hash) are
-/// transferred.
+/// Upload every channel from the local `FAForever` root, reporting progress.
+///
+/// `gamedata_version_override` forces the gamedata channel version (CLI flag);
+/// normally it is auto-detected from `lua.nx2`.
 pub async fn upload_gamedata(
     server: &str,
     token: &str,
-    dir: &Path,
-    patch_version: &str,
+    faf_root: &Path,
+    gamedata_version_override: Option<&str>,
     uploader: &str,
     progress: &mut dyn FnMut(UploadProgress),
 ) -> Result<UploadSummary> {
-    if !dir.is_dir() {
-        anyhow::bail!("{} is not a directory", dir.display());
+    if !faf_root.is_dir() {
+        anyhow::bail!("{} is not a directory", faf_root.display());
     }
-    if patch_version.trim().is_empty() {
-        anyhow::bail!("patch version must not be empty");
+    if uploader.trim().is_empty() {
+        anyhow::bail!("uploader name must not be empty");
     }
 
-    let entries = scan_directory(dir)?;
-    if entries.is_empty() {
-        anyhow::bail!("{} contains no files", dir.display());
+    let http = reqwest::Client::new();
+    let mut summary = UploadSummary {
+        uploaded_files: 0,
+        uploaded_bytes: 0,
+        published: Vec::new(),
+    };
+
+    for plan in plan_channels(faf_root, gamedata_version_override, progress)? {
+        let (files, bytes) =
+            upload_channel(&http, server, token, &plan, uploader, progress).await?;
+        summary.uploaded_files += files;
+        summary.uploaded_bytes += bytes;
+        summary
+            .published
+            .push(format!("{} {}", plan.channel, plan.version));
     }
-    let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
+    Ok(summary)
+}
+
+/// Build the upload plan for every channel available locally.
+fn plan_channels(
+    faf_root: &Path,
+    gamedata_version_override: Option<&str>,
+    progress: &mut dyn FnMut(UploadProgress),
+) -> Result<Vec<ChannelPlan>> {
+    let mut plans = Vec::new();
+
+    // gamedata: the big patch archives, version from lua.nx2 (or override).
+    let gamedata_dir = faf_root.join("gamedata");
+    let version = match gamedata_version_override {
+        Some(v) => v.to_string(),
+        None => version::detect_patch_version(&gamedata_dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not detect the patch version from {}/lua.nx2",
+                gamedata_dir.display()
+            )
+        })?,
+    };
+    let mut entries = Vec::new();
+    for name in GAMEDATA_SYNC_FILES {
+        let path = gamedata_dir.join(name);
+        if !path.is_file() {
+            anyhow::bail!(
+                "required gamedata file {} not found in {}",
+                name,
+                gamedata_dir.display()
+            );
+        }
+        entries.push(hash_file(&gamedata_dir, &path)?);
+    }
+    plans.push(ChannelPlan {
+        channel: CHANNEL_GAMEDATA,
+        source_dir: gamedata_dir,
+        version,
+        entries,
+    });
+
+    // map-generator: newest few jars (optional channel).
+    let generator_dir = faf_root.join("map_generator");
+    match newest_generator_jars(&generator_dir) {
+        Some((version, entries)) => plans.push(ChannelPlan {
+            channel: CHANNEL_MAP_GENERATOR,
+            source_dir: generator_dir,
+            version,
+            entries,
+        }),
+        None => progress(UploadProgress::ChannelSkipped {
+            channel: CHANNEL_MAP_GENERATOR.to_string(),
+            reason: "no MapGenerator_*.jar found".to_string(),
+        }),
+    }
+
+    Ok(plans)
+}
+
+/// The newest [`MAP_GENERATOR_KEEP`] generator jars and their version.
+fn newest_generator_jars(dir: &Path) -> Option<(String, Vec<FileEntry>)> {
+    let mut jars: Vec<(String, String)> = Vec::new(); // (file_name, version)
+    for item in fs::read_dir(dir).ok()? {
+        let name = item.ok()?.file_name().to_string_lossy().into_owned();
+        if let Some(v) = map_generator_jar_version(&name) {
+            jars.push((name, v));
+        }
+    }
+    if jars.is_empty() {
+        return None;
+    }
+    jars.sort_by(|a, b| compare_version_strings(&b.1, &a.1).unwrap_or(std::cmp::Ordering::Equal));
+    jars.truncate(MAP_GENERATOR_KEEP);
+    let version = jars.first()?.1.clone();
+    let mut entries = Vec::new();
+    for (name, _) in jars {
+        entries.push(hash_file(dir, &dir.join(name)).ok()?);
+    }
+    Some((version, entries))
+}
+
+/// Hash one file into a manifest entry.
+fn hash_file(dir: &Path, path: &Path) -> Result<FileEntry> {
+    let rel = crate::sync::relative_slash_path(dir, path);
+    validate_relative_path(&rel).with_context(|| format!("unsupported path: {rel}"))?;
+    let size = fs::metadata(path)?.len();
+    let sha256 = sha256_file(path).with_context(|| format!("failed to hash {}", path.display()))?;
+    Ok(FileEntry {
+        path: rel,
+        size,
+        sha256,
+    })
+}
+
+/// Upload one channel per its plan. Returns (files uploaded, bytes uploaded).
+async fn upload_channel(
+    http: &reqwest::Client,
+    server: &str,
+    token: &str,
+    plan: &ChannelPlan,
+    uploader: &str,
+    progress: &mut dyn FnMut(UploadProgress),
+) -> Result<(usize, u64)> {
+    progress(UploadProgress::ChannelStarted {
+        channel: plan.channel.to_string(),
+    });
+    let total_bytes: u64 = plan.entries.iter().map(|e| e.size).sum();
     progress(UploadProgress::Scanned {
-        files: entries.len(),
+        files: plan.entries.len(),
         total_bytes,
     });
 
-    let http = reqwest::Client::new();
-    let needed = check_needed(&http, server, token, &entries).await?;
+    let needed = check_needed(http, server, token, plan.channel, &plan.entries).await?;
     progress(UploadProgress::Needed {
         needed: needed.len(),
     });
@@ -162,7 +302,7 @@ pub async fn upload_gamedata(
     let mut uploaded_bytes = 0_u64;
     let count = needed.len();
     for (i, entry) in needed.iter().enumerate() {
-        upload_one(&http, server, token, dir, entry).await?;
+        upload_one(http, server, token, plan.channel, &plan.source_dir, entry).await?;
         uploaded_bytes += entry.size;
         progress(UploadProgress::FileUploaded {
             path: entry.path.clone(),
@@ -172,49 +312,23 @@ pub async fn upload_gamedata(
     }
 
     let manifest = commit(
-        &http,
+        http,
         server,
         token,
+        plan.channel,
         UploadCommitRequest {
-            patch_version: patch_version.to_string(),
+            patch_version: plan.version.clone(),
             uploader: uploader.to_string(),
-            files: entries,
+            files: plan.entries.clone(),
         },
     )
     .await?;
     progress(UploadProgress::Committed {
+        channel: plan.channel.to_string(),
         patch_version: manifest.patch_version.clone(),
         files: manifest.files.len(),
     });
-
-    Ok(UploadSummary {
-        uploaded_files: count,
-        uploaded_bytes,
-        patch_version: manifest.patch_version,
-    })
-}
-
-/// Hash every regular file below `dir` into a manifest entry list.
-fn scan_directory(dir: &Path) -> Result<Vec<FileEntry>> {
-    let mut entries = Vec::new();
-    for item in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-        if !item.file_type().is_file() {
-            continue;
-        }
-        let rel = relative_slash_path(dir, item.path());
-        validate_relative_path(&rel)
-            .with_context(|| format!("local file has an unsupported path: {rel}"))?;
-        let size = fs::metadata(item.path())?.len();
-        let sha256 = sha256_file(item.path())
-            .with_context(|| format!("failed to hash {}", item.path().display()))?;
-        entries.push(FileEntry {
-            path: rel,
-            size,
-            sha256,
-        });
-    }
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(entries)
+    Ok((count, uploaded_bytes))
 }
 
 /// Ask the server which of our files it still needs.
@@ -222,9 +336,10 @@ async fn check_needed(
     http: &reqwest::Client,
     server: &str,
     token: &str,
+    channel: &str,
     entries: &[FileEntry],
 ) -> Result<Vec<FileEntry>> {
-    let url = api::api_url(server, "upload/check");
+    let url = api::api_url(server, &format!("channels/{channel}/upload/check"));
     let resp = http
         .post(&url)
         .bearer_auth(token)
@@ -249,11 +364,12 @@ async fn upload_one(
     http: &reqwest::Client,
     server: &str,
     token: &str,
+    channel: &str,
     dir: &Path,
     entry: &FileEntry,
 ) -> Result<()> {
     let bytes = fs::read(dir.join(&entry.path))?;
-    let url = api::api_url(server, "upload/file");
+    let url = api::api_url(server, &format!("channels/{channel}/upload/file"));
     let resp = http
         .post(&url)
         .bearer_auth(token)
@@ -273,9 +389,10 @@ async fn commit(
     http: &reqwest::Client,
     server: &str,
     token: &str,
+    channel: &str,
     req: UploadCommitRequest,
 ) -> Result<Manifest> {
-    let url = api::api_url(server, "upload/commit");
+    let url = api::api_url(server, &format!("channels/{channel}/upload/commit"));
     let resp = http.post(&url).bearer_auth(token).json(&req).send().await?;
     let resp = api::ensure_success(resp).await.context("commit failed")?;
     Ok(resp.json::<Manifest>().await?)

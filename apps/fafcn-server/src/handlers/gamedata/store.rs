@@ -1,9 +1,10 @@
-//! On-disk storage for the gamedata mirror: uploaded files plus the manifest.
+//! On-disk storage for the gamedata mirror: uploaded files plus manifests,
+//! organized into sync channels (gamedata, map-generator).
 //!
 //! Layout below the configured root:
 //!
 //! ```text
-//! <root>/
+//! <root>/channels/<channel>/
 //!   manifest.json   # generated atomically on commit, never hand-edited
 //!   files/<path>    # content served to sync clients
 //!   incoming/       # temp dir for in-progress uploads (renamed into files/)
@@ -14,7 +15,8 @@ use std::{fs, path::PathBuf};
 use axum::http::HeaderMap;
 use chrono::Utc;
 use fafcn_gamedata::{
-    sha256_bytes, sha256_file, validate_relative_path, FileEntry, Manifest, UploadCommitRequest,
+    compare_version_strings, sha256_bytes, sha256_file, validate_relative_path, FileEntry,
+    Manifest, UploadCommitRequest, CHANNELS,
 };
 
 use crate::error::{Error, Result};
@@ -27,24 +29,30 @@ pub struct GamedataStore {
 }
 
 impl GamedataStore {
-    /// Create the store, ensuring the directory layout exists.
+    /// Create the store, ensuring the per-channel directory layout exists.
     pub fn new(root: PathBuf, upload_token: Option<String>) -> Result<Self> {
-        fs::create_dir_all(root.join("files"))?;
-        fs::create_dir_all(root.join("incoming"))?;
+        for channel in CHANNELS {
+            fs::create_dir_all(root.join("channels").join(channel).join("files"))?;
+            fs::create_dir_all(root.join("channels").join(channel).join("incoming"))?;
+        }
         Ok(Self { root, upload_token })
     }
 
-    /// Directory whose contents are served under `/api/gamedata/files`.
-    pub fn files_dir(&self) -> PathBuf {
-        self.root.join("files")
+    /// Directory served under `/api/gamedata/channels/<channel>/files`.
+    pub fn files_dir(&self, channel: &str) -> PathBuf {
+        self.channel_root(channel).join("files")
     }
 
-    fn incoming_dir(&self) -> PathBuf {
-        self.root.join("incoming")
+    fn channel_root(&self, channel: &str) -> PathBuf {
+        self.root.join("channels").join(channel)
     }
 
-    fn manifest_path(&self) -> PathBuf {
-        self.root.join("manifest.json")
+    fn incoming_dir(&self, channel: &str) -> PathBuf {
+        self.channel_root(channel).join("incoming")
+    }
+
+    fn manifest_path(&self, channel: &str) -> PathBuf {
+        self.channel_root(channel).join("manifest.json")
     }
 
     /// Verify the `Authorization: Bearer <token>` header against the
@@ -65,25 +73,25 @@ impl GamedataStore {
         }
     }
 
-    /// Read the current manifest, or `None` if nothing was ever committed.
-    pub fn read_manifest(&self) -> Result<Option<Manifest>> {
-        let path = self.manifest_path();
+    /// Read a channel's manifest, or `None` if nothing was ever committed.
+    pub fn read_manifest(&self, channel: &str) -> Result<Option<Manifest>> {
+        let path = self.manifest_path(channel);
         if !path.is_file() {
             return Ok(None);
         }
         let json = fs::read_to_string(&path)?;
         let manifest = serde_json::from_str(&json)
-            .map_err(|e| Error::Internal(format!("corrupt manifest.json: {e}")))?;
+            .map_err(|e| Error::Internal(format!("corrupt manifest.json in {channel}: {e}")))?;
         Ok(Some(manifest))
     }
 
     /// Return the subset of `files` the server does not already have stored
     /// with a matching hash.
-    pub fn check_needed(&self, files: &[FileEntry]) -> Result<Vec<String>> {
+    pub fn check_needed(&self, channel: &str, files: &[FileEntry]) -> Result<Vec<String>> {
         let mut needed = Vec::new();
         for entry in files {
             validate_relative_path(&entry.path).map_err(|e| Error::BadRequest(e.to_string()))?;
-            if !self.stored_file_matches(entry)? {
+            if !self.stored_file_matches(channel, entry)? {
                 needed.push(entry.path.clone());
             }
         }
@@ -92,7 +100,13 @@ impl GamedataStore {
 
     /// Store one uploaded file: hash-verify, then atomically move from
     /// `incoming/` into `files/`.
-    pub fn store_upload(&self, rel_path: &str, expected_sha256: &str, bytes: &[u8]) -> Result<()> {
+    pub fn store_upload(
+        &self,
+        channel: &str,
+        rel_path: &str,
+        expected_sha256: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
         validate_relative_path(rel_path).map_err(|e| Error::BadRequest(e.to_string()))?;
         let actual = sha256_bytes(bytes);
         if actual != expected_sha256 {
@@ -102,11 +116,11 @@ impl GamedataStore {
         }
 
         let tmp = self
-            .incoming_dir()
+            .incoming_dir(channel)
             .join(format!("{}.part", uuid::Uuid::new_v4()));
         fs::write(&tmp, bytes)?;
 
-        let dest = self.files_dir().join(rel_path);
+        let dest = self.files_dir(channel).join(rel_path);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -115,8 +129,8 @@ impl GamedataStore {
     }
 
     /// Finalize an upload session: verify every listed file is present with a
-    /// matching hash, then atomically replace `manifest.json`.
-    pub fn commit(&self, req: &UploadCommitRequest) -> Result<Manifest> {
+    /// matching hash, then atomically replace the channel's `manifest.json`.
+    pub fn commit(&self, channel: &str, req: &UploadCommitRequest) -> Result<Manifest> {
         if req.patch_version.trim().is_empty() {
             return Err(Error::BadRequest(
                 "patch_version must not be empty".to_string(),
@@ -128,10 +142,10 @@ impl GamedataStore {
         if req.files.is_empty() {
             return Err(Error::BadRequest("file list must not be empty".to_string()));
         }
-        self.guard_against_downgrade(&req.patch_version)?;
+        self.guard_against_downgrade(channel, &req.patch_version)?;
         for entry in &req.files {
             validate_relative_path(&entry.path).map_err(|e| Error::BadRequest(e.to_string()))?;
-            if !self.stored_file_matches(entry)? {
+            if !self.stored_file_matches(channel, entry)? {
                 return Err(Error::BadRequest(format!(
                     "cannot commit: {} is missing or does not match its sha256",
                     entry.path
@@ -147,36 +161,32 @@ impl GamedataStore {
         };
         let json = serde_json::to_string_pretty(&manifest)
             .map_err(|e| Error::Internal(format!("failed to serialize manifest: {e}")))?;
-        let tmp = self.root.join("manifest.json.tmp");
+        let tmp = self.channel_root(channel).join("manifest.json.tmp");
         fs::write(&tmp, json)?;
-        fs::rename(&tmp, self.manifest_path())?;
+        fs::rename(&tmp, self.manifest_path(channel))?;
         Ok(manifest)
     }
 
     /// Refuse to publish a patch that is strictly older than the one already
-    /// on the server (numeric comparison; skipped for non-numeric versions).
-    fn guard_against_downgrade(&self, new_version: &str) -> Result<()> {
-        let Some(existing) = self.read_manifest()? else {
+    /// on the server (skipped for non-numeric versions).
+    fn guard_against_downgrade(&self, channel: &str, new_version: &str) -> Result<()> {
+        let Some(existing) = self.read_manifest(channel)? else {
             return Ok(());
         };
-        let (Ok(new), Ok(old)) = (
-            new_version.trim().parse::<u64>(),
-            existing.patch_version.trim().parse::<u64>(),
-        ) else {
-            return Ok(());
-        };
-        if new < old {
+        if compare_version_strings(&existing.patch_version, new_version)
+            == Some(std::cmp::Ordering::Greater)
+        {
             return Err(Error::Conflict(format!(
-                "server already has newer patch {} (yours is {new_version}); nothing to upload",
-                existing.patch_version
+                "server already has newer {} {} (yours is {new_version}); nothing to upload",
+                channel, existing.patch_version
             )));
         }
         Ok(())
     }
 
     /// True when `files/<path>` exists with matching size and hash.
-    fn stored_file_matches(&self, entry: &FileEntry) -> Result<bool> {
-        let path = self.files_dir().join(&entry.path);
+    fn stored_file_matches(&self, channel: &str, entry: &FileEntry) -> Result<bool> {
+        let path = self.files_dir(channel).join(&entry.path);
         if !path.is_file() {
             return Ok(false);
         }
@@ -190,6 +200,7 @@ impl GamedataStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fafcn_gamedata::CHANNEL_GAMEDATA;
 
     fn temp_store() -> (PathBuf, GamedataStore) {
         let root = std::env::temp_dir().join(format!("fafcn-store-test-{}", uuid::Uuid::new_v4()));
@@ -211,34 +222,37 @@ mod tests {
         let bytes = b"patch-bytes";
         let entry = entry_for(bytes);
 
-        // Nothing stored yet: the file is needed.
         assert_eq!(
-            store.check_needed(&[entry.clone()]).unwrap(),
+            store
+                .check_needed(CHANNEL_GAMEDATA, std::slice::from_ref(&entry))
+                .unwrap(),
             vec!["faf.scd"]
         );
-
-        // Upload with a wrong hash is rejected and stores nothing.
         assert!(store
-            .store_upload("faf.scd", "00".repeat(32).as_str(), bytes)
+            .store_upload(CHANNEL_GAMEDATA, "faf.scd", "00".repeat(32).as_str(), bytes)
             .is_err());
 
-        // Correct upload: no longer needed, committable.
-        store.store_upload("faf.scd", &entry.sha256, bytes).unwrap();
+        store
+            .store_upload(CHANNEL_GAMEDATA, "faf.scd", &entry.sha256, bytes)
+            .unwrap();
         assert!(store
-            .check_needed(std::slice::from_ref(&entry))
+            .check_needed(CHANNEL_GAMEDATA, std::slice::from_ref(&entry))
             .unwrap()
             .is_empty());
 
         let manifest = store
-            .commit(&UploadCommitRequest {
-                patch_version: "3825".to_string(),
-                uploader: "tester".to_string(),
-                files: vec![entry],
-            })
+            .commit(
+                CHANNEL_GAMEDATA,
+                &UploadCommitRequest {
+                    patch_version: "3825".to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![entry],
+                },
+            )
             .unwrap();
         assert_eq!(manifest.patch_version, "3825");
 
-        let loaded = store.read_manifest().unwrap().unwrap();
+        let loaded = store.read_manifest(CHANNEL_GAMEDATA).unwrap().unwrap();
         assert_eq!(loaded.files.len(), 1);
         assert_eq!(loaded.files[0].sha256, manifest.files[0].sha256);
 
@@ -248,11 +262,14 @@ mod tests {
     #[test]
     fn commit_rejects_missing_files() {
         let (root, store) = temp_store();
-        let result = store.commit(&UploadCommitRequest {
-            patch_version: "3825".to_string(),
-            uploader: "tester".to_string(),
-            files: vec![entry_for(b"nope")],
-        });
+        let result = store.commit(
+            CHANNEL_GAMEDATA,
+            &UploadCommitRequest {
+                patch_version: "3825".to_string(),
+                uploader: "tester".to_string(),
+                files: vec![entry_for(b"nope")],
+            },
+        );
         assert!(result.is_err());
         fs::remove_dir_all(&root).unwrap();
     }
@@ -262,17 +279,21 @@ mod tests {
         let (root, store) = temp_store();
         let bytes = b"patch-bytes";
         let entry = entry_for(bytes);
-        store.store_upload("faf.scd", &entry.sha256, bytes).unwrap();
+        store
+            .store_upload(CHANNEL_GAMEDATA, "faf.scd", &entry.sha256, bytes)
+            .unwrap();
         let commit = |version: &str| {
-            store.commit(&UploadCommitRequest {
-                patch_version: version.to_string(),
-                uploader: "tester".to_string(),
-                files: vec![entry.clone()],
-            })
+            store.commit(
+                CHANNEL_GAMEDATA,
+                &UploadCommitRequest {
+                    patch_version: version.to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![entry.clone()],
+                },
+            )
         };
 
         commit("3837").unwrap();
-        // Same version is allowed (re-publish), older is rejected, newer allowed.
         assert!(commit("3837").is_ok());
         let downgraded = commit("3825");
         assert!(matches!(downgraded, Err(Error::Conflict(_))));
@@ -283,13 +304,18 @@ mod tests {
     #[test]
     fn rejects_path_traversal() {
         let (root, store) = temp_store();
-        assert!(store.store_upload("../evil.scd", "x", b"y").is_err());
         assert!(store
-            .check_needed(&[FileEntry {
-                path: "../evil.scd".to_string(),
-                size: 1,
-                sha256: "x".to_string(),
-            }])
+            .store_upload(CHANNEL_GAMEDATA, "../evil.scd", "x", b"y")
+            .is_err());
+        assert!(store
+            .check_needed(
+                CHANNEL_GAMEDATA,
+                &[FileEntry {
+                    path: "../evil.scd".to_string(),
+                    size: 1,
+                    sha256: "x".to_string(),
+                }]
+            )
             .is_err());
         fs::remove_dir_all(&root).unwrap();
     }

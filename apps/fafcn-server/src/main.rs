@@ -98,7 +98,7 @@ async fn main() -> Result<()> {
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
-    let app = routes::router(&server_config.gamedata_dir.join("files"))
+    let app = routes::router(&server_config.gamedata_dir)
         .fallback_service(
             ServeDir::new(state.assets_dir.as_ref())
                 .fallback(ServeFile::new(state.assets_dir.join("index.html"))),

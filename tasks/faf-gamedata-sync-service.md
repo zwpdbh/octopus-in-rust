@@ -17,20 +17,25 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 
 ### In Scope
 
-- **Server (`apps/fafcn-server`)**: new `/api/gamedata/*` route group:
-  - `GET /api/gamedata/manifest.json` — anonymous read of the current manifest.
-  - `GET /api/gamedata/files/<path>` — static file download with HTTP range support.
+- **Server (`apps/fafcn-server`)**: channel-aware `/api/gamedata/*` routes (channels: `gamedata`, `map-generator`):
+  - `GET /api/gamedata/channels/<channel>/manifest.json` — anonymous read of a channel manifest.
+  - `GET /api/gamedata/channels/<channel>/files/<path>` — static file download with HTTP range support.
   - `GET /api/gamedata/client/<file>` — sync client download; the server patches the binary per request with an embedded config block (`fafcn-gamedata::overlay`: JSON + length + magic appended as PE/ELF overlay data) containing the mirror's own origin (`X-Forwarded-Proto` + `Host`), so the player's client starts with 镜像地址 pre-filled — no manual setup.
-  - `POST /api/gamedata/upload/check` — token-authed; uploader submits the full `{path, size, sha256}` list, server replies which files it still needs (dedup / cheap resume).
-  - `POST /api/gamedata/upload/file` — token-authed; raw body + `x-gamedata-path` / `x-gamedata-sha256` headers; server hash-verifies before storing.
-  - `POST /api/gamedata/upload/commit` — token-authed; server verifies every listed file is present with matching hash, then atomically regenerates the manifest.
-  - `GET /api/gamedata/status` — patch version (as declared by the uploader), file count, total size, last-updated, uploader name.
+  - `POST /api/gamedata/channels/<channel>/upload/check` — token-authed; uploader submits the full `{path, size, sha256}` list, server replies which files it still needs (dedup / cheap resume).
+  - `POST /api/gamedata/channels/<channel>/upload/file` — token-authed; raw body + `x-gamedata-path` / `x-gamedata-sha256` headers; server hash-verifies before storing.
+  - `POST /api/gamedata/channels/<channel>/upload/commit` — token-authed; server verifies every listed file is present with matching hash, rejects strictly-older versions (409), then atomically regenerates the channel manifest.
+  - `GET /api/gamedata/status` — per-channel version/uploader/file count/size/last-updated + client build tag.
+- **Channel definitions** (shared in `crates/fafcn-gamedata/src/channels.rs`):
+  - `gamedata` — only `env.nx2`, `units.nx2`, `textures.nx2` (the files players actually struggle to download), version from `lua.nx2`.
+  - `map-generator` — newest 3 `MapGenerator_*.jar` (semver sort), version = newest jar.
 - **Storage layout** (filesystem, under a configurable `FAFCN_GAMEDATA_DIR`, default `data/faf-gamedata/`):
   ```
   data/faf-gamedata/
-    manifest.json          # generated, not hand-edited
-    files/<relative path>  # content as served to clients
-    incoming/              # temp dir for in-progress uploads (atomic rename on complete)
+    channels/<channel>/
+      manifest.json          # generated, not hand-edited
+      files/<relative path>  # content as served to clients
+      incoming/              # temp dir for in-progress uploads (atomic rename on complete)
+    client/                  # sync client binaries + VERSION build tag
   ```
 - **Manifest format** (single JSON, regenerated on every accepted upload):
   ```json
@@ -43,12 +48,12 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
   }
   ```
 - **Sync client (`apps/fafcn-sync`, ships as a single downloadable `.exe`)**:
-  - **GUI (default, double-click)**: eframe-based, for non-technical players — mirror address field, gamedata folder field with native folder picker + auto-detect (`FAForever\gamedata` containing `.nx2` files), one big sync button, progress bar + log, Chinese/English toggle (Chinese default). Windows release builds are GUI-subsystem (no console window).
-  - **CLI (`fafcn-sync sync`)**: same sync engine for terminal/automation use; on Windows release it re-attaches to the parent console.
-  - Hash-diff against the manifest → download missing/mismatched files to a temp dir → verify sha256 → atomic rename into `gamedata`.
-  - Never write in place; never delete local files not in the manifest (report them only).
-  - Remember server + gamedata dir + language in a small config file; server defaults to the value embedded in the downloaded binary (remembered config wins over embedded).
-  - Display the server manifest's `patch_version` and `last-updated` so the user can judge freshness themselves; always tell the user how to fall back to the official channel.
+  - **GUI (default, double-click)**: eframe-based, dark theme, for non-technical players — mirror address field, **FAForever root folder** field with native folder picker + auto-detect (`FAForever` dir containing `gamedata\*.nx2`), one big sync button syncing ALL channels, progress bar + localized log, Chinese/English toggle (Chinese default). Upload tab for VPN-having uploaders (token + player name; both channel versions auto-detected read-only; upload disabled with explanation when the server has a newer version). Windows release builds are GUI-subsystem (no console window).
+  - **CLI (`fafcn-sync sync` / `upload`)**: same engines for terminal/automation use; on Windows release it re-attaches to the parent console.
+  - Hash-diff against each channel manifest → download missing/mismatched files to a temp dir → verify sha256 → atomic rename into the channel subfolder.
+  - gamedata: never delete local files not in the manifest (report them only). map-generator: prune local `MapGenerator_*.jar` beyond the newest 3 versions.
+  - Remember server + FAForever dir + language + token/player name in a small config file; server defaults to the value embedded in the downloaded binary (remembered config wins over embedded).
+  - Display the server manifest's version and last-updated so the user can judge freshness themselves; always tell the user how to fall back to the official channel.
 - **Web page (`apps/fafcn-web`)**: one new `/sync` page — client download link + server status (patch version, last updated, file count/size, staleness indicator).
 - **Upload helper**: an 上传 tab in the same GUI client (token + folder picker + patch version + name + progress), plus the `fafcn-sync upload` CLI subcommand — one exe for both roles.
 
@@ -92,7 +97,7 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 - [x] `fafcn-sync` client (`apps/fafcn-sync`): GUI (eframe, double-click) + CLI (`sync` + `upload` subcommands).
 - [x] `/sync` page in `fafcn-web`.
 - [x] `.env.example` / config docs updated.
-- [x] End-to-end smoke test (local): token auth 401, upload + commit, sync to empty dir byte-identical, no-op re-sync, corrupt file re-downloaded, extra files untouched, dedup re-upload, HTTP 206 range downloads.
+- [x] End-to-end smoke test (local): token auth 401, upload + commit, sync to empty dir byte-identical, no-op re-sync, corrupt file re-downloaded, extra files untouched, dedup re-upload, HTTP 206 range downloads, downgrade rejection (409), build tag in exe + status, channel E2E (gamedata filtered to 3 files, map-generator newest-3 jars, jar pruning).
 - [ ] End-to-end test on a real FAF install.
 - [x] Windows release build of `fafcn-sync` published under `/api/gamedata/client/` (via `cargo xtask fafcn file-sync`, cross-compiles to `x86_64-pc-windows-gnu`; use `--release` for distribution).
 
@@ -108,5 +113,6 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 | 2026-08-18 | Mirror address embedded into the client binary per download (PE/ELF overlay) | Non-technical players must never type a URL. Alternatives rejected: zip-with-config (extraction is error-prone for the audience), custom protocol handler (requires registry writes). Appended overlay data is ignored by both loaders; remembered config takes precedence so power users can still switch mirrors. |
 | 2026-08-18 | Upload lives in the client (GUI tab + CLI), not as web drag-drop | Uploads are rare and done by the technical, VPN-having player; browser folder-upload in WASM (traversal, 700MB hashing, no fetch upload progress) is high-complexity for the wrong path. The /sync page shows uploader instructions instead. |
 | 2026-08-18 | Patch version auto-detected from `lua.nx2` (`lua/version.lua` — it's a ZIP); server rejects strictly older uploads (409) | The version is ground truth from the game data, so users never type it (manual entry is fallback only). The GUI also pre-checks the server manifest and disables upload with an explanation when the server is newer; the commit-time server guard is the authoritative enforcement. |
+| 2026-08-18 | Two sync channels rooted at the FAForever folder: gamedata filtered to env/units/textures.nx2; map-generator keeps newest 3 jars (semver sort, pruned locally beyond that) | Player feedback: these are the only files they actually struggle to download. Version compare generalized to dotted-numeric (`1.22.10` > `1.22.1`). gamedata still never deletes extras; jar pruning is scoped strictly to the `MapGenerator_*.jar` pattern. |
 | 2026-08-18 | Never delete local files not in manifest; download-to-temp + atomic rename | Client must never break a working game install. |
 | 2026-08-18 | User upload is the only source of gamedata; no server-side fetching from official channels | The required patch files are not reliably downloadable from FAF's open-source GitHub repos; automated staleness checks are deferred until we investigate how the official client detects new patches (see Implementation Notes; source at `/home/zw/code/faf_related/official_faf_stack/downlords-faf-client`). |

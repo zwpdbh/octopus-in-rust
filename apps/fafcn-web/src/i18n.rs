@@ -244,6 +244,9 @@ pub enum Text {
     UploadHint,
     ClientVersion,
     ClientVersionMissing,
+    ChannelGamedata,
+    ChannelMapGenerator,
+    ChannelNotPublished,
 }
 
 impl Text {
@@ -505,6 +508,12 @@ impl Text {
             (Text::ClientVersion, Lang::Zh) => "客户端版本",
             (Text::ClientVersionMissing, Lang::En) => "unknown (rebuild with: cargo xtask fafcn file-sync)",
             (Text::ClientVersionMissing, Lang::Zh) => "未知(请运行 cargo xtask fafcn file-sync 重新构建)",
+            (Text::ChannelGamedata, Lang::En) => "gamedata",
+            (Text::ChannelGamedata, Lang::Zh) => "游戏数据",
+            (Text::ChannelMapGenerator, Lang::En) => "map-generator",
+            (Text::ChannelMapGenerator, Lang::Zh) => "地图生成器",
+            (Text::ChannelNotPublished, Lang::En) => "not published yet",
+            (Text::ChannelNotPublished, Lang::Zh) => "未发布",
         }
     }
 }

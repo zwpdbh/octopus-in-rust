@@ -10,15 +10,17 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use fafcn_gamedata::{CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR};
 use tower_http::services::ServeDir;
 
 use crate::{handlers, state::AppState};
 
 /// Build the Axum router for `fafcn-server`.
 ///
-/// `gamedata_files_dir` is mounted as a static file service (with range
-/// support) for sync downloads.
-pub fn router(gamedata_files_dir: &Path) -> Router<AppState> {
+/// `gamedata_root` is the mirror storage root; each channel's `files/` dir is
+/// mounted as a static file service (with range support) for sync downloads.
+pub fn router(gamedata_root: &Path) -> Router<AppState> {
+    let channels = gamedata_root.join("channels");
     Router::new()
         .route("/api/units", get(handlers::units::list_units))
         .route("/api/units/:id", get(handlers::units::get_unit))
@@ -27,26 +29,33 @@ pub fn router(gamedata_files_dir: &Path) -> Router<AppState> {
         .route("/api/ask", post(handlers::qa::ask_handler))
         .route("/api/ask/stream", post(handlers::qa::ask_stream_handler))
         .route("/api/health/qa", get(handlers::qa::health_handler))
-        // Gamedata mirror: JSON API.
+        // Gamedata mirror: JSON API (per channel).
         .route(
-            "/api/gamedata/manifest.json",
+            "/api/gamedata/channels/:channel/manifest.json",
             get(handlers::gamedata::get_manifest),
         )
         .route("/api/gamedata/status", get(handlers::gamedata::get_status))
         .route(
-            "/api/gamedata/upload/check",
+            "/api/gamedata/channels/:channel/upload/check",
             post(handlers::gamedata::upload_check),
         )
         .route(
-            "/api/gamedata/upload/file",
+            "/api/gamedata/channels/:channel/upload/file",
             post(handlers::gamedata::upload_file).layer(DefaultBodyLimit::disable()),
         )
         .route(
-            "/api/gamedata/upload/commit",
+            "/api/gamedata/channels/:channel/upload/commit",
             post(handlers::gamedata::upload_commit),
         )
-        // Gamedata mirror: static downloads (mirror files) + patched client binaries.
-        .nest_service("/api/gamedata/files", ServeDir::new(gamedata_files_dir))
+        // Gamedata mirror: static downloads (per channel) + patched client binaries.
+        .nest_service(
+            "/api/gamedata/channels/gamedata/files",
+            ServeDir::new(channels.join(CHANNEL_GAMEDATA).join("files")),
+        )
+        .nest_service(
+            "/api/gamedata/channels/map-generator/files",
+            ServeDir::new(channels.join(CHANNEL_MAP_GENERATOR).join("files")),
+        )
         .route(
             "/api/gamedata/client/:filename",
             get(handlers::gamedata::download_client),

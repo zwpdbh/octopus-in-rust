@@ -1,8 +1,9 @@
 //! Gamedata sync core, shared by the CLI and the GUI.
 //!
-//! [`sync_gamedata`] diffs a local gamedata directory against the server
-//! manifest and downloads only what is missing or changed, reporting progress
-//! through a callback so both frontends can present it their own way.
+//! [`sync_gamedata`] syncs every channel (gamedata, map-generator) below the
+//! local `FAForever` root against the server manifests, downloading only what
+//! is missing or changed, and reports progress through a callback so both
+//! frontends can present it their own way.
 
 use std::{
     collections::HashSet,
@@ -11,19 +12,35 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use fafcn_gamedata::{sha256_bytes, sha256_file, validate_relative_path, FileEntry, Manifest};
+use fafcn_gamedata::{
+    channel_subdir, compare_version_strings, map_generator_jar_version, sha256_bytes, sha256_file,
+    validate_relative_path, FileEntry, Manifest, CHANNELS, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR,
+    MAP_GENERATOR_KEEP,
+};
 use walkdir::WalkDir;
 
 use crate::{api, config::ClientConfig, SyncArgs};
 
-/// Temp directory (inside the gamedata dir) for in-progress downloads.
+/// Temp directory (inside the channel dir) for in-progress downloads.
 const TMP_DIR_NAME: &str = ".fafcn-sync-tmp";
 
 /// Progress events emitted while syncing.
 pub enum SyncProgress {
-    /// The mirror manifest was fetched successfully.
+    /// Started working on a channel.
+    ChannelStarted {
+        /// Channel id.
+        channel: String,
+    },
+    /// The mirror has nothing published for this channel yet.
+    ChannelEmpty {
+        /// Channel id.
+        channel: String,
+    },
+    /// A channel manifest was fetched successfully.
     ManifestLoaded {
-        /// FAF patch version, as declared by the uploader.
+        /// Channel id.
+        channel: String,
+        /// Channel version, as declared by the uploader.
         patch_version: String,
         /// Display name of the uploader.
         uploader: String,
@@ -48,6 +65,12 @@ pub enum SyncProgress {
         /// Total files in this run.
         count: usize,
     },
+    /// An outdated local file was pruned (map-generator keeps only the
+    /// newest few jars).
+    Pruned {
+        /// File name that was removed.
+        path: String,
+    },
 }
 
 /// What a finished sync did.
@@ -56,7 +79,7 @@ pub struct SyncSummary {
     pub downloaded_files: usize,
     /// Bytes downloaded.
     pub downloaded_bytes: u64,
-    /// Local files not tracked by the manifest (left untouched).
+    /// Local gamedata files not tracked by the manifest (left untouched).
     pub extra_files: Vec<String>,
 }
 
@@ -64,38 +87,47 @@ pub struct SyncSummary {
 pub async fn run(args: SyncArgs) -> Result<()> {
     let mut cfg = ClientConfig::load().with_embedded_defaults();
     let server = api::resolve_server(args.server, &cfg)?;
-    let dir = resolve_gamedata_dir(args.dir, &cfg)?;
-    println!("Mirror:   {server}");
-    println!("Gamedata: {}", dir.display());
+    let root = resolve_faf_dir(args.dir, &cfg)?;
+    println!("Mirror:    {server}");
+    println!("FAForever: {}", root.display());
 
-    let summary = sync_gamedata(&server, &dir, &mut |event| match event {
+    let summary = sync_gamedata(&server, &root, &mut |event| match event {
+        SyncProgress::ChannelStarted { channel } => println!("== {channel} =="),
+        SyncProgress::ChannelEmpty { channel } => {
+            println!("mirror has no {channel} yet — ask an uploader to publish it")
+        }
         SyncProgress::ManifestLoaded {
             patch_version,
             uploader,
             file_count,
             total_bytes,
+            ..
         } => {
             println!(
-                "Mirror has patch {patch_version} ({file_count} files, {:.1} MB), uploaded by {uploader}",
+                "version {patch_version} ({file_count} files, {:.1} MB), uploaded by {uploader}",
                 total_bytes as f64 / 1e6,
             );
         }
         SyncProgress::PlanReady {
             downloads,
             total_bytes,
+            ..
         } => {
             if downloads == 0 {
-                println!("Everything up to date — nothing to download.");
+                println!("up to date");
             } else {
                 println!(
-                    "Downloading {downloads} file(s), {:.1} MB total:",
+                    "downloading {downloads} file(s), {:.1} MB",
                     total_bytes as f64 / 1e6
                 );
             }
         }
-        SyncProgress::FileInstalled { path, index, count } => {
+        SyncProgress::FileInstalled {
+            path, index, count, ..
+        } => {
             println!("[{index}/{count}] {path}");
         }
+        SyncProgress::Pruned { path, .. } => println!("pruned old file: {path}"),
     })
     .await?;
 
@@ -111,33 +143,81 @@ pub async fn run(args: SyncArgs) -> Result<()> {
     }
 
     cfg.server = Some(server);
-    cfg.gamedata_dir = Some(dir);
+    cfg.gamedata_dir = Some(root);
     cfg.save()?;
     println!("Sync complete. You can start the FAF client now.");
     Ok(())
 }
 
-/// Sync `dir` against the mirror at `server`, reporting progress.
+/// Sync every channel below `faf_root` against the mirror at `server`.
 pub async fn sync_gamedata(
     server: &str,
-    dir: &Path,
+    faf_root: &Path,
     progress: &mut dyn FnMut(SyncProgress),
 ) -> Result<SyncSummary> {
     let http = reqwest::Client::new();
-    let manifest = fetch_manifest(&http, server).await?;
-    progress(SyncProgress::ManifestLoaded {
-        patch_version: manifest.patch_version.clone(),
-        uploader: manifest.uploader.clone(),
-        file_count: manifest.files.len(),
-        total_bytes: manifest.total_size(),
-    });
+    let mut summary = SyncSummary {
+        downloaded_files: 0,
+        downloaded_bytes: 0,
+        extra_files: Vec::new(),
+    };
 
-    // Decide per-file actions by comparing hashes.
+    for channel in CHANNELS {
+        progress(SyncProgress::ChannelStarted {
+            channel: channel.to_string(),
+        });
+        let subdir = channel_subdir(channel).expect("known channel");
+        let target_dir = faf_root.join(subdir);
+
+        let Some(manifest) = fetch_manifest(&http, server, channel).await? else {
+            progress(SyncProgress::ChannelEmpty {
+                channel: channel.to_string(),
+            });
+            continue;
+        };
+        progress(SyncProgress::ManifestLoaded {
+            channel: channel.to_string(),
+            patch_version: manifest.patch_version.clone(),
+            uploader: manifest.uploader.clone(),
+            file_count: manifest.files.len(),
+            total_bytes: manifest.total_size(),
+        });
+
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("failed to create {}", target_dir.display()))?;
+        let (downloaded, bytes) =
+            sync_channel(&http, server, channel, &target_dir, &manifest, progress).await?;
+        summary.downloaded_files += downloaded;
+        summary.downloaded_bytes += bytes;
+
+        match channel {
+            &CHANNEL_GAMEDATA => {
+                summary.extra_files = find_extra_files(&target_dir, &manifest);
+            }
+            &CHANNEL_MAP_GENERATOR => {
+                prune_old_jars(&target_dir, &manifest, progress)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(summary)
+}
+
+/// Diff one channel's target dir against its manifest and download what's
+/// missing or changed. Returns (files downloaded, bytes downloaded).
+async fn sync_channel(
+    http: &reqwest::Client,
+    server: &str,
+    channel: &str,
+    target_dir: &Path,
+    manifest: &Manifest,
+    progress: &mut dyn FnMut(SyncProgress),
+) -> Result<(usize, u64)> {
     let mut downloads: Vec<&FileEntry> = Vec::new();
     for entry in &manifest.files {
         validate_relative_path(&entry.path)
             .with_context(|| format!("manifest contains unsafe path: {}", entry.path))?;
-        if !local_file_matches(dir, entry)? {
+        if !local_file_matches(target_dir, entry)? {
             downloads.push(entry);
         }
     }
@@ -148,27 +228,23 @@ pub async fn sync_gamedata(
         total_bytes,
     });
 
-    if !downloads.is_empty() {
-        let tmp_dir = dir.join(TMP_DIR_NAME);
-        fs::create_dir_all(&tmp_dir)
-            .with_context(|| format!("failed to create {}", tmp_dir.display()))?;
-        let count = downloads.len();
-        for (i, entry) in downloads.iter().enumerate() {
-            download_one(&http, server, dir, &tmp_dir, entry).await?;
-            progress(SyncProgress::FileInstalled {
-                path: entry.path.clone(),
-                index: i + 1,
-                count,
-            });
-        }
-        fs::remove_dir_all(&tmp_dir).ok();
+    if downloads.is_empty() {
+        return Ok((0, 0));
     }
-
-    Ok(SyncSummary {
-        downloaded_files: downloads.len(),
-        downloaded_bytes: total_bytes,
-        extra_files: find_extra_files(dir, &manifest),
-    })
+    let tmp_dir = target_dir.join(TMP_DIR_NAME);
+    fs::create_dir_all(&tmp_dir)
+        .with_context(|| format!("failed to create {}", tmp_dir.display()))?;
+    let count = downloads.len();
+    for (i, entry) in downloads.iter().enumerate() {
+        download_one(http, server, channel, target_dir, &tmp_dir, entry).await?;
+        progress(SyncProgress::FileInstalled {
+            path: entry.path.clone(),
+            index: i + 1,
+            count,
+        });
+    }
+    fs::remove_dir_all(&tmp_dir).ok();
+    Ok((count, total_bytes))
 }
 
 /// True when the local file exists with matching size and hash.
@@ -190,13 +266,17 @@ fn local_file_matches(dir: &Path, entry: &FileEntry) -> Result<bool> {
 async fn download_one(
     http: &reqwest::Client,
     server: &str,
+    channel: &str,
     dir: &Path,
     tmp_dir: &Path,
     entry: &FileEntry,
 ) -> Result<()> {
     let url = api::api_url(
         server,
-        &format!("files/{}", api::encode_relative_path(&entry.path)),
+        &format!(
+            "channels/{channel}/files/{}",
+            api::encode_relative_path(&entry.path)
+        ),
     );
     let resp = api::ensure_success(http.get(&url).send().await?)
         .await
@@ -251,6 +331,45 @@ fn find_extra_files(dir: &Path, manifest: &Manifest) -> Vec<String> {
     extras
 }
 
+/// Keep only the newest [`MAP_GENERATOR_KEEP`] `MapGenerator_*.jar` versions
+/// locally (considering both local files and the manifest), deleting older
+/// ones. Only jar files matching the generator pattern are ever touched.
+fn prune_old_jars(
+    dir: &Path,
+    manifest: &Manifest,
+    progress: &mut dyn FnMut(SyncProgress),
+) -> Result<()> {
+    // Newest N versions across local + manifest.
+    let mut versions: Vec<String> = manifest
+        .files
+        .iter()
+        .filter_map(|f| map_generator_jar_version(&f.path))
+        .collect();
+    let mut local_jars: Vec<(String, String)> = Vec::new(); // (file_name, version)
+    for item in fs::read_dir(dir)? {
+        let name = item?.file_name().to_string_lossy().into_owned();
+        if let Some(v) = map_generator_jar_version(&name) {
+            local_jars.push((name, v.clone()));
+            versions.push(v);
+        }
+    }
+    versions.sort_by(|a, b| compare_version_strings(b, a).unwrap_or(std::cmp::Ordering::Equal));
+    versions.dedup();
+    let keep: HashSet<&str> = versions
+        .iter()
+        .take(MAP_GENERATOR_KEEP)
+        .map(|s| s.as_str())
+        .collect();
+
+    for (name, version) in local_jars {
+        if !keep.contains(version.as_str()) {
+            fs::remove_file(dir.join(&name))?;
+            progress(SyncProgress::Pruned { path: name });
+        }
+    }
+    Ok(())
+}
+
 /// Convert an absolute path below `dir` to a forward-slash relative path.
 pub fn relative_slash_path(dir: &Path, path: &Path) -> String {
     path.strip_prefix(dir)
@@ -261,31 +380,31 @@ pub fn relative_slash_path(dir: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// Fetch and parse the server manifest.
-async fn fetch_manifest(http: &reqwest::Client, server: &str) -> Result<Manifest> {
-    let url = api::api_url(server, "manifest.json");
+/// Fetch a channel manifest; `Ok(None)` when the channel was never published.
+async fn fetch_manifest(
+    http: &reqwest::Client,
+    server: &str,
+    channel: &str,
+) -> Result<Option<Manifest>> {
+    let url = api::api_url(server, &format!("channels/{channel}/manifest.json"));
     let resp = http.get(&url).send().await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(anyhow!(
-            "the mirror has no gamedata yet — ask a player with VPN access to upload the latest patch first"
-        ));
+        return Ok(None);
     }
     let resp = api::ensure_success(resp).await?;
-    Ok(resp.json::<Manifest>().await?)
+    Ok(Some(resp.json::<Manifest>().await?))
 }
 
-/// True when `path` looks like a FAF gamedata directory: it is named
-/// `gamedata` below a `FAForever` directory and contains `.nx2` patch files.
-pub fn is_valid_gamedata_dir(path: &Path) -> bool {
+/// True when `path` looks like the FAF data root: it is named `FAForever`
+/// and has a `gamedata` subfolder containing `.nx2` patch files.
+pub fn is_valid_faf_dir(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
     }
-    let name_ok = path.file_name().is_some_and(|n| n == "gamedata")
-        && path
-            .parent()
-            .and_then(|p| p.file_name())
-            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("FAForever"));
-    name_ok && contains_nx2(path)
+    let name_ok = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("FAForever"));
+    name_ok && contains_nx2(&path.join("gamedata"))
 }
 
 /// True when the directory contains at least one `.nx2` file (top level).
@@ -300,52 +419,64 @@ fn contains_nx2(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Directories worth checking when auto-detecting the gamedata folder.
+/// Directories worth checking when auto-detecting the FAForever folder.
 pub fn autodetect_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(program_data) = std::env::var("ProgramData") {
-        candidates.push(Path::new(&program_data).join("FAForever").join("gamedata"));
+        candidates.push(Path::new(&program_data).join("FAForever"));
     }
     // FAF also commonly ends up directly under a drive root.
     for letter in b'C'..=b'Z' {
         let root = PathBuf::from(format!("{}:\\", letter as char));
         if root.is_dir() {
-            candidates.push(root.join("FAForever").join("gamedata"));
-            candidates.push(root.join("ProgramData").join("FAForever").join("gamedata"));
+            candidates.push(root.join("FAForever"));
+            candidates.push(root.join("ProgramData").join("FAForever"));
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        candidates.push(Path::new(&home).join(".faforever").join("gamedata"));
-        candidates.push(
-            Path::new(&home)
-                .join(".local/share/FAForever")
-                .join("gamedata"),
-        );
+        candidates.push(Path::new(&home).join(".faforever"));
+        candidates.push(Path::new(&home).join(".local/share/FAForever"));
     }
     candidates
 }
 
-/// Find the local gamedata directory automatically: the first candidate that
+/// Find the local FAForever folder automatically: the first candidate that
 /// fully validates, else the first that merely exists.
-pub fn autodetect_gamedata_dir() -> Option<PathBuf> {
+pub fn autodetect_faf_dir() -> Option<PathBuf> {
     let candidates = autodetect_candidates();
     candidates
         .iter()
-        .find(|c| is_valid_gamedata_dir(c))
+        .find(|c| is_valid_faf_dir(c))
         .or_else(|| candidates.iter().find(|c| c.is_dir()))
         .cloned()
 }
 
-/// Resolve the gamedata directory: CLI arg > remembered config > auto-detect.
-fn resolve_gamedata_dir(arg: Option<PathBuf>, cfg: &ClientConfig) -> Result<PathBuf> {
-    if let Some(dir) = arg.or_else(|| cfg.gamedata_dir.clone()) {
-        return Ok(dir);
+/// Normalize a configured/entered path: if it points at the `gamedata`
+/// subfolder (config from older versions), use its `FAForever` parent.
+pub fn normalize_faf_dir(path: PathBuf) -> PathBuf {
+    if path.file_name().is_some_and(|n| n == "gamedata") {
+        if let Some(parent) = path.parent() {
+            if parent
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("FAForever"))
+            {
+                return parent.to_path_buf();
+            }
+        }
     }
-    if let Some(detected) = autodetect_gamedata_dir() {
-        println!("Auto-detected gamedata directory: {}", detected.display());
+    path
+}
+
+/// Resolve the FAForever directory: CLI arg > remembered config > auto-detect.
+fn resolve_faf_dir(arg: Option<PathBuf>, cfg: &ClientConfig) -> Result<PathBuf> {
+    if let Some(dir) = arg.or_else(|| cfg.gamedata_dir.clone()) {
+        return Ok(normalize_faf_dir(dir));
+    }
+    if let Some(detected) = autodetect_faf_dir() {
+        println!("Auto-detected FAForever directory: {}", detected.display());
         return Ok(detected);
     }
     Err(anyhow!(
-        "could not find your FAF gamedata directory; pass it once with --dir <path> (e.g. --dir \"C:\\ProgramData\\FAForever\\gamedata\")"
+        "could not find your FAForever directory; pass it once with --dir <path> (e.g. --dir \"C:\\ProgramData\\FAForever\")"
     ))
 }
