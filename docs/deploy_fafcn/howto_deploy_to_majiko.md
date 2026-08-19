@@ -25,7 +25,7 @@ directory.
 |---|---|
 | SSH | `majiko@8v.pub -p 10040` (password auth; sudo uses the same password) |
 | LAN IP | `192.168.50.10` (behind a firewall/NAT; admin forwards ports on request) |
-| Public access | external **TCP 10041** → `192.168.50.10:3000` → `http://8v.pub:10041` |
+| Public access | external **TCP 10041** → `192.168.50.10:3000` → `https://8v.pub:10041` |
 | External 80/443 | **NOT available** on the server itself — HTTPS is terminated at the friend's gateway reverse proxy (see "Firewall / HTTPS note") |
 | Internet from server | GitHub etc. **blocked**; proxy gateway available at `http://192.168.50.1:7893` if ever needed (`export https_proxy=http://192.168.50.1:7893`) |
 | OS / resources | Ubuntu 22.04, 4 cores, 5.8 GB RAM, ~34 GB free disk |
@@ -70,24 +70,23 @@ everyone out).
 
 ```
 player browser / fafcn-sync (download)          uploader's fafcn-sync (upload)
-        │ http://8v.pub:10041                            │  + Bearer UPLOAD_TOKEN
+        │ https://8v.pub:10041                           │  + Bearer UPLOAD_TOKEN
         └──────────────┬─────────────────────────────────┘
-                       ▼  external TCP 10041 (edge firewall forward)
+                       ▼
+           friend's TLS reverse proxy (terminates HTTPS, holds the cert)
+                       ▼  plain HTTP, external TCP 10041 (edge forward)
               192.168.50.10:3000  fafcn-server (plain HTTP, single port)
                        │
                        ├── web SPA / JSON APIs
                        ├── /ws/simulate (WebSocket upgrade, same port)
                        └── /api/gamedata/... (mirror: manifest, files, upload)
-
-future:  browser ──https──▶ friend's TLS reverse proxy ──http──▶ :3000
-         (server side unchanged — see "Firewall / HTTPS note")
 ```
 
 ### If connectivity breaks, check in this order
 
 1. `curl -s http://127.0.0.1:3000/api/health` **on the server** — if this
    fails, the service is down (`journalctl -u fafcn -n 50`), network is fine.
-2. `curl -s http://8v.pub:10041/api/health` from outside — if this fails
+2. `curl -s https://8v.pub:10041/api/health` from outside — if this fails
    but step 1 works, the **edge forward** is broken (most common cause: the
    machine's LAN IP changed via DHCP — ask the admin to update the rule or
    pin the IP).
@@ -176,7 +175,7 @@ Facts and notices (all learned the hard way on 2026-08-19):
     -d "{\"model\":\"<MODEL>\",\"messages\":[{\"role\":\"user\",\"content\":\"say pong\"}],\"max_tokens\":64}"'
 
   # 2. after .env edit + restart, end-to-end gate (expect "status":"ok")
-  curl -s --max-time 60 http://8v.pub:10041/api/health
+  curl -s --max-time 60 https://8v.pub:10041/api/health
   ```
 
   `GET /api/health` is the composite gate: standard service health
@@ -206,7 +205,7 @@ Facts and notices (all learned the hard way on 2026-08-19):
    ```
 
 3. Every remote verification should go through the **public URL**
-   `http://8v.pub:10041` as well as `127.0.0.1:3000` on the server — the
+   `https://8v.pub:10041` as well as `127.0.0.1:3000` on the server — the
    port-forward rule can break independently of the service.
 
 ## Full redeploy from scratch (if /opt/fafcn was wiped)
@@ -320,13 +319,13 @@ $SSH 'systemctl is-active fafcn && curl -s http://127.0.0.1:3000/api/health'
   `journalctl -u fafcn -n 50 --no-pager` (see Pitfall 1).
 
 ```bash
-curl -s http://8v.pub:10041/api/health             # via public URL
-curl -s http://8v.pub:10041/api/gamedata/status    # expect channels: gamedata, map-generator, faf-client
-curl -s -o /dev/null -w "%{http_code}\n" http://8v.pub:10041/
+curl -s https://8v.pub:10041/api/health             # via public URL
+curl -s https://8v.pub:10041/api/gamedata/status    # expect channels: gamedata, map-generator, faf-client
+curl -s -o /dev/null -w "%{http_code}\n" https://8v.pub:10041/
 ```
 
 - Gate 2: all return 200 / expected JSON through the **public** address.
-- Gate 3 (browser): ask the user to hard-refresh `http://8v.pub:10041/`
+- Gate 3 (browser): ask the user to hard-refresh `https://8v.pub:10041/`
   (Ctrl+Shift+R) and confirm the home page renders with units loaded —
   this catches a debug web bundle that API checks cannot.
 
@@ -419,12 +418,13 @@ Prevention (already encoded in the gates above):
 ## Firewall / HTTPS note
 
 Port forwarding and connectivity troubleshooting live in "Network
-configuration" above. This section covers only the HTTPS plan.
+configuration" above. This section covers only HTTPS.
 
-### HTTPS plan (agreed 2026-08-19): TLS termination at the gateway
+### HTTPS (LIVE since 2026-08-19): TLS termination at the gateway
 
-HTTPS is **not** done on this server. The network admin (the user's friend)
-terminates TLS on his own reverse proxy in front of the port forward:
+The site is served as **`https://8v.pub:10041`**. TLS is **not** done on
+this server — the network admin (the user's friend) terminates it on his
+own reverse proxy in front of the port forward:
 
 ```
 browser ──https──▶ friend's reverse proxy (holds the 8v.pub cert)
@@ -435,7 +435,8 @@ Consequences for anyone maintaining this deployment:
 
 - **Server side stays plain HTTP on port 3000. Do NOT add TLS, nginx, or
   certbot here.** Nothing to install, nothing to renew on this machine.
-- The friend's reverse proxy MUST forward these headers, or features break:
+- The friend's reverse proxy forwards these headers (required, or features
+  break):
 
   ```nginx
   proxy_set_header Host $host;                      # required
@@ -449,20 +450,18 @@ Consequences for anyone maintaining this deployment:
   `<scheme>://<host>` into every sync-client exe it serves (the /sync page
   download). If the header is missing, players get a client pre-filled with
   an `http://` mirror address while the site is actually served over HTTPS.
-- Once the proxy is live, get the final external URL from the admin and
-  re-verify (replace `<EXT>` with the real https URL):
+- If the public URL ever changes, update `MAJIKO_PUBLIC_URL` in `xtask/.env`
+  (or the default in `xtask/src/apps/fafcn_majiko.rs`) and the references in
+  this document, then re-verify:
 
   ```bash
-  curl -s --max-time 60 <EXT>/api/health             # expect "status":"ok"
-  curl -s <EXT>/api/gamedata/status                  # channels JSON
-  curl -s -o /dev/null -w "%{http_code}\n" <EXT>/     # 200
+  cargo xtask fafcn majiko-health    # all three layers should go green
   # plus a browser check of /qa and the WebSocket simulator page
   ```
 
-- Until the proxy is live, plain `http://8v.pub:10041` remains the working
-  address. The only cleartext-sensitive traffic is the gamedata
-  `UPLOAD_TOKEN` (Bearer header used by `fafcn-sync upload`); rotate it by
-  editing `/opt/fafcn/.env` + `systemctl restart fafcn` if ever concerned.
+- The upload token now travels inside TLS (`fafcn-sync upload --server
+  https://8v.pub:10041 ...`). Rotate it by editing `/opt/fafcn/.env` +
+  `systemctl restart fafcn` if ever concerned.
 
 ## Ops cheat sheet
 
@@ -476,5 +475,5 @@ $SSH 'echo "<SSH_PASSWORD>" | sudo -S -k systemctl restart fafcn 2>/dev/null'
 $SSH 'systemctl is-active fafcn'
 
 # upload gamedata from a FAF machine (token is in /opt/fafcn/.env)
-fafcn-sync upload --server http://8v.pub:10041 --token <UPLOAD_TOKEN> --dir "C:\ProgramData\FAForever"
+fafcn-sync upload --server https://8v.pub:10041 --token <UPLOAD_TOKEN> --dir "C:\ProgramData\FAForever"
 ```

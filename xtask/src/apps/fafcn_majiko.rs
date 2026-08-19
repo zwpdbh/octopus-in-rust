@@ -29,8 +29,9 @@ const DEFAULT_HOST: &str = "8v.pub";
 const DEFAULT_SSH_PORT: u16 = 10040;
 /// Install directory on the server (owned by the SSH user).
 const DEFAULT_DEPLOY_DIR: &str = "/opt/fafcn";
-/// Public base URL of the deployed site (edge firewall forward).
-const DEFAULT_PUBLIC_URL: &str = "http://8v.pub:10041";
+/// Public base URL of the deployed site (friend's TLS reverse proxy →
+/// edge forward → `192.168.50.10:3000`). HTTPS since 2026-08-19.
+const DEFAULT_PUBLIC_URL: &str = "https://8v.pub:10041";
 /// systemd unit name on the server.
 const SERVICE_NAME: &str = "fafcn";
 
@@ -437,17 +438,62 @@ enum LayerStatus {
 
 impl LayerStatus {
     fn print(&self, layer: &str) -> bool {
+        // Continuation lines align under the detail column.
+        const INDENT: &str = "                 ";
         match self {
             LayerStatus::Ok(detail) => {
-                println!("  ✅ {layer}: {detail}");
+                println!(
+                    "  ✅ {layer}: {}",
+                    detail.replace('\n', &format!("\n{INDENT}"))
+                );
                 true
             }
             LayerStatus::Fail(detail) => {
-                println!("  ❌ {layer}: {detail}");
+                println!(
+                    "  ❌ {layer}: {}",
+                    detail.replace('\n', &format!("\n{INDENT}"))
+                );
                 false
             }
         }
     }
+}
+
+/// Parse the composite `/api/health` JSON body into polished detail lines.
+/// Returns `(is_ok, detail)`; `None` if the body is not the expected shape.
+fn health_detail(body: &str) -> Option<(bool, String)> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let status = v.get("status")?.as_str()?;
+
+    let svc = v.get("service")?;
+    let units = svc.get("units_loaded")?.as_u64()?;
+    let mark = |key: &str| {
+        if svc.get(key).and_then(|x| x.as_bool()).unwrap_or(false) {
+            "✓"
+        } else {
+            "✗"
+        }
+    };
+    let svc_line = format!(
+        "service: units={units} web-dist{} portraits{} gamedata{}",
+        mark("web_dist_present"),
+        mark("portraits_dir_present"),
+        mark("gamedata_dir_present"),
+    );
+
+    let qa = v.get("qa")?;
+    let qa_status = qa.get("status")?.as_str()?;
+    let model = qa.get("model").and_then(|x| x.as_str()).unwrap_or("?");
+    let base_url = qa.get("base_url").and_then(|x| x.as_str()).unwrap_or("?");
+    let qa_line = if qa_status == "ok" {
+        let reply = qa.get("reply").and_then(|x| x.as_str()).unwrap_or("?");
+        format!("qa: ok — {model} via {base_url}, reply={reply:?}")
+    } else {
+        let error = qa.get("error").and_then(|x| x.as_str()).unwrap_or("?");
+        format!("qa: ERROR — {model} via {base_url}: {}", truncate(error))
+    };
+
+    Some((status == "ok", format!("{svc_line}\n{qa_line}")))
 }
 
 /// Entry point for `cargo xtask fafcn majiko-health`.
@@ -486,10 +532,17 @@ pub fn run_health() -> Result<()> {
                 let mut lines = out.lines();
                 let state = lines.next().unwrap_or("unknown");
                 let health = lines.collect::<Vec<_>>().join(" ");
-                if state == "active" && health.contains("\"status\":\"ok\"") {
-                    LayerStatus::Ok(format!("systemd active, /api/health ok ({})", truncate(&health)))
-                } else {
-                    LayerStatus::Fail(format!("systemd={state}, local health={}", truncate(&health)))
+                match (state, health_detail(&health)) {
+                    ("active", Some((true, detail))) => {
+                        LayerStatus::Ok(format!("systemd active, /api/health ok\n{detail}"))
+                    }
+                    (_, Some((_, detail))) => LayerStatus::Fail(format!(
+                        "systemd={state}, /api/health not ok\n{detail}"
+                    )),
+                    _ => LayerStatus::Fail(format!(
+                        "systemd={state}, local health={}",
+                        truncate(&health)
+                    )),
                 }
             }
             Err(e) => LayerStatus::Fail(format!("{e:#}")),
@@ -504,14 +557,21 @@ pub fn run_health() -> Result<()> {
         let health_url = format!("{}/api/health", cfg.public_url);
         let status_url = format!("{}/api/gamedata/status", cfg.public_url);
         match (curl(&health_url), curl(&status_url)) {
-            (Ok(h), Ok(s)) if h.contains("\"status\":\"ok\"") && s.contains("\"channels\"") => {
-                LayerStatus::Ok(format!("{} serves health + gamedata", cfg.public_url))
+            (Ok(h), Ok(s)) if s.contains("\"channels\"") => match health_detail(&h) {
+                Some((true, detail)) => LayerStatus::Ok(format!(
+                    "{} serves health + gamedata\n{}",
+                    cfg.public_url,
+                    detail.split('\n').next().unwrap_or_default()
+                )),
+                Some((false, detail)) => LayerStatus::Fail(format!(
+                    "{} reachable but /api/health not ok\n{}",
+                    cfg.public_url, detail
+                )),
+                None => LayerStatus::Fail(format!("unexpected health body: {}", truncate(&h))),
+            },
+            (Ok(_), Ok(s)) => {
+                LayerStatus::Fail(format!("unexpected gamedata status body: {}", truncate(&s)))
             }
-            (Ok(h), Ok(s)) => LayerStatus::Fail(format!(
-                "unexpected bodies — health: {}; status: {}",
-                truncate(&h),
-                truncate(&s)
-            )),
             (Err(e), _) | (_, Err(e)) => LayerStatus::Fail(format!(
                 "{} unreachable from here: {e:#} \
                  (edge forward or friend's TLS proxy down?)",
