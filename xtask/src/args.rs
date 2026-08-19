@@ -73,6 +73,9 @@ pub fn print_fafcn_help() {
     println!("             link serves players a real Windows binary");
     println!("             Options: --debug  Debug profile (release is the default;");
     println!("                      debug builds keep a console window on Windows)");
+    println!("  unit-update  Refresh plugins/faf-units/data/faf_units.json from the");
+    println!("             upstream unit database (faf-downloader). Prints the");
+    println!("             follow-up commands (rebuild plugin, deploy, qqbot).");
     println!("  majiko-deploy  Build and redeploy the whole stack to the majiko server");
     println!("             (8v.pub). Reads MAJIKO_* settings from xtask/.env (see");
     println!("             xtask/.env.example). Requires sshpass + rsync locally.");

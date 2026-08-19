@@ -147,6 +147,11 @@ impl FafBlueprints {
             .collect()
     }
 
+    /// FAF patch version of the loaded unit database (e.g. `"3837"`).
+    pub fn units_version(&self) -> &str {
+        &self.index.version
+    }
+
     fn unit_to_blueprint(&self, unit: &faf_units::Unit) -> Result<UnitBlueprint> {
         let eco_metrics = self.get_eco_cost_from_search(unit)?;
         let eco_effect = self.get_unit_eco_effect(unit)?;

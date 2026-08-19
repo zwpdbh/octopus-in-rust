@@ -24,6 +24,7 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
         "backend" => run_backend(),
         "frontend" => run_frontend(),
         "file-sync" => build_file_sync(rest),
+        "unit-update" => update_units(),
         "majiko-deploy" => crate::apps::fafcn_majiko::run_deploy(rest),
         "majiko-health" => crate::apps::fafcn_majiko::run_health(),
         "help" | "-h" | "--help" => {
@@ -75,6 +76,68 @@ fn run_frontend() -> Result<()> {
     if !status.success() {
         anyhow::bail!("dx serve exited with status: {status}");
     }
+    Ok(())
+}
+
+/// Path (repo-relative) of the unit database consumed by the server and
+/// embedded into the WASM plugin at compile time.
+const UNITS_JSON: &str = "plugins/faf-units/data/faf_units.json";
+
+/// Refresh the unit database from the upstream ETFreeman mirror
+/// (`faf-downloader` downloads it and merges the zh-CN translations).
+///
+/// This only rewrites the JSON file. Nothing picks it up automatically:
+/// the server reads it at startup and the WASM plugin embeds it at compile
+/// time, so the follow-up commands are printed explicitly at the end.
+fn update_units() -> Result<()> {
+    println!("Updating {UNITS_JSON} via faf-downloader...");
+    let mut cmd = cargo::command();
+    cmd.args([
+        "run",
+        "--release",
+        "-p",
+        "faf-downloader",
+        "--",
+        "-f",
+        "json",
+        "-o",
+        UNITS_JSON,
+    ]);
+    cargo::run(&mut cmd).context("faf-downloader failed")?;
+
+    // Sanity-check the freshly written file and report what we got.
+    let text = std::fs::read_to_string(UNITS_JSON)
+        .with_context(|| format!("failed to read back {UNITS_JSON}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("{UNITS_JSON} is not valid JSON"))?;
+    let version = parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let units = parsed
+        .get("units")
+        .and_then(|u| u.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if units == 0 {
+        anyhow::bail!("{UNITS_JSON} contains 0 units — refusing to treat this as success");
+    }
+    println!("Updated: {units} units, FAF version {version}");
+
+    println!();
+    println!("The JSON is refreshed, but nothing uses it yet. Next steps:");
+    println!();
+    println!("  1. Rebuild the WASM plugin (it embeds the JSON at compile time):");
+    println!("       cargo build --release -p faf-units-plugin --target wasm32-unknown-unknown");
+    println!("       cp target/wasm32-unknown-unknown/release/faf_units_plugin.wasm data/qqbot-data/plugins/");
+    println!();
+    println!("  2. Deploy everything to the majiko server (ships the JSON + rebuilt");
+    println!("     plugin and restarts the service):");
+    println!("       cargo xtask fafcn majiko-deploy");
+    println!();
+    println!("  3. If qqbot also uses the faf_units plugin, restart it so it picks up");
+    println!("     the rebuilt wasm from data/qqbot-data/plugins/:");
+    println!("       cargo xtask qqbot restart   # or: qqbot tools update");
     Ok(())
 }
 

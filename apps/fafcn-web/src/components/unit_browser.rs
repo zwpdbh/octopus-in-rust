@@ -2,9 +2,19 @@ use std::collections::HashSet;
 
 use dioxus::prelude::*;
 use gloo_net::http::Request;
+use serde::Deserialize;
 
 use crate::components::{ComparisonPanel, UnitSelector, UnitSummary};
 use crate::i18n::{self, Text};
+
+/// Unit database metadata sent by `/api/units/meta` (version + attribution).
+#[derive(Clone, Deserialize, PartialEq)]
+struct UnitsMeta {
+    version: String,
+    unit_count: usize,
+    source_name: String,
+    source_url: String,
+}
 
 /// Unit comparison page body: multi-select unit grid + comparison panel.
 ///
@@ -24,6 +34,15 @@ pub fn UnitBrowser() -> Element {
     });
     let mut selected = use_signal(Vec::<UnitSummary>::new);
     let t = i18n::use_t();
+    let meta = use_resource(move || async move {
+        Request::get(&crate::net::api_url("/api/units/meta"))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json::<UnitsMeta>()
+            .await
+            .map_err(|e| e.to_string())
+    });
 
     let unit_list = match units.read().as_ref() {
         Some(Ok(list)) => list.clone(),
@@ -65,6 +84,21 @@ pub fn UnitBrowser() -> Element {
                 }
                 div { class: "w-96 xl:w-[30rem] 2xl:w-[36rem] shrink-0 border-l border-neutral-800 bg-neutral-900/50 overflow-y-auto p-4",
                     ComparisonPanel { selected }
+                }
+            }
+            // Footer: unit database version + upstream attribution.
+            if let Some(Ok(meta)) = meta.read().as_ref() {
+                div { class: "shrink-0 border-t border-neutral-800 bg-neutral-900/60 px-4 py-1.5 text-xs text-neutral-400 flex items-center gap-1.5",
+                    span { "{t.t(Text::UnitsDataVersion)}: {meta.version} · {meta.unit_count} units" }
+                    span { class: "text-neutral-600", "|" }
+                    span { "{t.t(Text::UnitsDataSource)}: " }
+                    a {
+                        class: "text-sky-400 hover:text-sky-300 underline underline-offset-2",
+                        href: "{meta.source_url}",
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        "{meta.source_name}"
+                    }
                 }
             }
         }

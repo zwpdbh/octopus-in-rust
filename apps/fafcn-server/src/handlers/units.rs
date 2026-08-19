@@ -71,6 +71,33 @@ pub async fn list_units(State(state): State<AppState>) -> impl IntoResponse {
     Json(units)
 }
 
+/// Human-readable name of the upstream unit database (for attribution).
+const UNITS_SOURCE_NAME: &str = "ETFreeman unit database";
+/// Upstream project the unit database is downloaded from by `faf-downloader`.
+const UNITS_SOURCE_URL: &str = "https://github.com/FAForever/etfreeman-db";
+
+/// Metadata about the loaded unit database, shown on the Units page.
+#[derive(Serialize)]
+pub struct UnitsMeta {
+    /// FAF patch version of the data, e.g. `"3837"`.
+    version: String,
+    unit_count: usize,
+    source_name: &'static str,
+    source_url: &'static str,
+}
+
+/// `GET /api/units/meta` — data version and upstream attribution.
+///
+/// Registered as a static segment, so it wins over `/api/units/:id`.
+pub async fn units_meta(State(state): State<AppState>) -> impl IntoResponse {
+    Json(UnitsMeta {
+        version: state.blueprints.units_version().to_string(),
+        unit_count: state.blueprints.all_units().len(),
+        source_name: UNITS_SOURCE_NAME,
+        source_url: UNITS_SOURCE_URL,
+    })
+}
+
 /// Get a single unit blueprint by id or search term.
 pub async fn get_unit(
     State(state): State<AppState>,
