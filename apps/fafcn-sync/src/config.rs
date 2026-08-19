@@ -54,14 +54,72 @@ impl ClientConfig {
 
     /// Fill unset fields from config the server embedded into this executable
     /// at download time (e.g. the mirror address the binary came from).
-    /// Remembered settings always win over embedded ones.
+    /// Remembered settings always win over embedded ones — with one
+    /// exception: a remembered plain-`http` address is upgraded when the
+    /// binary was downloaded from the same host over `https` (the mirror
+    /// moved behind a TLS proxy; the old `http` address no longer works).
     pub fn with_embedded_defaults(mut self) -> Self {
-        if self.server.is_none() {
-            if let Some(embedded) = read_embedded_config() {
-                self.server = embedded.server;
+        if let Some(embedded) = read_embedded_config() {
+            match (&self.server, &embedded.server) {
+                (None, _) => self.server = embedded.server,
+                (Some(remembered), Some(embedded_server))
+                    if is_scheme_upgrade(remembered, embedded_server) =>
+                {
+                    self.server = Some(embedded_server.clone());
+                }
+                _ => {}
             }
         }
         self
+    }
+}
+
+/// True when `remembered` and `embedded` are the same address except that
+/// `remembered` uses `http://` and `embedded` uses `https://`.
+fn is_scheme_upgrade(remembered: &str, embedded: &str) -> bool {
+    match (
+        remembered.strip_prefix("http://"),
+        embedded.strip_prefix("https://"),
+    ) {
+        (Some(old_rest), Some(new_rest)) => old_rest == new_rest,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_scheme_upgrade;
+
+    #[test]
+    fn scheme_upgrade_detected() {
+        assert!(is_scheme_upgrade(
+            "http://8v.pub:10041",
+            "https://8v.pub:10041"
+        ));
+    }
+
+    #[test]
+    fn different_host_is_not_an_upgrade() {
+        assert!(!is_scheme_upgrade(
+            "http://8v.pub:10041",
+            "https://mirror.example.com"
+        ));
+        assert!(!is_scheme_upgrade(
+            "http://8v.pub:10041",
+            "https://8v.pub:9999"
+        ));
+    }
+
+    #[test]
+    fn https_remembered_is_never_downgraded() {
+        assert!(!is_scheme_upgrade(
+            "https://8v.pub:10041",
+            "http://8v.pub:10041"
+        ));
+        assert!(!is_scheme_upgrade(
+            "https://8v.pub:10041",
+            "https://8v.pub:10041"
+        ));
     }
 }
 

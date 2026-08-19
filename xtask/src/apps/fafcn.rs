@@ -24,6 +24,8 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
         "backend" => run_backend(),
         "frontend" => run_frontend(),
         "file-sync" => build_file_sync(rest),
+        "majiko-deploy" => crate::apps::fafcn_majiko::run_deploy(rest),
+        "majiko-health" => crate::apps::fafcn_majiko::run_health(),
         "help" | "-h" | "--help" => {
             crate::args::print_fafcn_help();
             Ok(())
