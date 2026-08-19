@@ -23,6 +23,7 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
     let channels = gamedata_root.join("channels");
     Router::new()
         .route("/api/units", get(handlers::units::list_units))
+        .route("/api/units/meta", get(handlers::units::units_meta))
         .route("/api/units/:id", get(handlers::units::get_unit))
         .route("/api/portraits/:id", get(handlers::portraits::get_portrait))
         .route("/ws/simulate", get(handlers::simulate::simulate_ws_handler))
