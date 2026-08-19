@@ -3,12 +3,16 @@
 use std::path::PathBuf;
 
 /// Return the workspace root directory (`octopus/`).
+///
+/// The path is derived from the compile-time crate location, so on deployed
+/// hosts (where the repo does not exist) canonicalization fails; in that case
+/// fall back to the unresolved path — every consumer is expected to be
+/// overridden via `FAFCN_*` environment variables there.
 pub fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("failed to resolve workspace root")
+        .join("..");
+    root.canonicalize().unwrap_or(root)
 }
 
 /// HTTP server configuration.
