@@ -26,7 +26,7 @@ directory.
 | SSH | `majiko@8v.pub -p 10040` (password auth; sudo uses the same password) |
 | LAN IP | `192.168.50.10` (behind a firewall/NAT; admin forwards ports on request) |
 | Public access | external **TCP 10041** → `192.168.50.10:3000` → `http://8v.pub:10041` |
-| External 80/443 | **NOT available** — plain HTTP on a high port is the only option |
+| External 80/443 | **NOT available** on the server itself — HTTPS is terminated at the friend's gateway reverse proxy (see "Firewall / HTTPS note") |
 | Internet from server | GitHub etc. **blocked**; proxy gateway available at `http://192.168.50.1:7893` if ever needed (`export https_proxy=http://192.168.50.1:7893`) |
 | OS / resources | Ubuntu 22.04, 4 cores, 5.8 GB RAM, ~34 GB free disk |
 | Toolchain on server | none (no git/rust/nginx) and **not needed** — everything is built locally and shipped |
@@ -36,6 +36,63 @@ directory.
 Because GitHub is unreachable from the server and no toolchain exists there,
 **always build locally and rsync artifacts** (Option B of the generic
 runbook). Do not attempt `git clone` on the server.
+
+## Network configuration (the complete picture)
+
+**One single application port carries EVERYTHING.** fafcn-server multiplexes
+the web SPA, JSON APIs, the simulator WebSocket (`/ws/simulate`), and all
+gamedata mirror traffic — player downloads AND token-authenticated uploads
+(`fafcn-sync upload`) — over plain HTTP on TCP 3000. There are no separate
+ports, no raw TCP/UDP services, nothing else to forward. **Never request
+additional port forwards for sync/upload features.**
+
+### Inbound (the only two forwarded ports)
+
+| External (8v.pub) | Internal | Protocol | Purpose |
+|---|---|---|---|
+| TCP 10040 | `192.168.50.10:22` | SSH | server administration (password auth) |
+| TCP 10041 | `192.168.50.10:3000` | TCP / HTTP | **all fafcn traffic**: web, API, WebSocket, gamedata up/download |
+
+External 80/443 are not available. Server-side `ufw` is **inactive** — the
+edge firewall is the only packet filter; keep it that way (do not "harden"
+ufw on the server without adding an SSH allow rule first, or you will lock
+everyone out).
+
+### Outbound (from the server)
+
+| Destination | Reachability |
+|---|---|
+| LLM relay `llmapi.secsino.com` | ✅ direct (domestic service, no proxy) |
+| Ubuntu apt mirrors | ✅ direct |
+| GitHub / most non-CN sites | ❌ blocked — use `export https_proxy=http://192.168.50.1:7893` if ever needed |
+
+### Traffic flow
+
+```
+player browser / fafcn-sync (download)          uploader's fafcn-sync (upload)
+        │ http://8v.pub:10041                            │  + Bearer UPLOAD_TOKEN
+        └──────────────┬─────────────────────────────────┘
+                       ▼  external TCP 10041 (edge firewall forward)
+              192.168.50.10:3000  fafcn-server (plain HTTP, single port)
+                       │
+                       ├── web SPA / JSON APIs
+                       ├── /ws/simulate (WebSocket upgrade, same port)
+                       └── /api/gamedata/... (mirror: manifest, files, upload)
+
+future:  browser ──https──▶ friend's TLS reverse proxy ──http──▶ :3000
+         (server side unchanged — see "Firewall / HTTPS note")
+```
+
+### If connectivity breaks, check in this order
+
+1. `curl -s http://127.0.0.1:3000/api/health/qa` **on the server** — if this
+   fails, the service is down (`journalctl -u fafcn -n 50`), network is fine.
+2. `curl -s http://8v.pub:10041/api/health/qa` from outside — if this fails
+   but step 1 works, the **edge forward** is broken (most common cause: the
+   machine's LAN IP changed via DHCP — ask the admin to update the rule or
+   pin the IP).
+3. If only uploads fail with 401/403: wrong/rotated `UPLOAD_TOKEN`, not a
+   network issue.
 
 ## Layout on the server
 
@@ -316,13 +373,53 @@ Prevention (already encoded in the gates above):
 - After deploy, tell the user to hard-refresh (Ctrl+Shift+R) — browsers
   cache the old JS/wasm aggressively.
 
-## Firewall note
+## Firewall / HTTPS note
 
-The site is reachable only because the network admin forwards
-**external TCP 10041 → 192.168.50.10:3000**. If the LAN IP of the machine
-changes (DHCP), the rule breaks — ask the admin to update it or pin the IP.
-External 80/443 are unavailable on this network; HTTPS would require the
-gateway to terminate TLS, which is not currently set up.
+Port forwarding and connectivity troubleshooting live in "Network
+configuration" above. This section covers only the HTTPS plan.
+
+### HTTPS plan (agreed 2026-08-19): TLS termination at the gateway
+
+HTTPS is **not** done on this server. The network admin (the user's friend)
+terminates TLS on his own reverse proxy in front of the port forward:
+
+```
+browser ──https──▶ friend's reverse proxy (holds the 8v.pub cert)
+                   ──http──▶ 192.168.50.10:3000 (fafcn-server, plain HTTP)
+```
+
+Consequences for anyone maintaining this deployment:
+
+- **Server side stays plain HTTP on port 3000. Do NOT add TLS, nginx, or
+  certbot here.** Nothing to install, nothing to renew on this machine.
+- The friend's reverse proxy MUST forward these headers, or features break:
+
+  ```nginx
+  proxy_set_header Host $host;                      # required
+  proxy_set_header X-Forwarded-Proto $scheme;       # required — see below
+  proxy_set_header Upgrade $http_upgrade;           # required for /ws/simulate
+  proxy_set_header Connection "upgrade";            # required for /ws/simulate
+  proxy_read_timeout 3600s;                         # Q&A streaming is long-lived
+  ```
+
+- **Why `X-Forwarded-Proto` matters:** fafcn-server embeds
+  `<scheme>://<host>` into every sync-client exe it serves (the /sync page
+  download). If the header is missing, players get a client pre-filled with
+  an `http://` mirror address while the site is actually served over HTTPS.
+- Once the proxy is live, get the final external URL from the admin and
+  re-verify (replace `<EXT>` with the real https URL):
+
+  ```bash
+  curl -s --max-time 60 <EXT>/api/health/qa          # expect "reply":"pong"
+  curl -s <EXT>/api/gamedata/status                  # channels JSON
+  curl -s -o /dev/null -w "%{http_code}\n" <EXT>/     # 200
+  # plus a browser check of /qa and the WebSocket simulator page
+  ```
+
+- Until the proxy is live, plain `http://8v.pub:10041` remains the working
+  address. The only cleartext-sensitive traffic is the gamedata
+  `UPLOAD_TOKEN` (Bearer header used by `fafcn-sync upload`); rotate it by
+  editing `/opt/fafcn/.env` + `systemctl restart fafcn` if ever concerned.
 
 ## Ops cheat sheet
 
