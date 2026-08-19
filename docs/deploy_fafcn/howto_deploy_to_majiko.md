@@ -85,9 +85,9 @@ future:  browser ──https──▶ friend's TLS reverse proxy ──http─�
 
 ### If connectivity breaks, check in this order
 
-1. `curl -s http://127.0.0.1:3000/api/health/qa` **on the server** — if this
+1. `curl -s http://127.0.0.1:3000/api/health` **on the server** — if this
    fails, the service is down (`journalctl -u fafcn -n 50`), network is fine.
-2. `curl -s http://8v.pub:10041/api/health/qa` from outside — if this fails
+2. `curl -s http://8v.pub:10041/api/health` from outside — if this fails
    but step 1 works, the **edge forward** is broken (most common cause: the
    machine's LAN IP changed via DHCP — ask the admin to update the rule or
    pin the IP).
@@ -175,12 +175,19 @@ Facts and notices (all learned the hard way on 2026-08-19):
     -H "Content-Type: application/json" -H "Authorization: Bearer <KEY>" \
     -d "{\"model\":\"<MODEL>\",\"messages\":[{\"role\":\"user\",\"content\":\"say pong\"}],\"max_tokens\":64}"'
 
-  # 2. after .env edit + restart, end-to-end gate (expect "reply":"pong")
-  curl -s --max-time 60 http://8v.pub:10041/api/health/qa
+  # 2. after .env edit + restart, end-to-end gate (expect "status":"ok")
+  curl -s --max-time 60 http://8v.pub:10041/api/health
   ```
 
-  The health endpoint performs a REAL LLM round-trip; `"reply":"pong"`
-  proves key validity, reachability, and model availability in one shot.
+  `GET /api/health` is the composite gate: standard service health
+  (units loaded, web dist, portraits, gamedata dirs) PLUS a REAL LLM
+  round-trip in one call. `"status":"ok"` proves deployment, key validity,
+  reachability, and model availability in one shot. Per-component detail is
+  in `service.*` and `qa.*`; a broken LLM alone yields HTTP 200 with
+  `"status":"degraded"` + `qa.status="error"` (the rest of the site still
+  works). `GET /api/health/qa` remains as the LLM-only variant (503 on
+  provider failure). Neither endpoint should be polled aggressively — each
+  call spends a few LLM tokens.
 
 ## Shell conventions (IMPORTANT — read before running anything)
 
@@ -305,15 +312,15 @@ systemctl daemon-reload && systemctl enable --now fafcn" 2>/dev/null'
 ### Phase 6 — Verification gates
 
 ```bash
-$SSH 'systemctl is-active fafcn && curl -s http://127.0.0.1:3000/api/health/qa'
+$SSH 'systemctl is-active fafcn && curl -s http://127.0.0.1:3000/api/health'
 ```
 
-- Gate 1: `active` and health JSON contains `"reply":"pong"`.
+- Gate 1: `active` and health JSON contains `"status":"ok"`.
   If the service crash-loops, read
   `journalctl -u fafcn -n 50 --no-pager` (see Pitfall 1).
 
 ```bash
-curl -s http://8v.pub:10041/api/health/qa          # via public URL
+curl -s http://8v.pub:10041/api/health             # via public URL
 curl -s http://8v.pub:10041/api/gamedata/status    # expect channels: gamedata, map-generator, faf-client
 curl -s -o /dev/null -w "%{http_code}\n" http://8v.pub:10041/
 ```
@@ -325,6 +332,42 @@ curl -s -o /dev/null -w "%{http_code}\n" http://8v.pub:10041/
 
 ## Routine update (code changed, redeploy)
 
+**One command** (implemented in `xtask/src/apps/fafcn_majiko.rs`):
+
+```bash
+cargo xtask fafcn majiko-deploy                   # full stack: backend + plugin + web
+cargo xtask fafcn majiko-deploy --skip-web        # backend/plugin only, keep the web UI
+cargo xtask fafcn majiko-deploy --with-gamedata   # also sync the ~800MB mirror (rarely needed)
+cargo xtask fafcn majiko-deploy --skip-verify     # skip health gates (e.g. edge forward known-down)
+```
+
+Companion command — three-layer health report (SSH login → systemd +
+`127.0.0.1:3000` on the host → public `MAJIKO_PUBLIC_URL`); exits non-zero
+if any layer fails, so it doubles as the connectivity decision tree from
+"Network configuration":
+
+```bash
+cargo xtask fafcn majiko-health
+```
+
+It performs, in order: preflight (local `sshpass`/`rsync`/`dx` + SSH login
+check) → release builds (server, wasm plugin, dx web with a cleaned output
+dir) → the Pitfall-2 release-bundle gate → rsync (with `--delete` on
+web-dist only) → `systemctl restart fafcn` → health gates on both
+`127.0.0.1:3000` and `MAJIKO_PUBLIC_URL`.
+
+Connection settings and the SSH password live in **`xtask/.env`**
+(git-ignored; template: `xtask/.env.example`). Keys: `MAJIKO_SSH_PASSWORD`
+(required), `MAJIKO_SSH_USER`, `MAJIKO_SSH_HOST`, `MAJIKO_SSH_PORT`,
+`MAJIKO_DEPLOY_DIR`, `MAJIKO_PUBLIC_URL` (update this one if the friend's
+TLS reverse proxy changes the public address). Process env overrides
+`xtask/.env` values.
+
+Mirror data, `.env`, and the systemd unit survive updates untouched.
+
+<details>
+<summary>Manual equivalent (what the command does, step by step)</summary>
+
 ```bash
 cargo build --release -p fafcn-server
 (cd apps/fafcn-web && dx build --release --platform web)   # only if web changed
@@ -333,8 +376,8 @@ rsync -az --delete -e "$RSYNC_SSH" target/dx/fafcn-web/release/web/public/ majik
 $SSH 'echo "<SSH_PASSWORD>" | sudo -S -k systemctl restart fafcn 2>/dev/null; sleep 4; systemctl is-active fafcn'
 ```
 
-Then re-run the Phase 6 gates. Mirror data, `.env`, and the systemd unit
-survive updates untouched.
+Then re-run the Phase 6 gates.
+</details>
 
 ## Pitfalls hit on 2026-08-19 (fixed, but know them)
 
@@ -410,7 +453,7 @@ Consequences for anyone maintaining this deployment:
   re-verify (replace `<EXT>` with the real https URL):
 
   ```bash
-  curl -s --max-time 60 <EXT>/api/health/qa          # expect "reply":"pong"
+  curl -s --max-time 60 <EXT>/api/health             # expect "status":"ok"
   curl -s <EXT>/api/gamedata/status                  # channels JSON
   curl -s -o /dev/null -w "%{http_code}\n" <EXT>/     # 200
   # plus a browser check of /qa and the WebSocket simulator page

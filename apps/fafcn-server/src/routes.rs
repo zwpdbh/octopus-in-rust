@@ -28,6 +28,7 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
         .route("/ws/simulate", get(handlers::simulate::simulate_ws_handler))
         .route("/api/ask", post(handlers::qa::ask_handler))
         .route("/api/ask/stream", post(handlers::qa::ask_stream_handler))
+        .route("/api/health", get(handlers::health::health_handler))
         .route("/api/health/qa", get(handlers::qa::health_handler))
         // Gamedata mirror: JSON API (per channel).
         .route(
