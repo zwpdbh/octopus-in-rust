@@ -28,7 +28,8 @@ members = [
     "crates/faf-game-engine",
     "apps/breakout",
     "crates/faf-sim-service",
-    "crates/faf-sim-protocol", "apps/fafcn-web",
+    "crates/faf-sim-protocol",
+    "apps/fafcn-web",
     "crates/fafcn-gamedata",
     "apps/fafcn-sync",
 ]
@@ -54,7 +55,8 @@ bevy_app = "0.19"
 bevy_ecs = "0.19"
 anyhow = "1"
 async-trait = "0.1"
-axum = "0.7"
+axum = "0.8.9"
+bytes = "1"
 burn = { version = "0.21", default-features = false, features = [
     "std",
     "autodiff",
@@ -91,10 +93,10 @@ tempfile = "3"
 burn-train = { version = "0.21", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 tokio-test = "0.4"
-toml = "0.8"
-tower-http = { version = "0.5", features = ["fs", "trace"] }
+toml = "1.1.4"
+tower-http = { version = "0.7.0", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"

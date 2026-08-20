@@ -23,7 +23,8 @@ pub fn run(command: &str, rest: &[String]) -> Result<()> {
     match command {
         "backend" => run_backend(),
         "frontend" => run_frontend(),
-        "file-sync" => build_file_sync(rest),
+        "file-sync" => build_file_sync(rest).map(|_| ()),
+        "majiko-deploy-file-sync" => crate::apps::fafcn_majiko::run_file_sync_deploy(),
         "unit-update" => update_units(),
         "majiko-deploy" => crate::apps::fafcn_majiko::run_deploy(rest),
         "majiko-health" => crate::apps::fafcn_majiko::run_health(),
@@ -143,7 +144,7 @@ fn update_units() -> Result<()> {
 
 /// Cross-compile the `fafcn-sync` CLI for Windows and install it where the
 /// backend serves it, so the `/sync` page download link hands players a real
-/// Windows binary.
+/// Windows binary. Returns the fresh build tag.
 ///
 /// Release is the default: debug builds keep a console window (see the
 /// `windows_subsystem` gate in fafcn-sync's main.rs), which is exactly what
@@ -152,7 +153,7 @@ fn update_units() -> Result<()> {
 /// Every build is stamped with a fresh tag (compiled into the exe AND
 /// written to a VERSION file the status endpoint serves), so users can
 /// verify the /sync page and their download match.
-fn build_file_sync(rest: &[String]) -> Result<()> {
+pub(crate) fn build_file_sync(rest: &[String]) -> Result<String> {
     let release = !rest.iter().any(|a| a == "--debug");
     ensure_windows_cross_toolchain()?;
     let tag = new_build_tag();
@@ -188,7 +189,7 @@ fn build_file_sync(rest: &[String]) -> Result<()> {
 
     println!("Installed {built} -> {}", dest.display());
     println!("Build tag: {tag} (shown on the /sync page and in the client title bar)");
-    Ok(())
+    Ok(tag)
 }
 
 /// A unique-per-build tag: timestamp + random suffix, e.g. `dev-68f3a1c2-9b4e`.

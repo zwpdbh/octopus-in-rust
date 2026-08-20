@@ -1,12 +1,15 @@
 //! Sync channel definitions shared by server, client, and web.
 //!
 //! Players only struggle to download specific things, so the mirror is
-//! organized into two well-known channels below the `FAForever` folder:
+//! organized into well-known channels:
 //!
 //! - `gamedata` — only the big patch archives (`env.nx2`, `units.nx2`,
 //!   `textures.nx2`), versioned by the FAF patch version from `lua.nx2`.
 //! - `map-generator` — the newest few `MapGenerator_*.jar` files, versioned
 //!   by the newest jar's version.
+//! - `faf-client` — the client installer (mirror-only).
+//! - `maps` — FAF maps (folders like `name.v0001`), synced into the FAF
+//!   Client's `maps_and_mods/maps` folder instead of the FAForever folder.
 
 /// Channel id for the gamedata patch archives.
 pub const CHANNEL_GAMEDATA: &str = "gamedata";
@@ -18,8 +21,18 @@ pub const CHANNEL_MAP_GENERATOR: &str = "map-generator";
 /// from the web page; it is NOT synced into the FAForever folder).
 pub const CHANNEL_FAF_CLIENT: &str = "faf-client";
 
+/// Channel id for FAF maps. Synced into the FAF Client's
+/// `maps_and_mods/maps` folder, NOT the FAForever folder (hence absent from
+/// [`SYNC_CHANNELS`]); uploads MERGE into the existing manifest.
+pub const CHANNEL_MAPS: &str = "maps";
+
 /// All known channel ids (rejected at the API boundary otherwise).
-pub const CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_FAF_CLIENT];
+pub const CHANNELS: &[&str] = &[
+    CHANNEL_GAMEDATA,
+    CHANNEL_MAP_GENERATOR,
+    CHANNEL_FAF_CLIENT,
+    CHANNEL_MAPS,
+];
 
 /// Channels the sync client syncs into the FAForever folder.
 pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR];
@@ -91,6 +104,23 @@ pub fn map_generator_jar_version(file_name: &str) -> Option<String> {
     Some(version.to_string())
 }
 
+/// Parse a FAF map folder name of the form `base.vNNNN` (e.g.
+/// `my_map.v0001`) into `(base, version)`. Returns `None` for names that
+/// don't follow the convention.
+pub fn map_folder_version(folder_name: &str) -> Option<(&str, u32)> {
+    let (base, version) = folder_name.rsplit_once(".v")?;
+    if base.is_empty() || version.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((base, version.parse().ok()?))
+}
+
+/// Today's date as `YYYY-MM-DD` — the display version for maps commits
+/// (the maps channel merges uploads, so there is no single patch version).
+pub fn today_stamp() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
 /// Compare two version strings as dotted numeric tuples (`3837` > `3825`,
 /// `1.22.10` > `1.22.1`). Returns `None` when either side is not numeric.
 pub fn compare_version_strings(a: &str, b: &str) -> Option<std::cmp::Ordering> {
@@ -150,6 +180,17 @@ mod tests {
         );
         assert_eq!(map_generator_jar_version("other.jar"), None);
         assert_eq!(map_generator_jar_version("MapGenerator_beta.jar"), None);
+    }
+
+    #[test]
+    fn map_folder_version_parsing() {
+        assert_eq!(map_folder_version("my_map.v0001"), Some(("my_map", 1)));
+        assert_eq!(map_folder_version("astro.v0012"), Some(("astro", 12)));
+        assert_eq!(map_folder_version("a.b.v0002"), Some(("a.b", 2)));
+        assert_eq!(map_folder_version("noversion"), None);
+        assert_eq!(map_folder_version("map.v"), None);
+        assert_eq!(map_folder_version("map.vxyz"), None);
+        assert_eq!(map_folder_version(".v0001"), None);
     }
 
     #[test]

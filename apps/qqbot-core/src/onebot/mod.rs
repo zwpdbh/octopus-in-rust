@@ -43,7 +43,7 @@ pub async fn connect(
                                         continue;
                                     }
                                 };
-                                if let Err(e) = ws_writer.send(Message::Text(payload)).await {
+                                if let Err(e) = ws_writer.send(Message::Text(payload.into())).await {
                                     error!(error = %e, "failed to send action");
                                     break;
                                 }

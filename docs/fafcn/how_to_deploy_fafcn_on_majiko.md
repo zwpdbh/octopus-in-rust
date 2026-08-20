@@ -340,6 +340,16 @@ cargo xtask fafcn majiko-deploy --with-gamedata   # also sync the ~800MB mirror 
 cargo xtask fafcn majiko-deploy --skip-verify     # skip health gates (e.g. edge forward known-down)
 ```
 
+When ONLY the fafcn-sync Windows client changed, skip the full redeploy —
+this rebuilds the client (release, fresh build tag), rsyncs just
+`data/faf-gamedata/client/` (exe + VERSION), and verifies the new tag shows
+up in `/api/gamedata/status`. No service restart needed (the server reads
+those files per request):
+
+```bash
+cargo xtask fafcn majiko-deploy-file-sync
+```
+
 Companion command — three-layer health report (SSH login → systemd +
 `127.0.0.1:3000` on the host → public `MAJIKO_PUBLIC_URL`); exits non-zero
 if any layer fails, so it doubles as the connectivity decision tree from

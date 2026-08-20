@@ -82,6 +82,9 @@ pub fn print_fafcn_help() {
     println!("             Options: --skip-web       backend/plugin only, keep web UI");
     println!("                      --with-gamedata  also sync the ~800MB mirror");
     println!("                      --skip-verify    skip post-deploy health gates");
+    println!("  majiko-deploy-file-sync  Rebuild the fafcn-sync Windows client and");
+    println!("             ship ONLY that binary to the majiko server (no full redeploy,");
+    println!("             no service restart). Reads MAJIKO_* settings from xtask/.env.");
     println!("  majiko-health  Check the majiko deployment in three layers:");
     println!("             SSH login, service on the host (systemd + 127.0.0.1:3000),");
     println!("             and the public URL (MAJIKO_PUBLIC_URL). Exits non-zero if");
@@ -91,6 +94,7 @@ pub fn print_fafcn_help() {
     println!("  cargo xtask fafcn backend");
     println!("  cargo xtask fafcn frontend");
     println!("  cargo xtask fafcn file-sync");
+    println!("  cargo xtask fafcn majiko-deploy-file-sync");
     println!("  cargo xtask fafcn majiko-deploy");
     println!("  cargo xtask fafcn majiko-health");
 }

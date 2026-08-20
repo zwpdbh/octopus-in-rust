@@ -10,13 +10,17 @@
 //!   incoming/       # temp dir for in-progress uploads (renamed into files/)
 //! ```
 
-use std::{fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+};
 
 use axum::http::HeaderMap;
 use chrono::Utc;
 use fafcn_gamedata::{
-    compare_version_strings, sha256_bytes, sha256_file, validate_relative_path, FileEntry,
-    Manifest, UploadCommitRequest, CHANNELS,
+    compare_version_strings, map_folder_version, sha256_bytes, sha256_file, validate_relative_path,
+    FileEntry, Manifest, UploadCommitRequest, CHANNELS,
 };
 
 use crate::error::{Error, Result};
@@ -131,6 +135,108 @@ impl GamedataStore {
     /// Finalize an upload session: verify every listed file is present with a
     /// matching hash, then atomically replace the channel's `manifest.json`.
     pub fn commit(&self, channel: &str, req: &UploadCommitRequest) -> Result<Manifest> {
+        self.validate_commit_request(channel, req)?;
+        self.guard_against_downgrade(channel, &req.patch_version)?;
+        let manifest = Manifest {
+            patch_version: req.patch_version.clone(),
+            uploader: req.uploader.clone(),
+            generated_at: Utc::now(),
+            files: req.files.clone(),
+        };
+        self.write_manifest(channel, &manifest)?;
+        Ok(manifest)
+    }
+
+    /// Finalize a maps upload by MERGING into the existing manifest instead
+    /// of replacing it (maps come from many uploaders over time). Every map
+    /// whose base name appears in the incoming set has ALL its previously
+    /// stored versions replaced by the incoming one; unrelated maps are kept
+    /// untouched. Files of replaced map versions are removed from disk.
+    ///
+    /// No downgrade guard: the maps version is a date stamp, not a patch
+    /// number.
+    pub fn commit_merge(&self, channel: &str, req: &UploadCommitRequest) -> Result<Manifest> {
+        self.validate_commit_request(channel, req)?;
+
+        // Base names (without `.vNNNN`) of the maps being uploaded.
+        let incoming_bases: HashSet<String> = req
+            .files
+            .iter()
+            .filter_map(|e| map_folder_version(top_folder(&e.path)))
+            .map(|(base, _)| base.to_string())
+            .collect();
+        let incoming_paths: HashSet<&str> = req.files.iter().map(|e| e.path.as_str()).collect();
+
+        let mut merged: Vec<FileEntry> = Vec::new();
+        let mut dropped: Vec<String> = Vec::new();
+        if let Some(existing) = self.read_manifest(channel)? {
+            for entry in existing.files {
+                let replaced = map_folder_version(top_folder(&entry.path))
+                    .is_some_and(|(base, _)| incoming_bases.contains(base));
+                if replaced {
+                    dropped.push(entry.path);
+                } else if !incoming_paths.contains(entry.path.as_str()) {
+                    merged.push(entry);
+                }
+                // Same path in both: incoming entry wins (dedupe).
+            }
+        }
+        merged.extend(req.files.iter().cloned());
+        merged.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // Collapse to the newest version per map base: merged uploads (or an
+        // uploader whose folder contained several versions of a map) must not
+        // leave multiple versions of the same map in the manifest — clients
+        // prune their older copies and would otherwise re-download them.
+        let mut newest: HashMap<String, u32> = HashMap::new();
+        for entry in &merged {
+            if let Some((base, version)) = map_folder_version(top_folder(&entry.path)) {
+                newest
+                    .entry(base.to_string())
+                    .and_modify(|v| *v = (*v).max(version))
+                    .or_insert(version);
+            }
+        }
+        let mut collapsed = Vec::with_capacity(merged.len());
+        for entry in merged {
+            let keep = match map_folder_version(top_folder(&entry.path)) {
+                Some((base, version)) => newest.get(base) == Some(&version),
+                None => true,
+            };
+            if keep {
+                collapsed.push(entry);
+            } else {
+                dropped.push(entry.path);
+            }
+        }
+        let merged = collapsed;
+
+        // Remove replaced files from disk, then the now-empty old folders.
+        let merged_tops: HashSet<&str> = merged.iter().map(|e| top_folder(&e.path)).collect();
+        let mut dropped_tops: HashSet<&str> = HashSet::new();
+        for path in &dropped {
+            dropped_tops.insert(top_folder(path));
+            let _ = fs::remove_file(self.files_dir(channel).join(path));
+        }
+        for top in dropped_tops {
+            if !merged_tops.contains(top) {
+                let _ = fs::remove_dir_all(self.files_dir(channel).join(top));
+            }
+        }
+
+        let manifest = Manifest {
+            patch_version: req.patch_version.clone(),
+            uploader: req.uploader.clone(),
+            generated_at: Utc::now(),
+            files: merged,
+        };
+        self.write_manifest(channel, &manifest)?;
+        Ok(manifest)
+    }
+
+    /// Shared commit validation: non-empty metadata and every listed file
+    /// stored with a matching hash.
+    fn validate_commit_request(&self, channel: &str, req: &UploadCommitRequest) -> Result<()> {
         if req.patch_version.trim().is_empty() {
             return Err(Error::BadRequest(
                 "patch_version must not be empty".to_string(),
@@ -142,7 +248,6 @@ impl GamedataStore {
         if req.files.is_empty() {
             return Err(Error::BadRequest("file list must not be empty".to_string()));
         }
-        self.guard_against_downgrade(channel, &req.patch_version)?;
         for entry in &req.files {
             validate_relative_path(&entry.path).map_err(|e| Error::BadRequest(e.to_string()))?;
             if !self.stored_file_matches(channel, entry)? {
@@ -152,19 +257,17 @@ impl GamedataStore {
                 )));
             }
         }
+        Ok(())
+    }
 
-        let manifest = Manifest {
-            patch_version: req.patch_version.clone(),
-            uploader: req.uploader.clone(),
-            generated_at: Utc::now(),
-            files: req.files.clone(),
-        };
-        let json = serde_json::to_string_pretty(&manifest)
+    /// Atomically replace the channel's `manifest.json`.
+    fn write_manifest(&self, channel: &str, manifest: &Manifest) -> Result<()> {
+        let json = serde_json::to_string_pretty(manifest)
             .map_err(|e| Error::Internal(format!("failed to serialize manifest: {e}")))?;
         let tmp = self.channel_root(channel).join("manifest.json.tmp");
         fs::write(&tmp, json)?;
         fs::rename(&tmp, self.manifest_path(channel))?;
-        Ok(manifest)
+        Ok(())
     }
 
     /// Refuse to publish a patch that is strictly older than the one already
@@ -197,10 +300,16 @@ impl GamedataStore {
     }
 }
 
+/// Top-level folder of a manifest path (`map.v0001/x.lua` → `map.v0001`;
+/// a top-level file maps to itself).
+fn top_folder(path: &str) -> &str {
+    path.split('/').next().unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fafcn_gamedata::CHANNEL_GAMEDATA;
+    use fafcn_gamedata::{CHANNEL_GAMEDATA, CHANNEL_MAPS};
 
     fn temp_store() -> (PathBuf, GamedataStore) {
         let root = std::env::temp_dir().join(format!("fafcn-store-test-{}", uuid::Uuid::new_v4()));
@@ -298,6 +407,84 @@ mod tests {
         let downgraded = commit("3825");
         assert!(matches!(downgraded, Err(Error::Conflict(_))));
         assert!(commit("3900").is_ok());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn map_entry(path: &str, bytes: &[u8]) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            size: bytes.len() as u64,
+            sha256: sha256_bytes(bytes),
+        }
+    }
+
+    fn store_map_file(store: &GamedataStore, entry: &FileEntry, bytes: &[u8]) {
+        store
+            .store_upload(CHANNEL_MAPS, &entry.path, &entry.sha256, bytes)
+            .unwrap();
+    }
+
+    fn merge_req(entries: Vec<FileEntry>) -> UploadCommitRequest {
+        UploadCommitRequest {
+            patch_version: "2026-08-20".to_string(),
+            uploader: "tester".to_string(),
+            files: entries,
+        }
+    }
+
+    #[test]
+    fn merge_replaces_old_map_version_and_keeps_others() {
+        let (root, store) = temp_store();
+        // Existing manifest: map_a v1 + map_b v1.
+        let a1 = map_entry("map_a.v0001/a.lua", b"a1");
+        let b1 = map_entry("map_b.v0001/b.lua", b"b1");
+        store_map_file(&store, &a1, b"a1");
+        store_map_file(&store, &b1, b"b1");
+        store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a1.clone(), b1.clone()]))
+            .unwrap();
+
+        // Upload map_a v2: v1 must be replaced, map_b untouched.
+        let a2 = map_entry("map_a.v0002/a.lua", b"a2");
+        store_map_file(&store, &a2, b"a2");
+        let manifest = store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a2.clone()]))
+            .unwrap();
+
+        let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["map_a.v0002/a.lua", "map_b.v0001/b.lua"]);
+        // Old version files are gone from disk, the rest remains.
+        assert!(!root.join("channels/maps/files/map_a.v0001/a.lua").exists());
+        assert!(root.join("channels/maps/files/map_a.v0002/a.lua").is_file());
+        assert!(root.join("channels/maps/files/map_b.v0001/b.lua").is_file());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn merge_rejects_missing_files() {
+        let (root, store) = temp_store();
+        let result =
+            store.commit_merge(CHANNEL_MAPS, &merge_req(vec![map_entry("m.v0001/x", b"x")]));
+        assert!(result.is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn merge_collapses_multiple_versions_to_newest() {
+        let (root, store) = temp_store();
+        // One upload carrying BOTH versions of a map (uploader's folder had
+        // a stale copy): only the newest may survive in the manifest.
+        let a1 = map_entry("map_a.v0001/a.lua", b"a1");
+        let a2 = map_entry("map_a.v0002/a.lua", b"a2");
+        store_map_file(&store, &a1, b"a1");
+        store_map_file(&store, &a2, b"a2");
+        let manifest = store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a1, a2]))
+            .unwrap();
+
+        let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["map_a.v0002/a.lua"]);
+        assert!(!root.join("channels/maps/files/map_a.v0001").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 

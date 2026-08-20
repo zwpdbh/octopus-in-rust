@@ -18,10 +18,17 @@ use anyhow::{Context, Result};
 use fafcn_gamedata::{
     compare_version_strings, map_generator_jar_version, sha256_file, validate_relative_path,
     FileEntry, Manifest, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
-    CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
+    CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
+use futures_util::StreamExt;
+use walkdir::WalkDir;
 
-use crate::{api, config::ClientConfig, version, UploadArgs, UploadClientArgs};
+use crate::{
+    api,
+    config::ClientConfig,
+    progress::{format_bytes, format_speed, ProgressReporter, TransferUpdate},
+    version, UploadArgs, UploadClientArgs, UploadMapsArgs,
+};
 
 /// Progress events emitted while uploading.
 pub enum UploadProgress {
@@ -48,7 +55,11 @@ pub enum UploadProgress {
     Needed {
         /// Files to upload (0 = server already has everything).
         needed: usize,
+        /// Total bytes to upload.
+        total_bytes: u64,
     },
+    /// Byte-level progress within the current upload plan.
+    Bytes(TransferUpdate),
     /// A single file finished uploading.
     FileUploaded {
         /// Manifest-relative path.
@@ -134,6 +145,80 @@ pub async fn run_client(args: UploadClientArgs) -> Result<()> {
     Ok(())
 }
 
+/// Run the CLI `upload-maps` subcommand: publish a folder of FAF maps.
+pub async fn run_maps(args: UploadMapsArgs) -> Result<()> {
+    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let server = api::resolve_server(args.server, &cfg)?;
+    let uploader = args
+        .uploader
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("Mirror: {server}");
+    println!("Maps:   {}", args.dir.display());
+
+    let summary = upload_maps(
+        &server,
+        &args.token,
+        &args.dir,
+        &uploader,
+        &mut print_progress,
+    )
+    .await?;
+    for published in &summary.published {
+        println!("Published {} {}", published.channel, published.version);
+    }
+
+    cfg.server = Some(server);
+    cfg.save()?;
+    Ok(())
+}
+
+/// Upload every file below `folder` (recursively — each `name.vNNNN` map
+/// folder and all its files) to the `maps` channel. The server MERGES these
+/// maps into the existing manifest, replacing older versions of the same
+/// maps and keeping maps uploaded by others.
+pub async fn upload_maps(
+    server: &str,
+    token: &str,
+    folder: &Path,
+    uploader: &str,
+    progress: &mut dyn FnMut(UploadProgress),
+) -> Result<UploadSummary> {
+    if !folder.is_dir() {
+        anyhow::bail!("{} is not a directory", folder.display());
+    }
+    if uploader.trim().is_empty() {
+        anyhow::bail!("uploader name must not be empty");
+    }
+    let mut entries = Vec::new();
+    for item in WalkDir::new(folder).into_iter().filter_map(|e| e.ok()) {
+        if item.file_type().is_file() {
+            entries.push(hash_file(folder, item.path())?);
+        }
+    }
+    if entries.is_empty() {
+        anyhow::bail!("{} contains no files", folder.display());
+    }
+    let plan = ChannelPlan {
+        channel: CHANNEL_MAPS,
+        source_dir: folder.to_path_buf(),
+        version: fafcn_gamedata::today_stamp(),
+        entries,
+    };
+
+    let http = reqwest::Client::new();
+    let (files, bytes) = upload_channel(&http, server, token, &plan, uploader, progress).await?;
+    Ok(UploadSummary {
+        uploaded_files: files,
+        uploaded_bytes: bytes,
+        published: vec![PublishedChannel {
+            channel: CHANNEL_MAPS.to_string(),
+            version: plan.version.clone(),
+        }],
+    })
+}
+
 /// Progress printer shared by the CLI upload subcommands.
 fn print_progress(event: UploadProgress) {
     match event {
@@ -144,15 +229,33 @@ fn print_progress(event: UploadProgress) {
         UploadProgress::Scanned { files, total_bytes } => {
             println!("found {files} file(s), {:.1} MB", total_bytes as f64 / 1e6)
         }
-        UploadProgress::Needed { needed } => {
+        UploadProgress::Needed {
+            needed,
+            total_bytes,
+        } => {
             if needed == 0 {
                 println!("server already has every file");
             } else {
-                println!("server needs {needed} file(s):");
+                println!(
+                    "server needs {needed} file(s), {:.1} MB:",
+                    total_bytes as f64 / 1e6
+                );
             }
         }
+        UploadProgress::Bytes(update) => {
+            use std::io::Write;
+            print!(
+                "\r{:>5.1}%  {} / {}  {}    ",
+                update.percent(),
+                format_bytes(update.done_bytes),
+                format_bytes(update.total_bytes),
+                format_speed(update.bytes_per_sec),
+            );
+            let _ = std::io::stdout().flush();
+        }
         UploadProgress::FileUploaded { path, index, count } => {
-            println!("[{index}/{count}] {path}")
+            // Pad to overwrite the live progress line above.
+            println!("\r[{index}/{count}] {path:<60}")
         }
         UploadProgress::Committed {
             patch_version,
@@ -393,16 +496,29 @@ async fn upload_channel(
     });
 
     let needed = check_needed(http, server, token, plan.channel, &plan.entries).await?;
+    let needed_bytes: u64 = needed.iter().map(|e| e.size).sum();
     progress(UploadProgress::Needed {
         needed: needed.len(),
+        total_bytes: needed_bytes,
     });
 
     let mut uploaded_bytes = 0_u64;
     let count = needed.len();
+    let mut reporter = ProgressReporter::new(needed_bytes, progress, UploadProgress::Bytes);
     for (i, entry) in needed.iter().enumerate() {
-        upload_one(http, server, token, plan.channel, &plan.source_dir, entry).await?;
+        upload_one(
+            http,
+            server,
+            token,
+            plan.channel,
+            &plan.source_dir,
+            entry,
+            &mut reporter,
+        )
+        .await?;
         uploaded_bytes += entry.size;
-        progress(UploadProgress::FileUploaded {
+        reporter.snapshot();
+        reporter.emit(UploadProgress::FileUploaded {
             path: entry.path.clone(),
             index: i + 1,
             count,
@@ -457,7 +573,13 @@ async fn check_needed(
         .collect())
 }
 
-/// Upload one file's raw bytes with its path/hash headers.
+/// Request-body chunk size for streamed uploads.
+const UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Upload one file's raw bytes with its path/hash headers. The body is
+/// streamed in chunks so byte-level progress can be reported: the stream
+/// counts each chunk's size into a channel, and the select loop below feeds
+/// those counts into `reporter` while the request is in flight.
 async fn upload_one(
     http: &reqwest::Client,
     server: &str,
@@ -465,17 +587,42 @@ async fn upload_one(
     channel: &str,
     dir: &Path,
     entry: &FileEntry,
+    reporter: &mut ProgressReporter<'_, UploadProgress>,
 ) -> Result<()> {
-    let bytes = fs::read(dir.join(&entry.path))?;
+    // reqwest::Body::wrap_stream requires a 'static stream, so the counting
+    // closure cannot borrow the reporter — it reports chunk sizes back instead.
+    let bytes = bytes::Bytes::from(fs::read(dir.join(&entry.path))?);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let chunk_count = bytes.len().div_ceil(UPLOAD_CHUNK_SIZE);
+    let stream = futures_util::stream::iter(0..chunk_count).map(move |i| {
+        let start = i * UPLOAD_CHUNK_SIZE;
+        let end = (start + UPLOAD_CHUNK_SIZE).min(bytes.len());
+        let chunk = bytes.slice(start..end);
+        let _ = tx.send(chunk.len() as u64);
+        Ok::<_, std::io::Error>(chunk)
+    });
+
     let url = api::api_url(server, &format!("channels/{channel}/upload/file"));
-    let resp = http
+    let send = http
         .post(&url)
         .bearer_auth(token)
-        .header("x-gamedata-path", &entry.path)
+        // The path travels in a header, which is ASCII-only — percent-encode
+        // it (non-ASCII map file names exist in the wild).
+        .header("x-gamedata-path", api::encode_relative_path(&entry.path))
         .header("x-gamedata-sha256", &entry.sha256)
-        .body(bytes)
-        .send()
-        .await?;
+        .body(reqwest::Body::wrap_stream(stream))
+        .send();
+    tokio::pin!(send);
+    let resp = loop {
+        tokio::select! {
+            resp = &mut send => break resp?,
+            Some(n) = rx.recv() => reporter.add(n),
+        }
+    };
+    // Drain chunks counted just before the request completed.
+    while let Ok(n) = rx.try_recv() {
+        reporter.add(n);
+    }
     api::ensure_success(resp)
         .await
         .with_context(|| format!("failed to upload {}", entry.path))?;

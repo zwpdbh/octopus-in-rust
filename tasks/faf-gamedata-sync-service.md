@@ -60,7 +60,8 @@ This service replaces QQ with a deployed mirror: a VPN-having uploader pushes th
 
 ### Out of Scope
 
-- Maps/mods vault mirroring (later task if wanted).
+- ~~Maps/mods vault mirroring~~ **Done (2026-08-20):** the `maps` channel mirrors FAF maps. Uploads merge into the manifest (newer `name.vNNNN` versions replace older ones); sync downloads them into the FAF Client's `maps_and_mods/maps` and prunes stale local map versions.
+- Mods vault mirroring (later task if wanted).
 - Delta/binary-diff sync, P2P distribution, chunked resumable upload (unnecessary at < 700 MB scale; range-supported *downloads* are included).
 - Object storage (OSS/COS) offload (revisit only if bandwidth becomes a cost problem).
 - GUI client via Dioxus desktop (CLI first; GUI is a later enhancement).

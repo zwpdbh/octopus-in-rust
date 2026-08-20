@@ -5,6 +5,7 @@
 //! ```text
 //! cargo xtask fafcn majiko-deploy [--skip-web] [--with-gamedata] [--skip-verify]
 //! cargo xtask fafcn majiko-health
+//! cargo xtask fafcn majiko-deploy-file-sync   (sync client binary only)
 //! ```
 //!
 //! Connection details and secrets come from (highest priority first):
@@ -374,6 +375,55 @@ fn ship(cfg: &MajikoConfig, opts: &DeployOptions) -> Result<()> {
             &["--partial"],
         )?;
     }
+    Ok(())
+}
+
+/// Entry point for `cargo xtask fafcn majiko-deploy-file-sync`.
+///
+/// Lightweight alternative to `majiko-deploy` when ONLY the fafcn-sync
+/// Windows client changed: rebuild it (release, fresh build tag), rsync just
+/// the client directory (`exe` + `VERSION`), and verify the status endpoint
+/// reports the new tag. No service restart is needed — `download_client`
+/// and `get_status` read these files per request.
+pub fn run_file_sync_deploy() -> Result<()> {
+    let cfg = MajikoConfig::load()?;
+    println!("==> Target: {}@{}:{}", cfg.user, cfg.host, cfg.ssh_port);
+
+    for tool in ["sshpass", "rsync"] {
+        which(tool)?;
+    }
+    println!("==> Preflight: SSH connectivity...");
+    let who = cfg
+        .ssh_output("whoami")
+        .context("SSH preflight failed — check MAJIKO_* settings in xtask/.env")?;
+    if who != cfg.user {
+        bail!("expected to log in as '{}', got '{who}'", cfg.user);
+    }
+
+    println!("==> Build: fafcn-sync (Windows, release)...");
+    let tag = crate::apps::fafcn::build_file_sync(&[])?;
+
+    println!("==> Ship: sync client binary...");
+    cfg.rsync(
+        "data/faf-gamedata/client/",
+        &cfg.remote_path("data/faf-gamedata/client/"),
+        &[],
+    )?;
+
+    println!(
+        "==> Verify: build tag via public URL ({})...",
+        cfg.public_url
+    );
+    let status = curl(&format!("{}/api/gamedata/status", cfg.public_url))?;
+    if !status.contains(&tag) {
+        bail!(
+            "status endpoint does not report the new build tag {tag}: {}",
+            truncate(&status)
+        );
+    }
+
+    println!();
+    println!("✅ Sync client {tag} is live at {}/sync", cfg.public_url);
     Ok(())
 }
 
