@@ -19,7 +19,12 @@ use fafcn_gamedata::{
 };
 use walkdir::WalkDir;
 
-use crate::{api, config::ClientConfig, SyncArgs};
+use crate::{
+    api,
+    config::ClientConfig,
+    progress::{format_bytes, format_speed, ProgressReporter, TransferUpdate},
+    SyncArgs,
+};
 
 /// Temp directory (inside the channel dir) for in-progress downloads.
 const TMP_DIR_NAME: &str = ".fafcn-sync-tmp";
@@ -56,6 +61,8 @@ pub enum SyncProgress {
         /// Total bytes to download.
         total_bytes: u64,
     },
+    /// Byte-level progress within the current download plan.
+    Bytes(TransferUpdate),
     /// A single file finished downloading and was installed.
     FileInstalled {
         /// Manifest-relative path.
@@ -122,10 +129,12 @@ pub async fn run(args: SyncArgs) -> Result<()> {
                 );
             }
         }
+        SyncProgress::Bytes(update) => print_transfer(&update),
         SyncProgress::FileInstalled {
             path, index, count, ..
         } => {
-            println!("[{index}/{count}] {path}");
+            // Pad to overwrite the live progress line above.
+            println!("\r[{index}/{count}] {path:<60}");
         }
         SyncProgress::Pruned { path, .. } => println!("pruned old file: {path}"),
     })
@@ -235,9 +244,20 @@ async fn sync_channel(
     fs::create_dir_all(&tmp_dir)
         .with_context(|| format!("failed to create {}", tmp_dir.display()))?;
     let count = downloads.len();
+    let mut reporter = ProgressReporter::new(total_bytes, progress, SyncProgress::Bytes);
     for (i, entry) in downloads.iter().enumerate() {
-        download_one(http, server, channel, target_dir, &tmp_dir, entry).await?;
-        progress(SyncProgress::FileInstalled {
+        download_one(
+            http,
+            server,
+            channel,
+            target_dir,
+            &tmp_dir,
+            entry,
+            &mut reporter,
+        )
+        .await?;
+        reporter.snapshot();
+        reporter.emit(SyncProgress::FileInstalled {
             path: entry.path.clone(),
             index: i + 1,
             count,
@@ -261,8 +281,22 @@ fn local_file_matches(dir: &Path, entry: &FileEntry) -> Result<bool> {
     Ok(local_hash == entry.sha256)
 }
 
+/// Print one live progress line (overwrites itself via carriage return).
+fn print_transfer(update: &TransferUpdate) {
+    use std::io::Write;
+    print!(
+        "\r{:>5.1}%  {} / {}  {}    ",
+        update.percent(),
+        format_bytes(update.done_bytes),
+        format_bytes(update.total_bytes),
+        format_speed(update.bytes_per_sec),
+    );
+    let _ = std::io::stdout().flush();
+}
+
 /// Download one file to the temp dir, verify its hash, then move it into
 /// place (the old file is removed only after the replacement verifies).
+/// Chunk sizes are fed into `reporter` so byte-level progress can be emitted.
 async fn download_one(
     http: &reqwest::Client,
     server: &str,
@@ -270,6 +304,7 @@ async fn download_one(
     dir: &Path,
     tmp_dir: &Path,
     entry: &FileEntry,
+    reporter: &mut ProgressReporter<'_, SyncProgress>,
 ) -> Result<()> {
     let url = api::api_url(
         server,
@@ -278,10 +313,14 @@ async fn download_one(
             api::encode_relative_path(&entry.path)
         ),
     );
-    let resp = api::ensure_success(http.get(&url).send().await?)
+    let mut resp = api::ensure_success(http.get(&url).send().await?)
         .await
         .with_context(|| format!("failed to download {}", entry.path))?;
-    let bytes = resp.bytes().await?;
+    let mut bytes = Vec::with_capacity(entry.size as usize);
+    while let Some(chunk) = resp.chunk().await? {
+        reporter.add(chunk.len() as u64);
+        bytes.extend_from_slice(&chunk);
+    }
 
     let actual = sha256_bytes(&bytes);
     if actual != entry.sha256 {

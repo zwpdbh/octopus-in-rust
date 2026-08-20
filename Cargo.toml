@@ -55,6 +55,7 @@ bevy_ecs = "0.19"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
+bytes = "1"
 burn = { version = "0.21", default-features = false, features = [
     "std",
     "autodiff",

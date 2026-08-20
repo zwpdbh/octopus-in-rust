@@ -5076,9 +5076,11 @@ name = "fafcn-sync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "eframe",
  "fafcn-gamedata",
+ "futures-util",
  "reqwest 0.12.28",
  "rfd",
  "serde",

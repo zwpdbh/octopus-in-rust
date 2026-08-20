@@ -15,6 +15,7 @@ use eframe::egui;
 
 use crate::{
     config::ClientConfig,
+    progress::{format_bytes, format_speed},
     sync::{self, SyncProgress, SyncSummary},
     upload::{self, UploadProgress, UploadSummary},
     version,
@@ -459,8 +460,10 @@ struct SyncApp {
     sync_state: ActionState,
     upload_state: ActionState,
     worker: Option<Receiver<WorkerMsg>>,
-    /// (done, total) files for the progress bar of the running action.
-    progress: (usize, usize),
+    /// (done_bytes, total_bytes) for the progress bar of the running action.
+    progress: (u64, u64),
+    /// Smoothed transfer speed (bytes/sec) of the running action.
+    speed: f64,
     log: Vec<String>,
 }
 
@@ -494,6 +497,7 @@ impl SyncApp {
             upload_state: ActionState::Idle,
             worker: None,
             progress: (0, 0),
+            speed: 0.0,
             log: Vec::new(),
         }
     }
@@ -513,6 +517,7 @@ impl SyncApp {
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
+        self.speed = 0.0;
         self.log.clear();
         self.sync_state = ActionState::Running;
         let cfg = self.persisted_config();
@@ -540,6 +545,7 @@ impl SyncApp {
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
+        self.speed = 0.0;
         self.log.clear();
         self.upload_state = ActionState::Running;
         let cfg = self.persisted_config();
@@ -578,6 +584,7 @@ impl SyncApp {
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
+        self.speed = 0.0;
         self.log.clear();
         self.upload_state = ActionState::Running;
         let cfg = self.persisted_config();
@@ -650,14 +657,18 @@ impl SyncApp {
                         total_bytes,
                         ..
                     }) => {
-                        self.progress = (0, downloads);
+                        self.progress = (0, total_bytes);
+                        self.speed = 0.0;
                         self.log
                             .push(log_plan(self.lang, downloads, total_bytes as f64 / 1e6));
+                    }
+                    WorkerMsg::Sync(SyncProgress::Bytes(update)) => {
+                        self.progress = (update.done_bytes, update.total_bytes);
+                        self.speed = update.bytes_per_sec;
                     }
                     WorkerMsg::Sync(SyncProgress::FileInstalled {
                         path, index, count, ..
                     }) => {
-                        self.progress = (index, count);
                         self.log.push(log_file(self.lang, index, count, &path));
                     }
                     WorkerMsg::Sync(SyncProgress::Pruned { path, .. }) => {
@@ -687,14 +698,23 @@ impl SyncApp {
                         self.log
                             .push(log_scanned(self.lang, files, total_bytes as f64 / 1e6));
                     }
-                    WorkerMsg::Upload(UploadProgress::Needed { needed, .. }) => {
-                        self.progress = (0, needed);
+                    WorkerMsg::Upload(UploadProgress::Needed {
+                        needed,
+                        total_bytes,
+                        ..
+                    }) => {
+                        // No bar when there is nothing to upload.
+                        self.progress = (0, if needed == 0 { 0 } else { total_bytes });
+                        self.speed = 0.0;
                         self.log.push(log_needed(self.lang, needed));
+                    }
+                    WorkerMsg::Upload(UploadProgress::Bytes(update)) => {
+                        self.progress = (update.done_bytes, update.total_bytes);
+                        self.speed = update.bytes_per_sec;
                     }
                     WorkerMsg::Upload(UploadProgress::FileUploaded {
                         path, index, count, ..
                     }) => {
-                        self.progress = (index, count);
                         self.log
                             .push(log_uploaded_file(self.lang, index, count, &path));
                     }
@@ -1108,10 +1128,14 @@ impl eframe::App for SyncApp {
 
             let (done, total) = self.progress;
             if total > 0 {
-                ui.add(
-                    egui::ProgressBar::new(done as f32 / total as f32)
-                        .text(format!("{done} / {total}")),
-                );
+                let fraction = done as f32 / total as f32;
+                ui.add(egui::ProgressBar::new(fraction).text(format!(
+                    "{:.0}%  ·  {} / {}  ·  {}",
+                    fraction * 100.0,
+                    format_bytes(done),
+                    format_bytes(total),
+                    format_speed(self.speed),
+                )));
             }
             ui.add_space(8.0);
 

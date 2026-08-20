@@ -16,6 +16,7 @@
 mod api;
 mod config;
 mod gui;
+mod progress;
 mod sync;
 mod upload;
 mod version;
@@ -114,12 +115,59 @@ pub struct UploadClientArgs {
 }
 
 fn main() -> Result<()> {
+    install_crash_log();
     let cli = Cli::parse();
     match cli.command {
-        None | Some(Command::Gui) => gui::run(),
+        None | Some(Command::Gui) => run_gui(),
         Some(Command::Sync(args)) => run_cli(sync::run(args)),
         Some(Command::Upload(args)) => run_cli(upload::run(args)),
         Some(Command::UploadClient(args)) => run_cli(upload::run_client(args)),
+    }
+}
+
+/// GUI release builds have no console: a panic or a windowing error just
+/// makes the window vanish. Record panics and how the GUI exited to a crash
+/// log next to the config file so such reports can be diagnosed.
+fn install_crash_log() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        append_crash_log(&format!("PANIC: {info}"));
+        default_hook(info);
+    }));
+}
+
+/// Run the GUI, recording whether it exited normally, with an error, or
+/// (via the panic hook) crashed.
+fn run_gui() -> Result<()> {
+    match gui::run() {
+        Ok(()) => {
+            append_crash_log("GUI exited normally");
+            Ok(())
+        }
+        Err(e) => {
+            append_crash_log(&format!("GUI exited with error: {e:#}"));
+            Err(e)
+        }
+    }
+}
+
+/// Append one timestamped line to the crash log (best-effort, never fails).
+fn append_crash_log(line: &str) {
+    use std::io::Write;
+    let path = config::crash_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "[{secs}] {line}");
     }
 }
 

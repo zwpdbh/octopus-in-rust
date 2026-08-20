@@ -20,8 +20,14 @@ use fafcn_gamedata::{
     FileEntry, Manifest, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
     CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
+use futures_util::StreamExt;
 
-use crate::{api, config::ClientConfig, version, UploadArgs, UploadClientArgs};
+use crate::{
+    api,
+    config::ClientConfig,
+    progress::{format_bytes, format_speed, ProgressReporter, TransferUpdate},
+    version, UploadArgs, UploadClientArgs,
+};
 
 /// Progress events emitted while uploading.
 pub enum UploadProgress {
@@ -48,7 +54,11 @@ pub enum UploadProgress {
     Needed {
         /// Files to upload (0 = server already has everything).
         needed: usize,
+        /// Total bytes to upload.
+        total_bytes: u64,
     },
+    /// Byte-level progress within the current upload plan.
+    Bytes(TransferUpdate),
     /// A single file finished uploading.
     FileUploaded {
         /// Manifest-relative path.
@@ -144,15 +154,33 @@ fn print_progress(event: UploadProgress) {
         UploadProgress::Scanned { files, total_bytes } => {
             println!("found {files} file(s), {:.1} MB", total_bytes as f64 / 1e6)
         }
-        UploadProgress::Needed { needed } => {
+        UploadProgress::Needed {
+            needed,
+            total_bytes,
+        } => {
             if needed == 0 {
                 println!("server already has every file");
             } else {
-                println!("server needs {needed} file(s):");
+                println!(
+                    "server needs {needed} file(s), {:.1} MB:",
+                    total_bytes as f64 / 1e6
+                );
             }
         }
+        UploadProgress::Bytes(update) => {
+            use std::io::Write;
+            print!(
+                "\r{:>5.1}%  {} / {}  {}    ",
+                update.percent(),
+                format_bytes(update.done_bytes),
+                format_bytes(update.total_bytes),
+                format_speed(update.bytes_per_sec),
+            );
+            let _ = std::io::stdout().flush();
+        }
         UploadProgress::FileUploaded { path, index, count } => {
-            println!("[{index}/{count}] {path}")
+            // Pad to overwrite the live progress line above.
+            println!("\r[{index}/{count}] {path:<60}")
         }
         UploadProgress::Committed {
             patch_version,
@@ -393,16 +421,29 @@ async fn upload_channel(
     });
 
     let needed = check_needed(http, server, token, plan.channel, &plan.entries).await?;
+    let needed_bytes: u64 = needed.iter().map(|e| e.size).sum();
     progress(UploadProgress::Needed {
         needed: needed.len(),
+        total_bytes: needed_bytes,
     });
 
     let mut uploaded_bytes = 0_u64;
     let count = needed.len();
+    let mut reporter = ProgressReporter::new(needed_bytes, progress, UploadProgress::Bytes);
     for (i, entry) in needed.iter().enumerate() {
-        upload_one(http, server, token, plan.channel, &plan.source_dir, entry).await?;
+        upload_one(
+            http,
+            server,
+            token,
+            plan.channel,
+            &plan.source_dir,
+            entry,
+            &mut reporter,
+        )
+        .await?;
         uploaded_bytes += entry.size;
-        progress(UploadProgress::FileUploaded {
+        reporter.snapshot();
+        reporter.emit(UploadProgress::FileUploaded {
             path: entry.path.clone(),
             index: i + 1,
             count,
@@ -457,7 +498,13 @@ async fn check_needed(
         .collect())
 }
 
-/// Upload one file's raw bytes with its path/hash headers.
+/// Request-body chunk size for streamed uploads.
+const UPLOAD_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Upload one file's raw bytes with its path/hash headers. The body is
+/// streamed in chunks so byte-level progress can be reported: the stream
+/// counts each chunk's size into a channel, and the select loop below feeds
+/// those counts into `reporter` while the request is in flight.
 async fn upload_one(
     http: &reqwest::Client,
     server: &str,
@@ -465,17 +512,40 @@ async fn upload_one(
     channel: &str,
     dir: &Path,
     entry: &FileEntry,
+    reporter: &mut ProgressReporter<'_, UploadProgress>,
 ) -> Result<()> {
-    let bytes = fs::read(dir.join(&entry.path))?;
+    // reqwest::Body::wrap_stream requires a 'static stream, so the counting
+    // closure cannot borrow the reporter — it reports chunk sizes back instead.
+    let bytes = bytes::Bytes::from(fs::read(dir.join(&entry.path))?);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let chunk_count = bytes.len().div_ceil(UPLOAD_CHUNK_SIZE);
+    let stream = futures_util::stream::iter(0..chunk_count).map(move |i| {
+        let start = i * UPLOAD_CHUNK_SIZE;
+        let end = (start + UPLOAD_CHUNK_SIZE).min(bytes.len());
+        let chunk = bytes.slice(start..end);
+        let _ = tx.send(chunk.len() as u64);
+        Ok::<_, std::io::Error>(chunk)
+    });
+
     let url = api::api_url(server, &format!("channels/{channel}/upload/file"));
-    let resp = http
+    let send = http
         .post(&url)
         .bearer_auth(token)
         .header("x-gamedata-path", &entry.path)
         .header("x-gamedata-sha256", &entry.sha256)
-        .body(bytes)
-        .send()
-        .await?;
+        .body(reqwest::Body::wrap_stream(stream))
+        .send();
+    tokio::pin!(send);
+    let resp = loop {
+        tokio::select! {
+            resp = &mut send => break resp?,
+            Some(n) = rx.recv() => reporter.add(n),
+        }
+    };
+    // Drain chunks counted just before the request completed.
+    while let Ok(n) = rx.try_recv() {
+        reporter.add(n);
+    }
     api::ensure_success(resp)
         .await
         .with_context(|| format!("failed to upload {}", entry.path))?;
