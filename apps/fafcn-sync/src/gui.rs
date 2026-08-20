@@ -39,6 +39,9 @@ pub fn run() -> Result<()> {
             // unreadable and clashes with the fafcn-web UI.
             cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Log lines and status text must be copyable (bug reports!).
+            cc.egui_ctx
+                .all_styles_mut(|s| s.interaction.selectable_labels = true);
             install_cjk_font(cc);
             Ok(Box::new(SyncApp::new()))
         }),
@@ -172,6 +175,7 @@ enum Txt {
     FafClientDirLabel,
     FafClientFound,
     FafClientMissing,
+    CopyLog,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -276,6 +280,8 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         }
         (Txt::FafClientMissing, GuiLang::Zh) => "未找到 faf-client.exe,将跳过地图同步",
         (Txt::FafClientMissing, GuiLang::En) => "faf-client.exe not found — maps sync will be skipped",
+        (Txt::CopyLog, GuiLang::Zh) => "复制日志",
+        (Txt::CopyLog, GuiLang::En) => "Copy log",
     }
 }
 
@@ -1360,6 +1366,15 @@ impl eframe::App for SyncApp {
             }
             ui.add_space(8.0);
 
+            ui.horizontal(|ui| {
+                if ui
+                    .button(egui::RichText::new(tr(self.lang, Txt::CopyLog)).small())
+                    .on_hover_text("fafcn-sync-crash.log")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(self.log.join("\n"));
+                }
+            });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)

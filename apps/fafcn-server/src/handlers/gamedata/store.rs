@@ -10,7 +10,11 @@
 //!   incoming/       # temp dir for in-progress uploads (renamed into files/)
 //! ```
 
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+};
 
 use axum::http::HeaderMap;
 use chrono::Utc;
@@ -179,6 +183,33 @@ impl GamedataStore {
         }
         merged.extend(req.files.iter().cloned());
         merged.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // Collapse to the newest version per map base: merged uploads (or an
+        // uploader whose folder contained several versions of a map) must not
+        // leave multiple versions of the same map in the manifest — clients
+        // prune their older copies and would otherwise re-download them.
+        let mut newest: HashMap<String, u32> = HashMap::new();
+        for entry in &merged {
+            if let Some((base, version)) = map_folder_version(top_folder(&entry.path)) {
+                newest
+                    .entry(base.to_string())
+                    .and_modify(|v| *v = (*v).max(version))
+                    .or_insert(version);
+            }
+        }
+        let mut collapsed = Vec::with_capacity(merged.len());
+        for entry in merged {
+            let keep = match map_folder_version(top_folder(&entry.path)) {
+                Some((base, version)) => newest.get(base) == Some(&version),
+                None => true,
+            };
+            if keep {
+                collapsed.push(entry);
+            } else {
+                dropped.push(entry.path);
+            }
+        }
+        let merged = collapsed;
 
         // Remove replaced files from disk, then the now-empty old folders.
         let merged_tops: HashSet<&str> = merged.iter().map(|e| top_folder(&e.path)).collect();
@@ -435,6 +466,25 @@ mod tests {
         let result =
             store.commit_merge(CHANNEL_MAPS, &merge_req(vec![map_entry("m.v0001/x", b"x")]));
         assert!(result.is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn merge_collapses_multiple_versions_to_newest() {
+        let (root, store) = temp_store();
+        // One upload carrying BOTH versions of a map (uploader's folder had
+        // a stale copy): only the newest may survive in the manifest.
+        let a1 = map_entry("map_a.v0001/a.lua", b"a1");
+        let a2 = map_entry("map_a.v0002/a.lua", b"a2");
+        store_map_file(&store, &a1, b"a1");
+        store_map_file(&store, &a2, b"a2");
+        let manifest = store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a1, a2]))
+            .unwrap();
+
+        let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["map_a.v0002/a.lua"]);
+        assert!(!root.join("channels/maps/files/map_a.v0001").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 

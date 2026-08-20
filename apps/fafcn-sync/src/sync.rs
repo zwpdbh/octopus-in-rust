@@ -249,6 +249,10 @@ pub async fn sync_maps(
         });
         return Ok(0);
     };
+    // Older versions left in the manifest by merged uploads must not be
+    // synced: they would be re-downloaded on every run only to be pruned
+    // again below.
+    let manifest = newest_maps_only(&manifest);
     progress(SyncProgress::ManifestLoaded {
         channel: CHANNEL_MAPS.to_string(),
         patch_version: manifest.patch_version.clone(),
@@ -271,6 +275,39 @@ pub async fn sync_maps(
     .await?;
     prune_stale_map_versions(&target_dir, &manifest, progress)?;
     Ok(downloaded)
+}
+
+/// Drop manifest entries that are an older version of a map also present in
+/// a newer version (`name.v0001` when `name.v0002` exists). Entries that
+/// don't follow the `.vNNNN` convention (e.g. top-level `.zip` files) are
+/// always kept.
+fn newest_maps_only(manifest: &Manifest) -> Manifest {
+    let mut newest: HashMap<&str, u32> = HashMap::new();
+    for entry in &manifest.files {
+        let top = entry.path.split('/').next().unwrap_or(&entry.path);
+        if let Some((base, version)) = map_folder_version(top) {
+            newest
+                .entry(base)
+                .and_modify(|v| *v = (*v).max(version))
+                .or_insert(version);
+        }
+    }
+    let files = manifest
+        .files
+        .iter()
+        .filter(|entry| {
+            let top = entry.path.split('/').next().unwrap_or(&entry.path);
+            match map_folder_version(top) {
+                Some((base, version)) => newest.get(base) == Some(&version),
+                None => true,
+            }
+        })
+        .cloned()
+        .collect();
+    Manifest {
+        files,
+        ..manifest.clone()
+    }
 }
 
 /// Delete local map folders that are older versions of maps present in the
