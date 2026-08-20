@@ -6,6 +6,7 @@ use axum::{
 };
 use faf_sim_protocol::{SimClientMessage, SimEvent, SimServerMessage};
 use faf_sim_service::SimulationService;
+use futures::SinkExt;
 
 use crate::{error::Result, state::AppState};
 
@@ -133,7 +134,7 @@ async fn send_json(
 ) -> Result<()> {
     let text = serde_json::to_string(message).unwrap_or_default();
     socket
-        .send(axum::extract::ws::Message::Text(text))
+        .send(axum::extract::ws::Message::Text(text.into()))
         .await
         .map_err(|e| crate::error::Error::Internal(e.to_string()))
 }

@@ -14,7 +14,12 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
-eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+eframe = { version = "0.36", default-features = false, features = [
+  "glow",
+  "default_fonts",
+  "x11",
+  "wayland",
+] }
 fafcn-gamedata = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
@@ -23,7 +28,7 @@ serde = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 toml = { workspace = true }
 walkdir = { workspace = true }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

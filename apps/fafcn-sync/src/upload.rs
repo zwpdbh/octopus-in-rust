@@ -18,15 +18,16 @@ use anyhow::{Context, Result};
 use fafcn_gamedata::{
     compare_version_strings, map_generator_jar_version, sha256_file, validate_relative_path,
     FileEntry, Manifest, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
-    CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
+    CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
 use futures_util::StreamExt;
+use walkdir::WalkDir;
 
 use crate::{
     api,
     config::ClientConfig,
     progress::{format_bytes, format_speed, ProgressReporter, TransferUpdate},
-    version, UploadArgs, UploadClientArgs,
+    version, UploadArgs, UploadClientArgs, UploadMapsArgs,
 };
 
 /// Progress events emitted while uploading.
@@ -142,6 +143,80 @@ pub async fn run_client(args: UploadClientArgs) -> Result<()> {
     cfg.server = Some(server);
     cfg.save()?;
     Ok(())
+}
+
+/// Run the CLI `upload-maps` subcommand: publish a folder of FAF maps.
+pub async fn run_maps(args: UploadMapsArgs) -> Result<()> {
+    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let server = api::resolve_server(args.server, &cfg)?;
+    let uploader = args
+        .uploader
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("Mirror: {server}");
+    println!("Maps:   {}", args.dir.display());
+
+    let summary = upload_maps(
+        &server,
+        &args.token,
+        &args.dir,
+        &uploader,
+        &mut print_progress,
+    )
+    .await?;
+    for published in &summary.published {
+        println!("Published {} {}", published.channel, published.version);
+    }
+
+    cfg.server = Some(server);
+    cfg.save()?;
+    Ok(())
+}
+
+/// Upload every file below `folder` (recursively — each `name.vNNNN` map
+/// folder and all its files) to the `maps` channel. The server MERGES these
+/// maps into the existing manifest, replacing older versions of the same
+/// maps and keeping maps uploaded by others.
+pub async fn upload_maps(
+    server: &str,
+    token: &str,
+    folder: &Path,
+    uploader: &str,
+    progress: &mut dyn FnMut(UploadProgress),
+) -> Result<UploadSummary> {
+    if !folder.is_dir() {
+        anyhow::bail!("{} is not a directory", folder.display());
+    }
+    if uploader.trim().is_empty() {
+        anyhow::bail!("uploader name must not be empty");
+    }
+    let mut entries = Vec::new();
+    for item in WalkDir::new(folder).into_iter().filter_map(|e| e.ok()) {
+        if item.file_type().is_file() {
+            entries.push(hash_file(folder, item.path())?);
+        }
+    }
+    if entries.is_empty() {
+        anyhow::bail!("{} contains no files", folder.display());
+    }
+    let plan = ChannelPlan {
+        channel: CHANNEL_MAPS,
+        source_dir: folder.to_path_buf(),
+        version: fafcn_gamedata::today_stamp(),
+        entries,
+    };
+
+    let http = reqwest::Client::new();
+    let (files, bytes) = upload_channel(&http, server, token, &plan, uploader, progress).await?;
+    Ok(UploadSummary {
+        uploaded_files: files,
+        uploaded_bytes: bytes,
+        published: vec![PublishedChannel {
+            channel: CHANNEL_MAPS.to_string(),
+            version: plan.version.clone(),
+        }],
+    })
 }
 
 /// Progress printer shared by the CLI upload subcommands.
@@ -531,7 +606,9 @@ async fn upload_one(
     let send = http
         .post(&url)
         .bearer_auth(token)
-        .header("x-gamedata-path", &entry.path)
+        // The path travels in a header, which is ASCII-only — percent-encode
+        // it (non-ASCII map file names exist in the wild).
+        .header("x-gamedata-path", api::encode_relative_path(&entry.path))
         .header("x-gamedata-sha256", &entry.sha256)
         .body(reqwest::Body::wrap_stream(stream))
         .send();

@@ -114,6 +114,7 @@ enum Tab {
     Sync,
     UploadPatch,
     UploadClient,
+    UploadMaps,
 }
 
 /// What the background worker is doing (or did last).
@@ -163,6 +164,14 @@ enum Txt {
     UploadClientNow,
     VersionLabel,
     FieldClientFile,
+    TabUploadMaps,
+    ChannelMaps,
+    MapsDirLabel,
+    MapsHint,
+    FieldMapsDir,
+    FafClientDirLabel,
+    FafClientFound,
+    FafClientMissing,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -245,16 +254,50 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::VersionLabel, GuiLang::En) => "Version",
         (Txt::FieldClientFile, GuiLang::Zh) => "安装包文件",
         (Txt::FieldClientFile, GuiLang::En) => "installer file",
+        (Txt::TabUploadMaps, GuiLang::Zh) => "上传地图",
+        (Txt::TabUploadMaps, GuiLang::En) => "Upload maps",
+        (Txt::ChannelMaps, GuiLang::Zh) => "地图",
+        (Txt::ChannelMaps, GuiLang::En) => "maps",
+        (Txt::MapsDirLabel, GuiLang::Zh) => "地图文件夹",
+        (Txt::MapsDirLabel, GuiLang::En) => "Maps folder",
+        (Txt::MapsHint, GuiLang::Zh) => {
+            "选择包含地图的文件夹:其中的所有地图(包括子文件夹内的文件)都会上传到镜像。上传是合并式的:同名地图的旧版本会被你上传的版本替换,其他人上传的地图不受影响。"
+        }
+        (Txt::MapsHint, GuiLang::En) => {
+            "Pick a folder of maps: every map inside (including files in subfolders) is uploaded to the mirror. Uploads are merged: your versions replace older versions of the same maps; maps uploaded by others are kept."
+        }
+        (Txt::FieldMapsDir, GuiLang::Zh) => "地图文件夹",
+        (Txt::FieldMapsDir, GuiLang::En) => "maps folder",
+        (Txt::FafClientDirLabel, GuiLang::Zh) => "FAF Client 目录(含 faf-client.exe)",
+        (Txt::FafClientDirLabel, GuiLang::En) => "FAF Client folder (contains faf-client.exe)",
+        (Txt::FafClientFound, GuiLang::Zh) => "已找到 faf-client.exe,地图将同步到 maps_and_mods/maps",
+        (Txt::FafClientFound, GuiLang::En) => {
+            "faf-client.exe found — maps sync into maps_and_mods/maps"
+        }
+        (Txt::FafClientMissing, GuiLang::Zh) => "未找到 faf-client.exe,将跳过地图同步",
+        (Txt::FafClientMissing, GuiLang::En) => "faf-client.exe not found — maps sync will be skipped",
     }
 }
 
 // --- Interpolated log lines ---
+
+/// A folder picker that opens at `current` when it is a valid directory.
+fn folder_picker(current: &str) -> rfd::FileDialog {
+    let dialog = rfd::FileDialog::new();
+    let current = PathBuf::from(current.trim());
+    if current.is_dir() {
+        dialog.set_directory(current)
+    } else {
+        dialog
+    }
+}
 
 /// Localized display name for a channel id.
 fn channel_name(lang: GuiLang, channel: &str) -> &'static str {
     match channel {
         fafcn_gamedata::CHANNEL_MAP_GENERATOR => tr(lang, Txt::ChannelMapGenerator),
         fafcn_gamedata::CHANNEL_FAF_CLIENT => tr(lang, Txt::ChannelFafClient),
+        fafcn_gamedata::CHANNEL_MAPS => tr(lang, Txt::ChannelMaps),
         _ => tr(lang, Txt::ChannelGamedata),
     }
 }
@@ -411,6 +454,13 @@ fn log_upload_done(lang: GuiLang, published: &[crate::upload::PublishedChannel])
     }
 }
 
+fn log_maps_skipped(lang: GuiLang) -> String {
+    match lang {
+        GuiLang::Zh => "未设置有效的 FAF Client 目录,跳过地图同步。".to_string(),
+        GuiLang::En => "FAF Client folder not set — skipping maps sync.".to_string(),
+    }
+}
+
 fn log_failed(lang: GuiLang, err: &str) -> String {
     match lang {
         GuiLang::Zh => format!("操作失败:{err}"),
@@ -431,6 +481,8 @@ fn txt_server_newer(lang: GuiLang, server: &str, local: &str) -> String {
 enum WorkerMsg {
     Sync(SyncProgress),
     Upload(UploadProgress),
+    /// The sync ran without a FAF Client folder; maps were skipped.
+    MapsSkipped,
     SyncDone(Result<SyncSummary, String>),
     UploadDone(Result<UploadSummary, String>),
 }
@@ -438,6 +490,8 @@ enum WorkerMsg {
 struct SyncApp {
     lang: GuiLang,
     tab: Tab,
+    /// Tab shown on the previous frame (for tab-switch actions).
+    last_tab: Tab,
     // Shared fields (same values for both tabs).
     server: String,
     dir: String,
@@ -448,6 +502,10 @@ struct SyncApp {
     // Installer-upload fields (faf-client channel).
     client_file: String,
     client_version: String,
+    // Maps-upload source folder (UploadMaps tab).
+    maps_dir: String,
+    // FAF Client install folder for maps sync (Sync tab).
+    faf_client_dir: String,
     // Patch version auto-detected from lua.nx2 (recomputed when dir changes).
     detected_version: Option<String>,
     detected_generator: Option<String>,
@@ -480,6 +538,7 @@ impl SyncApp {
         Self {
             lang: GuiLang::from_config(cfg.lang.as_deref()),
             tab: Tab::Sync,
+            last_tab: Tab::Sync,
             server: cfg.server.unwrap_or_default(),
             dir,
             token: cfg.upload_token.unwrap_or_default(),
@@ -487,6 +546,13 @@ impl SyncApp {
             uploader: cfg.uploader.unwrap_or_default(),
             client_file: String::new(),
             client_version: String::new(),
+            maps_dir: String::new(),
+            faf_client_dir: cfg
+                .faf_client_dir
+                .clone()
+                .or_else(sync::autodetect_faf_client_dir)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             detected_version: None,
             detected_generator: None,
             version_dir: String::new(),
@@ -511,9 +577,26 @@ impl SyncApp {
         sync::normalize_faf_dir(PathBuf::from(self.dir.trim()))
     }
 
+    /// Default the maps-upload source folder to the player's own maps folder
+    /// (`<FAF Client>/maps_and_mods/maps`) when we know the FAF Client root.
+    fn prefill_maps_dir(&mut self) {
+        if !self.maps_dir.trim().is_empty() {
+            return;
+        }
+        let root = PathBuf::from(self.faf_client_dir.trim());
+        if sync::is_valid_faf_client_dir(&root) {
+            let maps = sync::maps_dir(&root);
+            if maps.is_dir() {
+                self.maps_dir = maps.to_string_lossy().into_owned();
+            }
+        }
+    }
+
     fn start_sync(&mut self) {
         let server = self.server.trim().trim_end_matches('/').to_string();
         let dir = self.faf_root();
+        let faf_client = PathBuf::from(self.faf_client_dir.trim());
+        let faf_client = sync::is_valid_faf_client_dir(&faf_client).then_some(faf_client);
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
@@ -527,11 +610,57 @@ impl SyncApp {
                 .enable_all()
                 .build()
                 .expect("tokio runtime")
-                .block_on(sync::sync_gamedata(&server, &dir, &mut |event| {
-                    let _ = tx.send(WorkerMsg::Sync(event));
-                }))
-                .map_err(|e| format!("{e:#}"));
+                .block_on(async {
+                    let mut forward = |event| {
+                        let _ = tx.send(WorkerMsg::Sync(event));
+                    };
+                    let summary = sync::sync_gamedata(&server, &dir, &mut forward).await?;
+                    // Maps live below the FAF Client folder, not FAForever.
+                    match &faf_client {
+                        Some(root) => {
+                            sync::sync_maps(&server, root, &mut forward).await?;
+                        }
+                        None => {
+                            let _ = tx.send(WorkerMsg::MapsSkipped);
+                        }
+                    }
+                    Ok(summary)
+                })
+                .map_err(|e: anyhow::Error| format!("{e:#}"));
             let _ = tx.send(WorkerMsg::SyncDone(result));
+            let _ = cfg.save();
+        });
+    }
+
+    fn start_upload_maps(&mut self) {
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        let token = self.token.trim().to_string();
+        let folder = PathBuf::from(self.maps_dir.trim());
+        let uploader = self.uploader.trim().to_string();
+        let (tx, rx) = channel();
+        self.worker = Some(rx);
+        self.progress = (0, 0);
+        self.speed = 0.0;
+        self.log.clear();
+        self.upload_state = ActionState::Running;
+        let cfg = self.persisted_config();
+
+        thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(upload::upload_maps(
+                    &server,
+                    &token,
+                    &folder,
+                    &uploader,
+                    &mut |event| {
+                        let _ = tx.send(WorkerMsg::Upload(event));
+                    },
+                ))
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(WorkerMsg::UploadDone(result));
             let _ = cfg.save();
         });
     }
@@ -622,6 +751,10 @@ impl SyncApp {
         if !self.uploader.trim().is_empty() {
             cfg.uploader = Some(self.uploader.trim().to_string());
         }
+        let faf_client = PathBuf::from(self.faf_client_dir.trim());
+        if sync::is_valid_faf_client_dir(&faf_client) {
+            cfg.faf_client_dir = Some(faf_client);
+        }
         cfg
     }
 
@@ -673,6 +806,9 @@ impl SyncApp {
                     }
                     WorkerMsg::Sync(SyncProgress::Pruned { path, .. }) => {
                         self.log.push(log_pruned(self.lang, &path));
+                    }
+                    WorkerMsg::MapsSkipped => {
+                        self.log.push(log_maps_skipped(self.lang));
                     }
                     WorkerMsg::SyncDone(Ok(summary)) => {
                         self.log
@@ -772,7 +908,7 @@ impl SyncApp {
         ui.add_space(4.0);
 
         // The FAForever folder is only needed for sync and patch upload.
-        if self.tab != Tab::UploadClient {
+        if matches!(self.tab, Tab::Sync | Tab::UploadPatch) {
             ui.label(tr(self.lang, Txt::DirLabel));
             ui.add_enabled_ui(!busy, |ui| {
                 ui.add(
@@ -782,7 +918,7 @@ impl SyncApp {
                 );
                 ui.horizontal(|ui| {
                     if ui.button(tr(self.lang, Txt::Browse)).clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        if let Some(path) = folder_picker(&self.dir).pick_folder() {
                             self.dir = path.to_string_lossy().into_owned();
                         }
                     }
@@ -916,7 +1052,8 @@ impl SyncApp {
         if self.server.trim().is_empty() {
             missing.push(tr(self.lang, Txt::FieldServer));
         }
-        if !self.faf_root().is_dir() {
+        // The FAForever folder is only needed for sync and patch upload.
+        if matches!(self.tab, Tab::Sync | Tab::UploadPatch) && !self.faf_root().is_dir() {
             missing.push(tr(self.lang, Txt::FieldDir));
         }
         if self.tab == Tab::UploadPatch {
@@ -925,6 +1062,17 @@ impl SyncApp {
             }
             if self.effective_patch_version().is_none() {
                 missing.push(tr(self.lang, Txt::FieldPatchVersion));
+            }
+            if self.uploader.trim().is_empty() {
+                missing.push(tr(self.lang, Txt::FieldUploader));
+            }
+        }
+        if self.tab == Tab::UploadMaps {
+            if self.token.trim().is_empty() {
+                missing.push(tr(self.lang, Txt::FieldToken));
+            }
+            if !PathBuf::from(self.maps_dir.trim()).is_dir() {
+                missing.push(tr(self.lang, Txt::FieldMapsDir));
             }
             if self.uploader.trim().is_empty() {
                 missing.push(tr(self.lang, Txt::FieldUploader));
@@ -940,7 +1088,9 @@ impl SyncApp {
         let can_run = !busy && missing.is_empty() && !server_newer;
         let running = match self.tab {
             Tab::Sync => self.sync_state == ActionState::Running,
-            Tab::UploadPatch | Tab::UploadClient => self.upload_state == ActionState::Running,
+            Tab::UploadPatch | Tab::UploadClient | Tab::UploadMaps => {
+                self.upload_state == ActionState::Running
+            }
         };
         let label = match (self.tab, running) {
             (Tab::Sync, true) => tr(self.lang, Txt::Syncing),
@@ -949,6 +1099,8 @@ impl SyncApp {
             (Tab::UploadPatch, false) => tr(self.lang, Txt::UploadNow),
             (Tab::UploadClient, true) => tr(self.lang, Txt::Uploading),
             (Tab::UploadClient, false) => tr(self.lang, Txt::UploadClientNow),
+            (Tab::UploadMaps, true) => tr(self.lang, Txt::Uploading),
+            (Tab::UploadMaps, false) => tr(self.lang, Txt::UploadNow),
         };
         if ui
             .add_enabled(
@@ -961,6 +1113,7 @@ impl SyncApp {
                 Tab::Sync => self.start_sync(),
                 Tab::UploadPatch => self.start_upload(),
                 Tab::UploadClient => self.start_upload_client(),
+                Tab::UploadMaps => self.start_upload_maps(),
             }
         }
         // Explain exactly why the button is disabled.
@@ -987,8 +1140,16 @@ impl SyncApp {
 }
 
 impl eframe::App for SyncApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_worker(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.drain_worker(ui.ctx());
+        // Tab-switch actions: entering the maps upload tab prefills the
+        // source folder from the located FAF Client install.
+        if self.tab != self.last_tab {
+            self.last_tab = self.tab;
+            if self.tab == Tab::UploadMaps {
+                self.prefill_maps_dir();
+            }
+        }
         if let Some(rx) = &self.status_rx {
             if let Ok(version) = rx.try_recv() {
                 self.server_version = version;
@@ -998,7 +1159,7 @@ impl eframe::App for SyncApp {
         self.maybe_refresh_server_version();
         let busy = self.busy();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("fafcn-sync");
                 ui.label(egui::RichText::new(crate::BUILD_TAG).small().weak());
@@ -1027,6 +1188,11 @@ impl eframe::App for SyncApp {
                     &mut self.tab,
                     Tab::UploadClient,
                     tr(self.lang, Txt::TabUploadClient),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::UploadMaps,
+                    tr(self.lang, Txt::TabUploadMaps),
                 );
             });
             ui.separator();
@@ -1121,6 +1287,61 @@ impl eframe::App for SyncApp {
                         );
                     });
                 });
+            }
+            if self.tab == Tab::Sync {
+                ui.add_space(4.0);
+                ui.label(tr(self.lang, Txt::FafClientDirLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.faf_client_dir)
+                            .hint_text(r"E:\FAF Client")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                            if let Some(path) = folder_picker(&self.faf_client_dir).pick_folder() {
+                                self.faf_client_dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                        if ui.button(tr(self.lang, Txt::Detect)).clicked() {
+                            if let Some(path) = sync::autodetect_faf_client_dir() {
+                                self.faf_client_dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                });
+                if sync::is_valid_faf_client_dir(&PathBuf::from(self.faf_client_dir.trim())) {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_GREEN,
+                        tr(self.lang, Txt::FafClientFound),
+                    );
+                } else {
+                    ui.colored_label(egui::Color32::YELLOW, tr(self.lang, Txt::FafClientMissing));
+                }
+            }
+
+            if self.tab == Tab::UploadMaps {
+                ui.add_space(4.0);
+                ui.label(tr(self.lang, Txt::MapsDirLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.maps_dir)
+                            .hint_text(r"D:\MyMaps")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                            if let Some(path) = folder_picker(&self.maps_dir).pick_folder() {
+                                self.maps_dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                });
+                ui.label(
+                    egui::RichText::new(tr(self.lang, Txt::MapsHint))
+                        .small()
+                        .weak(),
+                );
             }
             ui.add_space(12.0);
 

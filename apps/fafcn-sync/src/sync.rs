@@ -6,16 +6,16 @@
 //! frontends can present it their own way.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Context, Result};
 use fafcn_gamedata::{
-    channel_subdir, compare_version_strings, map_generator_jar_version, sha256_bytes, sha256_file,
-    validate_relative_path, FileEntry, Manifest, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR,
-    MAP_GENERATOR_KEEP, SYNC_CHANNELS,
+    channel_subdir, compare_version_strings, map_folder_version, map_generator_jar_version,
+    sha256_bytes, sha256_file, validate_relative_path, FileEntry, Manifest, CHANNEL_GAMEDATA,
+    CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP, SYNC_CHANNELS,
 };
 use walkdir::WalkDir;
 
@@ -98,7 +98,43 @@ pub async fn run(args: SyncArgs) -> Result<()> {
     println!("Mirror:    {server}");
     println!("FAForever: {}", root.display());
 
-    let summary = sync_gamedata(&server, &root, &mut |event| match event {
+    let summary = sync_gamedata(&server, &root, &mut print_progress).await?;
+
+    for extra in &summary.extra_files {
+        println!("Note: {extra} is not in the mirror manifest (left untouched)");
+    }
+    if summary.downloaded_files > 0 {
+        println!(
+            "Downloaded {} file(s), {:.1} MB.",
+            summary.downloaded_files,
+            summary.downloaded_bytes as f64 / 1e6
+        );
+    }
+
+    // Maps live below the FAF Client folder, not FAForever.
+    match resolve_faf_client_dir(args.faf_client_dir, &cfg) {
+        Some(client_root) => {
+            sync_maps(&server, &client_root, &mut print_progress).await?;
+            cfg.faf_client_dir = Some(client_root);
+        }
+        None => {
+            println!(
+                "FAF Client folder not found — skipping maps sync \
+                 (pass --faf-client-dir once to enable it)"
+            );
+        }
+    }
+
+    cfg.server = Some(server);
+    cfg.gamedata_dir = Some(root);
+    cfg.save()?;
+    println!("Sync complete. You can start the FAF client now.");
+    Ok(())
+}
+
+/// Progress printer for the CLI `sync` subcommand.
+fn print_progress(event: SyncProgress) {
+    match event {
         SyncProgress::ChannelStarted { channel } => println!("== {channel} =="),
         SyncProgress::ChannelEmpty { channel } => {
             println!("mirror has no {channel} yet — ask an uploader to publish it")
@@ -137,25 +173,7 @@ pub async fn run(args: SyncArgs) -> Result<()> {
             println!("\r[{index}/{count}] {path:<60}");
         }
         SyncProgress::Pruned { path, .. } => println!("pruned old file: {path}"),
-    })
-    .await?;
-
-    for extra in &summary.extra_files {
-        println!("Note: {extra} is not in the mirror manifest (left untouched)");
     }
-    if summary.downloaded_files > 0 {
-        println!(
-            "Downloaded {} file(s), {:.1} MB.",
-            summary.downloaded_files,
-            summary.downloaded_bytes as f64 / 1e6
-        );
-    }
-
-    cfg.server = Some(server);
-    cfg.gamedata_dir = Some(root);
-    cfg.save()?;
-    println!("Sync complete. You can start the FAF client now.");
-    Ok(())
 }
 
 /// Sync every channel below `faf_root` against the mirror at `server`.
@@ -210,6 +228,87 @@ pub async fn sync_gamedata(
         }
     }
     Ok(summary)
+}
+
+/// Sync the `maps` channel into `<faf_client_root>/maps_and_mods/maps`,
+/// deleting local map folders that are older versions of maps in the
+/// manifest. Returns the number of files downloaded (0 = up to date or the
+/// channel is not published yet).
+pub async fn sync_maps(
+    server: &str,
+    faf_client_root: &Path,
+    progress: &mut dyn FnMut(SyncProgress),
+) -> Result<usize> {
+    progress(SyncProgress::ChannelStarted {
+        channel: CHANNEL_MAPS.to_string(),
+    });
+    let http = reqwest::Client::new();
+    let Some(manifest) = fetch_manifest(&http, server, CHANNEL_MAPS).await? else {
+        progress(SyncProgress::ChannelEmpty {
+            channel: CHANNEL_MAPS.to_string(),
+        });
+        return Ok(0);
+    };
+    progress(SyncProgress::ManifestLoaded {
+        channel: CHANNEL_MAPS.to_string(),
+        patch_version: manifest.patch_version.clone(),
+        uploader: manifest.uploader.clone(),
+        file_count: manifest.files.len(),
+        total_bytes: manifest.total_size(),
+    });
+
+    let target_dir = maps_dir(faf_client_root);
+    fs::create_dir_all(&target_dir)
+        .with_context(|| format!("failed to create {}", target_dir.display()))?;
+    let (downloaded, _bytes) = sync_channel(
+        &http,
+        server,
+        CHANNEL_MAPS,
+        &target_dir,
+        &manifest,
+        progress,
+    )
+    .await?;
+    prune_stale_map_versions(&target_dir, &manifest, progress)?;
+    Ok(downloaded)
+}
+
+/// Delete local map folders that are older versions of maps present in the
+/// manifest (`name.v0001` when the manifest has `name.v0002`). Folders whose
+/// map is absent from the manifest (the player's own maps) are never touched.
+fn prune_stale_map_versions(
+    dir: &Path,
+    manifest: &Manifest,
+    progress: &mut dyn FnMut(SyncProgress),
+) -> Result<()> {
+    // Newest version per map base name in the manifest.
+    let mut newest: HashMap<&str, u32> = HashMap::new();
+    for entry in &manifest.files {
+        let top = entry.path.split('/').next().unwrap_or(&entry.path);
+        if let Some((base, version)) = map_folder_version(top) {
+            newest
+                .entry(base)
+                .and_modify(|v| *v = (*v).max(version))
+                .or_insert(version);
+        }
+    }
+    if newest.is_empty() {
+        return Ok(());
+    }
+    for item in fs::read_dir(dir)? {
+        let item = item?;
+        if !item.file_type()?.is_dir() {
+            continue;
+        }
+        let name = item.file_name().to_string_lossy().into_owned();
+        if let Some((base, version)) = map_folder_version(&name) {
+            if newest.get(base).is_some_and(|&max| version < max) {
+                fs::remove_dir_all(item.path())?;
+                progress(SyncProgress::Pruned { path: name });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Diff one channel's target dir against its manifest and download what's
@@ -456,6 +555,78 @@ fn contains_nx2(path: &Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+/// File whose presence marks a FAF Client install root.
+const FAF_CLIENT_EXE: &str = "faf-client.exe";
+
+/// True when `path` looks like the FAF Client install root (it contains
+/// `faf-client.exe`).
+pub fn is_valid_faf_client_dir(path: &Path) -> bool {
+    path.is_dir() && path.join(FAF_CLIENT_EXE).is_file()
+}
+
+/// The maps folder below a FAF Client root: `maps_and_mods/maps`.
+pub fn maps_dir(faf_client_root: &Path) -> PathBuf {
+    faf_client_root.join("maps_and_mods").join("maps")
+}
+
+/// Find the FAF Client install root automatically: a folder containing
+/// `faf-client.exe`, scanning drive roots and their immediate subfolders
+/// (e.g. `E:\FAF Client`). Candidates that also contain `uninstall.exe` or
+/// an existing `maps_and_mods` folder rank first.
+pub fn autodetect_faf_client_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for letter in b'C'..=b'Z' {
+        let root = PathBuf::from(format!("{}:\\", letter as char));
+        if !root.is_dir() {
+            continue;
+        }
+        candidates.push(root.clone());
+        if let Ok(rd) = fs::read_dir(&root) {
+            candidates.extend(
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir()),
+            );
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(&home));
+        for sub in [".local/share", "Games"] {
+            if let Ok(rd) = fs::read_dir(Path::new(&home).join(sub)) {
+                candidates.extend(
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_dir()),
+                );
+            }
+        }
+    }
+    let confidence = |p: &Path| {
+        let mut score = 0;
+        if p.join("uninstall.exe").is_file() {
+            score += 1;
+        }
+        if p.join("maps_and_mods").is_dir() {
+            score += 1;
+        }
+        score
+    };
+    candidates
+        .iter()
+        .filter(|c| is_valid_faf_client_dir(c))
+        .max_by_key(|c| confidence(c))
+        .cloned()
+}
+
+/// Resolve the FAF Client directory: CLI arg > remembered config > auto-detect.
+/// Returns `None` when nothing usable is found (maps sync is then skipped).
+fn resolve_faf_client_dir(arg: Option<PathBuf>, cfg: &ClientConfig) -> Option<PathBuf> {
+    let candidate = arg
+        .or_else(|| cfg.faf_client_dir.clone())
+        .or_else(autodetect_faf_client_dir)?;
+    is_valid_faf_client_dir(&candidate).then_some(candidate)
 }
 
 /// Directories worth checking when auto-detecting the FAForever folder.

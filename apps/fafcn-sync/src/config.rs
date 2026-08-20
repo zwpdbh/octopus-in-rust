@@ -19,6 +19,9 @@ pub struct ClientConfig {
     pub server: Option<String>,
     /// Local FAF gamedata directory used last time.
     pub gamedata_dir: Option<PathBuf>,
+    /// FAF Client install folder (contains faf-client.exe), used for maps sync.
+    #[serde(default)]
+    pub faf_client_dir: Option<PathBuf>,
     /// GUI language ("zh" / "en"), remembered across launches.
     #[serde(default)]
     pub lang: Option<String>,

@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use fafcn_gamedata::{CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR};
+use fafcn_gamedata::{CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR};
 use tower_http::services::ServeDir;
 
 use crate::{handlers, state::AppState};
@@ -24,8 +24,11 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
     Router::new()
         .route("/api/units", get(handlers::units::list_units))
         .route("/api/units/meta", get(handlers::units::units_meta))
-        .route("/api/units/:id", get(handlers::units::get_unit))
-        .route("/api/portraits/:id", get(handlers::portraits::get_portrait))
+        .route("/api/units/{id}", get(handlers::units::get_unit))
+        .route(
+            "/api/portraits/{id}",
+            get(handlers::portraits::get_portrait),
+        )
         .route("/ws/simulate", get(handlers::simulate::simulate_ws_handler))
         .route("/api/ask", post(handlers::qa::ask_handler))
         .route("/api/ask/stream", post(handlers::qa::ask_stream_handler))
@@ -33,20 +36,20 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
         .route("/api/health/qa", get(handlers::qa::health_handler))
         // Gamedata mirror: JSON API (per channel).
         .route(
-            "/api/gamedata/channels/:channel/manifest.json",
+            "/api/gamedata/channels/{channel}/manifest.json",
             get(handlers::gamedata::get_manifest),
         )
         .route("/api/gamedata/status", get(handlers::gamedata::get_status))
         .route(
-            "/api/gamedata/channels/:channel/upload/check",
+            "/api/gamedata/channels/{channel}/upload/check",
             post(handlers::gamedata::upload_check),
         )
         .route(
-            "/api/gamedata/channels/:channel/upload/file",
+            "/api/gamedata/channels/{channel}/upload/file",
             post(handlers::gamedata::upload_file).layer(DefaultBodyLimit::disable()),
         )
         .route(
-            "/api/gamedata/channels/:channel/upload/commit",
+            "/api/gamedata/channels/{channel}/upload/commit",
             post(handlers::gamedata::upload_commit),
         )
         // Gamedata mirror: static downloads (per channel) + patched client binaries.
@@ -62,8 +65,12 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
             "/api/gamedata/channels/faf-client/files",
             ServeDir::new(channels.join(CHANNEL_FAF_CLIENT).join("files")),
         )
+        .nest_service(
+            "/api/gamedata/channels/maps/files",
+            ServeDir::new(channels.join(CHANNEL_MAPS).join("files")),
+        )
         .route(
-            "/api/gamedata/client/:filename",
+            "/api/gamedata/client/{filename}",
             get(handlers::gamedata::download_client),
         )
 }

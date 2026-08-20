@@ -18,7 +18,7 @@ use axum::{
 };
 use fafcn_gamedata::{
     ChannelStatus, EmbeddedConfig, Manifest, StatusResponse, UploadCheckRequest,
-    UploadCheckResponse, UploadCommitRequest, CHANNELS,
+    UploadCheckResponse, UploadCommitRequest, CHANNELS, CHANNEL_MAPS,
 };
 
 use crate::{
@@ -107,7 +107,9 @@ pub async fn upload_file(
 ) -> Result<()> {
     state.gamedata.authorize(&headers)?;
     let channel = known_channel(&channel)?;
-    let rel_path = required_header(&headers, PATH_HEADER)?.to_string();
+    // The path header is percent-encoded by the client (ASCII-only transport).
+    let rel_path = fafcn_gamedata::decode_relative_path(required_header(&headers, PATH_HEADER)?)
+        .map_err(|e| Error::BadRequest(e.to_string()))?;
     let sha256 = required_header(&headers, SHA256_HEADER)?.to_string();
     let size = body.len();
     let log_path = rel_path.clone();
@@ -120,7 +122,9 @@ pub async fn upload_file(
 }
 
 /// `POST /api/gamedata/channels/:channel/upload/commit` — verify all files
-/// and publish a new manifest. Requires the upload token.
+/// and publish a new manifest. Requires the upload token. The maps channel
+/// MERGES the uploaded maps into the existing manifest (replacing older
+/// versions of the same maps); other channels replace their manifest.
 pub async fn upload_commit(
     State(state): State<AppState>,
     Path(channel): Path<String>,
@@ -131,9 +135,15 @@ pub async fn upload_commit(
     let channel = known_channel(&channel)?;
     let log_channel = channel.clone();
     let store = state.gamedata.clone();
-    let manifest = tokio::task::spawn_blocking(move || store.commit(&channel, &req))
-        .await
-        .map_err(|e| Error::Internal(format!("task join error: {e}")))??;
+    let manifest = tokio::task::spawn_blocking(move || {
+        if channel == CHANNEL_MAPS {
+            store.commit_merge(&channel, &req)
+        } else {
+            store.commit(&channel, &req)
+        }
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("task join error: {e}")))??;
     tracing::info!(
         channel = %log_channel,
         patch_version = %manifest.patch_version,

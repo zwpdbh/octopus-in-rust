@@ -51,6 +51,8 @@ enum Command {
     Upload(UploadArgs),
     /// Upload a FAF client installer to the mirror (VPN/downloaders only).
     UploadClient(UploadClientArgs),
+    /// Upload a folder of FAF maps to the mirror (merged into the maps channel).
+    UploadMaps(UploadMapsArgs),
 }
 
 /// Arguments for `fafcn-sync sync`.
@@ -63,6 +65,11 @@ pub struct SyncArgs {
     /// Path to the FAF `gamedata` directory. Auto-detected / remembered after first use.
     #[arg(long)]
     pub dir: Option<PathBuf>,
+
+    /// Path to the FAF Client install folder (contains faf-client.exe); maps
+    /// sync into its maps_and_mods/maps. Auto-detected / remembered.
+    #[arg(long)]
+    pub faf_client_dir: Option<PathBuf>,
 }
 
 /// Arguments for `fafcn-sync upload`.
@@ -114,6 +121,26 @@ pub struct UploadClientArgs {
     pub uploader: Option<String>,
 }
 
+/// Arguments for `fafcn-sync upload-maps`.
+#[derive(Debug, Args)]
+pub struct UploadMapsArgs {
+    /// Mirror base URL, e.g. https://fafcn.example.com. Remembered after first use.
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Group upload token (ask the person who deployed the server).
+    #[arg(long)]
+    pub token: String,
+
+    /// Folder containing the maps to publish (each map a name.vNNNN subfolder).
+    #[arg(long)]
+    pub dir: PathBuf,
+
+    /// Your display name, shown on the status page.
+    #[arg(long)]
+    pub uploader: Option<String>,
+}
+
 fn main() -> Result<()> {
     install_crash_log();
     let cli = Cli::parse();
@@ -122,23 +149,28 @@ fn main() -> Result<()> {
         Some(Command::Sync(args)) => run_cli(sync::run(args)),
         Some(Command::Upload(args)) => run_cli(upload::run(args)),
         Some(Command::UploadClient(args)) => run_cli(upload::run_client(args)),
+        Some(Command::UploadMaps(args)) => run_cli(upload::run_maps(args)),
     }
 }
 
 /// GUI release builds have no console: a panic or a windowing error just
 /// makes the window vanish. Record panics and how the GUI exited to a crash
-/// log next to the config file so such reports can be diagnosed.
+/// log so such reports can be diagnosed.
 fn install_crash_log() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        append_crash_log(&format!("PANIC: {info}"));
+        let thread = std::thread::current();
+        let thread = thread.name().unwrap_or("<unnamed>");
+        append_crash_log(&format!("PANIC on thread '{thread}': {info}"));
         default_hook(info);
     }));
 }
 
-/// Run the GUI, recording whether it exited normally, with an error, or
-/// (via the panic hook) crashed.
+/// Run the GUI, recording startup and whether it exited normally, with an
+/// error, or (via the panic hook) crashed. A `started` line with no matching
+/// exit line means the process was killed by a signal (native/GPU crash).
 fn run_gui() -> Result<()> {
+    append_crash_log(&format!("GUI started (build {})", BUILD_TAG));
     match gui::run() {
         Ok(()) => {
             append_crash_log("GUI exited normally");
@@ -151,10 +183,30 @@ fn run_gui() -> Result<()> {
     }
 }
 
+/// Crash log location: `fafcn-sync-crash.log` next to the executable (easy
+/// to find where it is executed), falling back to the config directory when
+/// the executable directory is not writable.
+fn crash_log_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("fafcn-sync-crash.log");
+            let writable = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&candidate)
+                .is_ok();
+            if writable {
+                return candidate;
+            }
+        }
+    }
+    config::crash_log_path()
+}
+
 /// Append one timestamped line to the crash log (best-effort, never fails).
 fn append_crash_log(line: &str) {
     use std::io::Write;
-    let path = config::crash_log_path();
+    let path = crash_log_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
