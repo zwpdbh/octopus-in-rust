@@ -18,6 +18,7 @@ mod config;
 mod gui;
 mod progress;
 mod sync;
+mod update;
 mod upload;
 mod version;
 
@@ -143,6 +144,8 @@ pub struct UploadMapsArgs {
 
 fn main() -> Result<()> {
     install_crash_log();
+    // Remove the `.old` exe left behind by a previous self-update.
+    update::cleanup_old_exe();
     let cli = Cli::parse();
     match cli.command {
         None | Some(Command::Gui) => run_gui(),
@@ -183,13 +186,13 @@ fn run_gui() -> Result<()> {
     }
 }
 
-/// Crash log location: `fafcn-sync-crash.log` next to the executable (easy
+/// Crash log location: `fafcn-sync-log.log` next to the executable (easy
 /// to find where it is executed), falling back to the config directory when
 /// the executable directory is not writable.
 fn crash_log_path() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("fafcn-sync-crash.log");
+            let candidate = dir.join("fafcn-sync-log.log");
             let writable = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)

@@ -17,6 +17,7 @@ use crate::{
     config::ClientConfig,
     progress::{format_bytes, format_speed},
     sync::{self, SyncProgress, SyncSummary},
+    update,
     upload::{self, UploadProgress, UploadSummary},
     version,
 };
@@ -176,6 +177,13 @@ enum Txt {
     FafClientFound,
     FafClientMissing,
     CopyLog,
+    UpdateChecking,
+    UpdateUpToDate,
+    UpdateNow,
+    UpdateRetry,
+    UpdateFailed,
+    UpdateDownloading,
+    UpdateRestarting,
 }
 
 fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -282,6 +290,27 @@ fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::FafClientMissing, GuiLang::En) => "faf-client.exe not found — maps sync will be skipped",
         (Txt::CopyLog, GuiLang::Zh) => "复制日志",
         (Txt::CopyLog, GuiLang::En) => "Copy log",
+        (Txt::UpdateChecking, GuiLang::Zh) => "正在检查更新…",
+        (Txt::UpdateChecking, GuiLang::En) => "Checking for updates…",
+        (Txt::UpdateUpToDate, GuiLang::Zh) => "已是最新",
+        (Txt::UpdateUpToDate, GuiLang::En) => "Up to date",
+        (Txt::UpdateNow, GuiLang::Zh) => "立即更新",
+        (Txt::UpdateNow, GuiLang::En) => "Update now",
+        (Txt::UpdateRetry, GuiLang::Zh) => "重试",
+        (Txt::UpdateRetry, GuiLang::En) => "Retry",
+        (Txt::UpdateFailed, GuiLang::Zh) => "更新失败",
+        (Txt::UpdateFailed, GuiLang::En) => "Update failed",
+        (Txt::UpdateDownloading, GuiLang::Zh) => "正在更新…",
+        (Txt::UpdateDownloading, GuiLang::En) => "Updating…",
+        (Txt::UpdateRestarting, GuiLang::Zh) => "更新完成,正在重启…",
+        (Txt::UpdateRestarting, GuiLang::En) => "Update installed, restarting…",
+    }
+}
+
+fn txt_update_available(lang: GuiLang, tag: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("发现新版本:{tag}"),
+        GuiLang::En => format!("New version available: {tag}"),
     }
 }
 
@@ -483,6 +512,34 @@ fn txt_server_newer(lang: GuiLang, server: &str, local: &str) -> String {
     }
 }
 
+/// Self-update lifecycle: checked at startup and re-checked when the mirror
+/// address changes; a newer build can be downloaded and swapped in place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelfUpdate {
+    /// Fetching the mirror's client build tag.
+    Checking,
+    /// The running build matches (or is newer than) the mirror's.
+    UpToDate,
+    /// The mirror serves a newer build.
+    Available { tag: String },
+    /// Downloading the new exe: (done_bytes, total_bytes).
+    Downloading { done: u64, total: u64 },
+    /// Downloaded; swapping the exe and relaunching.
+    Restarting,
+    /// Check or download failed (hover the label for the error).
+    Failed(String),
+}
+
+/// Messages from a self-update worker to the UI.
+enum UpdateMsg {
+    /// Version check finished: the mirror's client build tag.
+    Checked(Result<Option<String>, String>),
+    /// Download progress: (done_bytes, total_bytes).
+    Progress(u64, u64),
+    /// Download finished: path of the `<exe>.new` file.
+    Downloaded(Result<PathBuf, String>),
+}
+
 /// Messages from a background worker to the UI.
 enum WorkerMsg {
     Sync(SyncProgress),
@@ -520,6 +577,11 @@ struct SyncApp {
     server_version: Option<String>,
     status_rx: Option<Receiver<Option<String>>>,
     last_status_check: String,
+    // Self-update state (mirror's client build vs BUILD_TAG).
+    update: SelfUpdate,
+    update_rx: Option<Receiver<UpdateMsg>>,
+    /// Mirror address the last update check ran against.
+    update_checked_server: String,
     // Per-tab action state.
     sync_state: ActionState,
     upload_state: ActionState,
@@ -565,6 +627,9 @@ impl SyncApp {
             server_version: None,
             status_rx: None,
             last_status_check: String::new(),
+            update: SelfUpdate::Checking,
+            update_rx: None,
+            update_checked_server: String::new(),
             sync_state: ActionState::Idle,
             upload_state: ActionState::Idle,
             worker: None,
@@ -576,6 +641,10 @@ impl SyncApp {
 
     fn busy(&self) -> bool {
         self.worker.is_some()
+            || matches!(
+                self.update,
+                SelfUpdate::Downloading { .. } | SelfUpdate::Restarting
+            )
     }
 
     /// The FAForever root from the dir field (tolerates a gamedata subpath).
@@ -1028,6 +1097,225 @@ impl SyncApp {
         }
     }
 
+    /// Kick off a one-shot check for a newer client build when the mirror
+    /// address changed (and no update is already in flight).
+    fn maybe_start_update_check(&mut self) {
+        if self.update_rx.is_some()
+            || matches!(
+                self.update,
+                SelfUpdate::Downloading { .. } | SelfUpdate::Restarting
+            )
+        {
+            return;
+        }
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        if server.is_empty() || server == self.update_checked_server {
+            return;
+        }
+        self.update_checked_server = server.clone();
+        self.update = SelfUpdate::Checking;
+        let (tx, rx) = channel();
+        self.update_rx = Some(rx);
+        thread::spawn(move || {
+            let tag = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(update::fetch_client_tag(&server))
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UpdateMsg::Checked(tag));
+        });
+    }
+
+    /// Download the newer build from the mirror, then swap and relaunch.
+    fn start_self_update(&mut self) {
+        let server = self.server.trim().trim_end_matches('/').to_string();
+        let dest = match update::new_exe_path() {
+            Ok(path) => path,
+            Err(e) => {
+                self.update = SelfUpdate::Failed(format!("{e:#}"));
+                return;
+            }
+        };
+        self.update = SelfUpdate::Downloading { done: 0, total: 0 };
+        let (tx, rx) = channel();
+        self.update_rx = Some(rx);
+        thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(async {
+                    update::download_client(&server, &dest, &mut |done, total| {
+                        let _ = tx.send(UpdateMsg::Progress(done, total));
+                    })
+                    .await?;
+                    Ok::<PathBuf, anyhow::Error>(dest)
+                })
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UpdateMsg::Downloaded(result));
+        });
+    }
+
+    /// Apply messages from the self-update worker to the UI state.
+    fn drain_update(&mut self, ctx: &egui::Context) {
+        use std::sync::mpsc::TryRecvError;
+        // Collect first: the receiver borrow must end before mutating state.
+        let mut msgs = Vec::new();
+        let mut disconnected = false;
+        if let Some(rx) = &self.update_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => msgs.push(msg),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let mut restart_with: Option<PathBuf> = None;
+        let mut finished = false;
+        for msg in msgs {
+            match msg {
+                UpdateMsg::Checked(Ok(tag)) => {
+                    self.update = match tag {
+                        Some(tag) if update::is_newer_build(&tag, crate::BUILD_TAG) => {
+                            SelfUpdate::Available { tag }
+                        }
+                        _ => SelfUpdate::UpToDate,
+                    };
+                    finished = true;
+                }
+                UpdateMsg::Checked(Err(err)) => {
+                    self.update = SelfUpdate::Failed(err);
+                    finished = true;
+                }
+                UpdateMsg::Progress(done, total) => {
+                    self.update = SelfUpdate::Downloading { done, total };
+                }
+                UpdateMsg::Downloaded(Ok(path)) => {
+                    self.update = SelfUpdate::Restarting;
+                    restart_with = Some(path);
+                    finished = true;
+                }
+                UpdateMsg::Downloaded(Err(err)) => {
+                    self.update = SelfUpdate::Failed(err);
+                    finished = true;
+                }
+            }
+        }
+        if disconnected && !finished {
+            self.update = SelfUpdate::Failed("update worker died".to_string());
+        }
+        if finished || disconnected {
+            self.update_rx = None;
+        }
+        if self.update_rx.is_some() {
+            // Keep repainting while the check/download is in flight.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Swapping the exe must happen on the UI thread; on success this
+        // relaunches the new build and exits the process.
+        if let Some(path) = restart_with {
+            if let Err(e) = update::apply_and_restart(&path) {
+                let err = format!("{e:#}");
+                self.log.push(log_failed(self.lang, &err));
+                self.update = SelfUpdate::Failed(err);
+            }
+        }
+    }
+
+    /// The always-visible self-update row below the tab bar: the button is
+    /// enabled only when the mirror serves a newer build.
+    fn update_row(&mut self, ui: &mut egui::Ui) {
+        // What to do after the row renders (borrowing `self.update` in the
+        // closure prevents calling `&mut self` methods directly).
+        enum UpdateAction {
+            Start,
+            RetryCheck,
+        }
+        let mut action: Option<UpdateAction> = None;
+        ui.horizontal(|ui| match &self.update {
+            SelfUpdate::Checking => {
+                ui.label(
+                    egui::RichText::new(tr(self.lang, Txt::UpdateChecking))
+                        .small()
+                        .weak(),
+                );
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(tr(self.lang, Txt::UpdateNow)).small(),
+                );
+            }
+            SelfUpdate::UpToDate => {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        tr(self.lang, Txt::UpdateUpToDate),
+                        crate::BUILD_TAG
+                    ))
+                    .small()
+                    .weak(),
+                );
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(tr(self.lang, Txt::UpdateNow)).small(),
+                );
+            }
+            SelfUpdate::Available { tag } => {
+                ui.colored_label(
+                    egui::Color32::LIGHT_GREEN,
+                    txt_update_available(self.lang, tag),
+                );
+                if ui.button(tr(self.lang, Txt::UpdateNow)).clicked() {
+                    action = Some(UpdateAction::Start);
+                }
+            }
+            SelfUpdate::Downloading { .. } => {
+                ui.label(tr(self.lang, Txt::UpdateDownloading));
+                ui.add_enabled(
+                    false,
+                    egui::Button::new(tr(self.lang, Txt::UpdateNow)).small(),
+                );
+            }
+            SelfUpdate::Restarting => {
+                ui.colored_label(
+                    egui::Color32::LIGHT_GREEN,
+                    tr(self.lang, Txt::UpdateRestarting),
+                );
+            }
+            SelfUpdate::Failed(err) => {
+                ui.colored_label(egui::Color32::LIGHT_RED, tr(self.lang, Txt::UpdateFailed))
+                    .on_hover_text(err);
+                if ui.button(tr(self.lang, Txt::UpdateRetry)).clicked() {
+                    action = Some(UpdateAction::RetryCheck);
+                }
+            }
+        });
+        if let SelfUpdate::Downloading { done, total } = self.update {
+            let (fraction, text) = if total > 0 {
+                (
+                    done as f32 / total as f32,
+                    format!("{} / {}", format_bytes(done), format_bytes(total)),
+                )
+            } else {
+                (0.0, format_bytes(done))
+            };
+            ui.add(egui::ProgressBar::new(fraction).text(text));
+        }
+        match action {
+            Some(UpdateAction::Start) => self.start_self_update(),
+            // Retry re-runs the version check against the current mirror.
+            Some(UpdateAction::RetryCheck) => {
+                self.update_checked_server.clear();
+                self.update = SelfUpdate::Checking;
+            }
+            None => {}
+        }
+    }
+
     /// Fields still missing for the installer upload, as localized names.
     fn client_missing_fields(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
@@ -1148,6 +1436,7 @@ impl SyncApp {
 impl eframe::App for SyncApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_worker(ui.ctx());
+        self.drain_update(ui.ctx());
         // Tab-switch actions: entering the maps upload tab prefills the
         // source folder from the located FAF Client install.
         if self.tab != self.last_tab {
@@ -1163,6 +1452,7 @@ impl eframe::App for SyncApp {
             }
         }
         self.maybe_refresh_server_version();
+        self.maybe_start_update_check();
         let busy = self.busy();
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -1202,6 +1492,9 @@ impl eframe::App for SyncApp {
                 );
             });
             ui.separator();
+
+            self.update_row(ui);
+            ui.add_space(4.0);
 
             self.shared_fields(ui);
 
@@ -1369,7 +1662,7 @@ impl eframe::App for SyncApp {
             ui.horizontal(|ui| {
                 if ui
                     .button(egui::RichText::new(tr(self.lang, Txt::CopyLog)).small())
-                    .on_hover_text("fafcn-sync-crash.log")
+                    .on_hover_text("fafcn-sync-log.log")
                     .clicked()
                 {
                     ui.ctx().copy_text(self.log.join("\n"));

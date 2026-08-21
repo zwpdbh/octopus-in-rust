@@ -96,5 +96,5 @@ fn config_path() -> PathBuf {
 /// Where GUI crash/exit reports are appended. GUI release builds have no
 /// console, so a panic would otherwise make the window vanish silently.
 pub fn crash_log_path() -> PathBuf {
-    config_dir().join("crash.log")
+    config_dir().join("fafcn-sync-log.log")
 }
