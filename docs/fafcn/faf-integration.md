@@ -1,6 +1,15 @@
-# fafcn Gallery Platform — Design Document
+# fafcn ↔ FAF Integration — Design Document
 
-Status: **draft for review** — pending FAF community OAuth2 application approval.
+Scope: this document owns **everything about integrating fafcn with FAF** — the
+OAuth2 identity integration, the communication thread with the FAF team, the
+credential checklist, and open questions raised by FAF (e.g. gamedata ownership
+checks, section 2.2). The community gallery (sections 4.3, 5.2–5.3) is the **first
+consumer** of the FAF identity; its design stays here for context, but gallery work
+is **blocked** until the OAuth login round-trip works (section 2.1).
+
+Status: **OAuth approved, awaiting credentials** — FAF admin (Brutus5000) agreed on
+2026-08 to register the client (consent-screen name: `fafcn`); `client_id` /
+`client_secret` not yet received. Next: section 2.1 checklist.
 Author: fafcn team
 Date: 2026-08-19
 
@@ -12,8 +21,14 @@ Date: 2026-08-19
 
 ## 1. Vision
 
-Turn the fafcn website from a tool site into a small **community platform that fuses
-players' passion**:
+Integrate fafcn with FAF so the website can grow from a tool site into a small
+**community platform that fuses players' passion** — with identity delegated to FAF
+as the foundation:
+
+0. **FAF identity (this doc's core)** — players log in with their existing FAF
+   account via FAF's OAuth2. We store no accounts, no passwords, no user profiles —
+   only sessions. Admins are simply a hardcoded list of FAF usernames. Everything
+   below builds on this.
 
 1. **Living hero** — the frontpage hero stops being one hardcoded screenshot. It
    crossfades between several images while slowly zooming in (Ken Burns effect, the
@@ -21,16 +36,20 @@ players' passion**:
 2. **Community gallery** — players upload their own game screenshots with an optional
    caption. Uploads are invisible until an admin approves them; admins can mark the
    best ones as **featured**, and featured images become the frontpage hero slideshow.
-3. **Login delegated to FAF** — players log in with their existing FAF account via
-   FAF's OAuth2. We store no accounts, no passwords, no user profiles — only sessions.
-   Admins are simply a hardcoded list of FAF usernames.
 
 Later increments (out of scope here): likes/comments, per-user gallery pages, FAF
-avatar/rating on cards.
+avatar/rating on cards, stats/replay widgets (may need extra OAuth scopes).
 
 ---
 
-## 2. Message to the FAF developer (copy & send)
+## 2. Message to the FAF developer (sent 2026-08)
+
+> **Outcome:** Brutus5000 agreed to register the client and asked for the service name
+> shown on the consent screen → we answered **`fafcn`**. Credentials pending.
+> Sheikah separately raised a question about how the gamedata mirror interacts with
+> FAF's ownership checks — tracked in section 2.2.
+
+Original message:
 
 > @**Brutus5000** Good afternoon!
 >
@@ -82,10 +101,15 @@ avatar/rating on cards.
 2. **Both redirect URIs whitelisted exactly** — including the `:10041` port on the
    prod one (Hydra requires exact matches; if the port is a problem, we move the site
    to standard 443 first).
-3. **Endpoint confirmation**: authorize URL and token URL (we assume
-   `https://api.faforever.com/oauth2/auth` and `/oauth2/token`).
-4. **Which endpoint returns the user's identity** with the token (`/oauth2/userinfo`
-   or `/me`), and its response shape — specifically that `public_profile` includes the
+3. **Endpoint confirmation** (verified by probing, 2026-08-24): the authorization
+   server is **Ory Hydra at `https://hydra.faforever.com`** —
+   `GET /oauth2/auth` (unknown client → 302 to `invalid_client` error page) and
+   `POST /oauth2/token` (bad credentials → 401 JSON `invalid_client`).
+   The old assumption `https://api.faforever.com/oauth2/*` is **outdated**: those
+   paths now answer `401` with `WWW-Authenticate: Bearer resource_metadata=…`.
+4. **Which endpoint returns the user's identity** with the token — `GET
+   https://api.faforever.com/me` exists (401 without a Bearer token), shape to be
+   confirmed with a real token; specifically that `public_profile` includes the
    **user id and login name**.
 5. Optional: a **test-environment client** (test.faforever.com), and whether tokens
    can read public API data (player stats, replays) for future Discord-bot-like
@@ -99,6 +123,65 @@ Client ID and FAF Client Secret … scope `public_profile`".
 **Graceful degradation**: if the OAuth env vars are unset, the login endpoint returns
 `503 unavailable` and everything else (gallery viewing, static hero fallback) works
 normally — same pattern as our existing gamedata upload token.
+
+### 2.1 Action checklist — once FAF sends the credentials
+
+Do these **in order**; each step gates the next.
+
+1. **Verify registration before writing any code** (client_id is not sensitive; the
+   secret is never needed for these probes). A registered client redirects to FAF's
+   login page; an unknown one redirects to an `invalid_client` error page:
+
+   ```bash
+   # dev redirect URI
+   curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+     'https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=<CLIENT_ID>&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Fauth%2Fcallback&scope=public_profile&state=test'
+
+   # prod redirect URI (confirms the :10041 port was whitelisted)
+   curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+     'https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=<CLIENT_ID>&redirect_uri=https%3A%2F%2F8v.pub%3A10041%2Fapi%2Fauth%2Fcallback&scope=public_profile&state=test'
+   ```
+
+   - Redirect to a login/consent page → registered **and** that redirect URI is
+     whitelisted.
+   - Error page with `invalid_client` → not registered (or wrong client_id).
+   - Error mentioning `redirect_uri` → client exists but that URI is not whitelisted
+     (expected for prod if Hydra rejected the non-standard port — then we move the
+     site to 443 first, as noted above).
+
+2. **Store the credentials** in `apps/fafcn-server/.env` (gitignored, never commit):
+   `FAFCN_OAUTH_CLIENT_ID=…` / `FAFCN_OAUTH_CLIENT_SECRET=…`.
+3. **Implement** backend auth + gallery per section 4. OAuth endpoints default to
+   `https://hydra.faforever.com` and stay env-overridable (for the test environment).
+4. **Local smoke test** (rollout phase 3): browser login round-trip via
+   `http://localhost:3000/api/auth/login`; then `GET /api/auth/me` must return the FAF
+   user id + username — this confirms the real `/me` response shape; update section
+   4.2 if it differs from the assumption.
+5. **Deploy**: set the env vars on the prod server and add a matching section to
+   `docs/fafcn/how_to_deploy_fafcn_on_majiko.md`; verify the prod login round-trip at
+   `https://8v.pub:10041`.
+6. **Report back to FAF** that the integration works, and settle the remaining open
+   items: test-environment client (test.faforever.com), `/me` shape confirmation, and
+   whether extra scopes are possible later for stats/replay widgets.
+
+### 2.2 Open question from Sheikah — gamedata mirror vs. ownership checks
+
+Sheikah asked how the gamedata mirror interacts with FAF's ownership checks.
+Current facts (verified in code):
+
+- The mirror serves FAF patch archives (`env.nx2`, `units.nx2`, `textures.nx2`),
+  map-generator jars, the downlords-faf-client installer, and community maps —
+  **not** the base game and no SupCom executables.
+- Files enter the mirror only from a trusted member's own legitimate FAF install
+  (their official client downloaded them after their Steam-linked ownership check).
+- Downloads are currently anonymous; there is **no ownership check on our side**.
+  Mitigating context: FAF's own patch/CDN servers also serve these files without a
+  per-download check — FAF enforces ownership at account registration (Steam link),
+  and the patch files are useless without owning SupCom:FA anyway.
+- Offer on the table if FAF prefers: gate gamedata downloads behind the same FAF
+  OAuth login from this document, so only Steam-verified FAF account holders can
+  download (auth middleware on the `ServeDir` mounts in
+  `apps/fafcn-server/src/routes.rs`).
 
 ---
 
@@ -179,11 +262,12 @@ handlers/auth/
 Flow (server-side, `reqwest`):
 
 1. `GET /api/auth/login` — random `state` (uuid, in-memory map, 10-min expiry) →
-   `302` to `https://api.faforever.com/oauth2/auth?response_type=code&client_id=…
+   `302` to `https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=…
 &redirect_uri=…&scope=public_profile&state=…`.
 2. `GET /api/auth/callback?code&state` — verify state → POST code exchange to
-   `/oauth2/token` (form-encoded, client_id + secret) → GET user info with the access
-   token (`/oauth2/userinfo` or `/me` — validated during implementation; extract FAF
+   `https://hydra.faforever.com/oauth2/token` (form-encoded, client_id + secret) →
+   GET user info with the access token (`https://api.faforever.com/me` — validated
+   during implementation; extract FAF
    id + login name) → create session (uuid token, 30 days) →
    `Set-Cookie: fafcn_session=<token>; HttpOnly; Path=/; SameSite=Lax; Max-Age=…` →
    `302` to `FAFCN_PUBLIC_BASE_URL` (`/` in prod).
@@ -326,13 +410,13 @@ implementation time.)
 
 ## 7. Rollout phases
 
-1. **This document** — review, then approach the FAF team (section 2).
-2. **Implementation** — backend auth + gallery, frontend gallery page + hero
-   slideshow; works end-to-end without OAuth (login 503) until credentials arrive.
-3. **OAuth smoke** — with a dev client_id: login round-trip, upload, admin
-   approve/feature, hero slideshow live.
-4. **Production** — register prod redirect URI, set env vars, announce in the QQ
-   group, seed the first featured images ourselves.
+1. **FAF contact** — ✅ done: application approved (section 2), credentials pending.
+2. **OAuth round-trip** — ⏳ blocked on credentials: verify registration, implement
+   the auth module (4.2), local smoke test, prod smoke test (section 2.1 checklist).
+3. **Gallery implementation** — blocked on phase 2: backend gallery (4.3), frontend
+   gallery page + hero slideshow (5.2–5.3).
+4. **Production announcement** — announce in the QQ group, seed the first featured
+   images ourselves.
 
 ## 8. Out of scope (future increments)
 
