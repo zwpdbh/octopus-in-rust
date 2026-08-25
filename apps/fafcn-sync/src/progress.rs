@@ -81,6 +81,11 @@ impl TransferMeter {
         Some(self.update())
     }
 
+    /// Bytes recorded so far.
+    pub fn done_bytes(&self) -> u64 {
+        self.done_bytes
+    }
+
     /// Current snapshot, unthrottled (e.g. at a file boundary).
     pub fn update(&self) -> TransferUpdate {
         // Before the first throttled emission there is no EMA yet; fall back
@@ -130,6 +135,11 @@ impl<'a, E> ProgressReporter<'a, E> {
         if let Some(update) = self.meter.add(n) {
             (self.progress)((self.wrap)(update));
         }
+    }
+
+    /// Bytes recorded so far.
+    pub fn done_bytes(&self) -> u64 {
+        self.meter.done_bytes()
     }
 
     /// Emit the current snapshot unconditionally (e.g. at a file boundary).

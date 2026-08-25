@@ -269,6 +269,19 @@ pub(super) fn log_file(lang: GuiLang, index: usize, count: usize, path: &str) ->
     }
 }
 
+pub(super) fn log_file_failed(
+    lang: GuiLang,
+    index: usize,
+    count: usize,
+    path: &str,
+    err: &str,
+) -> String {
+    match lang {
+        GuiLang::Zh => format!("[{index}/{count}] 下载失败,已跳过 {path}:{err}"),
+        GuiLang::En => format!("[{index}/{count}] download failed, skipped {path}: {err}"),
+    }
+}
+
 pub(super) fn log_pruned(lang: GuiLang, path: &str) -> String {
     match lang {
         GuiLang::Zh => format!("已清理旧版本:{path}"),

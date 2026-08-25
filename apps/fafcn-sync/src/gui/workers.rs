@@ -239,6 +239,15 @@ impl SyncApp {
                     }) => {
                         self.log.push(log_file(self.lang, index, count, &path));
                     }
+                    WorkerMsg::Sync(SyncProgress::FileFailed {
+                        path,
+                        index,
+                        count,
+                        error,
+                    }) => {
+                        self.log
+                            .push(log_file_failed(self.lang, index, count, &path, &error));
+                    }
                     WorkerMsg::Sync(SyncProgress::Pruned { path, .. }) => {
                         self.log.push(log_pruned(self.lang, &path));
                     }

@@ -72,6 +72,18 @@ pub enum SyncProgress {
         /// Total files in this run.
         count: usize,
     },
+    /// A single file failed to download and was skipped; the sync continues
+    /// with the remaining files and the failure is retried on the next run.
+    FileFailed {
+        /// Manifest-relative path.
+        path: String,
+        /// 1-based index within this run.
+        index: usize,
+        /// Total files in this run.
+        count: usize,
+        /// Why the download failed.
+        error: String,
+    },
     /// An outdated local file was pruned (map-generator keeps only the
     /// newest few jars).
     Pruned {
@@ -171,6 +183,14 @@ fn print_progress(event: SyncProgress) {
         } => {
             // Pad to overwrite the live progress line above.
             println!("\r[{index}/{count}] {path:<60}");
+        }
+        SyncProgress::FileFailed {
+            path,
+            index,
+            count,
+            error,
+        } => {
+            println!("\r[{index}/{count}] FAILED, skipped {path}: {error}");
         }
         SyncProgress::Pruned { path, .. } => println!("pruned old file: {path}"),
     }
@@ -381,8 +401,11 @@ async fn sync_channel(
         .with_context(|| format!("failed to create {}", tmp_dir.display()))?;
     let count = downloads.len();
     let mut reporter = ProgressReporter::new(total_bytes, progress, SyncProgress::Bytes);
+    let mut installed = 0usize;
+    let mut installed_bytes = 0u64;
     for (i, entry) in downloads.iter().enumerate() {
-        download_one(
+        let before = reporter.done_bytes();
+        match download_one(
             http,
             server,
             channel,
@@ -391,16 +414,35 @@ async fn sync_channel(
             entry,
             &mut reporter,
         )
-        .await?;
-        reporter.snapshot();
-        reporter.emit(SyncProgress::FileInstalled {
-            path: entry.path.clone(),
-            index: i + 1,
-            count,
-        });
+        .await
+        {
+            Ok(()) => {
+                installed += 1;
+                installed_bytes += entry.size;
+                reporter.snapshot();
+                reporter.emit(SyncProgress::FileInstalled {
+                    path: entry.path.clone(),
+                    index: i + 1,
+                    count,
+                });
+            }
+            Err(err) => {
+                // Skip the failed file instead of aborting the whole sync;
+                // credit its remaining bytes so the progress bar completes.
+                let downloaded = reporter.done_bytes() - before;
+                reporter.add(entry.size.saturating_sub(downloaded));
+                reporter.snapshot();
+                reporter.emit(SyncProgress::FileFailed {
+                    path: entry.path.clone(),
+                    index: i + 1,
+                    count,
+                    error: format!("{err:#}"),
+                });
+            }
+        }
     }
     fs::remove_dir_all(&tmp_dir).ok();
-    Ok((count, total_bytes))
+    Ok((installed, installed_bytes))
 }
 
 /// True when the local file exists with matching size and hash.
