@@ -83,7 +83,6 @@ pub(super) enum Txt {
     PanelSyncClient,
     PanelGamedata,
     VersionUnknown,
-    NotPublished,
     ServerDownloading,
     PanelMirror,
     PanelOfficial,
@@ -221,8 +220,6 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::PanelGamedata, GuiLang::En) => "gamedata patch",
         (Txt::VersionUnknown, GuiLang::Zh) => "未知",
         (Txt::VersionUnknown, GuiLang::En) => "unknown",
-        (Txt::NotPublished, GuiLang::Zh) => "未发布",
-        (Txt::NotPublished, GuiLang::En) => "not published",
         (Txt::ServerDownloading, GuiLang::Zh) => "服务器下载中",
         (Txt::ServerDownloading, GuiLang::En) => "server downloading",
         (Txt::PanelMirror, GuiLang::Zh) => "镜像",
@@ -526,6 +523,22 @@ pub(super) fn log_client_new(lang: GuiLang, version: &str) -> String {
     match lang {
         GuiLang::Zh => format!("FAF 客户端有新版本 v{version},服务器下载中"),
         GuiLang::En => format!("New FAF client v{version}, server is downloading"),
+    }
+}
+
+/// Conclusion of a manual map-generator upstream check: mirror already current.
+pub(super) fn log_generator_current(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("地图生成器已是最新(v{version})"),
+        GuiLang::En => format!("Map generator is up to date (v{version})"),
+    }
+}
+
+/// Conclusion of a manual map-generator upstream check: newer release exists.
+pub(super) fn log_generator_new(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("地图生成器有新版本 v{version},服务器下载中"),
+        GuiLang::En => format!("New map generator v{version}, server is downloading"),
     }
 }
 

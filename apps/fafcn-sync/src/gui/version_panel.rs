@@ -279,6 +279,26 @@ impl SyncApp {
                 self.log.push(log_upstream_skipped(self.lang, reason));
             }
         }
+        match mirror_freshness(
+            mirror(CHANNEL_MAP_GENERATOR),
+            updater.latest_generator_version.as_deref(),
+        ) {
+            MirrorFreshness::Current => {
+                let version = updater
+                    .latest_generator_version
+                    .as_deref()
+                    .or_else(|| mirror(CHANNEL_MAP_GENERATOR))
+                    .unwrap_or("?");
+                self.log.push(log_generator_current(self.lang, version));
+            }
+            MirrorFreshness::Behind { latest } => {
+                self.log.push(log_generator_new(self.lang, &latest));
+            }
+            MirrorFreshness::Unknown => {
+                let reason = tr(self.lang, Txt::UpstreamStatusUnknown);
+                self.log.push(log_upstream_skipped(self.lang, reason));
+            }
+        }
     }
 
     /// The version panel below the update row: one freshness row per
@@ -322,7 +342,8 @@ impl SyncApp {
             client_text,
         );
 
-        // gamedata patch and FAF client: mirror channel vs upstream version.
+        // gamedata patch, FAF client and map generator: mirror channel vs
+        // upstream version.
         let updater = status.updater.as_ref();
         for (label, component, channel, upstream) in [
             (
@@ -337,19 +358,16 @@ impl SyncApp {
                 CHANNEL_FAF_CLIENT,
                 updater.and_then(|u| u.latest_client_version.as_deref()),
             ),
+            (
+                tr(self.lang, Txt::ChannelMapGenerator),
+                UpdaterComponent::MapGenerator,
+                CHANNEL_MAP_GENERATOR,
+                updater.and_then(|u| u.latest_generator_version.as_deref()),
+            ),
         ] {
             let text = self.freshness_text(component, mirror(channel), upstream, downloading);
             self.panel_row(ui, label, mirror(channel), upstream, text);
         }
-
-        // Map generator: no trustworthy upstream endpoint — display only.
-        let version = mirror(CHANNEL_MAP_GENERATOR)
-            .map(|v| format!("v{v}"))
-            .unwrap_or_else(|| tr(self.lang, Txt::NotPublished).to_string());
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr(self.lang, Txt::ChannelMapGenerator)).weak());
-            ui.label(egui::RichText::new(version).weak());
-        });
     }
 
     /// One panel row: label, mirror version vs upstream version (weak),

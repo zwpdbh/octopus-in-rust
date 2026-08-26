@@ -88,6 +88,8 @@ pub enum UpdaterComponent {
     Gamedata,
     /// The FAF client installer.
     FafClient,
+    /// The map generator jar.
+    MapGenerator,
 }
 
 /// State of the server-side auto-updater for official FAF patches.
@@ -120,6 +122,10 @@ pub struct UpdaterInfo {
     /// check). `None` on older servers without the client auto-mirror.
     #[serde(default)]
     pub latest_client_version: Option<String>,
+    /// Latest Neroxis map generator release version seen on GitHub (from the
+    /// last check). `None` on older servers without the generator auto-mirror.
+    #[serde(default)]
+    pub latest_generator_version: Option<String>,
     /// When the official version was last checked.
     pub last_check_at: Option<DateTime<Utc>>,
     /// Why the last update attempt failed, if it did.

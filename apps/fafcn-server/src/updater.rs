@@ -28,8 +28,9 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use fafcn_gamedata::{
-    compare_version_strings, sha256_file, FileEntry, UpdaterComponent, UpdaterInfo, UpdaterState,
-    UploadCommitRequest, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, GAMEDATA_SYNC_FILES,
+    compare_version_strings, map_generator_jar_version, sha256_file, FileEntry, UpdaterComponent,
+    UpdaterInfo, UpdaterState, UploadCommitRequest, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA,
+    CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP,
 };
 use futures::StreamExt;
 use serde::Deserialize;
@@ -54,16 +55,22 @@ const BASE_URL: &str = "https://content.faforever.com/faf/updaterNew/updates_faf
 const CLIENT_RELEASE_API: &str =
     "https://api.github.com/repos/FAForever/downlords-faf-client/releases/latest";
 
+/// GitHub API endpoint for the latest Neroxis map generator release (the
+/// same endpoint family the official client polls when opening the
+/// "generate map" dialog).
+const GENERATOR_RELEASE_API: &str =
+    "https://api.github.com/repos/FAForever/Neroxis-Map-Generator/releases/latest";
+
 /// Manifest uploader name for auto-committed patch sets.
 const AUTO_UPLOADER: &str = "auto-updater";
 
-/// The latest FAF client release on GitHub, distilled to what we mirror.
-pub struct ClientRelease {
+/// The latest upstream release on GitHub, distilled to what we mirror.
+pub struct UpstreamRelease {
     /// Release version (tag without the leading `v`, e.g. `2026.7.1`).
     pub version: String,
-    /// Asset file name of the Windows installer.
+    /// Asset file name of the file we mirror.
     pub file_name: String,
-    /// Direct download URL of the installer asset.
+    /// Direct download URL of the asset.
     pub download_url: String,
 }
 
@@ -89,7 +96,7 @@ struct GhAsset {
 /// (the `x64` run merges into the digits). Asset pick: prefer the
 /// `faf_windows*.exe` installer, fall back to the old `dfc_windows_*.exe`
 /// naming; error when the release ships no Windows installer.
-pub fn parse_client_release(json: &str) -> anyhow::Result<ClientRelease> {
+pub fn parse_client_release(json: &str) -> anyhow::Result<UpstreamRelease> {
     let release: GhRelease = serde_json::from_str(json).context("invalid GitHub release JSON")?;
     let version = release.tag_name.trim_start_matches('v').to_string();
     let is_installer = |a: &&GhAsset| a.name.starts_with("faf_windows") && a.name.ends_with(".exe");
@@ -105,7 +112,34 @@ pub fn parse_client_release(json: &str) -> anyhow::Result<ClientRelease> {
                 release.tag_name
             )
         })?;
-    Ok(ClientRelease {
+    Ok(UpstreamRelease {
+        version,
+        file_name: asset.name.clone(),
+        download_url: asset.browser_download_url.clone(),
+    })
+}
+
+/// Parse the GitHub latest-release JSON of `FAForever/Neroxis-Map-Generator`
+/// into an [`UpstreamRelease`]. The mirrored asset is the
+/// `NeroxisGen_<version>.jar` the official client downloads
+/// (`downloadUrlFormat` in its `application.yml`); the release also ships
+/// platform packages (rpm/dmg/exe) that we ignore.
+pub fn parse_generator_release(json: &str) -> anyhow::Result<UpstreamRelease> {
+    let release: GhRelease = serde_json::from_str(json).context("invalid GitHub release JSON")?;
+    let version = release.tag_name.trim_start_matches('v').to_string();
+    let exact = format!("NeroxisGen_{version}.jar");
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == exact)
+        .or_else(|| {
+            release
+                .assets
+                .iter()
+                .find(|a| a.name.starts_with("NeroxisGen_") && a.name.ends_with(".jar"))
+        })
+        .ok_or_else(|| anyhow!("release {} has no NeroxisGen jar asset", release.tag_name))?;
+    Ok(UpstreamRelease {
         version,
         file_name: asset.name.clone(),
         download_url: asset.browser_download_url.clone(),
@@ -119,7 +153,10 @@ pub trait UpstreamFetch: Send + Sync {
     async fn fetch_mod_info(&self) -> anyhow::Result<String>;
 
     /// Fetch the latest FAF client release from GitHub.
-    async fn fetch_latest_client_release(&self) -> anyhow::Result<ClientRelease>;
+    async fn fetch_latest_client_release(&self) -> anyhow::Result<UpstreamRelease>;
+
+    /// Fetch the latest Neroxis map generator release from GitHub.
+    async fn fetch_latest_generator_release(&self) -> anyhow::Result<UpstreamRelease>;
 
     /// Stream-download `url` to `dest`, verifying Content-Length when the
     /// server provides one. Returns the number of bytes written.
@@ -145,7 +182,7 @@ impl UpstreamFetch for HttpFetch {
         Ok(body)
     }
 
-    async fn fetch_latest_client_release(&self) -> anyhow::Result<ClientRelease> {
+    async fn fetch_latest_client_release(&self) -> anyhow::Result<UpstreamRelease> {
         // GitHub rejects API requests without a User-Agent header.
         let body = self
             .client
@@ -157,6 +194,19 @@ impl UpstreamFetch for HttpFetch {
             .text()
             .await?;
         parse_client_release(&body)
+    }
+
+    async fn fetch_latest_generator_release(&self) -> anyhow::Result<UpstreamRelease> {
+        let body = self
+            .client
+            .get(GENERATOR_RELEASE_API)
+            .header(reqwest::header::USER_AGENT, "fafcn-server")
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        parse_generator_release(&body)
     }
 
     async fn download_to(&self, url: &str, dest: &Path) -> anyhow::Result<u64> {
@@ -213,6 +263,7 @@ impl UpdaterHandle {
                 state: UpdaterState::Idle,
                 latest_official_version: None,
                 latest_client_version: None,
+                latest_generator_version: None,
                 last_check_at: None,
                 last_error: None,
             })),
@@ -269,6 +320,7 @@ impl UpdaterHandle {
         for (phase, result) in [
             ("gamedata", self.update_gamedata().await),
             ("faf-client", self.update_faf_client().await),
+            ("map-generator", self.update_map_generator().await),
         ] {
             if let Err(err) = result {
                 tracing::warn!(phase, error = %format!("{err:#}"), "upstream phase failed");
@@ -428,7 +480,7 @@ impl UpdaterHandle {
     /// store it under its release file name and commit the channel.
     async fn download_client_installer(
         &self,
-        release: &ClientRelease,
+        release: &UpstreamRelease,
         tmp: &Path,
     ) -> anyhow::Result<()> {
         tracing::info!(
@@ -476,6 +528,160 @@ impl UpdaterHandle {
         tracing::info!(
             version = release.version,
             "faf-client auto-update committed"
+        );
+        Ok(())
+    }
+
+    /// Check the latest Neroxis map generator release on GitHub, then
+    /// download and commit the `NeroxisGen_<version>.jar` when it is newer
+    /// than the mirrored map-generator manifest. The commit keeps the newest
+    /// [`MAP_GENERATOR_KEEP`] jars (new release + newest existing entries);
+    /// prune-on-commit deletes older ones.
+    async fn update_map_generator(&self) -> anyhow::Result<()> {
+        let release = self
+            .upstream
+            .fetch_latest_generator_release()
+            .await
+            .context("failed to fetch the latest map generator release from GitHub")?;
+        {
+            let mut status = self.write_status();
+            status.latest_generator_version = Some(release.version.clone());
+            status.last_check_at = Some(Utc::now());
+        }
+
+        let store = self.store.clone();
+        let existing =
+            tokio::task::spawn_blocking(move || store.read_manifest(CHANNEL_MAP_GENERATOR))
+                .await
+                .context("task join error")?
+                .map_err(|e| anyhow!("{e}"))?;
+        match existing
+            .as_ref()
+            .and_then(|m| compare_version_strings(&m.patch_version, &release.version))
+        {
+            Some(Ordering::Equal) => {
+                tracing::info!(
+                    version = release.version,
+                    "map-generator mirror already at latest release"
+                );
+                return Ok(());
+            }
+            Some(Ordering::Greater) => {
+                // Manual upload ahead of upstream; never downgrade.
+                tracing::info!(
+                    version = release.version,
+                    "mirror is newer than upstream; skipping auto-update"
+                );
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        self.set_state(UpdaterState::Downloading {
+            component: UpdaterComponent::MapGenerator,
+            version: release.version.clone(),
+        });
+        let tmp = self
+            .store
+            .incoming_dir(CHANNEL_MAP_GENERATOR)
+            .join(format!("auto-{}.part", uuid::Uuid::new_v4()));
+        let result = self.download_generator_jar(&release, existing, &tmp).await;
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
+    }
+
+    /// Download the jar to `tmp` (Content-Length check), hash it, store it
+    /// under the channel's `MapGenerator_<version>.jar` name and commit the
+    /// newest [`MAP_GENERATOR_KEEP`] jars (the new one plus the newest
+    /// entries of the previous manifest).
+    async fn download_generator_jar(
+        &self,
+        release: &UpstreamRelease,
+        existing: Option<fafcn_gamedata::Manifest>,
+        tmp: &Path,
+    ) -> anyhow::Result<()> {
+        tracing::info!(url = release.download_url, "downloading map generator jar");
+        let written = self
+            .upstream
+            .download_to(&release.download_url, tmp)
+            .await
+            .with_context(|| format!("failed to download {}", release.download_url))?;
+        let sha_tmp = tmp.to_path_buf();
+        let sha256 = tokio::task::spawn_blocking(move || sha256_file(&sha_tmp))
+            .await
+            .context("task join error")??;
+        let new_entry = FileEntry {
+            path: format!("{MAP_GENERATOR_JAR_PREFIX}{}.jar", release.version),
+            size: written,
+            sha256,
+        };
+        let store = self.store.clone();
+        let store_entry = new_entry.clone();
+        let store_tmp = tmp.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            store.store_file_from_path(
+                CHANNEL_MAP_GENERATOR,
+                &store_entry.path,
+                &store_entry.sha256,
+                &store_tmp,
+            )
+        })
+        .await
+        .context("task join error")?
+        .map_err(|e| anyhow!("{e}"))?;
+
+        // New jar first, then the newest existing jars; prune-on-commit
+        // removes whatever falls off the keep-list (and nothing else).
+        let mut entries = vec![new_entry];
+        if let Some(manifest) = existing {
+            let mut old: Vec<FileEntry> = manifest
+                .files
+                .into_iter()
+                .filter(|e| e.path != entries[0].path)
+                .collect();
+            old.sort_by(|a, b| {
+                let va = map_generator_jar_version(&a.path);
+                let vb = map_generator_jar_version(&b.path);
+                // Newest first; unparseable names sink to the bottom.
+                match (&vb, &va) {
+                    (Some(vb), Some(va)) => {
+                        compare_version_strings(vb, va).unwrap_or(Ordering::Equal)
+                    }
+                    (Some(_), None) => Ordering::Greater,
+                    (None, Some(_)) => Ordering::Less,
+                    (None, None) => Ordering::Equal,
+                }
+            });
+            entries.extend(old);
+        }
+        entries.truncate(MAP_GENERATOR_KEEP);
+
+        // Drop entries whose file is no longer stored (defensive: commit
+        // would reject the whole update otherwise).
+        let store = self.store.clone();
+        let check = entries.clone();
+        let missing =
+            tokio::task::spawn_blocking(move || store.check_needed(CHANNEL_MAP_GENERATOR, &check))
+                .await
+                .context("task join error")?
+                .map_err(|e| anyhow!("{e}"))?;
+        entries.retain(|e| !missing.contains(&e.path));
+
+        let store = self.store.clone();
+        let req = UploadCommitRequest {
+            patch_version: release.version.clone(),
+            uploader: AUTO_UPLOADER.to_string(),
+            files: entries,
+        };
+        tokio::task::spawn_blocking(move || store.commit(CHANNEL_MAP_GENERATOR, &req))
+            .await
+            .context("task join error")?
+            .map_err(|e| anyhow!("{e}"))?;
+        tracing::info!(
+            version = release.version,
+            "map-generator auto-update committed"
         );
         Ok(())
     }
@@ -700,14 +906,20 @@ mod tests {
     const FAKE_CLIENT_FILE: &str = "faf_windows-x64_2026_7_1.exe";
     /// Installer URL served by the default fake upstream.
     const FAKE_CLIENT_URL: &str = "https://example.test/faf_windows-x64_2026_7_1.exe";
+    /// Generator jar version served by the default fake upstream.
+    const FAKE_GENERATOR_VERSION: &str = "1.22.1";
+    /// Generator jar URL served by the default fake upstream.
+    const FAKE_GENERATOR_URL: &str = "https://example.test/NeroxisGen_1.22.1.jar";
 
     struct FakeFetch {
         mod_info: String,
         /// `None` simulates a failed GitHub release fetch.
-        client_release: Option<ClientRelease>,
+        client_release: Option<UpstreamRelease>,
+        generator_release: Option<UpstreamRelease>,
         files: HashMap<String, Vec<u8>>,
         fetches: AtomicUsize,
         client_fetches: AtomicUsize,
+        generator_fetches: AtomicUsize,
         downloads: AtomicUsize,
     }
 
@@ -718,13 +930,26 @@ mod tests {
             Ok(self.mod_info.clone())
         }
 
-        async fn fetch_latest_client_release(&self) -> anyhow::Result<ClientRelease> {
+        async fn fetch_latest_client_release(&self) -> anyhow::Result<UpstreamRelease> {
             self.client_fetches.fetch_add(1, AtomicOrdering::SeqCst);
             let release = self
                 .client_release
                 .as_ref()
                 .ok_or_else(|| anyhow!("404: {CLIENT_RELEASE_API}"))?;
-            Ok(ClientRelease {
+            Ok(UpstreamRelease {
+                version: release.version.clone(),
+                file_name: release.file_name.clone(),
+                download_url: release.download_url.clone(),
+            })
+        }
+
+        async fn fetch_latest_generator_release(&self) -> anyhow::Result<UpstreamRelease> {
+            self.generator_fetches.fetch_add(1, AtomicOrdering::SeqCst);
+            let release = self
+                .generator_release
+                .as_ref()
+                .ok_or_else(|| anyhow!("404: {GENERATOR_RELEASE_API}"))?;
+            Ok(UpstreamRelease {
                 version: release.version.clone(),
                 file_name: release.file_name.clone(),
                 download_url: release.download_url.clone(),
@@ -740,19 +965,25 @@ mod tests {
     }
 
     fn fake_fetch(version: &str) -> (Arc<FakeFetch>, Arc<dyn UpstreamFetch>) {
-        fake_fetch_with_client(
+        fake_fetch_with_releases(
             version,
-            Some(ClientRelease {
+            Some(UpstreamRelease {
                 version: FAKE_CLIENT_VERSION.to_string(),
                 file_name: FAKE_CLIENT_FILE.to_string(),
                 download_url: FAKE_CLIENT_URL.to_string(),
             }),
+            Some(UpstreamRelease {
+                version: FAKE_GENERATOR_VERSION.to_string(),
+                file_name: format!("NeroxisGen_{FAKE_GENERATOR_VERSION}.jar"),
+                download_url: FAKE_GENERATOR_URL.to_string(),
+            }),
         )
     }
 
-    fn fake_fetch_with_client(
+    fn fake_fetch_with_releases(
         version: &str,
-        client_release: Option<ClientRelease>,
+        client_release: Option<UpstreamRelease>,
+        generator_release: Option<UpstreamRelease>,
     ) -> (Arc<FakeFetch>, Arc<dyn UpstreamFetch>) {
         let mut files = HashMap::new();
         for name in GAMEDATA_SYNC_FILES {
@@ -762,22 +993,33 @@ mod tests {
                 format!("{name}-{version}").into_bytes(),
             );
         }
-        if let Some(release) = &client_release {
+        for release in [&client_release, &generator_release].into_iter().flatten() {
             files.insert(
                 release.download_url.clone(),
-                format!("installer-{}", release.version).into_bytes(),
+                format!("asset-{}", release.version).into_bytes(),
             );
         }
         let fetch = Arc::new(FakeFetch {
             mod_info: format!("name = \"FAF\"\nversion = {version}\n"),
             client_release,
+            generator_release,
             files,
             fetches: AtomicUsize::new(0),
             client_fetches: AtomicUsize::new(0),
+            generator_fetches: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
         });
         let shared: Arc<dyn UpstreamFetch> = fetch.clone();
         (fetch, shared)
+    }
+
+    /// The generator release served by the default fake upstream.
+    fn fake_generator_release() -> Option<UpstreamRelease> {
+        Some(UpstreamRelease {
+            version: FAKE_GENERATOR_VERSION.to_string(),
+            file_name: format!("NeroxisGen_{FAKE_GENERATOR_VERSION}.jar"),
+            download_url: FAKE_GENERATOR_URL.to_string(),
+        })
     }
 
     fn temp_store() -> (PathBuf, Arc<GamedataStore>) {
@@ -847,10 +1089,10 @@ mod tests {
         assert!(info.last_check_at.is_some());
         assert_eq!(fake.fetches.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(fake.client_fetches.load(AtomicOrdering::SeqCst), 1);
-        // 3 gamedata archives + 1 client installer.
+        // 3 gamedata archives + 1 client installer + 1 generator jar.
         assert_eq!(
             fake.downloads.load(AtomicOrdering::SeqCst),
-            GAMEDATA_SYNC_FILES.len() + 1
+            GAMEDATA_SYNC_FILES.len() + 2
         );
 
         let manifest = store.read_manifest(CHANNEL_GAMEDATA).unwrap().unwrap();
@@ -880,14 +1122,14 @@ mod tests {
         let _ = handle.trigger(true).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(fake.fetches.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(fake.downloads.load(AtomicOrdering::SeqCst), 4);
+        assert_eq!(fake.downloads.load(AtomicOrdering::SeqCst), 5);
         fs_remove(root);
     }
 
     #[tokio::test]
     async fn update_skips_when_mirror_is_current_or_newer() {
         let (root, store) = temp_store();
-        // Pre-commit both channels at the same versions as upstream.
+        // Pre-commit all channels at the same versions as upstream.
         commit_one(&store, CHANNEL_GAMEDATA, "env.nx2", "3838", b"patch-bytes");
         commit_one(
             &store,
@@ -895,6 +1137,13 @@ mod tests {
             FAKE_CLIENT_FILE,
             FAKE_CLIENT_VERSION,
             b"installer-bytes",
+        );
+        commit_one(
+            &store,
+            CHANNEL_MAP_GENERATOR,
+            "MapGenerator_1.22.1.jar",
+            FAKE_GENERATOR_VERSION,
+            b"jar-bytes",
         );
 
         let (fake, shared) = fake_fetch("3838");
@@ -915,8 +1164,15 @@ mod tests {
     #[tokio::test]
     async fn client_update_commits_newer_release_and_prunes_old_installer() {
         let (root, store) = temp_store();
-        // Mirror has the old client; gamedata is already current.
+        // Mirror has the old client; gamedata and the generator are current.
         commit_one(&store, CHANNEL_GAMEDATA, "env.nx2", "3838", b"patch-bytes");
+        commit_one(
+            &store,
+            CHANNEL_MAP_GENERATOR,
+            "MapGenerator_1.22.1.jar",
+            FAKE_GENERATOR_VERSION,
+            b"jar-bytes",
+        );
         commit_one(
             &store,
             CHANNEL_FAF_CLIENT,
@@ -956,8 +1212,8 @@ mod tests {
     #[tokio::test]
     async fn client_release_fetch_failure_leaves_gamedata_phase_working() {
         let (root, store) = temp_store();
-        // GitHub release fetch 404s; the gamedata phase must still run.
-        let (fake, shared) = fake_fetch_with_client("3838", None);
+        // GitHub client-release fetch 404s; other phases must still run.
+        let (fake, shared) = fake_fetch_with_releases("3838", None, fake_generator_release());
         let handle = UpdaterHandle::with_fetch(store.clone(), shared);
 
         handle.trigger(true).await;
@@ -967,9 +1223,10 @@ mod tests {
         assert!(info.latest_client_version.is_none());
         // The gamedata phase ran to completion regardless.
         assert_eq!(info.latest_official_version.as_deref(), Some("3838"));
+        // 3 gamedata archives + 1 generator jar.
         assert_eq!(
             fake.downloads.load(AtomicOrdering::SeqCst),
-            GAMEDATA_SYNC_FILES.len()
+            GAMEDATA_SYNC_FILES.len() + 1
         );
         assert_eq!(
             store
@@ -991,7 +1248,12 @@ mod tests {
         files.remove(&format!("{BASE_URL}/units.3900.nx2"));
         let broken = Arc::new(FakeFetch {
             mod_info: fake.mod_info.clone(),
-            client_release: fake.client_release.as_ref().map(|r| ClientRelease {
+            client_release: fake.client_release.as_ref().map(|r| UpstreamRelease {
+                version: r.version.clone(),
+                file_name: r.file_name.clone(),
+                download_url: r.download_url.clone(),
+            }),
+            generator_release: fake.generator_release.as_ref().map(|r| UpstreamRelease {
                 version: r.version.clone(),
                 file_name: r.file_name.clone(),
                 download_url: r.download_url.clone(),
@@ -999,6 +1261,7 @@ mod tests {
             files,
             fetches: AtomicUsize::new(0),
             client_fetches: AtomicUsize::new(0),
+            generator_fetches: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
         });
         let handle = UpdaterHandle::with_fetch(store.clone(), broken.clone());
@@ -1017,6 +1280,98 @@ mod tests {
                 .map(|m| m.patch_version)
                 .as_deref(),
             Some(FAKE_CLIENT_VERSION)
+        );
+        fs_remove(root);
+    }
+
+    #[test]
+    fn parse_generator_release_picks_neroxis_jar() {
+        let json = r#"{
+            "tag_name": "1.22.1",
+            "assets": [
+                {"name": "neroxis-generator-1.22.1.exe", "browser_download_url": "https://example.test/x.exe"},
+                {"name": "NeroxisGen_1.22.1.jar", "browser_download_url": "https://example.test/NeroxisGen_1.22.1.jar"}
+            ]
+        }"#;
+        let release = parse_generator_release(json).unwrap();
+        assert_eq!(release.version, "1.22.1");
+        assert_eq!(release.file_name, "NeroxisGen_1.22.1.jar");
+        // No jar asset → error; garbage → error.
+        let no_jar = r#"{"tag_name": "1.22.1", "assets": []}"#;
+        assert!(parse_generator_release(no_jar).is_err());
+        assert!(parse_generator_release("not json").is_err());
+    }
+
+    #[tokio::test]
+    async fn generator_update_keeps_newest_jars_and_prunes_oldest() {
+        let (root, store) = temp_store();
+        // Mirror already has three older jars; gamedata/client are current.
+        commit_one(&store, CHANNEL_GAMEDATA, "env.nx2", "3838", b"patch-bytes");
+        commit_one(
+            &store,
+            CHANNEL_FAF_CLIENT,
+            FAKE_CLIENT_FILE,
+            FAKE_CLIENT_VERSION,
+            b"installer-bytes",
+        );
+        let mut jars = Vec::new();
+        for (name, version) in [
+            ("MapGenerator_1.20.0.jar", "1.20.0"),
+            ("MapGenerator_1.21.0.jar", "1.21.0"),
+            ("MapGenerator_1.22.0.jar", "1.22.0"),
+        ] {
+            let entry = FileEntry {
+                path: name.to_string(),
+                size: name.len() as u64,
+                sha256: fafcn_gamedata::sha256_bytes(name.as_bytes()),
+            };
+            store
+                .store_upload(CHANNEL_MAP_GENERATOR, name, &entry.sha256, name.as_bytes())
+                .unwrap();
+            jars.push(entry);
+            // Commit each version so the manifest ends at 1.22.0.
+            store
+                .commit(
+                    CHANNEL_MAP_GENERATOR,
+                    &UploadCommitRequest {
+                        patch_version: version.to_string(),
+                        uploader: "tester".to_string(),
+                        files: jars.clone(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let (fake, shared) = fake_fetch("3838");
+        let handle = UpdaterHandle::with_fetch(store.clone(), shared);
+        handle.trigger(true).await;
+        let info = wait_finished(&handle, &fake).await;
+        assert!(info.last_error.is_none(), "{:?}", info.last_error);
+        assert_eq!(
+            info.latest_generator_version.as_deref(),
+            Some(FAKE_GENERATOR_VERSION)
+        );
+        // Only the generator jar was downloaded.
+        assert_eq!(fake.downloads.load(AtomicOrdering::SeqCst), 1);
+
+        let manifest = store.read_manifest(CHANNEL_MAP_GENERATOR).unwrap().unwrap();
+        assert_eq!(manifest.patch_version, FAKE_GENERATOR_VERSION);
+        assert_eq!(manifest.uploader, AUTO_UPLOADER);
+        let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "MapGenerator_1.22.1.jar",
+                "MapGenerator_1.22.0.jar",
+                "MapGenerator_1.21.0.jar"
+            ],
+            "newest 3 jars kept"
+        );
+        assert!(
+            !root
+                .join("channels/map-generator/files/MapGenerator_1.20.0.jar")
+                .exists(),
+            "oldest jar pruned on commit"
         );
         fs_remove(root);
     }

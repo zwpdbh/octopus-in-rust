@@ -302,6 +302,8 @@ pub enum Text {
     UpdaterDownloading,
     UpdaterLatestClient,
     UpdaterStaleClient,
+    UpdaterLatestGenerator,
+    UpdaterStaleGenerator,
     FafClientTitle,
     FafClientDesc,
     DownloadFafClient,
@@ -824,6 +826,14 @@ impl Text {
                 "the mirror is behind the official client release — an auto-update should be in progress"
             }
             (Text::UpdaterStaleClient, Lang::Zh) => "镜像落后于官方客户端版本,自动更新应已在进行中",
+            (Text::UpdaterLatestGenerator, Lang::En) => "Latest official map generator",
+            (Text::UpdaterLatestGenerator, Lang::Zh) => "官方最新地图生成器",
+            (Text::UpdaterStaleGenerator, Lang::En) => {
+                "the mirror is behind the official map generator release — an auto-update should be in progress"
+            }
+            (Text::UpdaterStaleGenerator, Lang::Zh) => {
+                "镜像落后于官方地图生成器版本,自动更新应已在进行中"
+            }
             (Text::FafClientTitle, Lang::En) => "FAF client",
             (Text::FafClientTitle, Lang::Zh) => "FAF 客户端",
             (Text::FafClientDesc, Lang::En) => {

@@ -61,7 +61,7 @@ Per-channel rules that new code MUST respect:
 | Channel | Synced into | Version source | Client deletes? | Server file lifecycle |
 |---|---|---|---|---|
 | `gamedata` | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream) | **Never** deletes extras | Fixed filenames → overwritten in place |
-| `map-generator` | `FAForever/map_generator` | Newest jar version | Prunes jars beyond newest 3 | Prune-on-commit: files not in the new manifest are deleted |
+| `map-generator` | `FAForever/map_generator` | Newest jar version (manual upload); auto-mirror uses the GitHub release tag | Prunes jars beyond newest 3 | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
 | `faf-client` | — (web download) | From installer filename on manual upload; auto-mirror uses the GitHub release tag | — | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater |
 | `maps` | FAF Client's `maps_and_mods/maps` | Date stamp (no single version) | Prunes superseded `name.vNNNN` versions | `commit_merge`: replaced map versions deleted, others kept |
 
@@ -145,9 +145,9 @@ phase) so GUI and CLI render it their own way.
 
 ### 5.2 Auto-update flow (official FAF → mirror)
 
-`apps/fafcn-server/src/updater.rs`. One update pass covers two independent
-upstream sources (`run_update`, ~line 268 — when one phase fails the other
-still runs, and the first error lands in `last_error`):
+`apps/fafcn-server/src/updater.rs`. One update pass covers three independent
+upstream sources (`run_update`, ~line 268 — when one phase fails the others
+still run, and the first error lands in `last_error`):
 
 1. **gamedata patch** (`update_gamedata`, ~line 290). The official FAF
    client detects patches via an OAuth-gated API + HMAC-signed downloads; we
@@ -166,6 +166,17 @@ still runs, and the first error lands in `last_error`):
    `dfc_windows_*.exe` naming; error when the release has no Windows
    installer. The newest release is recorded in
    `UpdaterInfo.latest_client_version`.
+3. **Map generator jar** (`update_map_generator`, ~line 486). Latest GitHub
+   release of `FAForever/Neroxis-Map-Generator` (`GENERATOR_RELEASE_API`,
+   ~line 59) — the same endpoint family the official client polls when the
+   user opens the "generate map" dialog; its download URL format is
+   `releases/download/{version}/NeroxisGen_{version}.jar`. Asset pick
+   (`parse_generator_release`, ~line 118): exact `NeroxisGen_<version>.jar`,
+   falling back to any `NeroxisGen_*.jar`. The jar is stored under the
+   channel's `MapGenerator_<version>.jar` name; the commit lists the new jar
+   plus the newest existing jars so the channel keeps its newest-3 semantics
+   (prune-on-commit drops what falls off). Newest release recorded in
+   `UpdaterInfo.latest_generator_version`.
 
 Two triggers share one `update_once` (~line 256) behind a single-flight mutex
 + 30 s debounce (`trigger`, ~line 235):
@@ -183,9 +194,10 @@ One gamedata pass: parse version → compare with the gamedata manifest (equal
 from the faf-client download so clients never wait on the wrong one) →
 stream the 3 archives to `incoming/`, verify Content-Length + sha256 →
 `store_file_from_path` as unversioned names → `commit()` with
-`uploader: "auto-updater"`. The faf-client pass works the same way for the
-single installer asset; its commit's prune-on-commit deletes the superseded
-installer automatically. Any failure (including the deploy-lag 404 race)
+`uploader: "auto-updater"`. The faf-client and map-generator passes work the
+same way for their single assets (as `Downloading{component: FafClient|
+MapGenerator, ..}`); prune-on-commit deletes the superseded installer and
+oldest jars automatically. Any failure (including the deploy-lag 404 race)
 cleans temp files, records `last_error`, returns to `Idle`. The updater never
 panics and never blocks the server.
 
@@ -226,7 +238,7 @@ running exe and swapped in via rename-and-relaunch (Windows cannot overwrite
 a running exe, but can rename it).
 
 The **检查更新** button checks all three updatable components at once: the
-sync-client build above, plus the two server-side upstream sources — it POSTs
+sync-client build above, plus the three server-side upstream sources — it POSTs
 the debounced `upstream/refresh`, then polls `/api/gamedata/status` every 2 s
 (max ~15 s) until the check finishes (never waiting for downloads) and logs
 one conclusion line each for the gamedata patch and the FAF client

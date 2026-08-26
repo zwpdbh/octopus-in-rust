@@ -137,6 +137,8 @@ pub fn Sync() -> Element {
                                                     ch.name == fafcn_gamedata::CHANNEL_GAMEDATA;
                                                 let show_client_updater =
                                                     ch.name == fafcn_gamedata::CHANNEL_FAF_CLIENT;
+                                                let show_generator_updater =
+                                                    ch.name == fafcn_gamedata::CHANNEL_MAP_GENERATOR;
                                                 rsx! {
                                                     dl { class: "grid grid-cols-2 gap-y-1.5 text-xs",
                                                         dt { class: "text-neutral-400", "{t.t(Text::PatchVersion)}" }
@@ -160,6 +162,20 @@ pub fn Sync() -> Element {
                                                                     updater.latest_official_version.as_deref(),
                                                                     &m.patch_version,
                                                                     true,
+                                                                )}
+                                                            }
+                                                        }
+                                                        if show_generator_updater {
+                                                            if let Some(updater) = &resp.updater {
+                                                                {updater_rows(
+                                                                    t,
+                                                                    updater,
+                                                                    UpdaterComponent::MapGenerator,
+                                                                    Text::UpdaterLatestGenerator,
+                                                                    Text::UpdaterStaleGenerator,
+                                                                    updater.latest_generator_version.as_deref(),
+                                                                    &m.patch_version,
+                                                                    false,
                                                                 )}
                                                             }
                                                         }

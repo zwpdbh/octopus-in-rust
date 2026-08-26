@@ -308,6 +308,7 @@ pub async fn prepare_upstream(server: &str, progress: &mut dyn FnMut(SyncProgres
             state: UpdaterState::Idle,
             latest_official_version: None,
             latest_client_version: None,
+            latest_generator_version: None,
             last_check_at: None,
             last_error: None,
         });
