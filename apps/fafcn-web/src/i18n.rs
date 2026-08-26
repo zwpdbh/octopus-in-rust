@@ -166,6 +166,7 @@ pub enum Text {
     GuideStep1Github,
     GuideStep1GithubBtn,
     GuideStep1Note,
+    GuideStep1Video,
     GuideStep2Title,
     GuideStep2Desc,
     GuideStep2Btn,
@@ -513,6 +514,8 @@ impl Text {
             (Text::GuideStep1GithubBtn, Lang::Zh) => "前往 GitHub releases",
             (Text::GuideStep1Note, Lang::En) => "After install, register and log in your FAF account.",
             (Text::GuideStep1Note, Lang::Zh) => "安装后注册并登录 FAF 账号即可。",
+            (Text::GuideStep1Video, Lang::En) => "Video guide: FAF account registration (Bilibili)",
+            (Text::GuideStep1Video, Lang::Zh) => "视频教程:FAF 国际平台账号注册教程(B 站)",
             (Text::GuideStep2Title, Lang::En) => "Step 2: Sync patches & map generator",
             (Text::GuideStep2Title, Lang::Zh) => "第二步:同步补丁与地图生成器",
             (Text::GuideStep2Desc, Lang::En) => {

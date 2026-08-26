@@ -8,6 +8,9 @@ use crate::Route;
 /// GitHub releases page for the official FAF client.
 const GITHUB_RELEASES: &str = "https://github.com/FAForever/downlords-faf-client/releases";
 
+/// Bilibili video tutorial: FAF account registration (B 站).
+const REGISTER_VIDEO: &str = "https://www.bilibili.com/video/BV1aqkMBEEDw/";
+
 /// Onboarding guide: step-by-step instructions for new players.
 #[component]
 pub fn Guide() -> Element {
@@ -63,6 +66,12 @@ pub fn Guide() -> Element {
                         },
                     }
                     p { class: "text-xs text-neutral-500 mt-3", "{t.t(Text::GuideStep1Note)}" }
+                    a {
+                        class: "inline-flex items-center gap-1 mt-2 text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2",
+                        href: REGISTER_VIDEO,
+                        target: "_blank",
+                        "▶ {t.t(Text::GuideStep1Video)}"
+                    }
                 }
 
                 // Step 2: sync patches & map generator.
