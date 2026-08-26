@@ -296,6 +296,12 @@ pub enum Text {
     ChannelMapGenerator,
     ChannelMaps,
     ChannelNotPublished,
+    UpdaterLatestOfficial,
+    UpdaterLastChecked,
+    UpdaterStale,
+    UpdaterDownloading,
+    UpdaterLatestClient,
+    UpdaterStaleClient,
     FafClientTitle,
     FafClientDesc,
     DownloadFafClient,
@@ -802,6 +808,22 @@ impl Text {
             (Text::ChannelMaps, Lang::Zh) => "地图",
             (Text::ChannelNotPublished, Lang::En) => "not published yet",
             (Text::ChannelNotPublished, Lang::Zh) => "未发布",
+            (Text::UpdaterLatestOfficial, Lang::En) => "Latest official patch",
+            (Text::UpdaterLatestOfficial, Lang::Zh) => "官方最新补丁",
+            (Text::UpdaterLastChecked, Lang::En) => "Last checked",
+            (Text::UpdaterLastChecked, Lang::Zh) => "上次检查",
+            (Text::UpdaterStale, Lang::En) => {
+                "the mirror is behind the official patch — an auto-update should be in progress"
+            }
+            (Text::UpdaterStale, Lang::Zh) => "镜像落后于官方补丁,自动更新应已在进行中",
+            (Text::UpdaterDownloading, Lang::En) => "downloading from upstream…",
+            (Text::UpdaterDownloading, Lang::Zh) => "正在从官方下载…",
+            (Text::UpdaterLatestClient, Lang::En) => "Latest official client",
+            (Text::UpdaterLatestClient, Lang::Zh) => "官方最新客户端",
+            (Text::UpdaterStaleClient, Lang::En) => {
+                "the mirror is behind the official client release — an auto-update should be in progress"
+            }
+            (Text::UpdaterStaleClient, Lang::Zh) => "镜像落后于官方客户端版本,自动更新应已在进行中",
             (Text::FafClientTitle, Lang::En) => "FAF client",
             (Text::FafClientTitle, Lang::Zh) => "FAF 客户端",
             (Text::FafClientDesc, Lang::En) => {

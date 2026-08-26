@@ -198,6 +198,22 @@ impl SyncApp {
         if let Some(rx) = &self.worker {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    WorkerMsg::Sync(SyncProgress::Upstream(event)) => {
+                        let line = match event {
+                            sync::UpstreamEvent::Checking => log_upstream_checking(self.lang),
+                            sync::UpstreamEvent::ServerDownloading { version } => {
+                                log_upstream_downloading(self.lang, &version)
+                            }
+                            sync::UpstreamEvent::UpToDate => log_upstream_up_to_date(self.lang),
+                            sync::UpstreamEvent::WaitTimedOut { version } => {
+                                log_upstream_timeout(self.lang, version.as_deref())
+                            }
+                            sync::UpstreamEvent::Skipped { reason } => {
+                                log_upstream_skipped(self.lang, &reason)
+                            }
+                        };
+                        self.log.push(line);
+                    }
                     WorkerMsg::Sync(SyncProgress::ChannelStarted { channel }) => {
                         self.log.push(log_channel_started(self.lang, &channel));
                     }
@@ -247,6 +263,9 @@ impl SyncApp {
                     }) => {
                         self.log
                             .push(log_file_failed(self.lang, index, count, &path, &error));
+                    }
+                    WorkerMsg::Sync(SyncProgress::Mirrored { path, .. }) => {
+                        self.log.push(log_mirrored(self.lang, &path));
                     }
                     WorkerMsg::Sync(SyncProgress::Pruned { path, .. }) => {
                         self.log.push(log_pruned(self.lang, &path));

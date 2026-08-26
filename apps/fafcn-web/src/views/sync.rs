@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
-use fafcn_gamedata::{Manifest, StatusResponse};
+use fafcn_gamedata::{
+    compare_version_strings, Manifest, StatusResponse, UpdaterComponent, UpdaterInfo, UpdaterState,
+};
 use gloo_net::http::Request;
 
 use crate::i18n::{self, Text};
@@ -11,6 +13,53 @@ fn channel_title(t: i18n::T, name: &str) -> &'static str {
         fafcn_gamedata::CHANNEL_FAF_CLIENT => t.t(Text::FafClientTitle),
         fafcn_gamedata::CHANNEL_MAPS => t.t(Text::ChannelMaps),
         _ => t.t(Text::ChannelGamedata),
+    }
+}
+
+/// Updater status rows for one auto-mirrored channel: latest upstream
+/// version, a staleness hint when the mirror is behind, and (for the
+/// gamedata channel) the last check time.
+fn updater_rows(
+    t: i18n::T,
+    updater: &UpdaterInfo,
+    component: UpdaterComponent,
+    label: Text,
+    stale_text: Text,
+    latest: Option<&str>,
+    patch_version: &str,
+    show_last_checked: bool,
+) -> Element {
+    let stale = latest
+        .and_then(|v| compare_version_strings(v, patch_version))
+        .is_some_and(|ord| ord == std::cmp::Ordering::Greater);
+    let downloading = matches!(
+        &updater.state,
+        UpdaterState::Downloading {
+            component: c, ..
+        } if *c == component
+    );
+    let official = latest.unwrap_or("?").to_string();
+    let last_checked = show_last_checked.then(|| {
+        updater
+            .last_check_at
+            .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
+    });
+    rsx! {
+        dt { class: "text-neutral-400", "{t.t(label)}" }
+        dd { class: "text-white font-mono",
+            "{official}"
+            if downloading {
+                span { class: "text-blue-300 ml-2", "{t.t(Text::UpdaterDownloading)}" }
+            }
+        }
+        if let Some(Some(at)) = last_checked {
+            dt { class: "text-neutral-400", "{t.t(Text::UpdaterLastChecked)}" }
+            dd { class: "text-white font-mono", "{at}" }
+        }
+        if stale {
+            dt {}
+            dd { class: "text-amber-400", "{t.t(stale_text)}" }
+        }
     }
 }
 
@@ -84,6 +133,10 @@ pub fn Sync() -> Element {
                                                 let last_updated =
                                                     m.last_updated.format("%Y-%m-%d %H:%M UTC").to_string();
                                                 let total_mb = format!("{:.1} MB", m.total_size as f64 / 1e6);
+                                                let show_gamedata_updater =
+                                                    ch.name == fafcn_gamedata::CHANNEL_GAMEDATA;
+                                                let show_client_updater =
+                                                    ch.name == fafcn_gamedata::CHANNEL_FAF_CLIENT;
                                                 rsx! {
                                                     dl { class: "grid grid-cols-2 gap-y-1.5 text-xs",
                                                         dt { class: "text-neutral-400", "{t.t(Text::PatchVersion)}" }
@@ -96,6 +149,34 @@ pub fn Sync() -> Element {
                                                         dd { class: "text-white", "{m.file_count}" }
                                                         dt { class: "text-neutral-400", "{t.t(Text::TotalSize)}" }
                                                         dd { class: "text-white", "{total_mb}" }
+                                                        if show_gamedata_updater {
+                                                            if let Some(updater) = &resp.updater {
+                                                                {updater_rows(
+                                                                    t,
+                                                                    updater,
+                                                                    UpdaterComponent::Gamedata,
+                                                                    Text::UpdaterLatestOfficial,
+                                                                    Text::UpdaterStale,
+                                                                    updater.latest_official_version.as_deref(),
+                                                                    &m.patch_version,
+                                                                    true,
+                                                                )}
+                                                            }
+                                                        }
+                                                        if show_client_updater {
+                                                            if let Some(updater) = &resp.updater {
+                                                                {updater_rows(
+                                                                    t,
+                                                                    updater,
+                                                                    UpdaterComponent::FafClient,
+                                                                    Text::UpdaterLatestClient,
+                                                                    Text::UpdaterStaleClient,
+                                                                    updater.latest_client_version.as_deref(),
+                                                                    &m.patch_version,
+                                                                    false,
+                                                                )}
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }

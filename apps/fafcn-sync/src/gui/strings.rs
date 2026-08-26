@@ -62,6 +62,7 @@ pub(super) enum Txt {
     VersionLabel,
     FieldClientFile,
     TabUploadMaps,
+    TabSettings,
     ChannelMaps,
     MapsDirLabel,
     MapsHint,
@@ -71,12 +72,23 @@ pub(super) enum Txt {
     FafClientMissing,
     CopyLog,
     UpdateChecking,
+    UpdateCheckNow,
     UpdateUpToDate,
     UpdateNow,
     UpdateRetry,
     UpdateFailed,
     UpdateDownloading,
     UpdateRestarting,
+    PanelTitle,
+    PanelSyncClient,
+    PanelGamedata,
+    VersionUnknown,
+    NotPublished,
+    ServerDownloading,
+    PanelMirror,
+    PanelOfficial,
+    DirInvalidOpenSettings,
+    UpstreamStatusUnknown,
 }
 
 pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -161,6 +173,8 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::FieldClientFile, GuiLang::En) => "installer file",
         (Txt::TabUploadMaps, GuiLang::Zh) => "上传地图",
         (Txt::TabUploadMaps, GuiLang::En) => "Upload maps",
+        (Txt::TabSettings, GuiLang::Zh) => "设置",
+        (Txt::TabSettings, GuiLang::En) => "Settings",
         (Txt::ChannelMaps, GuiLang::Zh) => "地图",
         (Txt::ChannelMaps, GuiLang::En) => "maps",
         (Txt::MapsDirLabel, GuiLang::Zh) => "地图文件夹",
@@ -185,6 +199,8 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::CopyLog, GuiLang::En) => "Copy log",
         (Txt::UpdateChecking, GuiLang::Zh) => "正在检查更新…",
         (Txt::UpdateChecking, GuiLang::En) => "Checking for updates…",
+        (Txt::UpdateCheckNow, GuiLang::Zh) => "检查更新",
+        (Txt::UpdateCheckNow, GuiLang::En) => "Check update",
         (Txt::UpdateUpToDate, GuiLang::Zh) => "已是最新",
         (Txt::UpdateUpToDate, GuiLang::En) => "Up to date",
         (Txt::UpdateNow, GuiLang::Zh) => "立即更新",
@@ -197,6 +213,28 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::UpdateDownloading, GuiLang::En) => "Updating…",
         (Txt::UpdateRestarting, GuiLang::Zh) => "更新完成,正在重启…",
         (Txt::UpdateRestarting, GuiLang::En) => "Update installed, restarting…",
+        (Txt::PanelTitle, GuiLang::Zh) => "版本状态",
+        (Txt::PanelTitle, GuiLang::En) => "Version status",
+        (Txt::PanelSyncClient, GuiLang::Zh) => "fafcn-sync 客户端",
+        (Txt::PanelSyncClient, GuiLang::En) => "fafcn-sync client",
+        (Txt::PanelGamedata, GuiLang::Zh) => "gamedata 补丁",
+        (Txt::PanelGamedata, GuiLang::En) => "gamedata patch",
+        (Txt::VersionUnknown, GuiLang::Zh) => "未知",
+        (Txt::VersionUnknown, GuiLang::En) => "unknown",
+        (Txt::NotPublished, GuiLang::Zh) => "未发布",
+        (Txt::NotPublished, GuiLang::En) => "not published",
+        (Txt::ServerDownloading, GuiLang::Zh) => "服务器下载中",
+        (Txt::ServerDownloading, GuiLang::En) => "server downloading",
+        (Txt::PanelMirror, GuiLang::Zh) => "镜像",
+        (Txt::PanelMirror, GuiLang::En) => "mirror",
+        (Txt::PanelOfficial, GuiLang::Zh) => "官方",
+        (Txt::PanelOfficial, GuiLang::En) => "official",
+        (Txt::DirInvalidOpenSettings, GuiLang::Zh) => "FAForever 目录无效,请到“设置”页修改",
+        (Txt::DirInvalidOpenSettings, GuiLang::En) => {
+            "Invalid FAForever folder — fix it on the Settings tab"
+        }
+        (Txt::UpstreamStatusUnknown, GuiLang::Zh) => "服务器未返回更新状态",
+        (Txt::UpstreamStatusUnknown, GuiLang::En) => "server returned no updater status",
     }
 }
 
@@ -282,10 +320,28 @@ pub(super) fn log_file_failed(
     }
 }
 
+pub(super) fn log_update_checking(lang: GuiLang) -> String {
+    tr(lang, Txt::UpdateChecking).to_string()
+}
+
+pub(super) fn log_update_up_to_date(lang: GuiLang) -> String {
+    match lang {
+        GuiLang::Zh => format!("已是最新版本({})", crate::BUILD_TAG),
+        GuiLang::En => format!("Already up to date ({})", crate::BUILD_TAG),
+    }
+}
+
 pub(super) fn log_pruned(lang: GuiLang, path: &str) -> String {
     match lang {
         GuiLang::Zh => format!("已清理旧版本:{path}"),
         GuiLang::En => format!("pruned old version: {path}"),
+    }
+}
+
+pub(super) fn log_mirrored(lang: GuiLang, path: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("已同步到回放目录:{path}"),
+        GuiLang::En => format!("mirrored to replaydata: {path}"),
     }
 }
 
@@ -405,5 +461,86 @@ pub(super) fn txt_server_newer(lang: GuiLang, server: &str, local: &str) -> Stri
         GuiLang::En => {
             format!("Server already has newer patch {server} (yours is {local}); nothing to upload")
         }
+    }
+}
+
+pub(super) fn log_upstream_checking(lang: GuiLang) -> String {
+    match lang {
+        GuiLang::Zh => "正在检查官方补丁…".to_string(),
+        GuiLang::En => "Checking for a new official patch…".to_string(),
+    }
+}
+
+pub(super) fn log_upstream_downloading(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("服务器正在从官方下载补丁 v{version},请稍候…"),
+        GuiLang::En => format!("Server is downloading official patch v{version}, please wait…"),
+    }
+}
+
+pub(super) fn log_upstream_up_to_date(lang: GuiLang) -> String {
+    match lang {
+        GuiLang::Zh => "服务器已是最新".to_string(),
+        GuiLang::En => "Server is up to date".to_string(),
+    }
+}
+
+pub(super) fn log_upstream_timeout(lang: GuiLang, version: Option<&str>) -> String {
+    match lang {
+        GuiLang::Zh => format!(
+            "等待官方补丁{}超时,将同步镜像当前版本",
+            version.map(|v| format!(" v{v}")).unwrap_or_default()
+        ),
+        GuiLang::En => format!(
+            "Timed out waiting for upstream patch{}; syncing what the mirror has",
+            version.map(|v| format!(" v{v}")).unwrap_or_default()
+        ),
+    }
+}
+
+pub(super) fn log_upstream_skipped(lang: GuiLang, reason: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("官方补丁检查失败,不影响同步:{reason}"),
+        GuiLang::En => format!("Upstream check skipped (sync continues): {reason}"),
+    }
+}
+
+/// Conclusion of a manual gamedata upstream check: mirror already current.
+pub(super) fn log_gamedata_current(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("官方补丁 v{version},镜像已是最新"),
+        GuiLang::En => format!("Official patch v{version}, mirror is up to date"),
+    }
+}
+
+/// Conclusion of a manual faf-client upstream check: mirror already current.
+pub(super) fn log_client_current(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("FAF 客户端已是最新({version})"),
+        GuiLang::En => format!("FAF client is up to date ({version})"),
+    }
+}
+
+/// Conclusion of a manual faf-client upstream check: newer release exists.
+pub(super) fn log_client_new(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("FAF 客户端有新版本 v{version},服务器下载中"),
+        GuiLang::En => format!("New FAF client v{version}, server is downloading"),
+    }
+}
+
+/// Version-panel status: mirror holds the newest version.
+pub(super) fn txt_current_version(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("已是最新(v{version})"),
+        GuiLang::En => format!("up to date (v{version})"),
+    }
+}
+
+/// Version-panel status: upstream has a newer version.
+pub(super) fn txt_new_version(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("有新版本 v{version}"),
+        GuiLang::En => format!("new version v{version}"),
     }
 }

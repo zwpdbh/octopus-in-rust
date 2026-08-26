@@ -16,4 +16,6 @@ pub struct AppState {
     pub gamedata: Arc<GamedataStore>,
     /// Directory containing sync client binaries served with embedded config.
     pub gamedata_client_dir: Arc<PathBuf>,
+    /// Auto-updater for official FAF gamedata patches (poller + refresh API).
+    pub updater: crate::updater::UpdaterHandle,
 }

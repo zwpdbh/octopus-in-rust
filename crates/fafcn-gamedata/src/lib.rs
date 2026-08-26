@@ -19,8 +19,8 @@ pub use channels::{
 pub use error::{Error, Result};
 pub use hash::{sha256_bytes, sha256_file};
 pub use manifest::{
-    ChannelStatus, FileEntry, Manifest, ManifestSummary, StatusResponse, UploadCheckRequest,
-    UploadCheckResponse, UploadCommitRequest,
+    ChannelStatus, FileEntry, Manifest, ManifestSummary, StatusResponse, UpdaterComponent,
+    UpdaterInfo, UpdaterState, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
 };
 pub use overlay::{append_config, read_config, EmbeddedConfig};
 pub use path::{decode_relative_path, encode_relative_path, validate_relative_path};

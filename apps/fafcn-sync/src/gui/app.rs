@@ -21,6 +21,7 @@ use super::{
     fonts::install_cjk_font,
     self_update::{SelfUpdate, UpdateMsg},
     strings::*,
+    version_panel::PanelMsg,
     workers::WorkerMsg,
 };
 
@@ -59,6 +60,7 @@ pub(super) enum Tab {
     UploadPatch,
     UploadClient,
     UploadMaps,
+    Settings,
 }
 
 /// What the background worker is doing (or did last).
@@ -102,6 +104,18 @@ pub(super) struct SyncApp {
     pub(super) update_rx: Option<Receiver<UpdateMsg>>,
     /// Mirror address the last update check ran against.
     pub(super) update_checked_server: String,
+    /// The running update check was requested via the 检查更新 button — log
+    /// the conclusion when it finishes (automatic checks stay silent).
+    pub(super) update_check_manual: bool,
+    // Version panel (sync tab): latest `/api/gamedata/status` snapshot and
+    // the workers that fetch it.
+    pub(super) panel_status: Option<fafcn_gamedata::StatusResponse>,
+    /// Silent status fetch (startup / mirror address change).
+    pub(super) panel_rx: Option<Receiver<PanelMsg>>,
+    /// Mirror address the last silent status fetch ran against.
+    pub(super) panel_checked_server: String,
+    /// Manual 检查更新 upstream refresh (refresh + bounded status poll).
+    pub(super) check_rx: Option<Receiver<PanelMsg>>,
     // Per-tab action state.
     pub(super) sync_state: ActionState,
     pub(super) upload_state: ActionState,
@@ -150,6 +164,11 @@ impl SyncApp {
             update: SelfUpdate::Checking,
             update_rx: None,
             update_checked_server: String::new(),
+            update_check_manual: false,
+            panel_status: None,
+            panel_rx: None,
+            panel_checked_server: String::new(),
+            check_rx: None,
             sync_state: ActionState::Idle,
             upload_state: ActionState::Idle,
             worker: None,
@@ -202,61 +221,110 @@ impl SyncApp {
         }
     }
 
+    /// Compact warning on tabs that need the FAForever folder when it is
+    /// invalid; the field itself lives on the Settings tab.
+    fn dir_warning(&self, ui: &mut egui::Ui) {
+        if sync::is_valid_faf_dir(&self.faf_root()) {
+            return;
+        }
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            tr(self.lang, Txt::DirInvalidOpenSettings),
+        );
+    }
+
     fn shared_fields(&mut self, ui: &mut egui::Ui) {
         let busy = self.busy();
-        ui.label(tr(self.lang, Txt::ServerLabel));
-        ui.add_enabled_ui(!busy, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.server)
-                    .hint_text("https://your-mirror-address")
-                    .desired_width(f32::INFINITY),
-            );
-        });
-        ui.add_space(4.0);
-
-        // The FAForever folder is only needed for sync and patch upload.
-        if matches!(self.tab, Tab::Sync | Tab::UploadPatch) {
-            ui.label(tr(self.lang, Txt::DirLabel));
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.dir)
-                        .hint_text(r"C:\ProgramData\FAForever")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button(tr(self.lang, Txt::Browse)).clicked() {
-                        if let Some(path) = folder_picker(&self.dir).pick_folder() {
-                            self.dir = path.to_string_lossy().into_owned();
-                        }
-                    }
-                    if ui.button(tr(self.lang, Txt::Detect)).clicked() {
-                        if let Some(path) = sync::autodetect_faf_dir() {
-                            self.dir = path.to_string_lossy().into_owned();
-                        }
-                    }
-                });
-            });
-            if let Some((color, text)) = self.folder_status() {
-                ui.colored_label(color, text);
-            }
-        }
-
-        // Token + player name are needed by both upload tabs.
-        if self.tab != Tab::Sync {
-            ui.label(tr(self.lang, Txt::TokenLabel));
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.token)
-                        .password(true)
-                        .desired_width(f32::INFINITY),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label(tr(self.lang, Txt::UploaderLabel));
+        match self.tab {
+            // Mirror address and both folders live on the Settings tab.
+            Tab::Settings => {
+                ui.label(tr(self.lang, Txt::ServerLabel));
                 ui.add_enabled_ui(!busy, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.server)
+                            .hint_text("https://your-mirror-address")
+                            .desired_width(f32::INFINITY),
+                    );
                 });
-            });
+                ui.add_space(4.0);
+
+                ui.label(tr(self.lang, Txt::DirLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.dir)
+                            .hint_text(r"C:\ProgramData\FAForever")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                            if let Some(path) = folder_picker(&self.dir).pick_folder() {
+                                self.dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                        if ui.button(tr(self.lang, Txt::Detect)).clicked() {
+                            if let Some(path) = sync::autodetect_faf_dir() {
+                                self.dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                });
+                if let Some((color, text)) = self.folder_status() {
+                    ui.colored_label(color, text);
+                }
+                ui.add_space(4.0);
+
+                ui.label(tr(self.lang, Txt::FafClientDirLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.faf_client_dir)
+                            .hint_text(r"E:\FAF Client")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
+                            if let Some(path) = folder_picker(&self.faf_client_dir).pick_folder() {
+                                self.faf_client_dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                        if ui.button(tr(self.lang, Txt::Detect)).clicked() {
+                            if let Some(path) = sync::autodetect_faf_client_dir() {
+                                self.faf_client_dir = path.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                });
+                if sync::is_valid_faf_client_dir(&PathBuf::from(self.faf_client_dir.trim())) {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_GREEN,
+                        tr(self.lang, Txt::FafClientFound),
+                    );
+                } else {
+                    ui.colored_label(egui::Color32::YELLOW, tr(self.lang, Txt::FafClientMissing));
+                }
+            }
+            Tab::Sync => {
+                self.dir_warning(ui);
+            }
+            Tab::UploadPatch | Tab::UploadClient | Tab::UploadMaps => {
+                if self.tab == Tab::UploadPatch {
+                    self.dir_warning(ui);
+                }
+                // Token + player name are needed by every upload tab.
+                ui.label(tr(self.lang, Txt::TokenLabel));
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.token)
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(self.lang, Txt::UploaderLabel));
+                    ui.add_enabled_ui(!busy, |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.uploader).desired_width(140.0));
+                    });
+                });
+            }
         }
     }
 
@@ -355,6 +423,10 @@ impl SyncApp {
         if self.tab == Tab::UploadClient {
             return self.client_missing_fields();
         }
+        // The settings tab has no action button.
+        if self.tab == Tab::Settings {
+            return Vec::new();
+        }
         let mut missing = Vec::new();
         if self.server.trim().is_empty() {
             missing.push(tr(self.lang, Txt::FieldServer));
@@ -398,6 +470,8 @@ impl SyncApp {
             Tab::UploadPatch | Tab::UploadClient | Tab::UploadMaps => {
                 self.upload_state == ActionState::Running
             }
+            // Never rendered (the settings tab has no action button).
+            Tab::Settings => false,
         };
         let label = match (self.tab, running) {
             (Tab::Sync, true) => tr(self.lang, Txt::Syncing),
@@ -408,6 +482,7 @@ impl SyncApp {
             (Tab::UploadClient, false) => tr(self.lang, Txt::UploadClientNow),
             (Tab::UploadMaps, true) => tr(self.lang, Txt::Uploading),
             (Tab::UploadMaps, false) => tr(self.lang, Txt::UploadNow),
+            (Tab::Settings, _) => tr(self.lang, Txt::TabSettings),
         };
         if ui
             .add_enabled(
@@ -421,6 +496,7 @@ impl SyncApp {
                 Tab::UploadPatch => self.start_upload(),
                 Tab::UploadClient => self.start_upload_client(),
                 Tab::UploadMaps => self.start_upload_maps(),
+                Tab::Settings => {}
             }
         }
         // Explain exactly why the button is disabled.
@@ -461,10 +537,16 @@ impl eframe::App for SyncApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_worker(ui.ctx());
         self.drain_update(ui.ctx());
+        self.drain_panel(ui.ctx());
         // Tab-switch actions: entering the maps upload tab prefills the
-        // source folder from the located FAF Client install.
+        // source folder from the located FAF Client install; leaving the
+        // settings tab persists the edited fields.
         if self.tab != self.last_tab {
+            let leaving = self.last_tab;
             self.last_tab = self.tab;
+            if leaving == Tab::Settings {
+                let _ = self.persisted_config().save();
+            }
             if self.tab == Tab::UploadMaps {
                 self.prefill_maps_dir();
             }
@@ -477,6 +559,7 @@ impl eframe::App for SyncApp {
         }
         self.maybe_refresh_server_version();
         self.maybe_start_update_check();
+        self.maybe_fetch_panel_status();
         let busy = self.busy();
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -493,6 +576,28 @@ impl eframe::App for SyncApp {
                             GuiLang::Zh => GuiLang::En,
                             GuiLang::En => GuiLang::Zh,
                         };
+                    }
+                    // Manual update check: startup only checks once, so let
+                    // the user re-check without restarting the app. One click
+                    // checks all three updatable components: the sync client
+                    // build plus the two server-side upstream sources.
+                    let check_running = self.update_rx.is_some()
+                        || self.check_rx.is_some()
+                        || matches!(self.update, SelfUpdate::Checking);
+                    let can_check =
+                        !check_running && !self.busy() && !self.server.trim().is_empty();
+                    if ui
+                        .add_enabled(
+                            can_check,
+                            egui::Button::new(tr(self.lang, Txt::UpdateCheckNow)).small(),
+                        )
+                        .clicked()
+                    {
+                        self.update_checked_server.clear();
+                        self.update = SelfUpdate::Checking;
+                        self.update_check_manual = true;
+                        self.log.push(log_update_checking(self.lang));
+                        self.start_manual_upstream_check();
                     }
                 });
             });
@@ -514,6 +619,11 @@ impl eframe::App for SyncApp {
                     Tab::UploadMaps,
                     tr(self.lang, Txt::TabUploadMaps),
                 );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::Settings,
+                    tr(self.lang, Txt::TabSettings),
+                );
             });
             ui.separator();
 
@@ -521,6 +631,11 @@ impl eframe::App for SyncApp {
             ui.add_space(4.0);
 
             self.shared_fields(ui);
+
+            if self.tab == Tab::Sync {
+                ui.add_space(4.0);
+                self.version_panel(ui);
+            }
 
             if self.tab == Tab::UploadPatch {
                 ui.add_space(4.0);
@@ -611,38 +726,6 @@ impl eframe::App for SyncApp {
                     });
                 });
             }
-            if self.tab == Tab::Sync {
-                ui.add_space(4.0);
-                ui.label(tr(self.lang, Txt::FafClientDirLabel));
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.faf_client_dir)
-                            .hint_text(r"E:\FAF Client")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(self.lang, Txt::Browse)).clicked() {
-                            if let Some(path) = folder_picker(&self.faf_client_dir).pick_folder() {
-                                self.faf_client_dir = path.to_string_lossy().into_owned();
-                            }
-                        }
-                        if ui.button(tr(self.lang, Txt::Detect)).clicked() {
-                            if let Some(path) = sync::autodetect_faf_client_dir() {
-                                self.faf_client_dir = path.to_string_lossy().into_owned();
-                            }
-                        }
-                    });
-                });
-                if sync::is_valid_faf_client_dir(&PathBuf::from(self.faf_client_dir.trim())) {
-                    ui.colored_label(
-                        egui::Color32::LIGHT_GREEN,
-                        tr(self.lang, Txt::FafClientFound),
-                    );
-                } else {
-                    ui.colored_label(egui::Color32::YELLOW, tr(self.lang, Txt::FafClientMissing));
-                }
-            }
-
             if self.tab == Tab::UploadMaps {
                 ui.add_space(4.0);
                 ui.label(tr(self.lang, Txt::MapsDirLabel));
@@ -668,7 +751,9 @@ impl eframe::App for SyncApp {
             }
             ui.add_space(12.0);
 
-            self.action_button(ui);
+            if self.tab != Tab::Settings {
+                self.action_button(ui);
+            }
 
             let (done, total) = self.progress;
             if total > 0 {

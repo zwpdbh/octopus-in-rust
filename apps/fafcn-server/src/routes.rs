@@ -41,6 +41,10 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
         )
         .route("/api/gamedata/status", get(handlers::gamedata::get_status))
         .route(
+            "/api/gamedata/upstream/refresh",
+            post(handlers::gamedata::upstream_refresh),
+        )
+        .route(
             "/api/gamedata/channels/{channel}/upload/check",
             post(handlers::gamedata::upload_check),
         )

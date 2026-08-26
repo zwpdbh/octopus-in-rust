@@ -59,14 +59,21 @@ pub const MAP_GENERATOR_KEEP: usize = 3;
 /// Extract a dotted version from a file name, e.g. `dfc_windows_1_6_3.exe`
 /// or `downlords-faf-client-1.6.3.exe` → `1.6.3`. Returns the first run of
 /// digits separated by `.`/`_` containing at least two numeric parts.
+///
+/// New-style names like `faf_windows-x64_2026_7_1.exe` glue the arch token
+/// (`x64`) onto the version run, so a leading `32`/`64`/`86` part is dropped
+/// when the run has more than three parts.
 pub fn detect_version_from_filename(file_name: &str) -> Option<String> {
     let mut best: Option<String> = None;
     let mut current = String::new();
     let flush = |current: &mut String, best: &mut Option<String>| {
-        let parts: Vec<&str> = current
+        let mut parts: Vec<&str> = current
             .split(['.', '_'])
             .filter(|p| !p.is_empty())
             .collect();
+        if parts.len() > 3 && matches!(parts.first(), Some(&"32" | &"64" | &"86")) {
+            parts.remove(0);
+        }
         if parts.len() >= 2 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
             let candidate = parts.join(".");
             let better = match (
@@ -166,6 +173,10 @@ mod tests {
             Some("1.22.1")
         );
         assert_eq!(detect_version_from_filename("faf-client.exe"), None);
+        assert_eq!(
+            detect_version_from_filename("faf_windows-x64_2026_7_1.exe").as_deref(),
+            Some("2026.7.1")
+        );
     }
 
     #[test]

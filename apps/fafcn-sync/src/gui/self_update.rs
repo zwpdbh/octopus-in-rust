@@ -128,8 +128,22 @@ impl SyncApp {
                         _ => SelfUpdate::UpToDate,
                     };
                     finished = true;
+                    // A manually requested check must log its conclusion, or
+                    // the 正在检查更新… line reads like the operation hung.
+                    if self.update_check_manual {
+                        self.update_check_manual = false;
+                        let line = match &self.update {
+                            SelfUpdate::Available { tag } => txt_update_available(self.lang, tag),
+                            _ => log_update_up_to_date(self.lang),
+                        };
+                        self.log.push(line);
+                    }
                 }
                 UpdateMsg::Checked(Err(err)) => {
+                    if self.update_check_manual {
+                        self.update_check_manual = false;
+                        self.log.push(log_failed(self.lang, &err));
+                    }
                     self.update = SelfUpdate::Failed(err);
                     finished = true;
                 }
