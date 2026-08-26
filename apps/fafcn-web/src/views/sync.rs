@@ -12,6 +12,7 @@ fn channel_title(t: i18n::T, name: &str) -> &'static str {
         fafcn_gamedata::CHANNEL_MAP_GENERATOR => t.t(Text::ChannelMapGenerator),
         fafcn_gamedata::CHANNEL_FAF_CLIENT => t.t(Text::FafClientTitle),
         fafcn_gamedata::CHANNEL_MAPS => t.t(Text::ChannelMaps),
+        fafcn_gamedata::CHANNEL_COOP => t.t(Text::ChannelCoop),
         _ => t.t(Text::ChannelGamedata),
     }
 }

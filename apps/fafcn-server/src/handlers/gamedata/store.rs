@@ -398,7 +398,7 @@ fn relative_slash_path(base: &Path, path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fafcn_gamedata::{CHANNEL_GAMEDATA, CHANNEL_MAPS};
+    use fafcn_gamedata::{CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS};
 
     fn temp_store() -> (PathBuf, GamedataStore) {
         let root = std::env::temp_dir().join(format!("fafcn-store-test-{}", uuid::Uuid::new_v4()));
@@ -699,6 +699,55 @@ mod tests {
             .unwrap();
 
         assert!(extra.is_file(), "gamedata channel never prunes");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn coop_channel_roundtrip_with_nested_paths() {
+        let (root, store) = temp_store();
+        // Coop manifest paths carry their bin//gamedata prefixes — nested
+        // relative paths must pass validation and store correctly.
+        let files = [
+            ("bin/init_coop.lua", b"init" as &[u8]),
+            ("gamedata/A01_VO.nx2", b"voice-over"),
+            ("gamedata/mods.nx2", b"coop-mods"),
+        ];
+        let mut entries = Vec::new();
+        for (path, bytes) in files {
+            let entry = FileEntry {
+                path: path.to_string(),
+                size: bytes.len() as u64,
+                sha256: sha256_bytes(bytes),
+            };
+            store
+                .store_upload(CHANNEL_COOP, path, &entry.sha256, bytes)
+                .unwrap();
+            entries.push(entry);
+        }
+        let manifest = store
+            .commit(
+                CHANNEL_COOP,
+                &UploadCommitRequest {
+                    patch_version: "66".to_string(),
+                    uploader: "tester".to_string(),
+                    files: entries.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(manifest.files.len(), 3);
+        for entry in &entries {
+            assert_eq!(
+                fs::read(store.files_dir(CHANNEL_COOP).join(&entry.path)).unwrap(),
+                // contents land byte-identical under files/<path>
+                match entry.path.as_str() {
+                    "bin/init_coop.lua" => b"init".to_vec(),
+                    "gamedata/A01_VO.nx2" => b"voice-over".to_vec(),
+                    _ => b"coop-mods".to_vec(),
+                }
+            );
+        }
+        let loaded = store.read_manifest(CHANNEL_COOP).unwrap().unwrap();
+        assert_eq!(loaded.patch_version, "66");
         fs::remove_dir_all(&root).unwrap();
     }
 

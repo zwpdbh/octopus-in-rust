@@ -762,29 +762,11 @@ fn should_start(
         && last_attempt.is_none_or(|t| now.saturating_duration_since(t) >= debounce)
 }
 
-/// Extract the patch version from an upstream `mod_info.lua` body: the first
-/// `version = <digits>` line. Tolerates whitespace and Lua `--` comments.
-pub fn parse_mod_version(body: &str) -> Option<String> {
-    for line in body.lines() {
-        // Strip Lua line comments, then require `version = <digits>`.
-        let line = line.split_once("--").map_or(line, |(code, _)| code).trim();
-        let Some(rest) = line.strip_prefix("version") else {
-            continue;
-        };
-        let Some(rest) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let digits: String = rest
-            .trim_start()
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        if !digits.is_empty() {
-            return Some(digits);
-        }
-    }
-    None
-}
+/// Extract the patch version from an upstream `mod_info.lua` body.
+///
+/// The implementation lives in `fafcn_gamedata::parse_mod_info_version` so
+/// the sync client can parse the fa-coop `mod_info.lua` the same way.
+pub use fafcn_gamedata::parse_mod_info_version as parse_mod_version;
 
 #[cfg(test)]
 mod tests {

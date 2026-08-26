@@ -29,12 +29,12 @@ File-sync replaces QQ with a mirror:
 
 ## 2. Components at a glance
 
-| Component | Path | Role |
-|---|---|---|
-| Shared protocol crate | `crates/fafcn-gamedata` | Channel ids, manifest types, hashing, path validation, client-binary overlay. **Server, client, and web all depend on it so formats can never drift.** |
-| Server | `apps/fafcn-server` | Axum HTTP API, on-disk store (`handlers/gamedata/store.rs`), auto-updater (`updater.rs`). |
-| Sync client | `apps/fafcn-sync` | eframe GUI (default, double-click) + CLI subcommands (`sync`, `upload`, `upload-maps`, `upload-client`). |
-| Web page | `apps/fafcn-web/src/views/sync.rs` | Status display + client download link. |
+| Component             | Path                               | Role                                                                                                                                                  |
+| --------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared protocol crate | `crates/fafcn-gamedata`            | Channel ids, manifest types, hashing, path validation, client-binary overlay.**Server, client, and web all depend on it so formats can never drift.** |
+| Server                | `apps/fafcn-server`                | Axum HTTP API, on-disk store (`handlers/gamedata/store.rs`), auto-updater (`updater.rs`).                                                             |
+| Sync client           | `apps/fafcn-sync`                  | eframe GUI (default, double-click) + CLI subcommands (`sync`, `upload`, `upload-maps`, `upload-client`).                                              |
+| Web page              | `apps/fafcn-web/src/views/sync.rs` | Status display + client download link.                                                                                                                |
 
 ## 3. Core concepts
 
@@ -50,20 +50,32 @@ pub const CHANNELS: &[&str] = &[
     CHANNEL_MAP_GENERATOR, // "map-generator": newest 3 MapGenerator_*.jar
     CHANNEL_FAF_CLIENT,    // "faf-client": installer, mirror-only (not synced)
     CHANNEL_MAPS,          // "maps": FAF maps, merged uploads
+    CHANNEL_COOP,          // "coop": co-op mission files, synced to FAForever root
 ];
 
-// Channels the sync client syncs into the FAForever folder (~line 38):
-pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR];
+// Channels the sync client syncs into the FAForever folder (~line 55):
+pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_COOP];
 ```
 
 Per-channel rules that new code MUST respect:
 
-| Channel | Synced into | Version source | Client deletes? | Server file lifecycle |
-|---|---|---|---|---|
-| `gamedata` | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream) | **Never** deletes extras | Fixed filenames → overwritten in place |
-| `map-generator` | `FAForever/map_generator` | Newest jar version (manual upload); auto-mirror uses the GitHub release tag | Prunes jars beyond newest 3 | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
-| `faf-client` | — (web download) | From installer filename on manual upload; auto-mirror uses the GitHub release tag | — | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater |
+| Channel         | Synced into                                                          | Version source                                                                    | Client deletes?                        | Server file lifecycle                                                                                                     |
+| --------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `gamedata`      | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream)           | **Never** deletes extras               | Fixed filenames → overwritten in place                                                                                    |
+| `map-generator` | `FAForever/map_generator`                                            | Newest jar version (manual upload); auto-mirror uses the GitHub release tag       | Prunes jars beyond newest 3            | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
+| `faf-client`    | — (web download)                                                     | From installer filename on manual upload; auto-mirror uses the GitHub release tag | —                                      | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater                                            |
+| `coop` | FAForever **root** (paths carry `bin/`/`gamedata/` prefixes) | fa-coop `mod_info.lua` version, fetched from GitHub at upload time | Never deletes extras | Fixed names → overwritten in place; **manual upload only** (see TODO below) |
 | `maps` | FAF Client's `maps_and_mods/maps` | Date stamp (no single version) | Prunes superseded `name.vNNNN` versions | `commit_merge`: replaced map versions deleted, others kept |
+
+**Why the coop channel touches `bin/`:** a coop game boots from the coop init
+file, and the featured-mod system installs init files to `bin/`
+(`bin/init_coop.lua`; the official client copies it to `bin/init.lua` and
+launches `ForgedAlliance.exe /init init.lua`). The init file in turn assumes
+that location — it does `dofile(InitFileDir .. '/../fa_path.lua')` and mounts
+`InitFileDir .. '/../gamedata/'`, i.e. it must sit exactly one level below the
+FAForever root. So the coop channel must reproduce a two-folder layout
+(`bin/` + `gamedata/`), which is why it syncs into the root with
+prefix-carrying manifest paths instead of a single subfolder.
 
 ### 3.2 Manifest — the single source of truth
 
@@ -179,7 +191,8 @@ still run, and the first error lands in `last_error`):
    `UpdaterInfo.latest_generator_version`.
 
 Two triggers share one `update_once` (~line 256) behind a single-flight mutex
-+ 30 s debounce (`trigger`, ~line 235):
+
+- 30 s debounce (`trigger`, ~line 235):
 
 1. **Poller** — `spawn_poller` (~line 530), hardcoded 24 h interval, first
    tick on boot. All knobs are constants (`POLL_INTERVAL`, `VERSION_URL`,
@@ -195,14 +208,76 @@ from the faf-client download so clients never wait on the wrong one) →
 stream the 3 archives to `incoming/`, verify Content-Length + sha256 →
 `store_file_from_path` as unversioned names → `commit()` with
 `uploader: "auto-updater"`. The faf-client and map-generator passes work the
-same way for their single assets (as `Downloading{component: FafClient|
-MapGenerator, ..}`); prune-on-commit deletes the superseded installer and
+same way for their single assets (as `Downloading{component: FafClient| MapGenerator, ..}`); prune-on-commit deletes the superseded installer and
 oldest jars automatically. Any failure (including the deploy-lag 404 race)
 cleans temp files, records `last_error`, returns to `Idle`. The updater never
 panics and never blocks the server.
 
 Upstream HTTP sits behind an injectable `UpstreamFetch` trait (~line 119) so
 tests need no network.
+
+### 5.2.1 TODO — co-op auto-mirror (blocked)
+
+**Goal:** a fourth auto-updater phase (`update_coop`) so the coop channel
+self-updates like gamedata/faf-client/map-generator — no manual upload.
+
+**Why the gamedata trick does not transfer.** Auto-mirroring needs two
+anonymous things: (1) a machine-readable *version source* and (2) *derivable
+file URLs*. For gamedata both exist (`mod_info.lua` on the deploy branch +
+`updaterNew/updates_faf_files/{dir}.{version}.nx2`). For coop, (1) exists but
+(2) does not: the deployed coop files live ONLY at
+`content.faforever.com/legacy-featured-mod-files/updates_coop_files/`, which is
+Cloudflare-HMAC-gated (**403 anonymous**, verified) — coop never got a legacy
+`updaterNew` mirror (**404**, verified). So unlike gamedata, we cannot just
+download the official artifacts; we would have to **repack them ourselves**
+from the public sources.
+
+**What we have in hand (all anonymous, verified):**
+
+| Need | Source | Status |
+|---|---|---|
+| Coop mod version | `raw.githubusercontent.com/FAForever/fa-coop/master/mod_info.lua` → `version = 66` | ✅ |
+| Mod content (`init_coop.lua`, `mods/`, `units/`) | `codeload.github.com/FAForever/fa-coop/tar.gz/refs/heads/master` | ✅ |
+| Voice-overs `A01_VO.nx2`…(the bulk of the bytes) | GitHub release assets of `fa-coop` tag `v49` (frozen since v49) | ✅ |
+| Mission map zips | `content.faforever.com/maps/{folder}.zip` | ✅ (but no anonymous version *listing* — they ride the `maps` channel) |
+
+**What we are missing (the blocker):** the official **packaging contract** —
+the exact set of `{group, name}` the deployed files use, i.e. the contents of
+the `updates_coop_files` DB table. We must not guess it, because:
+
+- The packing rule (`LegacyFeaturedModDeploymentTask`) zips each top-level
+  repo dir to `{dir}.{version}.nx2` → installed as `gamedata/{dir}.nx2`.
+  fa-coop has a `units/` dir, which would produce `gamedata/units.nx2` and
+  **collide with the base faf `units.nx2`** owned by the gamedata channel.
+  Real installs don't break this way, so the official names must differ —
+  but we can't see how.
+- If our manifest names differ from what the official client installs, the
+  client will just re-download from the official servers anyway (md5
+  mismatch) — the mirror would be useless, or worse, shadow a real file.
+
+**How to unblock (one-time, ~15 min):** the deployed structure is frozen —
+see it once, hardcode the mapping forever. Either:
+
+1. **Authenticated API dump (preferred):** with any FAF account OAuth token,
+   run `GET https://api.faforever.com/data/featuredMod?filter=technicalName=="coop"`
+   to get the mod id, then `GET /featuredMods/{id}/files/latest` — the
+   response IS the definitive `{group, name, md5, version}` list. Paste it
+   into this doc / the issue.
+2. **Working-install diff:** a player whose coop works lists
+   `C:\ProgramData\FAForever\bin` and `…\gamedata` (everything beyond the 10
+   standard `FAF_STANDARD_NX2` archives + `init_coop.lua` is coop's).
+
+**After unblocking, the implementation is mechanical:** new updater phase
+`update_coop` — poll `mod_info.lua` → on bump, download repo tarball + v49
+VO assets → pack per the verified mapping → commit to the `coop` channel as
+`uploader: "auto-updater"` (prune stays off; fixed names overwrite in place).
+Add `UpdaterComponent::Coop` + `latest_coop_version`, one panel row, done.
+
+**Until then** the channel is manual-upload-only: `plan_coop`
+(`apps/fafcn-sync/src/upload.rs`) collects from a working install:
+`bin/init_coop.lua` + `gamedata/lobby_coop.cop` + `*_VO.nx2` + non-standard
+`.nx2` archives — correct by construction, since it mirrors exactly what the
+official client produced on a real machine.
 
 ### 5.3 Manual upload flow (uploader → mirror, backup path)
 
@@ -255,16 +330,16 @@ compact warning pointing there when the FAForever folder is invalid.
 
 All under `/api/gamedata`; channel ids validated against `CHANNELS`.
 
-| Method & path | Auth | Purpose |
-|---|---|---|
-| `GET /channels/<ch>/manifest.json` | — | Read the channel manifest |
-| `GET /channels/<ch>/files/<path>` | — | Static download, HTTP range support |
-| `GET /status` | — | Per-channel summary + client build tag + `updater` status |
-| `POST /upstream/refresh` | — (debounced) | Trigger an upstream check; returns `UpdaterInfo` |
-| `POST /channels/<ch>/upload/check` | Bearer | Which of the listed files the server still needs |
-| `POST /channels/<ch>/upload/file` | Bearer | Store one file (raw body + path/sha256 headers) |
-| `POST /channels/<ch>/upload/commit` | Bearer | Verify + publish manifest (`commit_merge` for maps) |
-| `GET /client/<file>` | — | Sync client binary with embedded mirror config |
+| Method & path                       | Auth          | Purpose                                                  |
+| ----------------------------------- | ------------- | -------------------------------------------------------- |
+| `GET /channels/<ch>/manifest.json`  | —             | Read the channel manifest                                |
+| `GET /channels/<ch>/files/<path>`   | —             | Static download, HTTP range support                      |
+| `GET /status`                       | —             | Per-channel summary + client build tag +`updater` status |
+| `POST /upstream/refresh`            | — (debounced) | Trigger an upstream check; returns`UpdaterInfo`          |
+| `POST /channels/<ch>/upload/check`  | Bearer        | Which of the listed files the server still needs         |
+| `POST /channels/<ch>/upload/file`   | Bearer        | Store one file (raw body + path/sha256 headers)          |
+| `POST /channels/<ch>/upload/commit` | Bearer        | Verify + publish manifest (`commit_merge` for maps)      |
+| `GET /client/<file>`                | —             | Sync client binary with embedded mirror config           |
 
 ## 7. Invariants — read before changing anything
 
@@ -331,8 +406,7 @@ access behind `UpstreamFetch` and the state machine inside
   commit + old installer pruned, 404→`Idle`+`last_error`, GitHub release
   fetch failure leaving the gamedata phase unaffected, debounce. Release-JSON
   parsing (asset pick, tag→version) is unit-tested from sample payloads.
-- No test touches the network. Run: `cargo test -p fafcn-gamedata
-  -p fafcn-server -p fafcn-sync`.
+- No test touches the network. Run: `cargo test -p fafcn-gamedata -p fafcn-server -p fafcn-sync`.
 - Live smoke: with the mirror behind upstream by one patch, start the server
   — the poller's first tick should commit the new patch with
   `uploader: "auto-updater"`.

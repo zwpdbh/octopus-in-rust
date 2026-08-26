@@ -12,9 +12,9 @@ mod path;
 
 pub use channels::{
     channel_subdir, compare_version_strings, detect_version_from_filename, map_folder_version,
-    map_generator_jar_version, today_stamp, CHANNELS, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA,
-    CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX,
-    MAP_GENERATOR_KEEP, SYNC_CHANNELS,
+    map_generator_jar_version, parse_mod_info_version, today_stamp, CHANNELS, CHANNEL_COOP,
+    CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, FAF_STANDARD_NX2,
+    GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP, SYNC_CHANNELS,
 };
 pub use error::{Error, Result};
 pub use hash::{sha256_bytes, sha256_file};
