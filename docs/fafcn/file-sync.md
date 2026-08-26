@@ -312,6 +312,12 @@ at startup, when the mirror address changes, or when the user clicks the
 running exe and swapped in via rename-and-relaunch (Windows cannot overwrite
 a running exe, but can rename it).
 
+**CJK fonts:** egui's bundled fonts have no Chinese glyphs. The GUI prefers
+the OS CJK font (YaHei/SimHei/…) and falls back to an embedded subsetted
+Noto Sans SC (`apps/fafcn-sync/assets/cjk-fallback.ttf`, ASCII + GB2312,
+SIL OFL — license in the same dir) so Chinese renders even on Windows
+installs without CJK supplemental fonts (`gui/fonts.rs`).
+
 The **检查更新** button checks all three updatable components at once: the
 sync-client build above, plus the three server-side upstream sources — it POSTs
 the debounced `upstream/refresh`, then polls `/api/gamedata/status` every 2 s

@@ -2,18 +2,24 @@
 
 use eframe::egui;
 
+/// Subsetted Noto Sans SC (ASCII + GB2312), embedded so the UI stays
+/// readable on Windows installs without any CJK system font (e.g. an
+/// English Windows 11 without the Chinese supplemental fonts). Subset of
+/// Noto Sans CJK SC, SIL OFL 1.1 — see `assets/FONT-LICENSE.txt`.
+const EMBEDDED_CJK_FONT: &[u8] = include_bytes!("../../assets/cjk-fallback.ttf");
+
 /// egui's bundled fonts have no CJK glyphs, so Chinese text renders as
-/// boxes. Load the operating system's CJK font (Microsoft YaHei is present
-/// on every Chinese Windows install) and register it as a fallback for both
-/// font families — Latin text keeps using egui's default font.
+/// boxes. Prefer the operating system's CJK font (Microsoft YaHei is present
+/// on every Chinese Windows install); when none exists, use the embedded
+/// Noto Sans SC subset. Registered as a fallback in both font families —
+/// Latin text keeps using egui's default font.
 pub(super) fn install_cjk_font(cc: &eframe::CreationContext<'_>) {
-    let Some(bytes) = load_system_cjk_font() else {
-        return;
+    let data = match load_system_cjk_font() {
+        Some(bytes) => egui::FontData::from_owned(bytes),
+        None => egui::FontData::from_static(EMBEDDED_CJK_FONT),
     };
     let mut fonts = egui::FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
+    fonts.font_data.insert("cjk".to_owned(), data.into());
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
