@@ -20,7 +20,8 @@ use axum::http::HeaderMap;
 use chrono::Utc;
 use fafcn_gamedata::{
     compare_version_strings, map_folder_version, sha256_bytes, sha256_file, validate_relative_path,
-    FileEntry, Manifest, UploadCommitRequest, CHANNELS, CHANNEL_FAF_CLIENT, CHANNEL_MAP_GENERATOR,
+    FileEntry, Manifest, UploadCommitRequest, CHANNELS, CHANNEL_FAF_CLIENT, CHANNEL_MAPS,
+    CHANNEL_MAP_GENERATOR,
 };
 
 use crate::error::{Error, Result};
@@ -376,6 +377,56 @@ impl GamedataStore {
         }
         Ok(sha256_file(&path)? == entry.sha256)
     }
+
+    /// Audit the maps channel: drop every map version whose files are not all
+    /// present on disk with the manifest's size, and remove its leftover
+    /// partial files. A map with missing files is unusable — advertising it
+    /// only makes every client's sync fail on it. Files are checked by
+    /// existence + size (not hash — this runs at startup and must stay fast).
+    ///
+    /// Returns the dropped map version folders. No-op (no manifest write)
+    /// when nothing is missing.
+    pub fn audit_maps_channel(&self) -> Result<Vec<String>> {
+        let Some(manifest) = self.read_manifest(CHANNEL_MAPS)? else {
+            return Ok(Vec::new());
+        };
+        // Group entries by map version folder.
+        let mut by_top: Vec<(&str, Vec<&FileEntry>)> = Vec::new();
+        for entry in &manifest.files {
+            let top = top_folder(&entry.path);
+            match by_top.iter_mut().find(|(t, _)| *t == top) {
+                Some((_, group)) => group.push(entry),
+                None => by_top.push((top, vec![entry])),
+            }
+        }
+        let mut dropped: Vec<String> = Vec::new();
+        let mut kept: Vec<FileEntry> = Vec::new();
+        for (top, entries) in by_top {
+            let complete = entries.iter().all(|e| {
+                let path = self.files_dir(CHANNEL_MAPS).join(&e.path);
+                path.is_file()
+                    && fs::metadata(&path)
+                        .map(|m| m.len() == e.size)
+                        .unwrap_or(false)
+            });
+            if complete {
+                kept.extend(entries.into_iter().cloned());
+            } else {
+                dropped.push(top.to_string());
+                // The leftovers are unusable; remove the whole folder.
+                let _ = fs::remove_dir_all(self.files_dir(CHANNEL_MAPS).join(top));
+            }
+        }
+        if dropped.is_empty() {
+            return Ok(dropped);
+        }
+        let manifest = Manifest {
+            files: kept,
+            ..manifest
+        };
+        self.write_manifest(CHANNEL_MAPS, &manifest)?;
+        Ok(dropped)
+    }
 }
 
 /// Top-level folder of a manifest path (`map.v0001/x.lua` → `map.v0001`;
@@ -699,6 +750,42 @@ mod tests {
             .unwrap();
 
         assert!(extra.is_file(), "gamedata channel never prunes");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn maps_audit_drops_maps_with_missing_files() {
+        let (root, store) = temp_store();
+        // Two maps: one complete, one loses a file after commit.
+        let a1 = map_entry("map_a.v0001/a.lua", b"a1");
+        let a2 = map_entry("map_a.v0001/a2.lua", b"a2");
+        let b1 = map_entry("map_b.v0001/b.lua", b"b1");
+        store_map_file(&store, &a1, b"a1");
+        store_map_file(&store, &a2, b"a2");
+        store_map_file(&store, &b1, b"b1");
+        store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a1, a2, b1]))
+            .unwrap();
+
+        // Complete manifest: audit is a no-op (no manifest rewrite).
+        assert!(store.audit_maps_channel().unwrap().is_empty());
+
+        // Delete one file of map_a (and truncate one of map_b's... map_b has
+        // only one file, so simulate size mismatch by rewriting it shorter).
+        fs::remove_file(root.join("channels/maps/files/map_a.v0001/a2.lua")).unwrap();
+        fs::write(root.join("channels/maps/files/map_b.v0001/b.lua"), b"b").unwrap();
+
+        let dropped = store.audit_maps_channel().unwrap();
+        assert_eq!(dropped.len(), 2, "both broken maps dropped: {dropped:?}");
+        let manifest = store.read_manifest(CHANNEL_MAPS).unwrap().unwrap();
+        assert!(
+            manifest.files.is_empty(),
+            "manifest emptied: {:?}",
+            manifest.files
+        );
+        // Leftover partial folders are gone from disk.
+        assert!(!root.join("channels/maps/files/map_a.v0001").exists());
+        assert!(!root.join("channels/maps/files/map_b.v0001").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 

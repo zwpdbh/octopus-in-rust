@@ -701,9 +701,27 @@ fn print_transfer(update: &TransferUpdate) {
     let _ = std::io::stdout().flush();
 }
 
-/// Download one file to the temp dir, verify its hash, then move it into
+/// Attempts per file before giving up. The mirror is a small VPS whose proxy
+/// occasionally drops connections under a long sync, so transient failures
+/// (timeouts, resets, 5xx, truncated bodies) are retried with a short
+/// backoff. 404s are never retried — the file is genuinely absent and only
+/// a re-upload fixes that.
+const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
+
+/// Outcome of one download attempt.
+enum FetchOutcome {
+    /// Downloaded and hash-verified bytes.
+    Ok(Vec<u8>),
+    /// 404 — the file is not on the server; retrying is pointless.
+    Missing,
+    /// Transient failure (timeout, reset, 5xx, truncation, hash mismatch).
+    Failed(anyhow::Error),
+}
+
+/// Download one file (with retries), verify its hash, then move it into
 /// place (the old file is removed only after the replacement verifies).
-/// Chunk sizes are fed into `reporter` so byte-level progress can be emitted.
+/// Chunk sizes are fed into `reporter` so byte-level progress can be emitted;
+/// a failed attempt's bytes are rolled back so retries don't count double.
 async fn download_one(
     http: &reqwest::Client,
     server: &str,
@@ -720,24 +738,38 @@ async fn download_one(
             api::encode_relative_path(&entry.path)
         ),
     );
-    let mut resp = api::ensure_success(http.get(&url).send().await?)
-        .await
-        .with_context(|| format!("failed to download {}", entry.path))?;
-    let mut bytes = Vec::with_capacity(entry.size as usize);
-    while let Some(chunk) = resp.chunk().await? {
-        reporter.add(chunk.len() as u64);
-        bytes.extend_from_slice(&chunk);
-    }
-
-    let actual = sha256_bytes(&bytes);
-    if actual != entry.sha256 {
-        return Err(anyhow!(
-            "downloaded {} but its hash does not match the manifest (expected {}, got {}) — refusing to install",
-            entry.path,
-            entry.sha256,
-            actual
-        ));
-    }
+    let mut attempt = 0;
+    let bytes = loop {
+        attempt += 1;
+        let before = reporter.done_bytes();
+        match fetch_file(http, &url, entry, reporter).await {
+            FetchOutcome::Ok(bytes) => break bytes,
+            outcome => {
+                // Roll back the failed attempt's bytes so the progress bar
+                // does not over-count the retry.
+                reporter.sub(reporter.done_bytes() - before);
+                match outcome {
+                    FetchOutcome::Missing => {
+                        return Err(anyhow!(
+                            "server does not have {} (404) — the mirror needs a re-upload",
+                            entry.path
+                        ));
+                    }
+                    FetchOutcome::Failed(err) => {
+                        if attempt >= MAX_DOWNLOAD_ATTEMPTS {
+                            return Err(err
+                                .context(format!("failed to download {}", entry.path))
+                                .context(format!(
+                                    "gave up after {MAX_DOWNLOAD_ATTEMPTS} attempts"
+                                )));
+                        }
+                        tokio::time::sleep(Duration::from_secs(2 * attempt as u64)).await;
+                    }
+                    FetchOutcome::Ok(_) => unreachable!(),
+                }
+            }
+        }
+    };
 
     let tmp_path = tmp_dir.join(&entry.path);
     if let Some(parent) = tmp_path.parent() {
@@ -756,6 +788,48 @@ async fn download_one(
     }
     fs::rename(&tmp_path, &dest)?;
     Ok(())
+}
+
+/// One download attempt: GET the file, stream the body, verify size and
+/// sha256 against the manifest entry.
+async fn fetch_file(
+    http: &reqwest::Client,
+    url: &str,
+    entry: &FileEntry,
+    reporter: &mut ProgressReporter<'_, SyncProgress>,
+) -> FetchOutcome {
+    let resp = match http.get(url).send().await {
+        Ok(resp) => resp,
+        Err(err) => return FetchOutcome::Failed(err.into()),
+    };
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return FetchOutcome::Missing;
+    }
+    let mut resp = match api::ensure_success(resp).await {
+        Ok(resp) => resp,
+        Err(err) => return FetchOutcome::Failed(err),
+    };
+    let mut bytes = Vec::with_capacity(entry.size as usize);
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                reporter.add(chunk.len() as u64);
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(err) => return FetchOutcome::Failed(err.into()),
+        }
+    }
+    let actual = sha256_bytes(&bytes);
+    if actual != entry.sha256 {
+        return FetchOutcome::Failed(anyhow!(
+            "downloaded {} but its hash does not match the manifest (expected {}, got {})",
+            entry.path,
+            entry.sha256,
+            actual
+        ));
+    }
+    FetchOutcome::Ok(bytes)
 }
 
 /// Local files not tracked by the manifest. Never deletes anything.

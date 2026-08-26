@@ -129,6 +129,12 @@ File lifecycle per channel (all in
 - **`commit_merge()`** (~line 200, maps only) — merges instead of replaces:
   a map whose base name is re-uploaded has ALL its older versions replaced and
   deleted from disk; unrelated maps are kept.
+- **Startup maps audit** (`audit_maps_channel`, called once from `main.rs` at
+  boot) — drops any map version whose files are not all present on disk with
+  the manifest's size, and deletes its leftover partial folder. A map with
+  missing files is unusable, so advertising it only makes every client's sync
+  fail on it. Existence + size check only (no hashing — startup must stay
+  fast); no-op when nothing is missing.
 
 ## 5. The three data flows
 

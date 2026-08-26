@@ -98,6 +98,23 @@ async fn main() -> Result<()> {
     // Always-on upstream poller: checks for new official FAF patches daily.
     crate::updater::spawn_poller(state.updater.clone());
 
+    // Startup self-heal: drop map versions whose files are missing on disk
+    // (e.g. lost in a migration) so clients stop failing on them.
+    {
+        let store = state.gamedata.clone();
+        tokio::task::spawn_blocking(move || match store.audit_maps_channel() {
+            Ok(dropped) if !dropped.is_empty() => {
+                tracing::warn!(
+                    count = dropped.len(),
+                    ?dropped,
+                    "maps audit dropped broken map versions"
+                );
+            }
+            Ok(_) => tracing::info!("maps audit: all manifest files present"),
+            Err(err) => tracing::warn!(error = %format!("{err:#}"), "maps audit failed"),
+        });
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST])
