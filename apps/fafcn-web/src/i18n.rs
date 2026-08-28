@@ -166,6 +166,7 @@ pub enum Text {
     GuideStep1Github,
     GuideStep1GithubBtn,
     GuideStep1Note,
+    GuideStep1Video,
     GuideStep2Title,
     GuideStep2Desc,
     GuideStep2Btn,
@@ -295,7 +296,16 @@ pub enum Text {
     ChannelGamedata,
     ChannelMapGenerator,
     ChannelMaps,
+    ChannelCoop,
     ChannelNotPublished,
+    UpdaterLatestOfficial,
+    UpdaterLastChecked,
+    UpdaterStale,
+    UpdaterDownloading,
+    UpdaterLatestClient,
+    UpdaterStaleClient,
+    UpdaterLatestGenerator,
+    UpdaterStaleGenerator,
     FafClientTitle,
     FafClientDesc,
     DownloadFafClient,
@@ -504,6 +514,8 @@ impl Text {
             (Text::GuideStep1GithubBtn, Lang::Zh) => "前往 GitHub releases",
             (Text::GuideStep1Note, Lang::En) => "After install, register and log in your FAF account.",
             (Text::GuideStep1Note, Lang::Zh) => "安装后注册并登录 FAF 账号即可。",
+            (Text::GuideStep1Video, Lang::En) => "Video guide: FAF account registration (Bilibili)",
+            (Text::GuideStep1Video, Lang::Zh) => "视频教程:FAF 国际平台账号注册教程(B 站)",
             (Text::GuideStep2Title, Lang::En) => "Step 2: Sync patches & map generator",
             (Text::GuideStep2Title, Lang::Zh) => "第二步:同步补丁与地图生成器",
             (Text::GuideStep2Desc, Lang::En) => {
@@ -800,8 +812,34 @@ impl Text {
             (Text::ChannelMapGenerator, Lang::Zh) => "地图生成器",
             (Text::ChannelMaps, Lang::En) => "maps",
             (Text::ChannelMaps, Lang::Zh) => "地图",
+            (Text::ChannelCoop, Lang::En) => "co-op missions",
+            (Text::ChannelCoop, Lang::Zh) => "合作任务",
             (Text::ChannelNotPublished, Lang::En) => "not published yet",
             (Text::ChannelNotPublished, Lang::Zh) => "未发布",
+            (Text::UpdaterLatestOfficial, Lang::En) => "Latest official patch",
+            (Text::UpdaterLatestOfficial, Lang::Zh) => "官方最新补丁",
+            (Text::UpdaterLastChecked, Lang::En) => "Last checked",
+            (Text::UpdaterLastChecked, Lang::Zh) => "上次检查",
+            (Text::UpdaterStale, Lang::En) => {
+                "the mirror is behind the official patch — an auto-update should be in progress"
+            }
+            (Text::UpdaterStale, Lang::Zh) => "镜像落后于官方补丁,自动更新应已在进行中",
+            (Text::UpdaterDownloading, Lang::En) => "downloading from upstream…",
+            (Text::UpdaterDownloading, Lang::Zh) => "正在从官方下载…",
+            (Text::UpdaterLatestClient, Lang::En) => "Latest official client",
+            (Text::UpdaterLatestClient, Lang::Zh) => "官方最新客户端",
+            (Text::UpdaterStaleClient, Lang::En) => {
+                "the mirror is behind the official client release — an auto-update should be in progress"
+            }
+            (Text::UpdaterStaleClient, Lang::Zh) => "镜像落后于官方客户端版本,自动更新应已在进行中",
+            (Text::UpdaterLatestGenerator, Lang::En) => "Latest official map generator",
+            (Text::UpdaterLatestGenerator, Lang::Zh) => "官方最新地图生成器",
+            (Text::UpdaterStaleGenerator, Lang::En) => {
+                "the mirror is behind the official map generator release — an auto-update should be in progress"
+            }
+            (Text::UpdaterStaleGenerator, Lang::Zh) => {
+                "镜像落后于官方地图生成器版本,自动更新应已在进行中"
+            }
             (Text::FafClientTitle, Lang::En) => "FAF client",
             (Text::FafClientTitle, Lang::Zh) => "FAF 客户端",
             (Text::FafClientDesc, Lang::En) => {

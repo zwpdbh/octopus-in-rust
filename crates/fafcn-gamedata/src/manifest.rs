@@ -72,6 +72,64 @@ pub struct StatusResponse {
     /// can show users which build they will download.
     #[serde(default)]
     pub client_tag: Option<String>,
+    /// State of the server-side auto-updater that fetches official FAF
+    /// patches. `None` when talking to an older server without the updater.
+    #[serde(default)]
+    pub updater: Option<UpdaterInfo>,
+}
+
+/// Which component the server-side auto-updater is working on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdaterComponent {
+    /// The gamedata patch archives (default for payloads from older servers
+    /// that predate the component field).
+    #[default]
+    Gamedata,
+    /// The FAF client installer.
+    FafClient,
+    /// The map generator jar.
+    MapGenerator,
+}
+
+/// State of the server-side auto-updater for official FAF patches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdaterState {
+    /// Nothing happening right now.
+    Idle,
+    /// Querying the official FAF patch version.
+    Checking,
+    /// Downloading official files for `version`.
+    Downloading {
+        /// Which component is being downloaded.
+        #[serde(default)]
+        component: UpdaterComponent,
+        /// Version being downloaded.
+        version: String,
+    },
+}
+
+/// Snapshot of the server-side auto-updater, returned by
+/// `GET /api/gamedata/status` and `POST /api/gamedata/upstream/refresh`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdaterInfo {
+    /// What the updater is doing right now.
+    pub state: UpdaterState,
+    /// Latest official FAF patch version seen (from the last check).
+    pub latest_official_version: Option<String>,
+    /// Latest FAF client release version seen on GitHub (from the last
+    /// check). `None` on older servers without the client auto-mirror.
+    #[serde(default)]
+    pub latest_client_version: Option<String>,
+    /// Latest Neroxis map generator release version seen on GitHub (from the
+    /// last check). `None` on older servers without the generator auto-mirror.
+    #[serde(default)]
+    pub latest_generator_version: Option<String>,
+    /// When the official version was last checked.
+    pub last_check_at: Option<DateTime<Utc>>,
+    /// Why the last update attempt failed, if it did.
+    pub last_error: Option<String>,
 }
 
 /// Mirror state of one sync channel.

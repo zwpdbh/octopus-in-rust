@@ -81,6 +81,17 @@ impl TransferMeter {
         Some(self.update())
     }
 
+    /// Bytes recorded so far.
+    pub fn done_bytes(&self) -> u64 {
+        self.done_bytes
+    }
+
+    /// Roll back `n` bytes — a failed download attempt whose bytes will be
+    /// re-downloaded by a retry must not count double.
+    pub fn sub(&mut self, n: u64) {
+        self.done_bytes = self.done_bytes.saturating_sub(n);
+    }
+
     /// Current snapshot, unthrottled (e.g. at a file boundary).
     pub fn update(&self) -> TransferUpdate {
         // Before the first throttled emission there is no EMA yet; fall back
@@ -130,6 +141,16 @@ impl<'a, E> ProgressReporter<'a, E> {
         if let Some(update) = self.meter.add(n) {
             (self.progress)((self.wrap)(update));
         }
+    }
+
+    /// Bytes recorded so far.
+    pub fn done_bytes(&self) -> u64 {
+        self.meter.done_bytes()
+    }
+
+    /// Roll back `n` bytes (failed attempt about to be retried).
+    pub fn sub(&mut self, n: u64) {
+        self.meter.sub(n);
     }
 
     /// Emit the current snapshot unconditionally (e.g. at a file boundary).
@@ -184,6 +205,16 @@ mod tests {
     fn completion_always_emits() {
         let mut meter = TransferMeter::new(10);
         assert!(meter.add(10).is_some());
+    }
+
+    #[test]
+    fn sub_rolls_back_failed_attempt_bytes() {
+        let mut meter = TransferMeter::new(100);
+        meter.add(40);
+        meter.sub(25);
+        assert_eq!(meter.done_bytes(), 15);
+        meter.sub(1000); // saturates at 0
+        assert_eq!(meter.done_bytes(), 0);
     }
 
     #[test]

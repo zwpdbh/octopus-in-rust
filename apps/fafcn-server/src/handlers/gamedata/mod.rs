@@ -17,7 +17,7 @@ use axum::{
     Json,
 };
 use fafcn_gamedata::{
-    ChannelStatus, EmbeddedConfig, Manifest, StatusResponse, UploadCheckRequest,
+    ChannelStatus, EmbeddedConfig, Manifest, StatusResponse, UpdaterInfo, UploadCheckRequest,
     UploadCheckResponse, UploadCommitRequest, CHANNELS, CHANNEL_MAPS,
 };
 
@@ -71,7 +71,16 @@ pub async fn get_status(State(state): State<AppState>) -> Result<Json<StatusResp
     Ok(Json(StatusResponse {
         channels,
         client_tag,
+        updater: Some(state.updater.snapshot()),
     }))
+}
+
+/// `POST /api/gamedata/upstream/refresh` — ask the server to check the
+/// official FAF patch release and pre-download it when newer. Debounced and
+/// single-flight: returns the current updater snapshot, starting a
+/// background update only when one is not already running.
+pub async fn upstream_refresh(State(state): State<AppState>) -> Json<UpdaterInfo> {
+    Json(state.updater.trigger(true).await)
 }
 
 /// `POST /api/gamedata/channels/:channel/upload/check` — which of the listed

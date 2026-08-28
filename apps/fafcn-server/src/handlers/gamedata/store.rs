@@ -13,14 +13,15 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use axum::http::HeaderMap;
 use chrono::Utc;
 use fafcn_gamedata::{
     compare_version_strings, map_folder_version, sha256_bytes, sha256_file, validate_relative_path,
-    FileEntry, Manifest, UploadCommitRequest, CHANNELS,
+    FileEntry, Manifest, UploadCommitRequest, CHANNELS, CHANNEL_FAF_CLIENT, CHANNEL_MAPS,
+    CHANNEL_MAP_GENERATOR,
 };
 
 use crate::error::{Error, Result};
@@ -51,7 +52,9 @@ impl GamedataStore {
         self.root.join("channels").join(channel)
     }
 
-    fn incoming_dir(&self, channel: &str) -> PathBuf {
+    /// Temp dir for in-progress uploads/downloads (`incoming/`), inside the
+    /// channel root so renames into `files/` stay on the same filesystem.
+    pub fn incoming_dir(&self, channel: &str) -> PathBuf {
         self.channel_root(channel).join("incoming")
     }
 
@@ -132,8 +135,42 @@ impl GamedataStore {
         Ok(())
     }
 
+    /// Store one file already on local disk (e.g. downloaded by the
+    /// auto-updater into `incoming/`): streaming-hash `src`, verify it
+    /// against `expected_sha256`, then atomically rename it into `files/`.
+    /// Same validation as [`Self::store_upload`] but never buffers the file
+    /// in memory. On success `src` no longer exists (it was renamed).
+    pub fn store_file_from_path(
+        &self,
+        channel: &str,
+        rel_path: &str,
+        expected_sha256: &str,
+        src: &Path,
+    ) -> Result<()> {
+        validate_relative_path(rel_path).map_err(|e| Error::BadRequest(e.to_string()))?;
+        let actual = sha256_file(src)?;
+        if actual != expected_sha256 {
+            return Err(Error::BadRequest(format!(
+                "sha256 mismatch for {rel_path}: expected {expected_sha256}, got {actual}"
+            )));
+        }
+
+        let dest = self.files_dir(channel).join(rel_path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(src, &dest)?;
+        Ok(())
+    }
+
     /// Finalize an upload session: verify every listed file is present with a
     /// matching hash, then atomically replace the channel's `manifest.json`.
+    ///
+    /// Channels with versioned file names (map-generator, faf-client) prune
+    /// stored files that are no longer in the committed manifest, so old
+    /// releases do not accumulate on disk. The gamedata channel never prunes:
+    /// its manifest always covers the same fixed file set, and the maps
+    /// channel has its own merge-time pruning in [`Self::commit_merge`].
     pub fn commit(&self, channel: &str, req: &UploadCommitRequest) -> Result<Manifest> {
         self.validate_commit_request(channel, req)?;
         self.guard_against_downgrade(channel, &req.patch_version)?;
@@ -144,6 +181,12 @@ impl GamedataStore {
             files: req.files.clone(),
         };
         self.write_manifest(channel, &manifest)?;
+        if matches!(channel, CHANNEL_MAP_GENERATOR | CHANNEL_FAF_CLIENT) {
+            let pruned = self.prune_unlisted_files(channel, &manifest)?;
+            if pruned > 0 {
+                tracing::info!(channel, pruned, "pruned files no longer in the manifest");
+            }
+        }
         Ok(manifest)
     }
 
@@ -287,6 +330,42 @@ impl GamedataStore {
         Ok(())
     }
 
+    /// Delete every file below `files/` that is not listed in `manifest`,
+    /// then remove emptied directories. Returns the number of files removed.
+    ///
+    /// Only safe for channels whose manifest is the sole source of truth
+    /// (map-generator, faf-client) — never call this for gamedata.
+    fn prune_unlisted_files(&self, channel: &str, manifest: &Manifest) -> Result<usize> {
+        let keep: HashSet<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        let files_dir = self.files_dir(channel);
+        let mut removed = 0usize;
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for entry in walkdir::WalkDir::new(&files_dir).contents_first(false) {
+            let entry =
+                entry.map_err(|e| Error::Internal(format!("failed to walk files dir: {e}")))?;
+            let path = entry.path();
+            if entry.file_type().is_dir() {
+                if path != files_dir {
+                    dirs.push(path.to_path_buf());
+                }
+                continue;
+            }
+            let rel = relative_slash_path(&files_dir, path).ok_or_else(|| {
+                Error::Internal(format!("failed to relativize {}", path.display()))
+            })?;
+            if !keep.contains(rel.as_str()) {
+                fs::remove_file(path)?;
+                removed += 1;
+            }
+        }
+        // Deepest first so parents become empty before their turn.
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+        for dir in dirs {
+            let _ = fs::remove_dir(dir); // fails harmlessly when not empty
+        }
+        Ok(removed)
+    }
+
     /// True when `files/<path>` exists with matching size and hash.
     fn stored_file_matches(&self, channel: &str, entry: &FileEntry) -> Result<bool> {
         let path = self.files_dir(channel).join(&entry.path);
@@ -298,6 +377,56 @@ impl GamedataStore {
         }
         Ok(sha256_file(&path)? == entry.sha256)
     }
+
+    /// Audit the maps channel: drop every map version whose files are not all
+    /// present on disk with the manifest's size, and remove its leftover
+    /// partial files. A map with missing files is unusable — advertising it
+    /// only makes every client's sync fail on it. Files are checked by
+    /// existence + size (not hash — this runs at startup and must stay fast).
+    ///
+    /// Returns the dropped map version folders. No-op (no manifest write)
+    /// when nothing is missing.
+    pub fn audit_maps_channel(&self) -> Result<Vec<String>> {
+        let Some(manifest) = self.read_manifest(CHANNEL_MAPS)? else {
+            return Ok(Vec::new());
+        };
+        // Group entries by map version folder.
+        let mut by_top: Vec<(&str, Vec<&FileEntry>)> = Vec::new();
+        for entry in &manifest.files {
+            let top = top_folder(&entry.path);
+            match by_top.iter_mut().find(|(t, _)| *t == top) {
+                Some((_, group)) => group.push(entry),
+                None => by_top.push((top, vec![entry])),
+            }
+        }
+        let mut dropped: Vec<String> = Vec::new();
+        let mut kept: Vec<FileEntry> = Vec::new();
+        for (top, entries) in by_top {
+            let complete = entries.iter().all(|e| {
+                let path = self.files_dir(CHANNEL_MAPS).join(&e.path);
+                path.is_file()
+                    && fs::metadata(&path)
+                        .map(|m| m.len() == e.size)
+                        .unwrap_or(false)
+            });
+            if complete {
+                kept.extend(entries.into_iter().cloned());
+            } else {
+                dropped.push(top.to_string());
+                // The leftovers are unusable; remove the whole folder.
+                let _ = fs::remove_dir_all(self.files_dir(CHANNEL_MAPS).join(top));
+            }
+        }
+        if dropped.is_empty() {
+            return Ok(dropped);
+        }
+        let manifest = Manifest {
+            files: kept,
+            ..manifest
+        };
+        self.write_manifest(CHANNEL_MAPS, &manifest)?;
+        Ok(dropped)
+    }
 }
 
 /// Top-level folder of a manifest path (`map.v0001/x.lua` → `map.v0001`;
@@ -306,10 +435,21 @@ fn top_folder(path: &str) -> &str {
     path.split('/').next().unwrap_or(path)
 }
 
+/// Forward-slash relative path of `path` below `base`, matching the manifest
+/// path format (`sub/dir/file.ext`). `None` when `path` is not below `base`.
+fn relative_slash_path(base: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(base).ok()?;
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        parts.push(component.as_os_str().to_str()?.to_string());
+    }
+    Some(parts.join("/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fafcn_gamedata::{CHANNEL_GAMEDATA, CHANNEL_MAPS};
+    use fafcn_gamedata::{CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS};
 
     fn temp_store() -> (PathBuf, GamedataStore) {
         let root = std::env::temp_dir().join(format!("fafcn-store-test-{}", uuid::Uuid::new_v4()));
@@ -485,6 +625,216 @@ mod tests {
         let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec!["map_a.v0002/a.lua"]);
         assert!(!root.join("channels/maps/files/map_a.v0001").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn store_file_from_path_stores_matching_file() {
+        let (root, store) = temp_store();
+        let bytes = b"auto-downloaded-patch";
+        let src = store
+            .incoming_dir(CHANNEL_GAMEDATA)
+            .join(format!("auto-{}.part", uuid::Uuid::new_v4()));
+        fs::write(&src, bytes).unwrap();
+
+        store
+            .store_file_from_path(CHANNEL_GAMEDATA, "env.nx2", &sha256_bytes(bytes), &src)
+            .unwrap();
+
+        let stored = root.join("channels/gamedata/files/env.nx2");
+        assert_eq!(fs::read(&stored).unwrap(), bytes);
+        assert!(!src.exists(), "src was renamed into files/");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn store_file_from_path_rejects_hash_mismatch() {
+        let (root, store) = temp_store();
+        let src = store
+            .incoming_dir(CHANNEL_GAMEDATA)
+            .join(format!("auto-{}.part", uuid::Uuid::new_v4()));
+        fs::write(&src, b"corrupt").unwrap();
+
+        let result =
+            store.store_file_from_path(CHANNEL_GAMEDATA, "env.nx2", &"00".repeat(32), &src);
+        assert!(matches!(result, Err(Error::BadRequest(_))));
+        assert!(
+            !root.join("channels/gamedata/files/env.nx2").exists(),
+            "nothing stored on mismatch"
+        );
+        assert!(src.is_file(), "src left in place for caller cleanup");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn store_file_from_path_rejects_path_traversal() {
+        let (root, store) = temp_store();
+        let src = root.join("evil.part");
+        fs::write(&src, b"x").unwrap();
+        assert!(store
+            .store_file_from_path(CHANNEL_GAMEDATA, "../evil.scd", &sha256_bytes(b"x"), &src)
+            .is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn commit_prunes_unlisted_files_in_versioned_channels() {
+        let (root, store) = temp_store();
+        // map-generator: old jar drops out of the manifest → deleted from disk.
+        let v1 = map_entry("MapGenerator_1.22.9.jar", b"v1");
+        store
+            .store_upload(CHANNEL_MAP_GENERATOR, &v1.path, &v1.sha256, b"v1")
+            .unwrap();
+        store
+            .commit(
+                CHANNEL_MAP_GENERATOR,
+                &UploadCommitRequest {
+                    patch_version: "1.22.9".to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![v1],
+                },
+            )
+            .unwrap();
+        assert!(root
+            .join("channels/map-generator/files/MapGenerator_1.22.9.jar")
+            .is_file());
+
+        let v2 = map_entry("MapGenerator_1.22.10.jar", b"v2");
+        store
+            .store_upload(CHANNEL_MAP_GENERATOR, &v2.path, &v2.sha256, b"v2")
+            .unwrap();
+        store
+            .commit(
+                CHANNEL_MAP_GENERATOR,
+                &UploadCommitRequest {
+                    patch_version: "1.22.10".to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![v2],
+                },
+            )
+            .unwrap();
+
+        assert!(
+            !root
+                .join("channels/map-generator/files/MapGenerator_1.22.9.jar")
+                .exists(),
+            "old jar pruned from disk"
+        );
+        assert!(root
+            .join("channels/map-generator/files/MapGenerator_1.22.10.jar")
+            .is_file());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn commit_never_prunes_gamedata_channel() {
+        let (root, store) = temp_store();
+        let listed = map_entry("env.nx2", b"listed");
+        store
+            .store_upload(CHANNEL_GAMEDATA, &listed.path, &listed.sha256, b"listed")
+            .unwrap();
+        // An unlisted file present on disk (e.g. left by an interrupted
+        // process) must survive a gamedata commit untouched.
+        let extra = root.join("channels/gamedata/files/stray.nx2");
+        fs::write(&extra, b"stray").unwrap();
+
+        store
+            .commit(
+                CHANNEL_GAMEDATA,
+                &UploadCommitRequest {
+                    patch_version: "3838".to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![listed],
+                },
+            )
+            .unwrap();
+
+        assert!(extra.is_file(), "gamedata channel never prunes");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn maps_audit_drops_maps_with_missing_files() {
+        let (root, store) = temp_store();
+        // Two maps: one complete, one loses a file after commit.
+        let a1 = map_entry("map_a.v0001/a.lua", b"a1");
+        let a2 = map_entry("map_a.v0001/a2.lua", b"a2");
+        let b1 = map_entry("map_b.v0001/b.lua", b"b1");
+        store_map_file(&store, &a1, b"a1");
+        store_map_file(&store, &a2, b"a2");
+        store_map_file(&store, &b1, b"b1");
+        store
+            .commit_merge(CHANNEL_MAPS, &merge_req(vec![a1, a2, b1]))
+            .unwrap();
+
+        // Complete manifest: audit is a no-op (no manifest rewrite).
+        assert!(store.audit_maps_channel().unwrap().is_empty());
+
+        // Delete one file of map_a (and truncate one of map_b's... map_b has
+        // only one file, so simulate size mismatch by rewriting it shorter).
+        fs::remove_file(root.join("channels/maps/files/map_a.v0001/a2.lua")).unwrap();
+        fs::write(root.join("channels/maps/files/map_b.v0001/b.lua"), b"b").unwrap();
+
+        let dropped = store.audit_maps_channel().unwrap();
+        assert_eq!(dropped.len(), 2, "both broken maps dropped: {dropped:?}");
+        let manifest = store.read_manifest(CHANNEL_MAPS).unwrap().unwrap();
+        assert!(
+            manifest.files.is_empty(),
+            "manifest emptied: {:?}",
+            manifest.files
+        );
+        // Leftover partial folders are gone from disk.
+        assert!(!root.join("channels/maps/files/map_a.v0001").exists());
+        assert!(!root.join("channels/maps/files/map_b.v0001").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn coop_channel_roundtrip_with_nested_paths() {
+        let (root, store) = temp_store();
+        // Coop manifest paths carry their bin//gamedata prefixes — nested
+        // relative paths must pass validation and store correctly.
+        let files = [
+            ("bin/init_coop.lua", b"init" as &[u8]),
+            ("gamedata/A01_VO.nx2", b"voice-over"),
+            ("gamedata/mods.nx2", b"coop-mods"),
+        ];
+        let mut entries = Vec::new();
+        for (path, bytes) in files {
+            let entry = FileEntry {
+                path: path.to_string(),
+                size: bytes.len() as u64,
+                sha256: sha256_bytes(bytes),
+            };
+            store
+                .store_upload(CHANNEL_COOP, path, &entry.sha256, bytes)
+                .unwrap();
+            entries.push(entry);
+        }
+        let manifest = store
+            .commit(
+                CHANNEL_COOP,
+                &UploadCommitRequest {
+                    patch_version: "66".to_string(),
+                    uploader: "tester".to_string(),
+                    files: entries.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(manifest.files.len(), 3);
+        for entry in &entries {
+            assert_eq!(
+                fs::read(store.files_dir(CHANNEL_COOP).join(&entry.path)).unwrap(),
+                // contents land byte-identical under files/<path>
+                match entry.path.as_str() {
+                    "bin/init_coop.lua" => b"init".to_vec(),
+                    "gamedata/A01_VO.nx2" => b"voice-over".to_vec(),
+                    _ => b"coop-mods".to_vec(),
+                }
+            );
+        }
+        let loaded = store.read_manifest(CHANNEL_COOP).unwrap().unwrap();
+        assert_eq!(loaded.patch_version, "66");
         fs::remove_dir_all(&root).unwrap();
     }
 

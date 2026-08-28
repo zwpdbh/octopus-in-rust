@@ -10,6 +10,11 @@
 //! - `faf-client` — the client installer (mirror-only).
 //! - `maps` — FAF maps (folders like `name.v0001`), synced into the FAF
 //!   Client's `maps_and_mods/maps` folder instead of the FAForever folder.
+//! - `coop` — co-op mission support files (`bin/init_coop.lua`,
+//!   `gamedata/lobby_coop.cop`, `gamedata/*_VO.nx2` voice-overs), synced into
+//!   the FAForever ROOT (manifest paths carry their `bin/`/`gamedata/`
+//!   prefix). Manually uploaded; the auto-updater does not mirror it (the
+//!   official coop file list is not anonymously visible).
 
 /// Channel id for the gamedata patch archives.
 pub const CHANNEL_GAMEDATA: &str = "gamedata";
@@ -26,26 +31,50 @@ pub const CHANNEL_FAF_CLIENT: &str = "faf-client";
 /// [`SYNC_CHANNELS`]); uploads MERGE into the existing manifest.
 pub const CHANNEL_MAPS: &str = "maps";
 
+/// Channel id for co-op mission support files. Synced into the FAForever
+/// ROOT (paths carry their own `bin/`/`gamedata/` prefix).
+pub const CHANNEL_COOP: &str = "coop";
+
 /// All known channel ids (rejected at the API boundary otherwise).
 pub const CHANNELS: &[&str] = &[
     CHANNEL_GAMEDATA,
     CHANNEL_MAP_GENERATOR,
     CHANNEL_FAF_CLIENT,
     CHANNEL_MAPS,
+    CHANNEL_COOP,
 ];
 
 /// Channels the sync client syncs into the FAForever folder.
-pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR];
+pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_COOP];
 
 /// The only gamedata files players actually need mirrored.
 pub const GAMEDATA_SYNC_FILES: &[&str] = &["env.nx2", "units.nx2", "textures.nx2"];
 
+/// The complete set of archive names the base `faf` featured mod deploys to
+/// `gamedata/` (all ten are re-packed on every FAF deploy). The coop upload
+/// whitelist uses this to EXCLUDE base-game archives: coop-specific archives
+/// are whatever `.nx2` remains.
+pub const FAF_STANDARD_NX2: &[&str] = &[
+    "effects.nx2",
+    "env.nx2",
+    "etc.nx2",
+    "loc.nx2",
+    "lua.nx2",
+    "meshes.nx2",
+    "projectiles.nx2",
+    "schook.nx2",
+    "textures.nx2",
+    "units.nx2",
+];
+
 /// Subfolder (below the FAForever root) each channel syncs into.
-/// Mirror-only channels (faf-client) return `None`.
+/// Mirror-only channels (faf-client) return `None`; coop syncs into the
+/// root itself (its manifest paths carry `bin/`/`gamedata/` prefixes).
 pub fn channel_subdir(channel: &str) -> Option<&'static str> {
     match channel {
         CHANNEL_GAMEDATA => Some("gamedata"),
         CHANNEL_MAP_GENERATOR => Some("map_generator"),
+        CHANNEL_COOP => Some(""),
         _ => None,
     }
 }
@@ -59,14 +88,21 @@ pub const MAP_GENERATOR_KEEP: usize = 3;
 /// Extract a dotted version from a file name, e.g. `dfc_windows_1_6_3.exe`
 /// or `downlords-faf-client-1.6.3.exe` → `1.6.3`. Returns the first run of
 /// digits separated by `.`/`_` containing at least two numeric parts.
+///
+/// New-style names like `faf_windows-x64_2026_7_1.exe` glue the arch token
+/// (`x64`) onto the version run, so a leading `32`/`64`/`86` part is dropped
+/// when the run has more than three parts.
 pub fn detect_version_from_filename(file_name: &str) -> Option<String> {
     let mut best: Option<String> = None;
     let mut current = String::new();
     let flush = |current: &mut String, best: &mut Option<String>| {
-        let parts: Vec<&str> = current
+        let mut parts: Vec<&str> = current
             .split(['.', '_'])
             .filter(|p| !p.is_empty())
             .collect();
+        if parts.len() > 3 && matches!(parts.first(), Some(&"32" | &"64" | &"86")) {
+            parts.remove(0);
+        }
         if parts.len() >= 2 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
             let candidate = parts.join(".");
             let better = match (
@@ -121,6 +157,32 @@ pub fn today_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
+/// Extract the mod version from a FAF `mod_info.lua` body: the first
+/// `version = <digits>` line. Tolerates whitespace and Lua `--` comments.
+/// Used for both the faf deploy branch (gamedata patch version) and the
+/// fa-coop repo (coop mod version).
+pub fn parse_mod_info_version(body: &str) -> Option<String> {
+    for line in body.lines() {
+        // Strip Lua line comments, then require `version = <digits>`.
+        let line = line.split_once("--").map_or(line, |(code, _)| code).trim();
+        let Some(rest) = line.strip_prefix("version") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let digits: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            return Some(digits);
+        }
+    }
+    None
+}
+
 /// Compare two version strings as dotted numeric tuples (`3837` > `3825`,
 /// `1.22.10` > `1.22.1`). Returns `None` when either side is not numeric.
 pub fn compare_version_strings(a: &str, b: &str) -> Option<std::cmp::Ordering> {
@@ -166,6 +228,10 @@ mod tests {
             Some("1.22.1")
         );
         assert_eq!(detect_version_from_filename("faf-client.exe"), None);
+        assert_eq!(
+            detect_version_from_filename("faf_windows-x64_2026_7_1.exe").as_deref(),
+            Some("2026.7.1")
+        );
     }
 
     #[test]
@@ -191,6 +257,32 @@ mod tests {
         assert_eq!(map_folder_version("map.v"), None);
         assert_eq!(map_folder_version("map.vxyz"), None);
         assert_eq!(map_folder_version(".v0001"), None);
+    }
+
+    #[test]
+    fn parse_mod_info_version_works() {
+        assert_eq!(
+            parse_mod_info_version("name = \"FAF\"\nversion = 3838\n"),
+            Some("3838".to_string())
+        );
+        assert_eq!(
+            parse_mod_info_version("  version   =   66  -- bumped\n"),
+            Some("66".to_string())
+        );
+        assert_eq!(parse_mod_info_version("version=66"), Some("66".to_string()));
+        assert_eq!(parse_mod_info_version(""), None);
+        assert_eq!(parse_mod_info_version("no version here"), None);
+        assert_eq!(parse_mod_info_version("version = \"66\""), None);
+        assert_eq!(parse_mod_info_version("version_number = 66"), None);
+        assert_eq!(parse_mod_info_version("-- version = 66"), None);
+        assert_eq!(parse_mod_info_version("version = "), None);
+    }
+
+    #[test]
+    fn coop_channel_registration() {
+        assert!(CHANNELS.contains(&CHANNEL_COOP));
+        assert!(SYNC_CHANNELS.contains(&CHANNEL_COOP));
+        assert_eq!(channel_subdir(CHANNEL_COOP), Some(""));
     }
 
     #[test]

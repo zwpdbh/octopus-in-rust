@@ -3,9 +3,11 @@
 This document is written to be **executed by an LLM agent** (Kimi Code CLI,
 Claude Code, etc.). It records the exact procedure that was used to deploy
 fafcn to the `majiko` home server on 2026-08-19, including the pitfalls that
-were hit and how they were fixed. For the generic runbook (fresh server,
-nginx + TLS, build-on-server option) see `how_to_deploy_fafcn.md` in the same
-directory.
+were hit and how they were fixed. Updated 2026-08-28: the site moved from
+`https://8v.pub:10041` to **`https://faforever.cn:60`** — a domain registered
+on AliCloud (see the "Public domain" section). For the generic runbook (fresh
+server, nginx + TLS, build-on-server option) see `how_to_deploy_fafcn.md` in
+the same directory.
 
 > **Sensitive values:** all secrets below are shown as `<PLACEHOLDERS>`.
 > Real values live only on the machines themselves:
@@ -19,13 +21,13 @@ directory.
 >   local `.env` over the server one; if you must (Phase 4), re-apply the
 >   three `FAFCN_LLM_*` lines afterwards.
 
-## Server facts (verified 2026-08-19)
+## Server facts (verified 2026-08-19; public URL updated 2026-08-28)
 
 | Fact | Value |
 |---|---|
 | SSH | `majiko@8v.pub -p 10040` (password auth; sudo uses the same password) |
 | LAN IP | `192.168.50.10` (behind a firewall/NAT; admin forwards ports on request) |
-| Public access | external **TCP 10041** → `192.168.50.10:3000` → `https://8v.pub:10041` |
+| Public access | external **TCP 60** → `192.168.50.10:3000` → `https://faforever.cn:60` (since 2026-08-28; previously TCP 10041 → `https://8v.pub:10041`) |
 | External 80/443 | **NOT available** on the server itself — HTTPS is terminated at the friend's gateway reverse proxy (see "Firewall / HTTPS note") |
 | Internet from server | GitHub etc. **blocked**; proxy gateway available at `http://192.168.50.1:7893` if ever needed (`export https_proxy=http://192.168.50.1:7893`) |
 | OS / resources | Ubuntu 22.04, 4 cores, 5.8 GB RAM, ~34 GB free disk |
@@ -48,12 +50,14 @@ additional port forwards for sync/upload features.**
 
 ### Inbound (the only two forwarded ports)
 
-| External (8v.pub) | Internal | Protocol | Purpose |
+| External | Internal | Protocol | Purpose |
 |---|---|---|---|
 | TCP 10040 | `192.168.50.10:22` | SSH | server administration (password auth) |
-| TCP 10041 | `192.168.50.10:3000` | TCP / HTTP | **all fafcn traffic**: web, API, WebSocket, gamedata up/download |
+| TCP 60 | `192.168.50.10:3000` | TCP / HTTP | **all fafcn traffic**: web, API, WebSocket, gamedata up/download (since 2026-08-28; previously TCP 10041 via `8v.pub`) |
 
-External 80/443 are not available. Server-side `ufw` is **inactive** — the
+External 80/443 are **blocked by the residential ISP** — that is why the
+public URL carries a port (`:60`, previously `:10041`). Server-side `ufw` is
+**inactive** — the
 edge firewall is the only packet filter; keep it that way (do not "harden"
 ufw on the server without adding an SSH allow rule first, or you will lock
 everyone out).
@@ -70,11 +74,12 @@ everyone out).
 
 ```
 player browser / fafcn-sync (download)          uploader's fafcn-sync (upload)
-        │ https://8v.pub:10041                           │  + Bearer UPLOAD_TOKEN
+        │ https://faforever.cn:60                      │  + Bearer UPLOAD_TOKEN
         └──────────────┬─────────────────────────────────┘
                        ▼
-           friend's TLS reverse proxy (terminates HTTPS, holds the cert)
-                       ▼  plain HTTP, external TCP 10041 (edge forward)
+      friend's Lucky reverse proxy (terminates HTTPS, holds the
+      faforever.cn cert; also runs DDNS + ACME for the domain)
+                       ▼  plain HTTP, external TCP 60 (edge forward)
               192.168.50.10:3000  fafcn-server (plain HTTP, single port)
                        │
                        ├── web SPA / JSON APIs
@@ -86,10 +91,11 @@ player browser / fafcn-sync (download)          uploader's fafcn-sync (upload)
 
 1. `curl -s http://127.0.0.1:3000/api/health` **on the server** — if this
    fails, the service is down (`journalctl -u fafcn -n 50`), network is fine.
-2. `curl -s https://8v.pub:10041/api/health` from outside — if this fails
+2. `curl -s https://faforever.cn:60/api/health` from outside — if this fails
    but step 1 works, the **edge forward** is broken (most common cause: the
    machine's LAN IP changed via DHCP — ask the admin to update the rule or
-   pin the IP).
+   pin the IP). If DNS no longer resolves to the friend's current public IP,
+   his Lucky DDNS task is down — ask him to check it.
 3. If only uploads fail with 401/403: wrong/rotated `UPLOAD_TOKEN`, not a
    network issue.
 
@@ -175,7 +181,7 @@ Facts and notices (all learned the hard way on 2026-08-19):
     -d "{\"model\":\"<MODEL>\",\"messages\":[{\"role\":\"user\",\"content\":\"say pong\"}],\"max_tokens\":64}"'
 
   # 2. after .env edit + restart, end-to-end gate (expect "status":"ok")
-  curl -s --max-time 60 https://8v.pub:10041/api/health
+  curl -s --max-time 60 https://faforever.cn:60/api/health
   ```
 
   `GET /api/health` is the composite gate: standard service health
@@ -205,7 +211,7 @@ Facts and notices (all learned the hard way on 2026-08-19):
    ```
 
 3. Every remote verification should go through the **public URL**
-   `https://8v.pub:10041` as well as `127.0.0.1:3000` on the server — the
+   `https://faforever.cn:60` as well as `127.0.0.1:3000` on the server — the
    port-forward rule can break independently of the service.
 
 ## Full redeploy from scratch (if /opt/fafcn was wiped)
@@ -319,13 +325,13 @@ $SSH 'systemctl is-active fafcn && curl -s http://127.0.0.1:3000/api/health'
   `journalctl -u fafcn -n 50 --no-pager` (see Pitfall 1).
 
 ```bash
-curl -s https://8v.pub:10041/api/health             # via public URL
-curl -s https://8v.pub:10041/api/gamedata/status    # expect channels: gamedata, map-generator, faf-client
-curl -s -o /dev/null -w "%{http_code}\n" https://8v.pub:10041/
+curl -s https://faforever.cn:60/api/health             # via public URL
+curl -s https://faforever.cn:60/api/gamedata/status    # expect channels: gamedata, map-generator, faf-client
+curl -s -o /dev/null -w "%{http_code}\n" https://faforever.cn:60/
 ```
 
 - Gate 2: all return 200 / expected JSON through the **public** address.
-- Gate 3 (browser): ask the user to hard-refresh `https://8v.pub:10041/`
+- Gate 3 (browser): ask the user to hard-refresh `https://faforever.cn:60/`
   (Ctrl+Shift+R) and confirm the home page renders with units loaded —
   this catches a debug web bundle that API checks cannot.
 
@@ -425,19 +431,59 @@ Prevention (already encoded in the gates above):
 - After deploy, tell the user to hard-refresh (Ctrl+Shift+R) — browsers
   cache the old JS/wasm aggressively.
 
+## Public domain (`faforever.cn`, registered on AliCloud)
+
+Since 2026-08-28 the site is served as **`https://faforever.cn:60`**. The
+domain is registered on **AliCloud** (registrant: the user, personal;
+registered 2026-08-25, expires 2027-08-25; real-name verification done).
+Renewal is a normal AliCloud console operation — set a reminder for
+~2027-07, an expired domain takes the whole site down.
+
+The split of responsibilities:
+
+- **AliCloud DNS** (we manage, `aliyun` CLI profile `default` works):
+  hosts the zone. The only record needed is an **A record `faforever.cn` →
+  the friend's current public IP** (113.5.92.224 at migration time).
+- **The friend's Lucky gateway** (he manages): runs a **DDNS task** that
+  keeps the A record in sync with his dynamic public IP via the AliCloud
+  DNS API, requests/renews the TLS cert (ACME **DNS-01**, Let's Encrypt),
+  and reverse-proxies `faforever.cn:60` → `192.168.50.10:3000`.
+- For that API access the friend holds a **dedicated AliCloud RAM
+  sub-account AccessKey** scoped to DNS operations on `faforever.cn` only
+  (custom policy on `acs:alidns:*:*:domain/faforever.cn`). It cannot touch
+  ECS or other domains. If it ever leaks, revoke it in the RAM console and
+  issue a new one the same way. Never hand out the main-account or the
+  local CLI's AccessKey.
+- **ICP filing (备案):** a `.cn` domain pointed at a mainland-China
+  residential line normally requires ICP registration for web service on
+  80/443. Those ports are ISP-blocked here anyway; running on a
+  non-standard port (`:60`) is the current working state, but be aware the
+  site could theoretically be asked to file. If that ever happens, the
+  fallback is going back to `8v.pub` or moving the frontend to a filed
+  host.
+
+The old address `https://8v.pub:10041` may stay up as a legacy alias — do
+not rely on it; all docs, clients, and `MAJIKO_PUBLIC_URL` use the new
+domain.
+
 ## Firewall / HTTPS note
 
 Port forwarding and connectivity troubleshooting live in "Network
 configuration" above. This section covers only HTTPS.
 
-### HTTPS (LIVE since 2026-08-19): TLS termination at the gateway
+### HTTPS: TLS termination at the gateway (Lucky)
 
-The site is served as **`https://8v.pub:10041`**. TLS is **not** done on
+The site is served as **`https://faforever.cn:60`**. TLS is **not** done on
 this server — the network admin (the user's friend) terminates it on his
-own reverse proxy in front of the port forward:
+own reverse proxy (Lucky) in front of the port forward. The certificate is
+a real **Let's Encrypt** cert for `faforever.cn`, issued via ACME DNS-01
+against AliCloud DNS and auto-renewed by Lucky (before Lucky was
+configured, the port served Lucky's self-signed default cert — if you ever
+see `CN=Lucky` again on the public port, the domain vhost/cert binding is
+broken on his side):
 
 ```
-browser ──https──▶ friend's reverse proxy (holds the 8v.pub cert)
+browser ──https──▶ friend's Lucky reverse proxy (holds the faforever.cn cert)
                    ──http──▶ 192.168.50.10:3000 (fafcn-server, plain HTTP)
 ```
 
@@ -470,7 +516,7 @@ Consequences for anyone maintaining this deployment:
   ```
 
 - The upload token now travels inside TLS (`fafcn-sync upload --server
-  https://8v.pub:10041 ...`). Rotate it by editing `/opt/fafcn/.env` +
+  https://faforever.cn:60 ...`). Rotate it by editing `/opt/fafcn/.env` +
   `systemctl restart fafcn` if ever concerned.
 
 ## Ops cheat sheet
@@ -485,5 +531,5 @@ $SSH 'echo "<SSH_PASSWORD>" | sudo -S -k systemctl restart fafcn 2>/dev/null'
 $SSH 'systemctl is-active fafcn'
 
 # upload gamedata from a FAF machine (token is in /opt/fafcn/.env)
-fafcn-sync upload --server https://8v.pub:10041 --token <UPLOAD_TOKEN> --dir "C:\ProgramData\FAForever"
+fafcn-sync upload --server https://faforever.cn:60 --token <UPLOAD_TOKEN> --dir "C:\ProgramData\FAForever"
 ```

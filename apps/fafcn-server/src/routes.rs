@@ -10,7 +10,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use fafcn_gamedata::{CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR};
+use fafcn_gamedata::{
+    CHANNEL_COOP, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR,
+};
 use tower_http::services::ServeDir;
 
 use crate::{handlers, state::AppState};
@@ -41,6 +43,10 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
         )
         .route("/api/gamedata/status", get(handlers::gamedata::get_status))
         .route(
+            "/api/gamedata/upstream/refresh",
+            post(handlers::gamedata::upstream_refresh),
+        )
+        .route(
             "/api/gamedata/channels/{channel}/upload/check",
             post(handlers::gamedata::upload_check),
         )
@@ -68,6 +74,10 @@ pub fn router(gamedata_root: &Path) -> Router<AppState> {
         .nest_service(
             "/api/gamedata/channels/maps/files",
             ServeDir::new(channels.join(CHANNEL_MAPS).join("files")),
+        )
+        .nest_service(
+            "/api/gamedata/channels/coop/files",
+            ServeDir::new(channels.join(CHANNEL_COOP).join("files")),
         )
         .route(
             "/api/gamedata/client/{filename}",

@@ -57,14 +57,18 @@ impl ClientConfig {
 
     /// Fill unset fields from config the server embedded into this executable
     /// at download time (e.g. the mirror address the binary came from).
-    /// The embedded address always wins over a remembered one: a freshly
-    /// downloaded binary should talk to the mirror it came from, even if an
-    /// older run remembered a different (possibly stale) address. Dev builds
-    /// have no embedded config, so the remembered address is the fallback.
+    /// The embedded address is only a fallback: it seeds a freshly downloaded
+    /// binary (which has no remembered address yet), but a remembered one
+    /// always wins — otherwise the user could never change the mirror in the
+    /// Settings tab (the edit was saved to disk, then overwritten by the
+    /// embedded address on the next launch). Dev builds have no embedded
+    /// config, so the remembered address is the fallback there.
     pub fn with_embedded_defaults(mut self) -> Self {
-        if let Some(embedded) = read_embedded_config() {
-            if embedded.server.is_some() {
-                self.server = embedded.server;
+        if self.server.is_none() {
+            if let Some(embedded) = read_embedded_config() {
+                if embedded.server.is_some() {
+                    self.server = embedded.server;
+                }
             }
         }
         self
@@ -96,5 +100,5 @@ fn config_path() -> PathBuf {
 /// Where GUI crash/exit reports are appended. GUI release builds have no
 /// console, so a panic would otherwise make the window vanish silently.
 pub fn crash_log_path() -> PathBuf {
-    config_dir().join("crash.log")
+    config_dir().join("fafcn-sync-log.log")
 }

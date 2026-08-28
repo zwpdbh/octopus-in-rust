@@ -16,6 +16,7 @@ mod error;
 mod handlers;
 mod routes;
 mod state;
+mod updater;
 
 use anyhow::Context;
 use axum::http::{header, Method};
@@ -81,17 +82,38 @@ async fn main() -> Result<()> {
         server_config.assets_dir.display()
     );
 
+    let gamedata = Arc::new(crate::handlers::gamedata::GamedataStore::new(
+        server_config.gamedata_dir.clone(),
+        server_config.gamedata_upload_token.clone(),
+    )?);
     let state = AppState {
         blueprints,
         portraits_dir: Arc::new(server_config.portraits_dir),
         assets_dir: Arc::new(server_config.assets_dir.clone()),
         qa_config,
-        gamedata: Arc::new(crate::handlers::gamedata::GamedataStore::new(
-            server_config.gamedata_dir.clone(),
-            server_config.gamedata_upload_token.clone(),
-        )?),
+        gamedata: gamedata.clone(),
         gamedata_client_dir: Arc::new(server_config.gamedata_client_dir.clone()),
+        updater: crate::updater::UpdaterHandle::new(gamedata),
     };
+    // Always-on upstream poller: checks for new official FAF patches daily.
+    crate::updater::spawn_poller(state.updater.clone());
+
+    // Startup self-heal: drop map versions whose files are missing on disk
+    // (e.g. lost in a migration) so clients stop failing on them.
+    {
+        let store = state.gamedata.clone();
+        tokio::task::spawn_blocking(move || match store.audit_maps_channel() {
+            Ok(dropped) if !dropped.is_empty() => {
+                tracing::warn!(
+                    count = dropped.len(),
+                    ?dropped,
+                    "maps audit dropped broken map versions"
+                );
+            }
+            Ok(_) => tracing::info!("maps audit: all manifest files present"),
+            Err(err) => tracing::warn!(error = %format!("{err:#}"), "maps audit failed"),
+        });
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

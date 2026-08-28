@@ -5049,6 +5049,7 @@ dependencies = [
  "fafcn-gamedata",
  "futures",
  "llm-provider",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -5057,6 +5058,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -5065,6 +5067,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "chrono",
  "clap",
  "eframe",
  "fafcn-gamedata",

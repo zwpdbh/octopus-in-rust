@@ -31,8 +31,9 @@ const DEFAULT_SSH_PORT: u16 = 10040;
 /// Install directory on the server (owned by the SSH user).
 const DEFAULT_DEPLOY_DIR: &str = "/opt/fafcn";
 /// Public base URL of the deployed site (friend's TLS reverse proxy →
-/// edge forward → `192.168.50.10:3000`). HTTPS since 2026-08-19.
-const DEFAULT_PUBLIC_URL: &str = "https://8v.pub:10041";
+/// edge forward → `192.168.50.10:3000`). Moved from `https://8v.pub:10041`
+/// to the AliCloud-registered domain on 2026-08-28.
+const DEFAULT_PUBLIC_URL: &str = "https://faforever.cn:60";
 /// systemd unit name on the server.
 const SERVICE_NAME: &str = "fafcn";
 
