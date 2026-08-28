@@ -787,4 +787,12 @@ impl eframe::App for SyncApp {
                 });
         });
     }
+
+    /// Persist the settings on window close. The tab-switch save alone is
+    /// not enough: a user who edits the mirror address and closes the window
+    /// directly from the Settings tab would otherwise lose the edit (and the
+    /// embedded mirror address would greet them again on the next launch).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let _ = self.persisted_config().save();
+    }
 }

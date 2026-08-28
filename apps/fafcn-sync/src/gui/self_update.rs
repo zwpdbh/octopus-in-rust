@@ -70,6 +70,11 @@ impl SyncApp {
 
     /// Download the newer build from the mirror, then swap and relaunch.
     pub(super) fn start_self_update(&mut self) {
+        // Persist the current settings (above all the mirror address) BEFORE
+        // the swap: `update::apply_and_restart` relaunches via a hard
+        // `std::process::exit`, which never runs `on_exit` — and the user
+        // just proved this address is the right one by updating through it.
+        let _ = self.persisted_config().save();
         let server = self.server.trim().trim_end_matches('/').to_string();
         let dest = match update::new_exe_path() {
             Ok(path) => path,

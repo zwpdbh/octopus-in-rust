@@ -25,7 +25,7 @@ directory.
 |---|---|
 | SSH | `majiko@8v.pub -p 10040` (password auth; sudo uses the same password) |
 | LAN IP | `192.168.50.10` (behind a firewall/NAT; admin forwards ports on request) |
-| Public access | external **TCP 10041** → `192.168.50.10:3000` → `https://8v.pub:10041` |
+| Public access | external **TCP 60** → `192.168.50.10:3000` → `https://faforever.cn:60` (since 2026-08-28; previously TCP 10041 → `https://8v.pub:10041`) |
 | External 80/443 | **NOT available** on the server itself — HTTPS is terminated at the friend's gateway reverse proxy (see "Firewall / HTTPS note") |
 | Internet from server | GitHub etc. **blocked**; proxy gateway available at `http://192.168.50.1:7893` if ever needed (`export https_proxy=http://192.168.50.1:7893`) |
 | OS / resources | Ubuntu 22.04, 4 cores, 5.8 GB RAM, ~34 GB free disk |
