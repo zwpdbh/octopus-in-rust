@@ -56,7 +56,7 @@ Original message:
 > I'm from the Chinese FAF community (FAFCN). Until recently we were just a private QQ
 > group — not great for helping Chinese RTS players discover and start playing FA.
 >
-> That's changing: we're building a public website — https://8v.pub:10041/ — with two
+> That's changing: we're building a public website — https://faforever.cn:60/ — with two
 > goals:
 >
 > 1. Introduce FA to Chinese RTS players (China has a huge RTS player base that has
@@ -84,7 +84,7 @@ Original message:
 > Could you register an OAuth2 client for us? Details:
 >
 > - Redirect URIs:
->   - prod: `https://8v.pub:10041/api/auth/callback` (note the non-standard port)
+>   - prod: `https://faforever.cn:60/api/auth/callback` (note the non-standard port)
 >   - dev: `http://localhost:3000/api/auth/callback`
 > - Grant type: authorization code
 > - Scope: `public_profile`
@@ -98,7 +98,7 @@ Original message:
 
 1. **`client_id` + `client_secret`** for a confidential client with the authorization
    code grant.
-2. **Both redirect URIs whitelisted exactly** — including the `:10041` port on the
+2. **Both redirect URIs whitelisted exactly** — including the `:60` port on the
    prod one (Hydra requires exact matches; if the port is a problem, we move the site
    to standard 443 first).
 3. **Endpoint confirmation** (verified by probing, 2026-08-24): the authorization
@@ -137,9 +137,9 @@ Do these **in order**; each step gates the next.
    curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
      'https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=<CLIENT_ID>&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Fauth%2Fcallback&scope=public_profile&state=test'
 
-   # prod redirect URI (confirms the :10041 port was whitelisted)
+   # prod redirect URI (confirms the :60 port was whitelisted)
    curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
-     'https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=<CLIENT_ID>&redirect_uri=https%3A%2F%2F8v.pub%3A10041%2Fapi%2Fauth%2Fcallback&scope=public_profile&state=test'
+     'https://hydra.faforever.com/oauth2/auth?response_type=code&client_id=<CLIENT_ID>&redirect_uri=https%3A%2F%2Ffaforever.cn%3A60%2Fapi%2Fauth%2Fcallback&scope=public_profile&state=test'
    ```
 
    - Redirect to a login/consent page → registered **and** that redirect URI is
@@ -159,7 +159,7 @@ Do these **in order**; each step gates the next.
    4.2 if it differs from the assumption.
 5. **Deploy**: set the env vars on the prod server and add a matching section to
    `docs/fafcn/how_to_deploy_fafcn_on_majiko.md`; verify the prod login round-trip at
-   `https://8v.pub:10041`.
+   `https://faforever.cn:60`.
 6. **Report back to FAF** that the integration works, and settle the remaining open
    items: test-environment client (test.faforever.com), `/me` shape confirmation, and
    whether extra scopes are possible later for stats/replay widgets.
