@@ -71,6 +71,7 @@ pub(super) enum Txt {
     FafClientDirLabel,
     FafClientFound,
     FafClientMissing,
+    FafClientDirMissing,
     CopyLog,
     UpdateChecking,
     UpdateCheckNow,
@@ -195,8 +196,12 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::FafClientFound, GuiLang::En) => {
             "faf-client.exe found — maps sync into maps_and_mods/maps"
         }
-        (Txt::FafClientMissing, GuiLang::Zh) => "未找到 faf-client.exe,将跳过地图同步",
-        (Txt::FafClientMissing, GuiLang::En) => "faf-client.exe not found — maps sync will be skipped",
+        (Txt::FafClientMissing, GuiLang::Zh) => "目录存在但没有 faf-client.exe,将跳过地图同步",
+        (Txt::FafClientMissing, GuiLang::En) => {
+            "folder exists but has no faf-client.exe — maps sync will be skipped"
+        }
+        (Txt::FafClientDirMissing, GuiLang::Zh) => "目录不存在,将跳过地图同步",
+        (Txt::FafClientDirMissing, GuiLang::En) => "folder does not exist — maps sync will be skipped",
         (Txt::CopyLog, GuiLang::Zh) => "复制日志",
         (Txt::CopyLog, GuiLang::En) => "Copy log",
         (Txt::UpdateChecking, GuiLang::Zh) => "正在检查更新…",

@@ -955,8 +955,9 @@ pub fn maps_dir(faf_client_root: &Path) -> PathBuf {
 
 /// Find the FAF Client install root automatically: a folder containing
 /// `faf-client.exe`, scanning drive roots and their immediate subfolders
-/// (e.g. `E:\FAF Client`). Candidates that also contain `uninstall.exe` or
-/// an existing `maps_and_mods` folder rank first.
+/// (e.g. `E:\FAF Client`) plus the default install location two levels down
+/// (`C:\Program Files\FAF Client`). Candidates that also contain
+/// `uninstall.exe` or an existing `maps_and_mods` folder rank first.
 pub fn autodetect_faf_client_dir() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     for letter in b'C'..=b'Z' {
@@ -971,6 +972,17 @@ pub fn autodetect_faf_client_dir() -> Option<PathBuf> {
                     .map(|e| e.path())
                     .filter(|p| p.is_dir()),
             );
+        }
+        // The install4j default is <drive>:\Program Files\FAF Client — one
+        // level deeper than the scan above reaches.
+        for pf in ["Program Files", "Program Files (x86)"] {
+            if let Ok(rd) = fs::read_dir(root.join(pf)) {
+                candidates.extend(
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_dir()),
+                );
+            }
         }
     }
     if let Ok(home) = std::env::var("HOME") {

@@ -102,3 +102,36 @@ fn config_path() -> PathBuf {
 pub fn crash_log_path() -> PathBuf {
     config_dir().join("fafcn-sync-log.log")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Windows paths with spaces and backslashes (e.g. the default FAF Client
+    /// install location `C:\Program Files\FAF Client`) must survive the
+    /// config.toml round-trip byte-for-byte: TOML basic strings treat `\` as
+    /// an escape character, so a serialization bug here silently corrupts
+    /// every remembered Windows path.
+    #[test]
+    fn windows_paths_with_spaces_survive_toml_round_trip() {
+        let cfg = ClientConfig {
+            server: Some("https://faforever.cn:60".to_string()),
+            gamedata_dir: Some(PathBuf::from(r"C:\ProgramData\FAForever")),
+            faf_client_dir: Some(PathBuf::from(r"C:\Program Files\FAF Client")),
+            lang: Some("zh".to_string()),
+            upload_token: Some("tok en".to_string()),
+            uploader: Some("player one".to_string()),
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: ClientConfig = toml::from_str(&text).unwrap();
+        assert_eq!(
+            back.faf_client_dir.as_deref(),
+            Some(Path::new(r"C:\Program Files\FAF Client"))
+        );
+        assert_eq!(
+            back.gamedata_dir.as_deref(),
+            Some(Path::new(r"C:\ProgramData\FAForever"))
+        );
+        assert_eq!(back.upload_token.as_deref(), Some("tok en"));
+    }
+}

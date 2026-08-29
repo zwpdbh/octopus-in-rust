@@ -293,10 +293,16 @@ impl SyncApp {
                         }
                     });
                 });
-                if sync::is_valid_faf_client_dir(&PathBuf::from(self.faf_client_dir.trim())) {
+                let dir = PathBuf::from(self.faf_client_dir.trim());
+                if sync::is_valid_faf_client_dir(&dir) {
                     ui.colored_label(
                         egui::Color32::LIGHT_GREEN,
                         tr(self.lang, Txt::FafClientFound),
+                    );
+                } else if dir.as_os_str().is_empty() || !dir.is_dir() {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        tr(self.lang, Txt::FafClientDirMissing),
                     );
                 } else {
                     ui.colored_label(egui::Color32::YELLOW, tr(self.lang, Txt::FafClientMissing));
