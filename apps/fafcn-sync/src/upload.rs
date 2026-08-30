@@ -127,7 +127,7 @@ pub struct UploadSummary {
 
 /// Run the CLI `upload-client` subcommand: publish one FAF client installer.
 pub async fn run_client(args: UploadClientArgs) -> Result<()> {
-    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let mut cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
     let server = api::resolve_server(args.server, &cfg)?;
     let uploader = args
         .uploader
@@ -174,7 +174,7 @@ pub async fn run_client(args: UploadClientArgs) -> Result<()> {
 
 /// Run the CLI `upload-maps` subcommand: publish a folder of FAF maps.
 pub async fn run_maps(args: UploadMapsArgs) -> Result<()> {
-    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let mut cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
     let server = api::resolve_server(args.server, &cfg)?;
     let uploader = args
         .uploader
@@ -345,7 +345,7 @@ struct ChannelPlan {
 
 /// Run the CLI `upload` subcommand (prints progress to stdout).
 pub async fn run(args: UploadArgs) -> Result<()> {
-    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let mut cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
     let server = api::resolve_server(args.server, &cfg)?;
     let uploader = args
         .uploader

@@ -129,7 +129,7 @@ pub(super) struct SyncApp {
 
 impl SyncApp {
     fn new() -> Self {
-        let cfg = ClientConfig::load().with_embedded_defaults();
+        let cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
         let dir = cfg
             .gamedata_dir
             .clone()

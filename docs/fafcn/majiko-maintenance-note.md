@@ -64,9 +64,9 @@ cargo xtask fafcn majiko-health              # 三层体检（SSH→服务→公
 ## 五、fafcn-sync 客户端要点
 
 - 玩家配置：`%APPDATA%\fafcn-sync\config.toml`（server 地址等）
-- exe 尾部内嵌下载来源地址（服务器按请求 origin 写入），仅作首次运行兜底；用户保存的地址优先（2026-08-28 三连修：启动覆盖 / 关窗不存 / 自更新硬退不存）
-- 自更新：`std::process::exit` 硬切换 exe；新 build 通过 `majiko-deploy-file-sync` 发布，玩家在客户端点「检查更新」即可
-- 当前最新 build：`dev-6a90fdaf-6052`
+- exe 尾部内嵌下载来源地址（服务器按请求 origin 写入）。优先级：**新 build 首次运行时采用内嵌地址**（靠 `config.toml` 里的 `last_build_tag` 识别，可自动修复旧版本残留的死域名地址），之后用户保存的地址优先（2026-08-28/30 四连修：启动覆盖 / 关窗不存 / 自更新硬退不存 / 旧配置残留）
+- 自更新：`std::process::exit` 硬切换 exe（切换前会先保存配置）；新 build 通过 `majiko-deploy-file-sync` 发布，玩家在客户端点「检查更新」即可
+- 当前最新 build：`dev-6a93905d-bc6c`
 
 ## 六、FAF 官方对接状态
 

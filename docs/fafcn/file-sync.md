@@ -308,8 +308,12 @@ enforcement.
 `GET /api/gamedata/client/<file>` patches the exe per request: a JSON config
 (mirror origin from `X-Forwarded-Proto` + `Host`) is appended as PE/ELF
 overlay data (`crates/fafcn-gamedata/src/overlay.rs`), so a player's client
-starts with 镜像地址 pre-filled. Remembered config wins over the embedded
-value. Release binaries are published by `cargo xtask fafcn file-sync`.
+starts with 镜像地址 pre-filled. On the **first run of a new build**
+(`ClientConfig.last_build_tag` differs from the running `BUILD_TAG`), the
+embedded origin replaces the remembered address — this repairs stale
+addresses left by old builds (e.g. a retired domain) without hardcoding any
+URL; afterwards the remembered address wins again, so user edits stick.
+Release binaries are published by `cargo xtask fafcn file-sync`.
 
 The client self-updates (`apps/fafcn-sync/src/update.rs` + `gui/self_update.rs`):
 it compares its `BUILD_TAG` against the mirror's `StatusResponse.client_tag`

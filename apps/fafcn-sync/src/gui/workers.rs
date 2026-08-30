@@ -178,6 +178,9 @@ impl SyncApp {
     pub(super) fn persisted_config(&self) -> ClientConfig {
         let mut cfg = ClientConfig::load();
         cfg.server = Some(self.server.trim().trim_end_matches('/').to_string());
+        // Stamp the running build, or the next launch would look like the
+        // first run of a new build again and re-adopt the embedded address.
+        cfg.last_build_tag = Some(crate::BUILD_TAG.to_string());
         cfg.gamedata_dir = Some(self.faf_root());
         cfg.lang = Some(self.lang.code().to_string());
         if !self.token.trim().is_empty() {

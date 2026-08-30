@@ -145,7 +145,7 @@ pub struct SyncSummary {
 
 /// Run the CLI `sync` subcommand (prints progress to stdout).
 pub async fn run(args: SyncArgs) -> Result<()> {
-    let mut cfg = ClientConfig::load().with_embedded_defaults();
+    let mut cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
     let server = api::resolve_server(args.server, &cfg)?;
     let root = resolve_faf_dir(args.dir, &cfg)?;
     println!("Mirror:    {server}");
