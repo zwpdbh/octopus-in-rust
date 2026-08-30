@@ -159,6 +159,8 @@ pub enum Text {
     WhyPriceNote,
     HomeCtaGuide,
     NavGuide,
+    FooterDisclaimer,
+    HomeCommunityNote,
     GuideTitle,
     GuideIntro,
     GuideStep1Title,
@@ -502,6 +504,21 @@ impl Text {
             }
             (Text::HomeCtaGuide, Lang::En) => "Get started guide",
             (Text::HomeCtaGuide, Lang::Zh) => "新手上路指南",
+
+            // Community-run disclaimer (FAF staff asked us to make the
+            // non-official status unmistakable, since faforever.cn looks
+            // like an official domain).
+            (Text::FooterDisclaimer, Lang::En) => {
+                "fafcn is a community-run fan site, not hosted or endorsed by FAF. Official site:"
+            }
+            (Text::FooterDisclaimer, Lang::Zh) => "fafcn 是玩家社区自建站点,并非 FAF 官方网站。官方网站:",
+            (Text::HomeCommunityNote, Lang::En) => {
+                "This site is built and maintained by the Chinese FAF player community (fafcn). \
+                 It is NOT hosted, operated, or endorsed by FAF. The official FAF website is"
+            }
+            (Text::HomeCommunityNote, Lang::Zh) => {
+                "本站由 FAF 中国玩家社区(fafcn)自发建设与维护,并非 FAF 官方运营的服务。FAF 官方网站是"
+            }
 
             // Navbar: guide.
             (Text::NavGuide, Lang::En) => "Guide",
