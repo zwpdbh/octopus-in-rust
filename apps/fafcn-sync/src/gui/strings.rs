@@ -90,6 +90,8 @@ pub(super) enum Txt {
     PanelOfficial,
     DirInvalidOpenSettings,
     UpstreamStatusUnknown,
+    SyncContent,
+    SyncContentHint,
 }
 
 pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
@@ -240,6 +242,10 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         }
         (Txt::UpstreamStatusUnknown, GuiLang::Zh) => "服务器未返回更新状态",
         (Txt::UpstreamStatusUnknown, GuiLang::En) => "server returned no updater status",
+        (Txt::SyncContent, GuiLang::Zh) => "勾选以同步额外内容",
+        (Txt::SyncContent, GuiLang::En) => "Sync optional content",
+        (Txt::SyncContentHint, GuiLang::Zh) => "体积较大，不勾选也能正常游戏",
+        (Txt::SyncContentHint, GuiLang::En) => "large downloads; not needed for regular games",
     }
 }
 

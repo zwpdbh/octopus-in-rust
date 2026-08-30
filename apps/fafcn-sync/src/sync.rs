@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use fafcn_gamedata::{
     channel_subdir, compare_version_strings, map_folder_version, map_generator_jar_version,
     sha256_bytes, sha256_file, validate_relative_path, FileEntry, Manifest, StatusResponse,
-    UpdaterComponent, UpdaterInfo, UpdaterState, CHANNEL_GAMEDATA, CHANNEL_MAPS,
+    UpdaterComponent, UpdaterInfo, UpdaterState, CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS,
     CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP, SYNC_CHANNELS,
 };
 use walkdir::WalkDir;
@@ -143,15 +143,31 @@ pub struct SyncSummary {
     pub extra_files: Vec<String>,
 }
 
+/// Optional content switches for a sync run.
+///
+/// Both default to `false` (opt-in): the `coop` channel (voice-over banks)
+/// and the `maps` channel are large and not needed to play regular games.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyncOptions {
+    /// Sync the `coop` channel (co-op missions + voice-overs, big).
+    pub coop: bool,
+    /// Sync the `maps` channel into the FAF Client folder.
+    pub maps: bool,
+}
+
 /// Run the CLI `sync` subcommand (prints progress to stdout).
 pub async fn run(args: SyncArgs) -> Result<()> {
+    let options = SyncOptions {
+        coop: args.with_coop,
+        maps: args.with_maps,
+    };
     let mut cfg = ClientConfig::load().with_embedded_defaults(crate::BUILD_TAG);
     let server = api::resolve_server(args.server, &cfg)?;
     let root = resolve_faf_dir(args.dir, &cfg)?;
     println!("Mirror:    {server}");
     println!("FAForever: {}", root.display());
 
-    let summary = sync_gamedata(&server, &root, &mut print_progress).await?;
+    let summary = sync_gamedata(&server, &root, &options, &mut print_progress).await?;
 
     for extra in &summary.extra_files {
         println!("Note: {extra} is not in the mirror manifest (left untouched)");
@@ -165,16 +181,22 @@ pub async fn run(args: SyncArgs) -> Result<()> {
     }
 
     // Maps live below the FAF Client folder, not FAForever.
-    match resolve_faf_client_dir(args.faf_client_dir, &cfg) {
-        Some(client_root) => {
+    match (
+        options.maps,
+        resolve_faf_client_dir(args.faf_client_dir, &cfg),
+    ) {
+        (true, Some(client_root)) => {
             sync_maps(&server, &client_root, &mut print_progress).await?;
             cfg.faf_client_dir = Some(client_root);
         }
-        None => {
+        (true, None) => {
             println!(
                 "FAF Client folder not found — skipping maps sync \
                  (pass --faf-client-dir once to enable it)"
             );
+        }
+        (false, _) => {
+            println!("maps sync disabled (pass --with-maps to enable)");
         }
     }
 
@@ -377,9 +399,12 @@ pub(crate) async fn fetch_status(http: &reqwest::Client, server: &str) -> Result
 }
 
 /// Sync every channel below `faf_root` against the mirror at `server`.
+///
+/// The `coop` channel is synced only when `options.coop` is set.
 pub async fn sync_gamedata(
     server: &str,
     faf_root: &Path,
+    options: &SyncOptions,
     progress: &mut dyn FnMut(SyncProgress),
 ) -> Result<SyncSummary> {
     prepare_upstream(server, progress).await;
@@ -391,6 +416,9 @@ pub async fn sync_gamedata(
     };
 
     for channel in SYNC_CHANNELS {
+        if *channel == CHANNEL_COOP && !options.coop {
+            continue;
+        }
         progress(SyncProgress::ChannelStarted {
             channel: channel.to_string(),
         });

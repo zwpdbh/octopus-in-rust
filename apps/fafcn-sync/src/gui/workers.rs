@@ -32,6 +32,10 @@ impl SyncApp {
         let dir = self.faf_root();
         let faf_client = PathBuf::from(self.faf_client_dir.trim());
         let faf_client = sync::is_valid_faf_client_dir(&faf_client).then_some(faf_client);
+        let options = sync::SyncOptions {
+            coop: self.sync_coop,
+            maps: self.sync_maps,
+        };
         let (tx, rx) = channel();
         self.worker = Some(rx);
         self.progress = (0, 0);
@@ -49,15 +53,20 @@ impl SyncApp {
                     let mut forward = |event| {
                         let _ = tx.send(WorkerMsg::Sync(event));
                     };
-                    let summary = sync::sync_gamedata(&server, &dir, &mut forward).await?;
+                    let summary =
+                        sync::sync_gamedata(&server, &dir, &options, &mut forward).await?;
                     // Maps live below the FAF Client folder, not FAForever.
                     match &faf_client {
-                        Some(root) => {
+                        Some(root) if options.maps => {
                             sync::sync_maps(&server, root, &mut forward).await?;
                         }
-                        None => {
+                        Some(_) => {
+                            // Maps checkbox off: nothing to do.
+                        }
+                        None if options.maps => {
                             let _ = tx.send(WorkerMsg::MapsSkipped);
                         }
+                        None => {}
                     }
                     Ok(summary)
                 })
@@ -193,6 +202,8 @@ impl SyncApp {
         if sync::is_valid_faf_client_dir(&faf_client) {
             cfg.faf_client_dir = Some(faf_client);
         }
+        cfg.sync_coop = Some(self.sync_coop);
+        cfg.sync_maps = Some(self.sync_maps);
         cfg
     }
 

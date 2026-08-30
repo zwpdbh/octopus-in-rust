@@ -91,6 +91,9 @@ pub(super) struct SyncApp {
     pub(super) maps_dir: String,
     // FAF Client install folder for maps sync (Sync tab).
     pub(super) faf_client_dir: String,
+    // Optional sync content (Sync tab checkboxes, both opt-in).
+    pub(super) sync_coop: bool,
+    pub(super) sync_maps: bool,
     // Patch version auto-detected from lua.nx2 (recomputed when dir changes).
     pub(super) detected_version: Option<String>,
     pub(super) detected_generator: Option<String>,
@@ -155,6 +158,9 @@ impl SyncApp {
                 .or_else(sync::autodetect_faf_client_dir)
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            // Optional content is opt-in: coop voice-overs and maps are big.
+            sync_coop: cfg.sync_coop.unwrap_or(false),
+            sync_maps: cfg.sync_maps.unwrap_or(false),
             detected_version: None,
             detected_generator: None,
             version_dir: String::new(),
@@ -641,6 +647,22 @@ impl eframe::App for SyncApp {
             if self.tab == Tab::Sync {
                 ui.add_space(4.0);
                 self.version_panel(ui);
+                ui.add_space(6.0);
+                // Optional large content, opt-in via checkboxes.
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tr(self.lang, Txt::SyncContent)).strong());
+                    ui.label(
+                        egui::RichText::new(tr(self.lang, Txt::SyncContentHint))
+                            .small()
+                            .weak(),
+                    );
+                });
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.sync_coop, tr(self.lang, Txt::ChannelCoop));
+                        ui.checkbox(&mut self.sync_maps, tr(self.lang, Txt::ChannelMaps));
+                    });
+                });
             }
 
             if self.tab == Tab::UploadPatch {

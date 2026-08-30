@@ -31,6 +31,12 @@ pub struct ClientConfig {
     /// Uploader display name (remembered locally).
     #[serde(default)]
     pub uploader: Option<String>,
+    /// Sync-tab checkbox: also sync the coop channel (large, opt-in).
+    #[serde(default)]
+    pub sync_coop: Option<bool>,
+    /// Sync-tab checkbox: also sync the maps channel (large, opt-in).
+    #[serde(default)]
+    pub sync_maps: Option<bool>,
     /// Build tag of the client that last wrote this config. Used to detect
     /// the first run of a freshly downloaded/updated exe (see
     /// `with_embedded_defaults`).
@@ -138,6 +144,8 @@ mod tests {
             lang: Some("zh".to_string()),
             upload_token: Some("tok en".to_string()),
             uploader: Some("player one".to_string()),
+            sync_coop: None,
+            sync_maps: None,
             last_build_tag: Some("build-a".to_string()),
         };
         let text = toml::to_string_pretty(&cfg).unwrap();
