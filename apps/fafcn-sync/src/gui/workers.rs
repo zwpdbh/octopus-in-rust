@@ -311,12 +311,30 @@ impl SyncApp {
                         self.log
                             .push(log_scanned(self.lang, files, total_bytes as f64 / 1e6));
                     }
+                    WorkerMsg::Upload(UploadProgress::Scanning {
+                        done_files,
+                        total_files,
+                        done_bytes,
+                        total_bytes,
+                    }) => {
+                        // First hash-phase event: announce it once, then the
+                        // progress bar carries the live numbers.
+                        if !self.scanning {
+                            self.scanning = true;
+                            self.log.push(tr(self.lang, Txt::Hashing).to_string());
+                        }
+                        self.progress = (done_bytes, total_bytes);
+                        self.progress_files = (done_files, total_files);
+                        self.speed = 0.0;
+                    }
                     WorkerMsg::Upload(UploadProgress::Needed {
                         needed,
                         total_bytes,
                         ..
                     }) => {
-                        // No bar when there is nothing to upload.
+                        // Hash phase over (if any); no bar when there is
+                        // nothing to upload.
+                        self.scanning = false;
                         self.progress = (0, if needed == 0 { 0 } else { total_bytes });
                         self.speed = 0.0;
                         self.log.push(log_needed(self.lang, needed));
@@ -338,11 +356,13 @@ impl SyncApp {
                         self.log
                             .push(log_upload_done(self.lang, &summary.published));
                         self.upload_state = ActionState::Succeeded;
+                        self.scanning = false;
                         finished = true;
                     }
                     WorkerMsg::UploadDone(Err(err)) => {
                         self.log.push(log_failed(self.lang, &err));
                         self.upload_state = ActionState::Failed;
+                        self.scanning = false;
                         finished = true;
                     }
                 }

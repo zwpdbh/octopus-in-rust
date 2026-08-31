@@ -127,6 +127,11 @@ pub(super) struct SyncApp {
     pub(super) progress: (u64, u64),
     /// Smoothed transfer speed (bytes/sec) of the running action.
     pub(super) speed: f64,
+    /// The running upload is in its local-hash phase (no bytes on the wire
+    /// yet); the button label and progress bar say so instead of "上传".
+    pub(super) scanning: bool,
+    /// (done_files, total_files) during the hash phase.
+    pub(super) progress_files: (usize, usize),
     pub(super) log: Vec<String>,
 }
 
@@ -180,6 +185,8 @@ impl SyncApp {
             worker: None,
             progress: (0, 0),
             speed: 0.0,
+            scanning: false,
+            progress_files: (0, 0),
             log: Vec::new(),
         }
     }
@@ -488,6 +495,11 @@ impl SyncApp {
         let label = match (self.tab, running) {
             (Tab::Sync, true) => tr(self.lang, Txt::Syncing),
             (Tab::Sync, false) => tr(self.lang, Txt::SyncNow),
+            (Tab::UploadPatch, true) | (Tab::UploadClient, true) | (Tab::UploadMaps, true)
+                if self.scanning =>
+            {
+                tr(self.lang, Txt::Hashing)
+            }
             (Tab::UploadPatch, true) => tr(self.lang, Txt::Uploading),
             (Tab::UploadPatch, false) => tr(self.lang, Txt::UploadNow),
             (Tab::UploadClient, true) => tr(self.lang, Txt::Uploading),
@@ -786,13 +798,26 @@ impl eframe::App for SyncApp {
             let (done, total) = self.progress;
             if total > 0 {
                 let fraction = done as f32 / total as f32;
-                ui.add(egui::ProgressBar::new(fraction).text(format!(
-                    "{:.0}%  ·  {} / {}  ·  {}",
-                    fraction * 100.0,
-                    format_bytes(done),
-                    format_bytes(total),
-                    format_speed(self.speed),
-                )));
+                let text = if self.scanning {
+                    let (done_files, total_files) = self.progress_files;
+                    format!(
+                        "{} {}/{}  ·  {} / {}",
+                        tr(self.lang, Txt::Hashing),
+                        done_files,
+                        total_files,
+                        format_bytes(done),
+                        format_bytes(total),
+                    )
+                } else {
+                    format!(
+                        "{:.0}%  ·  {} / {}  ·  {}",
+                        fraction * 100.0,
+                        format_bytes(done),
+                        format_bytes(total),
+                        format_speed(self.speed),
+                    )
+                };
+                ui.add(egui::ProgressBar::new(fraction).text(text));
             }
             ui.add_space(8.0);
 
