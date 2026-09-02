@@ -4,7 +4,9 @@
 //! organized into well-known channels:
 //!
 //! - `gamedata` — only the big patch archives (`env.nx2`, `units.nx2`,
-//!   `textures.nx2`), versioned by the FAF patch version from `lua.nx2`.
+//!   `textures.nx2`), versioned by the FAF patch version from `lua.nx2`,
+//!   plus frozen legacy extras (`faforever.faf`, see [`GAMEDATA_STATIC_FILES`])
+//!   that are manual-upload-only and preserved across auto-updates.
 //! - `map-generator` — the newest few `MapGenerator_*.jar` files, versioned
 //!   by the newest jar's version.
 //! - `faf-client` — the client installer (mirror-only).
@@ -45,6 +47,11 @@ pub const CHANNEL_COOP: &str = "coop";
 /// Synced into the FAForever `bin/` folder.
 pub const CHANNEL_BIN: &str = "bin";
 
+/// File name of the FAF-patched game binary mirrored by the [`CHANNEL_BIN`]
+/// channel (`bin/ForgedAlliance.exe` below the FAForever root). The official
+/// client downloads it from FAF's content server on first launch.
+pub const FORGED_ALLIANCE_EXE: &str = "ForgedAlliance.exe";
+
 /// All known channel ids (rejected at the API boundary otherwise).
 pub const CHANNELS: &[&str] = &[
     CHANNEL_GAMEDATA,
@@ -64,7 +71,26 @@ pub const SYNC_CHANNELS: &[&str] = &[
 ];
 
 /// The only gamedata files players actually need mirrored.
+///
+/// Every name here MUST follow `{dir}.{version}.nx2` upstream naming: the
+/// server auto-updater derives the download URL by stripping `.nx2`. Files
+/// that do not follow that rule belong in [`GAMEDATA_STATIC_FILES`].
 pub const GAMEDATA_SYNC_FILES: &[&str] = &["env.nx2", "units.nx2", "textures.nx2"];
+
+/// Legacy gamedata files that FAF's featured-mod registry still lists but
+/// that have no anonymous upstream (the official client fetches them from a
+/// Cloudflare-HMAC-gated URL via the OAuth API).
+///
+/// `faforever.faf` is the pre-`.nx2` monolithic FAF mod archive, frozen since
+/// ~version 3634 (2019): FAF's "latest files" query takes `MAX(version)`
+/// per fileId, so this stale row stays in the file list forever and every
+/// client re-downloads it during game prep. Current `init_faf.lua` never
+/// mounts it (only whitelisted `*.nx2`), so it is inert — but mirroring it
+/// spares players a slow gated download.
+///
+/// These files are seeded by manual upload (`fafcn-sync upload` picks them
+/// up when present) and PRESERVED by the server auto-updater across patches.
+pub const GAMEDATA_STATIC_FILES: &[&str] = &["faforever.faf"];
 
 /// The complete set of archive names the base `faf` featured mod deploys to
 /// `gamedata/` (all ten are re-packed on every FAF deploy). The coop upload
@@ -293,6 +319,20 @@ mod tests {
         assert_eq!(parse_mod_info_version("version_number = 66"), None);
         assert_eq!(parse_mod_info_version("-- version = 66"), None);
         assert_eq!(parse_mod_info_version("version = "), None);
+    }
+
+    #[test]
+    fn gamedata_static_files_do_not_overlap_sync_files() {
+        for name in GAMEDATA_STATIC_FILES {
+            assert!(
+                !GAMEDATA_SYNC_FILES.contains(name),
+                "{name} must not be in GAMEDATA_SYNC_FILES (the auto-updater cannot fetch it)"
+            );
+            assert!(
+                !name.ends_with(".nx2"),
+                "{name} must not look like a versioned .nx2 patch archive"
+            );
+        }
     }
 
     #[test]

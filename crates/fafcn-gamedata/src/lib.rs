@@ -14,8 +14,8 @@ pub use channels::{
     channel_subdir, compare_version_strings, detect_version_from_filename, map_folder_version,
     map_generator_jar_version, parse_mod_info_version, today_stamp, CHANNELS, CHANNEL_BIN,
     CHANNEL_COOP, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR,
-    FAF_STANDARD_NX2, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP,
-    SYNC_CHANNELS,
+    FAF_STANDARD_NX2, FORGED_ALLIANCE_EXE, GAMEDATA_STATIC_FILES, GAMEDATA_SYNC_FILES,
+    MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP, SYNC_CHANNELS,
 };
 pub use error::{Error, Result};
 pub use hash::{sha256_bytes, sha256_file, sha256_file_with_progress};

@@ -30,7 +30,8 @@ use chrono::Utc;
 use fafcn_gamedata::{
     compare_version_strings, map_generator_jar_version, sha256_file, FileEntry, UpdaterComponent,
     UpdaterInfo, UpdaterState, UploadCommitRequest, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA,
-    CHANNEL_MAP_GENERATOR, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP,
+    CHANNEL_MAP_GENERATOR, GAMEDATA_STATIC_FILES, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX,
+    MAP_GENERATOR_KEEP,
 };
 use futures::StreamExt;
 use serde::Deserialize;
@@ -355,9 +356,9 @@ impl UpdaterHandle {
         let current = tokio::task::spawn_blocking(move || store.read_manifest(CHANNEL_GAMEDATA))
             .await
             .context("task join error")?
-            .map_err(|e| anyhow!("{e}"))?
-            .map(|m| m.patch_version);
-        match current
+            .map_err(|e| anyhow!("{e}"))?;
+        let current_version = current.as_ref().map(|m| m.patch_version.clone());
+        match current_version
             .as_deref()
             .and_then(|c| compare_version_strings(c, &version))
         {
@@ -369,7 +370,7 @@ impl UpdaterHandle {
                 // Manual upload ahead of upstream; never downgrade.
                 tracing::info!(
                     version,
-                    current = current.as_deref().unwrap_or_default(),
+                    current = current_version.as_deref().unwrap_or_default(),
                     "mirror is newer than upstream; skipping auto-update"
                 );
                 return Ok(());
@@ -401,6 +402,17 @@ impl UpdaterHandle {
             .await
             .context("task join error")?
             .map_err(|e| anyhow!("{e}"))?;
+        }
+        // Preserve manual-upload-only legacy extras (e.g. `faforever.faf`,
+        // see GAMEDATA_STATIC_FILES): the gamedata channel never prunes
+        // on-disk files, so the stored file and its recorded sha256 remain
+        // valid for commit re-validation.
+        if let Some(manifest) = &current {
+            for entry in &manifest.files {
+                if GAMEDATA_STATIC_FILES.contains(&entry.path.as_str()) {
+                    entries.push(entry.clone());
+                }
+            }
         }
         let store = self.store.clone();
         let req = UploadCommitRequest {
@@ -1105,6 +1117,78 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(fake.fetches.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(fake.downloads.load(AtomicOrdering::SeqCst), 5);
+        fs_remove(root);
+    }
+
+    #[tokio::test]
+    async fn update_preserves_static_gamedata_extras() {
+        let (root, store) = temp_store();
+        // Pre-commit an older patch that additionally carries the frozen
+        // legacy extra `faforever.faf` (manual-upload-only; the auto-updater
+        // cannot fetch it and must carry it forward).
+        let extra_bytes = b"legacy-frozen-faf";
+        let extra = FileEntry {
+            path: "faforever.faf".to_string(),
+            size: extra_bytes.len() as u64,
+            sha256: fafcn_gamedata::sha256_bytes(extra_bytes),
+        };
+        store
+            .store_upload(
+                CHANNEL_GAMEDATA,
+                "env.nx2",
+                &fafcn_gamedata::sha256_bytes(b"old"),
+                b"old",
+            )
+            .unwrap();
+        store
+            .store_upload(
+                CHANNEL_GAMEDATA,
+                "faforever.faf",
+                &extra.sha256,
+                extra_bytes,
+            )
+            .unwrap();
+        store
+            .commit(
+                CHANNEL_GAMEDATA,
+                &UploadCommitRequest {
+                    patch_version: "3837".to_string(),
+                    uploader: "tester".to_string(),
+                    files: vec![
+                        FileEntry {
+                            path: "env.nx2".to_string(),
+                            size: 3,
+                            sha256: fafcn_gamedata::sha256_bytes(b"old"),
+                        },
+                        extra.clone(),
+                    ],
+                },
+            )
+            .unwrap();
+
+        let (fake, shared) = fake_fetch("3838");
+        let handle = UpdaterHandle::with_fetch(store.clone(), shared);
+        handle.trigger(true).await;
+        let info = wait_finished(&handle, &fake).await;
+        assert!(
+            info.last_error.is_none(),
+            "unexpected error: {:?}",
+            info.last_error
+        );
+
+        let manifest = store.read_manifest(CHANNEL_GAMEDATA).unwrap().unwrap();
+        assert_eq!(manifest.patch_version, "3838");
+        assert_eq!(manifest.files.len(), GAMEDATA_SYNC_FILES.len() + 1);
+        let preserved = manifest
+            .files
+            .iter()
+            .find(|e| e.path == "faforever.faf")
+            .expect("faforever.faf must survive the auto-update");
+        assert_eq!(preserved.sha256, extra.sha256);
+        assert!(store
+            .files_dir(CHANNEL_GAMEDATA)
+            .join("faforever.faf")
+            .is_file());
         fs_remove(root);
     }
 

@@ -46,7 +46,7 @@ Everything the mirror serves belongs to a well-known channel
 ```rust
 // crates/fafcn-gamedata/src/channels.rs ~line 45 — channel registry
 pub const CHANNELS: &[&str] = &[
-    CHANNEL_GAMEDATA,      // "gamedata": env/units/textures.nx2 patch archives
+    CHANNEL_GAMEDATA,      // "gamedata": env/units/textures.nx2 patch archives + frozen static extras (faforever.faf)
     CHANNEL_MAP_GENERATOR, // "map-generator": newest 3 MapGenerator_*.jar
     CHANNEL_FAF_CLIENT,    // "faf-client": installer, mirror-only (not synced)
     CHANNEL_MAPS,          // "maps": FAF maps, merged uploads
@@ -67,7 +67,7 @@ Per-channel rules that new code MUST respect:
 
 | Channel         | Synced into                                                          | Version source                                                                    | Client deletes?                        | Server file lifecycle                                                                                                     |
 | --------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `gamedata`      | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream)           | **Never** deletes extras               | Fixed filenames → overwritten in place                                                                                    |
+| `gamedata`      | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream)           | **Never** deletes extras               | Fixed filenames → overwritten in place; `GAMEDATA_STATIC_FILES` extras (`faforever.faf`) are manual-upload-only and **preserved by the auto-updater** |
 | `map-generator` | `FAForever/map_generator`                                            | Newest jar version (manual upload); auto-mirror uses the GitHub release tag       | Prunes jars beyond newest 3            | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
 | `faf-client`    | — (web download)                                                     | From installer filename on manual upload; auto-mirror uses the GitHub release tag | —                                      | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater                                            |
 | `coop` | FAForever **root** (paths carry `bin/`/`gamedata/` prefixes) | fa-coop `mod_info.lua` version, fetched from GitHub at upload time | Never deletes extras | Fixed names → overwritten in place; **manual upload only** (see TODO below) |
@@ -181,6 +181,22 @@ still run, and the first error lands in `last_error`):
      → `version = NNNN` (the exact integer FAF's deployment pipeline stamps).
    - Files: `https://content.faforever.com/faf/updaterNew/updates_faf_files/{dir}.{version}.nx2`
      (legacy path, no token; all dirs re-packed on every deploy).
+   - Static extras (`GAMEDATA_STATIC_FILES`, e.g. `faforever.faf`) are NOT
+     fetched — no anonymous upstream exists (the official client gets them
+     from the HMAC-gated `legacy-featured-mod-files/` path via the OAuth
+     API). They are seeded by manual upload and carried forward: before
+     committing a new patch, `update_gamedata` re-appends the previous
+     manifest's static-extra entries (safe because the gamedata channel
+     never prunes on-disk files).
+   - **`faforever.faf` background:** the old monolithic FAF mod archive from
+     the pre-`.nx2` era (frozen since ~v3634, 2019). FAF's "latest files"
+     query (`LegacyFeaturedModFileRepository.getFiles` in faf-java-api)
+     takes `MAX(version)` **per fileId**, so this stale row stays in the
+     featured-mod file list forever and every official client re-downloads
+     it into `gamedata/` during game prep. The current deployment pipeline
+     (`LegacyFeaturedModDeploymentTask`) never regenerates it, and current
+     `init_faf.lua` never mounts it (whitelisted `*.nx2` only) — inert dead
+     weight, but mirroring it removes a slow gated download for players.
 2. **FAF client installer** (`update_faf_client`, ~line 372). Latest GitHub
    release of `FAForever/downlords-faf-client`
    (`CLIENT_RELEASE_API`, ~line 54; the API requires a `User-Agent` header).
@@ -411,7 +427,10 @@ All under `/api/gamedata`; channel ids validated against `CHANNELS`.
 Edit `GAMEDATA_SYNC_FILES` (`channels.rs ~line 41`). The auto-updater derives
 remote names by stripping `.nx2` (`{dir}.{version}.nx2`), so new entries must
 follow FAF's directory-archive naming; everything else (client, manifests)
-adapts automatically.
+adapts automatically. Files that do NOT follow that naming or have no
+anonymous upstream belong in `GAMEDATA_STATIC_FILES` instead — they are
+manual-upload-only (picked up by `fafcn-sync upload` when present locally)
+and preserved by the auto-updater across patches.
 
 ### Change auto-updater behavior
 
