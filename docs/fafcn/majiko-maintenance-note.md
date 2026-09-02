@@ -78,7 +78,7 @@ feature: **every visitor question bills the friend's key**.
   检查更新
 - Upload flows show live progress in BOTH phases: local hashing
   (`正在计算本地文件校验和…`, byte-level, throttled) and transfer
-- Current latest build: `dev-6a97e360-b38e`
+- Current latest build: `dev-6a97f5c1-9a46`
 
 ## 6. FAF integration status
 

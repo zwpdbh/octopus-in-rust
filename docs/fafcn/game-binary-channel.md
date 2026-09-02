@@ -73,6 +73,14 @@ Reuses the existing channel machinery; no server-specific code:
 - Channel definition: `crates/fafcn-gamedata/src/channels.rs`
   (`CHANNEL_BIN = "bin"`, registered in `CHANNELS` / `SYNC_CHANNELS`,
   `channel_subdir → "bin"`).
+- Download mounts: `apps/fafcn-server/src/routes.rs` derives every channel's
+  static `files/` mount from `CHANNELS` in a loop. **Pitfall (hit on
+  2026-09-02):** the mounts used to be a hand-maintained list — `bin` was
+  missing, requests fell through to the SPA fallback, and players downloaded
+  `index.html` instead of the exe (sha256 mismatch after 3 retries →
+  "下载失败,已跳过"). The manifest/upload APIs validate the channel
+  dynamically, so only downloads broke — always test the full download path
+  when adding a channel, not just the manifest.
 - Upload side: `apps/fafcn-sync/src/upload.rs ~plan_channels` — the
   上传补丁 (upload-patch) flow automatically includes the bin channel when
   `%ProgramData%\FAForever\bin\ForgedAlliance.exe` exists locally (hash

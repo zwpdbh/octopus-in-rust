@@ -66,6 +66,7 @@ pub(super) enum Txt {
     TabSettings,
     ChannelMaps,
     ChannelCoop,
+    ChannelBin,
     MapsDirLabel,
     MapsHint,
     FieldMapsDir,
@@ -185,6 +186,8 @@ pub(super) fn tr(lang: GuiLang, txt: Txt) -> &'static str {
         (Txt::ChannelMaps, GuiLang::En) => "maps",
         (Txt::ChannelCoop, GuiLang::Zh) => "合作任务",
         (Txt::ChannelCoop, GuiLang::En) => "co-op missions",
+        (Txt::ChannelBin, GuiLang::Zh) => "游戏主程序",
+        (Txt::ChannelBin, GuiLang::En) => "game binary",
         (Txt::MapsDirLabel, GuiLang::Zh) => "地图文件夹",
         (Txt::MapsDirLabel, GuiLang::En) => "Maps folder",
         (Txt::MapsHint, GuiLang::Zh) => {
@@ -266,6 +269,7 @@ pub(super) fn channel_name(lang: GuiLang, channel: &str) -> &'static str {
         fafcn_gamedata::CHANNEL_FAF_CLIENT => tr(lang, Txt::ChannelFafClient),
         fafcn_gamedata::CHANNEL_MAPS => tr(lang, Txt::ChannelMaps),
         fafcn_gamedata::CHANNEL_COOP => tr(lang, Txt::ChannelCoop),
+        fafcn_gamedata::CHANNEL_BIN => tr(lang, Txt::ChannelBin),
         _ => tr(lang, Txt::ChannelGamedata),
     }
 }
