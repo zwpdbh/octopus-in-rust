@@ -28,9 +28,9 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use fafcn_gamedata::{
-    compare_version_strings, map_generator_jar_version, sha256_file, FileEntry, UpdaterComponent,
-    UpdaterInfo, UpdaterState, UploadCommitRequest, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA,
-    CHANNEL_MAP_GENERATOR, GAMEDATA_STATIC_FILES, GAMEDATA_SYNC_FILES, MAP_GENERATOR_JAR_PREFIX,
+    compare_version_strings, map_generator_jar_version, sha256_file, FileEntry, FileSyncRule,
+    UpdaterComponent, UpdaterInfo, UpdaterState, UploadCommitRequest, CHANNEL_FAF_CLIENT,
+    CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_FILES, MAP_GENERATOR_JAR_PREFIX,
     MAP_GENERATOR_KEEP,
 };
 use futures::StreamExt;
@@ -403,13 +403,17 @@ impl UpdaterHandle {
             .context("task join error")?
             .map_err(|e| anyhow!("{e}"))?;
         }
-        // Preserve manual-upload-only legacy extras (e.g. `faforever.faf`,
-        // see GAMEDATA_STATIC_FILES): the gamedata channel never prunes
-        // on-disk files, so the stored file and its recorded sha256 remain
-        // valid for commit re-validation.
+        // Preserve manual-upload-only legacy extras (see
+        // FileSyncRule::ManualPreserved): the gamedata channel never
+        // prunes on-disk files, so the stored file and its recorded sha256
+        // remain valid for commit re-validation.
         if let Some(manifest) = &current {
             for entry in &manifest.files {
-                if GAMEDATA_STATIC_FILES.contains(&entry.path.as_str()) {
+                let preserved = GAMEDATA_FILES
+                    .iter()
+                    .find(|f| f.exact_name() == Some(entry.path.as_str()))
+                    .is_some_and(|f| matches!(f.rule, FileSyncRule::ManualPreserved));
+                if preserved {
                     entries.push(entry.clone());
                 }
             }
@@ -698,16 +702,27 @@ impl UpdaterHandle {
         Ok(())
     }
 
-    /// Download every [`GAMEDATA_SYNC_FILES`] archive for `version` into the
-    /// channel's `incoming/` dir, recording entries and temp paths for the
-    /// caller to store/commit (or clean up on error).
+    /// Download every [`FileSyncRule::PatchArchive`] file for `version`
+    /// into the channel's `incoming/` dir, recording entries and temp paths
+    /// for the caller to store/commit (or clean up on error).
     async fn download_all(
         &self,
         version: &str,
         entries: &mut Vec<FileEntry>,
         tmps: &mut Vec<PathBuf>,
     ) -> anyhow::Result<()> {
-        for name in GAMEDATA_SYNC_FILES {
+        for file in GAMEDATA_FILES {
+            let name = match file.rule {
+                FileSyncRule::PatchArchive => file
+                    .exact_name()
+                    .expect("PatchArchive rows are FileMatch::Exact (table test)"),
+                // Manual-upload-only extras have no anonymous upstream; they
+                // are carried forward by the caller's preserve step instead.
+                // GitHubReleaseAsset/ManualOnly never occur in this table.
+                FileSyncRule::ManualPreserved
+                | FileSyncRule::GithubReleaseAsset
+                | FileSyncRule::ManualOnly => continue,
+            };
             let dir = name.strip_suffix(".nx2").unwrap_or(name);
             let url = format!("{BASE_URL}/{dir}.{version}.nx2");
             let tmp = self
@@ -980,7 +995,11 @@ mod tests {
         generator_release: Option<UpstreamRelease>,
     ) -> (Arc<FakeFetch>, Arc<dyn UpstreamFetch>) {
         let mut files = HashMap::new();
-        for name in GAMEDATA_SYNC_FILES {
+        for file in GAMEDATA_FILES {
+            if file.rule != FileSyncRule::PatchArchive {
+                continue;
+            }
+            let name = file.exact_name().unwrap();
             let dir = name.strip_suffix(".nx2").unwrap_or(name);
             files.insert(
                 format!("{BASE_URL}/{dir}.{version}.nx2"),
@@ -1039,6 +1058,14 @@ mod tests {
         );
     }
 
+    /// Number of auto-fetched patch archives in the gamedata file table.
+    fn patch_archive_count() -> usize {
+        GAMEDATA_FILES
+            .iter()
+            .filter(|f| f.rule == FileSyncRule::PatchArchive)
+            .count()
+    }
+
     /// Pre-commit a channel with a single file at `version`.
     fn commit_one(store: &GamedataStore, channel: &str, name: &str, version: &str, bytes: &[u8]) {
         let entry = FileEntry {
@@ -1086,13 +1113,13 @@ mod tests {
         // 3 gamedata archives + 1 client installer + 1 generator jar.
         assert_eq!(
             fake.downloads.load(AtomicOrdering::SeqCst),
-            GAMEDATA_SYNC_FILES.len() + 2
+            patch_archive_count() + 2
         );
 
         let manifest = store.read_manifest(CHANNEL_GAMEDATA).unwrap().unwrap();
         assert_eq!(manifest.patch_version, "3838");
         assert_eq!(manifest.uploader, AUTO_UPLOADER);
-        assert_eq!(manifest.files.len(), GAMEDATA_SYNC_FILES.len());
+        assert_eq!(manifest.files.len(), patch_archive_count());
         for entry in &manifest.files {
             assert!(store
                 .files_dir(CHANNEL_GAMEDATA)
@@ -1178,7 +1205,7 @@ mod tests {
 
         let manifest = store.read_manifest(CHANNEL_GAMEDATA).unwrap().unwrap();
         assert_eq!(manifest.patch_version, "3838");
-        assert_eq!(manifest.files.len(), GAMEDATA_SYNC_FILES.len() + 1);
+        assert_eq!(manifest.files.len(), patch_archive_count() + 1);
         let preserved = manifest
             .files
             .iter()
@@ -1292,7 +1319,7 @@ mod tests {
         // 3 gamedata archives + 1 generator jar.
         assert_eq!(
             fake.downloads.load(AtomicOrdering::SeqCst),
-            GAMEDATA_SYNC_FILES.len() + 1
+            patch_archive_count() + 1
         );
         assert_eq!(
             store

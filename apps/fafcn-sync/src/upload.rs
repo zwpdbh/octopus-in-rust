@@ -2,8 +2,9 @@
 //!
 //! Publishes every channel from the local `FAForever` root:
 //!
-//! - `gamedata`: only [`GAMEDATA_SYNC_FILES`] (the big patch archives),
-//!   versioned by the FAF patch version from `lua.nx2`.
+//! - `gamedata`: the files in [`GAMEDATA_FILES`] (the big patch archives,
+//!   plus optional frozen legacy extras), versioned by the FAF patch version
+//!   from `lua.nx2`.
 //! - `map-generator`: the newest [`MAP_GENERATOR_KEEP`] `MapGenerator_*.jar`
 //!   files, versioned by the newest jar.
 //! - `coop`: co-op mission support files (`bin/init_coop.lua`,
@@ -21,10 +22,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use fafcn_gamedata::{
     compare_version_strings, map_generator_jar_version, parse_mod_info_version, sha256_file,
-    sha256_file_with_progress, validate_relative_path, FileEntry, Manifest, UploadCheckRequest,
-    UploadCheckResponse, UploadCommitRequest, CHANNEL_BIN, CHANNEL_COOP, CHANNEL_GAMEDATA,
-    CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, FAF_STANDARD_NX2, FORGED_ALLIANCE_EXE,
-    GAMEDATA_STATIC_FILES, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
+    sha256_file_with_progress, validate_relative_path, FileEntry, FileMatch, Manifest,
+    UploadCheckRequest, UploadCheckResponse, UploadCommitRequest, BIN_FILES, CHANNEL_BIN,
+    CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, COOP_FILES,
+    FAF_STANDARD_NX2, FORGED_ALLIANCE_EXE, GAMEDATA_FILES, MAP_GENERATOR_KEEP,
 };
 use futures_util::StreamExt;
 use walkdir::WalkDir;
@@ -476,26 +477,30 @@ fn plan_channels(
             )
         })?,
     };
-    let mut paths: Vec<std::path::PathBuf> = GAMEDATA_SYNC_FILES
-        .iter()
-        .map(|name| gamedata_dir.join(name))
-        .collect();
-    for path in &paths {
-        if !path.is_file() {
-            anyhow::bail!(
-                "required gamedata file {} not found in {}",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                gamedata_dir.display()
-            );
-        }
-    }
-    // Frozen legacy extras (e.g. faforever.faf): optional — upload them when
-    // the local install has them, skip silently otherwise. The server
-    // auto-updater preserves them across patches once seeded.
-    for name in GAMEDATA_STATIC_FILES {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for file in GAMEDATA_FILES {
+        let Some(name) = file.exact_name() else {
+            continue; // pattern rows are not used in the gamedata table
+        };
         let path = gamedata_dir.join(name);
-        if path.is_file() {
+        if file.rule.required_on_upload() {
+            // Required patch archives: bail when missing locally.
+            if !path.is_file() {
+                anyhow::bail!(
+                    "required gamedata file {} not found in {}",
+                    name,
+                    gamedata_dir.display()
+                );
+            }
             paths.push(path);
+        } else {
+            // Optional files (e.g. the frozen legacy extra faforever.faf):
+            // upload them when the local install has them, skip silently
+            // otherwise. The server auto-updater preserves
+            // ManualPreserved extras across patches once seeded.
+            if path.is_file() {
+                paths.push(path);
+            }
         }
     }
     let entries = hash_files_with_progress(&gamedata_dir, &paths, progress)?;
@@ -506,24 +511,29 @@ fn plan_channels(
         entries,
     });
 
-    // bin: the FAF-patched game binary (optional channel — only players who
-    // launched a game once have it locally). Versioned by the SAME patch
-    // version as gamedata: the exe tracks the game version.
+    // bin: manual-upload-only files (the FAF-patched game binary).
+    // Optional channel — only players who launched a game once have it
+    // locally. Versioned by the SAME patch version as gamedata: the exe
+    // tracks the game version.
     let bin_dir = faf_root.join("bin");
-    let game_exe = bin_dir.join(FORGED_ALLIANCE_EXE);
-    if game_exe.is_file() {
-        let entries =
-            hash_files_with_progress(&bin_dir, std::slice::from_ref(&game_exe), progress)?;
+    let bin_paths: Vec<std::path::PathBuf> = BIN_FILES
+        .iter()
+        .filter_map(|f| f.exact_name())
+        .map(|name| bin_dir.join(name))
+        .filter(|p| p.is_file())
+        .collect();
+    if bin_paths.is_empty() {
+        progress(UploadProgress::ChannelSkipped {
+            channel: CHANNEL_BIN.to_string(),
+            reason: format!("no bin/{FORGED_ALLIANCE_EXE} found (launch a FAF game once first)"),
+        });
+    } else {
+        let entries = hash_files_with_progress(&bin_dir, &bin_paths, progress)?;
         plans.push(ChannelPlan {
             channel: CHANNEL_BIN,
             source_dir: bin_dir,
             version: version.clone(),
             entries,
-        });
-    } else {
-        progress(UploadProgress::ChannelSkipped {
-            channel: CHANNEL_BIN.to_string(),
-            reason: format!("no bin/{FORGED_ALLIANCE_EXE} found (launch a FAF game once first)"),
         });
     }
 
@@ -563,33 +573,41 @@ fn plan_channels(
 /// Build the coop channel plan: mission support files from a FAForever
 /// install where coop works, as root-relative manifest paths.
 ///
-/// Whitelist (never touches the base-game archives owned by the gamedata
-/// channel):
-/// - `bin/init_coop.lua` — the coop init file (required; its absence means
-///   coop was never downloaded locally and the channel is skipped).
-/// - `gamedata/lobby_coop.cop` — legacy coop lobby archive (optional).
-/// - `gamedata/*_VO.nx2` — voice-over banks.
-/// - `gamedata/*.nx2` NOT in [`FAF_STANDARD_NX2`] — coop-specific archives
-///   (e.g. `mods.nx2` packed from the fa-coop `mods/` directory). Note this
-///   also sweeps in other mods' archives if the uploader has them (e.g.
-///   nomads.nx2) — harmless for a friend-group mirror.
+/// The whitelist is the [`COOP_FILES`] table (never touches the base-game
+/// archives owned by the gamedata channel): `bin/init_coop.lua` doubles as
+/// the channel GATE (required; its absence means coop was never downloaded
+/// locally and the channel is skipped), the remaining rows sweep
+/// `gamedata/` by exact name, suffix, or the non-standard-`.nx2` pattern.
+/// Note the pattern rows also sweep in other mods' archives if the uploader
+/// has them (e.g. nomads.nx2) — harmless for a friend-group mirror.
 fn plan_coop(
     faf_root: &Path,
     version: &str,
     progress: &mut dyn FnMut(UploadProgress),
 ) -> Result<Option<ChannelPlan>> {
-    let init_file = faf_root.join("bin").join("init_coop.lua");
+    const GATE_FILE: &str = "bin/init_coop.lua";
+    let init_file = faf_root.join(GATE_FILE);
     if !init_file.is_file() {
         return Ok(None);
     }
     let mut paths = vec![init_file];
 
+    // Exact rows beyond the gate file (e.g. gamedata/lobby_coop.cop).
+    for file in COOP_FILES {
+        match file.file_match {
+            FileMatch::Exact(rel) if rel != GATE_FILE => {
+                let path = faf_root.join(rel);
+                if path.is_file() {
+                    paths.push(path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Pattern rows sweep the gamedata dir.
     let gamedata_dir = faf_root.join("gamedata");
     if gamedata_dir.is_dir() {
-        let legacy_cop = gamedata_dir.join("lobby_coop.cop");
-        if legacy_cop.is_file() {
-            paths.push(legacy_cop);
-        }
         for item in fs::read_dir(&gamedata_dir)? {
             let item = item?;
             let path = item.path();
@@ -597,15 +615,20 @@ fn plan_coop(
                 continue;
             }
             let name = item.file_name().to_string_lossy().into_owned();
-            let is_voice_over = name.ends_with("_VO.nx2");
-            let is_coop_archive =
-                name.ends_with(".nx2") && !FAF_STANDARD_NX2.contains(&name.as_str());
-            if is_voice_over || is_coop_archive {
+            let matched = COOP_FILES.iter().any(|f| match f.file_match {
+                FileMatch::Suffix(suffix) => name.ends_with(suffix),
+                FileMatch::NonStandardNx2 => {
+                    name.ends_with(".nx2") && !FAF_STANDARD_NX2.contains(&name.as_str())
+                }
+                FileMatch::Exact(_) => false,
+            });
+            if matched {
                 paths.push(path);
             }
         }
     }
     paths.sort();
+    paths.dedup();
     let entries = hash_files_with_progress(faf_root, &paths, progress)?;
     Ok(Some(ChannelPlan {
         channel: CHANNEL_COOP,
@@ -878,6 +901,7 @@ async fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fafcn_gamedata::FileSyncRule;
     use std::path::PathBuf;
 
     fn temp_faf_root() -> PathBuf {
@@ -943,15 +967,24 @@ mod tests {
         writer.finish().unwrap();
     }
 
+    /// Create local dummy files for every gamedata-table entry of `rule`.
+    fn write_gamedata_files(gamedata_dir: &Path, rule: FileSyncRule) {
+        for file in GAMEDATA_FILES {
+            if file.rule == rule {
+                if let Some(name) = file.exact_name() {
+                    fs::write(gamedata_dir.join(name), b"dummy").unwrap();
+                }
+            }
+        }
+    }
+
     #[test]
     fn plan_gamedata_includes_static_extras_when_present() {
         let root = temp_faf_root();
         let gamedata = root.join("gamedata");
         write_lua_nx2(&gamedata, "3839");
-        for name in GAMEDATA_SYNC_FILES {
-            fs::write(gamedata.join(name), b"archive").unwrap();
-        }
-        fs::write(gamedata.join("faforever.faf"), b"legacy").unwrap();
+        write_gamedata_files(&gamedata, FileSyncRule::PatchArchive);
+        write_gamedata_files(&gamedata, FileSyncRule::ManualPreserved);
 
         let plans = plan_channels(&root, None, None, &mut |_| {}).unwrap();
         let gamedata_plan = plans
@@ -963,13 +996,15 @@ mod tests {
             .iter()
             .map(|e| e.path.as_str())
             .collect();
-        for name in GAMEDATA_SYNC_FILES {
-            assert!(paths.contains(name), "missing {name}");
-        }
-        assert!(
-            paths.contains(&"faforever.faf"),
-            "present static extra must be uploaded: {paths:?}"
+        assert_eq!(
+            paths.len(),
+            GAMEDATA_FILES.len(),
+            "all table entries present locally must be planned: {paths:?}"
         );
+        for file in GAMEDATA_FILES {
+            let name = file.exact_name().unwrap();
+            assert!(paths.contains(&name), "missing {name}");
+        }
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -978,16 +1013,18 @@ mod tests {
         let root = temp_faf_root();
         let gamedata = root.join("gamedata");
         write_lua_nx2(&gamedata, "3839");
-        for name in GAMEDATA_SYNC_FILES {
-            fs::write(gamedata.join(name), b"archive").unwrap();
-        }
+        write_gamedata_files(&gamedata, FileSyncRule::PatchArchive);
 
         let plans = plan_channels(&root, None, None, &mut |_| {}).unwrap();
         let gamedata_plan = plans
             .iter()
             .find(|p| p.channel == CHANNEL_GAMEDATA)
             .unwrap();
-        assert_eq!(gamedata_plan.entries.len(), GAMEDATA_SYNC_FILES.len());
+        let patch_archives = GAMEDATA_FILES
+            .iter()
+            .filter(|f| f.rule == FileSyncRule::PatchArchive)
+            .count();
+        assert_eq!(gamedata_plan.entries.len(), patch_archives);
         fs::remove_dir_all(&root).unwrap();
     }
 }

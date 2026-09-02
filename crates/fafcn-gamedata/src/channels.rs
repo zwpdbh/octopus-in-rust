@@ -5,8 +5,9 @@
 //!
 //! - `gamedata` — only the big patch archives (`env.nx2`, `units.nx2`,
 //!   `textures.nx2`), versioned by the FAF patch version from `lua.nx2`,
-//!   plus frozen legacy extras (`faforever.faf`, see [`GAMEDATA_STATIC_FILES`])
-//!   that are manual-upload-only and preserved across auto-updates.
+//!   plus frozen legacy extras (`faforever.faf`) that are manual-upload-only
+//!   and preserved across auto-updates. The full per-file rule table is
+//!   [`GAMEDATA_FILES`].
 //! - `map-generator` — the newest few `MapGenerator_*.jar` files, versioned
 //!   by the newest jar's version.
 //! - `faf-client` — the client installer (mirror-only).
@@ -70,27 +71,150 @@ pub const SYNC_CHANNELS: &[&str] = &[
     CHANNEL_BIN,
 ];
 
-/// The only gamedata files players actually need mirrored.
+/// How a mirrored file is acquired and maintained — the shared vocabulary
+/// for every channel's per-file sync rules. Every consumer (server
+/// auto-updater, client upload planner) matches on this exhaustively, so
+/// adding a new rule kind surfaces every site that must decide how to
+/// handle it.
 ///
-/// Every name here MUST follow `{dir}.{version}.nx2` upstream naming: the
-/// server auto-updater derives the download URL by stripping `.nx2`. Files
-/// that do not follow that rule belong in [`GAMEDATA_STATIC_FILES`].
-pub const GAMEDATA_SYNC_FILES: &[&str] = &["env.nx2", "units.nx2", "textures.nx2"];
+/// Note the boundary: this models FILE rules (acquisition + upload
+/// semantics). CHANNEL lifecycle (sync target dir, prune policy,
+/// merge-vs-replace commit, replaydata mirror, opt-in flags) stays
+/// per-channel — see `channel_subdir` and `docs/fafcn/file-sync.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSyncRule {
+    /// Auto-mirrored from the official patch CDN: the server auto-updater
+    /// derives the upstream URL `{dir}.{version}.nx2`, so the name MUST end
+    /// in `.nx2`. Required on manual upload (the upload bails when the file
+    /// is missing locally).
+    PatchArchive,
+    /// Auto-mirrored from a GitHub latest-release asset (map-generator jar,
+    /// faf-client installer). Versioned file names; the channel prunes
+    /// superseded versions on commit.
+    GithubReleaseAsset,
+    /// No anonymous upstream (the official client fetches it from a
+    /// Cloudflare-HMAC-gated URL via the OAuth API). Seeded by manual upload
+    /// when present locally (optional), then carried forward by the server
+    /// auto-updater across patches.
+    ///
+    /// Current member: `faforever.faf`, the pre-`.nx2` monolithic FAF mod
+    /// archive, frozen since ~version 3634 (2019): FAF's "latest files"
+    /// query takes `MAX(version)` per fileId, so this stale row stays in the
+    /// file list forever and every client re-downloads it during game prep.
+    /// Current `init_faf.lua` never mounts it (only whitelisted `*.nx2`), so
+    /// it is inert — but mirroring it spares players a slow gated download.
+    ManualPreserved,
+    /// Manual upload only; the server auto-updater never touches it.
+    ManualOnly,
+}
 
-/// Legacy gamedata files that FAF's featured-mod registry still lists but
-/// that have no anonymous upstream (the official client fetches them from a
-/// Cloudflare-HMAC-gated URL via the OAuth API).
-///
-/// `faforever.faf` is the pre-`.nx2` monolithic FAF mod archive, frozen since
-/// ~version 3634 (2019): FAF's "latest files" query takes `MAX(version)`
-/// per fileId, so this stale row stays in the file list forever and every
-/// client re-downloads it during game prep. Current `init_faf.lua` never
-/// mounts it (only whitelisted `*.nx2`), so it is inert — but mirroring it
-/// spares players a slow gated download.
-///
-/// These files are seeded by manual upload (`fafcn-sync upload` picks them
-/// up when present) and PRESERVED by the server auto-updater across patches.
-pub const GAMEDATA_STATIC_FILES: &[&str] = &["faforever.faf"];
+impl FileSyncRule {
+    /// Whether a manual upload bails when the file is missing locally.
+    pub fn required_on_upload(self) -> bool {
+        match self {
+            Self::PatchArchive => true,
+            Self::GithubReleaseAsset | Self::ManualPreserved | Self::ManualOnly => false,
+        }
+    }
+
+    /// Whether the server auto-updater fetches it (vs. manual-upload-only).
+    pub fn auto_fetched(self) -> bool {
+        match self {
+            Self::PatchArchive | Self::GithubReleaseAsset => true,
+            Self::ManualPreserved | Self::ManualOnly => false,
+        }
+    }
+}
+
+/// How a file-table row matches local files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileMatch {
+    /// Exact path below the channel's sync root (fixed file name).
+    Exact(&'static str),
+    /// File name suffix, e.g. `"_VO.nx2"` (coop voice-over banks).
+    Suffix(&'static str),
+    /// Any `*.nx2` not in [`FAF_STANDARD_NX2`] (coop-specific archives).
+    NonStandardNx2,
+}
+
+/// One mirrored file (or file pattern) and its acquisition rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncFile {
+    pub file_match: FileMatch,
+    pub rule: FileSyncRule,
+}
+
+impl SyncFile {
+    /// The fixed file path for [`FileMatch::Exact`] rows, else `None`.
+    pub fn exact_name(&self) -> Option<&'static str> {
+        match self.file_match {
+            FileMatch::Exact(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+/// The single source of truth for gamedata-channel files: adding a mirrored
+/// file is one row here, and the [`FileSyncRule`] variant drives both the
+/// server auto-updater and the client upload planner.
+pub const GAMEDATA_FILES: &[SyncFile] = &[
+    SyncFile {
+        file_match: FileMatch::Exact("env.nx2"),
+        rule: FileSyncRule::PatchArchive,
+    },
+    SyncFile {
+        file_match: FileMatch::Exact("units.nx2"),
+        rule: FileSyncRule::PatchArchive,
+    },
+    SyncFile {
+        file_match: FileMatch::Exact("textures.nx2"),
+        rule: FileSyncRule::PatchArchive,
+    },
+    SyncFile {
+        file_match: FileMatch::Exact("faforever.faf"),
+        rule: FileSyncRule::ManualPreserved,
+    },
+];
+
+/// The `bin` channel's file table (synced into the FAForever `bin/` folder).
+pub const BIN_FILES: &[SyncFile] = &[SyncFile {
+    file_match: FileMatch::Exact(FORGED_ALLIANCE_EXE),
+    rule: FileSyncRule::ManualOnly,
+}];
+
+/// The coop channel's file table (synced into the FAForever ROOT; the Exact
+/// paths carry their `bin/`/`gamedata/` prefixes). `bin/init_coop.lua`
+/// doubles as the channel gate: without it coop was never downloaded
+/// locally and the upload planner skips the channel entirely.
+pub const COOP_FILES: &[SyncFile] = &[
+    SyncFile {
+        file_match: FileMatch::Exact("bin/init_coop.lua"),
+        rule: FileSyncRule::ManualOnly,
+    },
+    SyncFile {
+        file_match: FileMatch::Exact("gamedata/lobby_coop.cop"),
+        rule: FileSyncRule::ManualOnly,
+    },
+    SyncFile {
+        file_match: FileMatch::Suffix("_VO.nx2"),
+        rule: FileSyncRule::ManualOnly,
+    },
+    SyncFile {
+        file_match: FileMatch::NonStandardNx2,
+        rule: FileSyncRule::ManualOnly,
+    },
+];
+
+/// File rule for channels whose file names are dynamic (no per-file table).
+/// Returns `None` for channels with a per-file table instead
+/// ([`GAMEDATA_FILES`], [`BIN_FILES`], [`COOP_FILES`]).
+pub fn channel_file_rule(channel: &str) -> Option<FileSyncRule> {
+    match channel {
+        CHANNEL_MAP_GENERATOR | CHANNEL_FAF_CLIENT => Some(FileSyncRule::GithubReleaseAsset),
+        CHANNEL_MAPS => Some(FileSyncRule::ManualOnly),
+        _ => None,
+    }
+}
 
 /// The complete set of archive names the base `faf` featured mod deploys to
 /// `gamedata/` (all ten are re-packed on every FAF deploy). The coop upload
@@ -322,17 +446,72 @@ mod tests {
     }
 
     #[test]
-    fn gamedata_static_files_do_not_overlap_sync_files() {
-        for name in GAMEDATA_STATIC_FILES {
+    fn file_table_invariants() {
+        for table in [GAMEDATA_FILES, BIN_FILES, COOP_FILES] {
+            // No duplicate Exact names within one table.
+            let mut names: Vec<&str> = table
+                .iter()
+                .filter_map(|f| match f.file_match {
+                    FileMatch::Exact(name) => Some(name),
+                    _ => None,
+                })
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            let unique = names.len();
+            let exact = table
+                .iter()
+                .filter(|f| matches!(f.file_match, FileMatch::Exact(_)))
+                .count();
+            assert_eq!(unique, exact, "duplicate Exact file names");
+            // Patch archives must follow the `{dir}.{version}.nx2` upstream
+            // naming the auto-updater derives URLs from.
+            for file in table {
+                if file.rule == FileSyncRule::PatchArchive {
+                    let FileMatch::Exact(name) = file.file_match else {
+                        panic!("PatchArchive rows must be Exact");
+                    };
+                    assert!(
+                        name.ends_with(".nx2"),
+                        "{name}: PatchArchive names must end in .nx2"
+                    );
+                }
+            }
+        }
+        // The coop table must contain the init-file gate row.
+        assert!(COOP_FILES
+            .iter()
+            .any(|f| f.file_match == FileMatch::Exact("bin/init_coop.lua")));
+    }
+
+    #[test]
+    fn every_channel_has_a_file_rule_classification() {
+        for channel in CHANNELS {
+            let classified = channel_file_rule(channel).is_some();
+            let tabled = match *channel {
+                CHANNEL_GAMEDATA => !GAMEDATA_FILES.is_empty(),
+                CHANNEL_BIN => !BIN_FILES.is_empty(),
+                CHANNEL_COOP => !COOP_FILES.is_empty(),
+                _ => false,
+            };
             assert!(
-                !GAMEDATA_SYNC_FILES.contains(name),
-                "{name} must not be in GAMEDATA_SYNC_FILES (the auto-updater cannot fetch it)"
-            );
-            assert!(
-                !name.ends_with(".nx2"),
-                "{name} must not look like a versioned .nx2 patch archive"
+                classified ^ tabled,
+                "{channel}: exactly one of channel_file_rule / per-file table"
             );
         }
+        // The classifier covers the dynamic channels.
+        assert_eq!(
+            channel_file_rule(CHANNEL_MAP_GENERATOR),
+            Some(FileSyncRule::GithubReleaseAsset)
+        );
+        assert_eq!(
+            channel_file_rule(CHANNEL_FAF_CLIENT),
+            Some(FileSyncRule::GithubReleaseAsset)
+        );
+        assert_eq!(
+            channel_file_rule(CHANNEL_MAPS),
+            Some(FileSyncRule::ManualOnly)
+        );
     }
 
     #[test]
