@@ -15,6 +15,12 @@
 //!   the FAForever ROOT (manifest paths carry their `bin/`/`gamedata/`
 //!   prefix). Manually uploaded; the auto-updater does not mirror it (the
 //!   official coop file list is not anonymously visible).
+//! - `bin` — the FAF-patched game binary (`ForgedAlliance.exe`) that the
+//!   official client otherwise downloads from FAF's content server on first
+//!   launch. Pre-seeding it via the mirror lets new players skip that
+//!   download. NOTE: FAF deliberately distributes this exe only through
+//!   their official client to ownership-verified accounts; see
+//!   `docs/fafcn/game-binary-channel.md` before changing this channel.
 
 /// Channel id for the gamedata patch archives.
 pub const CHANNEL_GAMEDATA: &str = "gamedata";
@@ -35,6 +41,10 @@ pub const CHANNEL_MAPS: &str = "maps";
 /// ROOT (paths carry their own `bin/`/`gamedata/` prefix).
 pub const CHANNEL_COOP: &str = "coop";
 
+/// Channel id for the FAF-patched game binary (`ForgedAlliance.exe`).
+/// Synced into the FAForever `bin/` folder.
+pub const CHANNEL_BIN: &str = "bin";
+
 /// All known channel ids (rejected at the API boundary otherwise).
 pub const CHANNELS: &[&str] = &[
     CHANNEL_GAMEDATA,
@@ -42,10 +52,16 @@ pub const CHANNELS: &[&str] = &[
     CHANNEL_FAF_CLIENT,
     CHANNEL_MAPS,
     CHANNEL_COOP,
+    CHANNEL_BIN,
 ];
 
 /// Channels the sync client syncs into the FAForever folder.
-pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_COOP];
+pub const SYNC_CHANNELS: &[&str] = &[
+    CHANNEL_GAMEDATA,
+    CHANNEL_MAP_GENERATOR,
+    CHANNEL_COOP,
+    CHANNEL_BIN,
+];
 
 /// The only gamedata files players actually need mirrored.
 pub const GAMEDATA_SYNC_FILES: &[&str] = &["env.nx2", "units.nx2", "textures.nx2"];
@@ -75,6 +91,7 @@ pub fn channel_subdir(channel: &str) -> Option<&'static str> {
         CHANNEL_GAMEDATA => Some("gamedata"),
         CHANNEL_MAP_GENERATOR => Some("map_generator"),
         CHANNEL_COOP => Some(""),
+        CHANNEL_BIN => Some("bin"),
         _ => None,
     }
 }
@@ -283,6 +300,13 @@ mod tests {
         assert!(CHANNELS.contains(&CHANNEL_COOP));
         assert!(SYNC_CHANNELS.contains(&CHANNEL_COOP));
         assert_eq!(channel_subdir(CHANNEL_COOP), Some(""));
+    }
+
+    #[test]
+    fn bin_channel_registration() {
+        assert!(CHANNELS.contains(&CHANNEL_BIN));
+        assert!(SYNC_CHANNELS.contains(&CHANNEL_BIN));
+        assert_eq!(channel_subdir(CHANNEL_BIN), Some("bin"));
     }
 
     #[test]

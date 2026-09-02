@@ -309,6 +309,7 @@ pub enum Text {
     ChannelMapGenerator,
     ChannelMaps,
     ChannelCoop,
+    ChannelBin,
     ChannelNotPublished,
     UpdaterLatestOfficial,
     UpdaterLastChecked,
@@ -582,10 +583,10 @@ impl Text {
             (Text::GuideStep4Title, Lang::En) => "Step 4: Download our sync client (fafcn-sync)",
             (Text::GuideStep4Title, Lang::Zh) => "第四步:下载本站同步工具 fafcn-sync",
             (Text::GuideStep4Desc, Lang::En) => {
-                "FAF's official patch servers are slow from China. Grab fafcn-sync from our sync page, run it, and hit \"Sync now\" — it downloads the gamedata patches, the map generator, and maps at domestic speed."
+                "FAF's official patch servers are slow from China. Grab fafcn-sync from our sync page, run it, and hit \"Sync now\" — it downloads the gamedata patches, the map generator, maps, AND the game executable (so the FAF client's first-launch download disappears)."
             }
             (Text::GuideStep4Desc, Lang::Zh) => {
-                "FAF 官方补丁服务器在国内很慢。到本站同步页下载 fafcn-sync,双击运行,点“开始同步”,即可国内高速完成 gamedata 补丁、地图生成器与地图更新。"
+                "FAF 官方补丁服务器在国内很慢。到本站同步页下载 fafcn-sync,双击运行,点“开始同步”,即可国内高速完成 gamedata 补丁、地图生成器、地图,以及游戏主程序(客户端首次启动的等待下载也就消失了)。"
             }
             (Text::GuideStep4Btn, Lang::En) => "Go to patch sync",
             (Text::GuideStep4Btn, Lang::Zh) => "前往补丁同步页",
@@ -880,6 +881,8 @@ impl Text {
             (Text::ChannelMaps, Lang::Zh) => "地图",
             (Text::ChannelCoop, Lang::En) => "co-op missions",
             (Text::ChannelCoop, Lang::Zh) => "合作任务",
+            (Text::ChannelBin, Lang::En) => "game binary (ForgedAlliance.exe)",
+            (Text::ChannelBin, Lang::Zh) => "游戏主程序 (ForgedAlliance.exe)",
             (Text::ChannelNotPublished, Lang::En) => "not published yet",
             (Text::ChannelNotPublished, Lang::Zh) => "未发布",
             (Text::UpdaterLatestOfficial, Lang::En) => "Latest official patch",

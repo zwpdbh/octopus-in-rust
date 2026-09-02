@@ -21,9 +21,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use fafcn_gamedata::{
     compare_version_strings, map_generator_jar_version, parse_mod_info_version, sha256_file,
-    validate_relative_path, FileEntry, Manifest, UploadCheckRequest, UploadCheckResponse,
-    UploadCommitRequest, CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR,
-    FAF_STANDARD_NX2, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
+    sha256_file_with_progress, validate_relative_path, FileEntry, Manifest, UploadCheckRequest,
+    UploadCheckResponse, UploadCommitRequest, CHANNEL_BIN, CHANNEL_COOP, CHANNEL_GAMEDATA,
+    CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, FAF_STANDARD_NX2, GAMEDATA_SYNC_FILES, MAP_GENERATOR_KEEP,
 };
 use futures_util::StreamExt;
 use walkdir::WalkDir;
@@ -43,9 +43,12 @@ const COOP_MOD_INFO_URL: &str =
 
 /// Fetch the current coop mod version from the fa-coop repo. Best-effort:
 /// `None` when GitHub is unreachable (the coop upload is then skipped).
+/// Short timeout: GitHub is blocked in China and reqwest's default (no
+/// timeout) would hang the whole upload for minutes.
 async fn fetch_coop_version(http: &reqwest::Client) -> Option<String> {
     let body = http
         .get(COOP_MOD_INFO_URL)
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
         .ok()?
@@ -489,9 +492,30 @@ fn plan_channels(
     plans.push(ChannelPlan {
         channel: CHANNEL_GAMEDATA,
         source_dir: gamedata_dir,
-        version,
+        version: version.clone(),
         entries,
     });
+
+    // bin: the FAF-patched game binary (optional channel — only players who
+    // launched a game once have it locally). Versioned by the SAME patch
+    // version as gamedata: the exe tracks the game version.
+    let bin_dir = faf_root.join("bin");
+    let game_exe = bin_dir.join("ForgedAlliance.exe");
+    if game_exe.is_file() {
+        let entries =
+            hash_files_with_progress(&bin_dir, std::slice::from_ref(&game_exe), progress)?;
+        plans.push(ChannelPlan {
+            channel: CHANNEL_BIN,
+            source_dir: bin_dir,
+            version: version.clone(),
+            entries,
+        });
+    } else {
+        progress(UploadProgress::ChannelSkipped {
+            channel: CHANNEL_BIN.to_string(),
+            reason: "no bin/ForgedAlliance.exe found (launch a FAF game once first)".to_string(),
+        });
+    }
 
     // map-generator: newest few jars (optional channel).
     let generator_dir = faf_root.join("map_generator");
@@ -605,8 +629,10 @@ fn newest_generator_jars(
 }
 
 /// Hash a list of files into manifest entries, reporting `Scanning`
-/// progress per file. Sizes are read up front (cheap metadata) so the
-/// progress events carry real byte totals.
+/// progress CONTINUOUSLY (throttled to ~10 events/sec): multi-hundred-MB
+/// patch archives would otherwise sit silent for tens of seconds between
+/// per-file events. Sizes are read up front (cheap metadata) so the events
+/// carry real byte totals.
 fn hash_files_with_progress(
     dir: &Path,
     paths: &[std::path::PathBuf],
@@ -618,16 +644,42 @@ fn hash_files_with_progress(
         .filter_map(|p| fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
+    // Show the bar immediately, before the first chunk is hashed.
+    progress(UploadProgress::Scanning {
+        done_files: 0,
+        total_files,
+        done_bytes: 0,
+        total_bytes,
+    });
     let mut entries = Vec::with_capacity(total_files);
-    let mut done_bytes = 0_u64;
+    let mut base_bytes = 0_u64;
+    let mut last_emit = std::time::Instant::now();
     for (i, path) in paths.iter().enumerate() {
-        let entry = hash_file(dir, path)?;
-        done_bytes += entry.size;
-        entries.push(entry);
+        let rel = crate::sync::relative_slash_path(dir, path);
+        validate_relative_path(&rel).with_context(|| format!("unsupported path: {rel}"))?;
+        let size = fs::metadata(path)?.len();
+        let sha256 = sha256_file_with_progress(path, |file_done| {
+            if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+                last_emit = std::time::Instant::now();
+                progress(UploadProgress::Scanning {
+                    done_files: i,
+                    total_files,
+                    done_bytes: base_bytes + file_done,
+                    total_bytes,
+                });
+            }
+        })
+        .with_context(|| format!("failed to hash {}", path.display()))?;
+        base_bytes += size;
+        entries.push(FileEntry {
+            path: rel,
+            size,
+            sha256,
+        });
         progress(UploadProgress::Scanning {
             done_files: i + 1,
             total_files,
-            done_bytes,
+            done_bytes: base_bytes,
             total_bytes,
         });
     }

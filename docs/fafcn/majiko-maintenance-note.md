@@ -1,89 +1,113 @@
-# FAFCN 维护备忘（2026-08-28 更新）
+# FAFCN Maintenance Note (updated 2026-08-31)
 
-> 密钥类只记录**存放位置**，不记录明文。明文只存在于下列指明的文件/控制台中。
+> Secrets are referenced by **location only**, never written here in
+> plaintext. The real values live only in the files/consoles listed below.
 
-## 一、网站基本信息
+## 1. Site basics
 
-| 项目 | 值 |
+| Item | Value |
 |---|---|
-| 公网地址 | **https://faforever.cn:60**（旧地址 `https://8v.pub:10041` 为遗留别名，勿依赖） |
-| 域名 | `faforever.cn`，**阿里云注册**（个人实名），注册 2026-08-25，**到期 2027-08-25** |
-| ⚠️ 续期提醒 | **2027 年 7 月前在阿里云控制台续费**，过期 = 全站下线 |
-| 为什么带端口 | 朋友家宽 ISP 封锁 80/443，只能用非标端口（当前 `:60`） |
-| ICP 备案 | 未备案；.cn + 大陆 IP 理论上可能被要求备案，当前非标端口运行正常。若被要求，回退方案：回 `8v.pub` 或迁移到有备案的主机 |
+| Public URL | **https://faforever.cn:60** (legacy alias `https://8v.pub:10041` — do not rely on it) |
+| Domain | `faforever.cn`, registered on **AliCloud** (personal, real-name verified), registered 2026-08-25, **expires 2027-08-25** |
+| ⚠️ Renewal reminder | **Renew in the AliCloud console before ~July 2027** — expiry takes the whole site down |
+| Why the port | The friend's residential ISP blocks 80/443, so a non-standard port (`:60`) is required |
+| ICP filing | Not filed; a `.cn` domain on a mainland IP could theoretically be asked to file. Current non-standard port works. Fallback if forced: return to `8v.pub` or move to a filed host |
 
-## 二、架构与职责划分
+## 2. Architecture & responsibilities
 
 ```
-玩家浏览器 / fafcn-sync
+player browser / fafcn-sync
         │ https://faforever.cn:60
         ▼
-朋友的 Lucky 网关（113.5.92.224，动态 IP）
-  · DDNS：自动同步 A 记录 → 阿里云 DNS
-  · 证书：Let's Encrypt，ACME DNS-01，自动续期
-  · 反代：faforever.cn:60 → 192.168.50.10:3000
-  · 端口映射：10040→22（SSH）、60→3000（网站）
+friend's Lucky gateway (113.5.92.224, dynamic IP)
+  · DDNS: keeps the A record in sync via AliCloud DNS API
+  · TLS cert: Let's Encrypt via ACME DNS-01, auto-renewed
+  · reverse proxy: faforever.cn:60 → 192.168.50.10:3000
+  · port forwards: 10040→22 (SSH), 60→3000 (site)
         ▼  plain HTTP
-majiko 家用服务器 192.168.50.10（Ubuntu 22.04）
-  · fafcn-server 单端口 3000 承载一切（web/API/WebSocket/gamedata 上下行）
-  · systemd 单元：fafcn.service，安装目录 /opt/fafcn（属 majiko）
+majiko home server 192.168.50.10 (Ubuntu 22.04)
+  · fafcn-server carries EVERYTHING on port 3000 (web/API/WebSocket/gamedata)
+  · systemd unit: fafcn.service, install dir /opt/fafcn (owned by majiko)
 ```
 
-| 谁管什么 | 内容 |
+| Owner | Scope |
 |---|---|
-| **我（阿里云 CLI 可直接操作）** | 域名续费、DNS 记录（`aliyun` CLI profile `default`）、代码与部署 |
-| **朋友（Lucky 网关）** | DDNS 任务、证书签发续期、反代规则、端口映射 |
-| **朋友的 DNS Key** | 阿里云 **RAM 子账号**，权限锁死在 `faforever.cn` DNS（策略 `acs:alidns:*:*:domain/faforever.cn`）。泄漏则在 RAM 控制台吊销重建。**绝不外发主账号或本机 CLI 的 AK** |
+| **Us (AliCloud CLI works locally)** | Domain renewal, DNS records (`aliyun` CLI profile `default`), code & deploys |
+| **Friend (Lucky gateway)** | DDNS task, cert issuance/renewal, reverse-proxy rules, port forwards |
+| **Friend's DNS key** | AliCloud **RAM sub-account** scoped to `faforever.cn` DNS only (policy on `acs:alidns:*:*:domain/faforever.cn`). If leaked: revoke in the RAM console and reissue. **Never hand out the main-account or local CLI AccessKey** |
 
-## 三、部署与运维命令（本机仓库根目录）
+## 3. Deploy & ops commands (repo root)
 
 ```bash
-cargo xtask fafcn majiko-deploy              # 全量部署（后端+wasm插件+前端）
-cargo xtask fafcn majiko-deploy --skip-web   # 只更新后端
-cargo xtask fafcn majiko-deploy-file-sync    # 只更新 fafcn-sync Windows 客户端
-cargo xtask fafcn majiko-health              # 三层体检（SSH→服务→公网），排障第一步
+cargo xtask fafcn majiko-deploy              # full deploy (backend + wasm plugin + web)
+cargo xtask fafcn majiko-deploy --skip-web   # backend only
+cargo xtask fafcn majiko-deploy-file-sync    # fafcn-sync Windows client only
+cargo xtask fafcn majiko-health              # three-layer check (SSH → service → public); first troubleshooting step
 ```
 
-- 部署配置：`xtask/.env`（git-ignored）——`MAJIKO_SSH_PASSWORD`（SSH/sudo 密码明文在此）、`MAJIKO_PUBLIC_URL=https://faforever.cn:60`
-- SSH：`ssh -p 10040 majiko@8v.pub`（密码同上；sudo 同密码）
-- 服务器日志：`journalctl -u fafcn -f` 或 `/opt/fafcn/data/logs/fafcn-server.log`
+- Deploy config: `xtask/.env` (git-ignored) — `MAJIKO_SSH_PASSWORD` (SSH/sudo password in plaintext here), `MAJIKO_PUBLIC_URL=https://faforever.cn:60`
+- SSH: `ssh -p 10040 majiko@8v.pub` (same password; sudo uses it too)
+- Server logs: `journalctl -u fafcn -f` or `/opt/fafcn/data/logs/fafcn-server.log`
 
-## 四、密钥清单（位置索引）
+## 4. Secrets index (locations only)
 
-| 密钥 | 存放位置 |
+| Secret | Location |
 |---|---|
-| majiko SSH/sudo 密码 | 本机 `xtask/.env` |
-| LLM API key（secsino 转发站，朋友账号） | 服务器 `/opt/fafcn/.env`（`FAFCN_LLM_*`） |
-| gamedata 上传 token（UPLOAD_TOKEN） | 服务器 `/opt/fafcn/.env` |
-| FAF OAuth client_id/secret（**待收到**） | 收到后写服务器 `/opt/fafcn/.env` + 本机 `apps/fafcn-server/.env` |
-| 旧 Kimi LLM 配置备份 | 服务器 `/opt/fafcn/.env.bak-kimi`（可回滚） |
-| 阿里云 CLI AK（本机） | `aliyun configure list`（profile `default`） |
+| majiko SSH/sudo password | local `xtask/.env` |
+| LLM API key (secsino relay, friend's account) | server `/opt/fafcn/.env` (`FAFCN_LLM_*`) |
+| gamedata upload token (UPLOAD_TOKEN) | server `/opt/fafcn/.env` |
+| FAF OAuth client_id/secret (**pending**) | when received: server `/opt/fafcn/.env` + local `apps/fafcn-server/.env` |
+| Old Kimi LLM config backup | server `/opt/fafcn/.env.bak-kimi` (rollback-ready) |
+| AliCloud CLI AK (this machine) | `aliyun configure list` (profile `default`) |
 
-⚠️ 服务器 `.env` 与本机 `apps/fafcn-server/.env` **不一致**（LLM 已换转发站），不要直接覆盖；Q&A 是公开功能，**每个访客提问都在烧朋友 key 的额度**。
+⚠️ The server `.env` and local `apps/fafcn-server/.env` are **out of sync**
+(LLM was switched to the relay) — never blindly overwrite. Q&A is a public
+feature: **every visitor question bills the friend's key**.
 
-## 五、fafcn-sync 客户端要点
+## 5. fafcn-sync client notes
 
-- 玩家配置：`%APPDATA%\fafcn-sync\config.toml`（server 地址等）
-- exe 尾部内嵌下载来源地址（服务器按请求 origin 写入）。优先级：**新 build 首次运行时采用内嵌地址**（靠 `config.toml` 里的 `last_build_tag` 识别，可自动修复旧版本残留的死域名地址），之后用户保存的地址优先（2026-08-28/30 四连修：启动覆盖 / 关窗不存 / 自更新硬退不存 / 旧配置残留）
-- 自更新：`std::process::exit` 硬切换 exe（切换前会先保存配置）；新 build 通过 `majiko-deploy-file-sync` 发布，玩家在客户端点「检查更新」即可
-- 当前最新 build：`dev-6a956b30-b7de`
+- Player config: `%APPDATA%\fafcn-sync\config.toml` (server address etc.)
+- The exe carries its download origin appended by the server (embedded
+  config). Priority: **on the first run of a new build, the embedded origin
+  wins** (detected via `last_build_tag` in config.toml — auto-repairs stale
+  addresses left by old builds, e.g. the retired domain); afterwards the
+  remembered address wins (four fixes on 2026-08-28/30: startup override /
+  no save on close / hard-exit on self-update / stale legacy config)
+- Self-update: hard `std::process::exit` exe swap (config is saved BEFORE
+  the swap); new builds ship via `majiko-deploy-file-sync`, players click
+  检查更新
+- Upload flows show live progress in BOTH phases: local hashing
+  (`正在计算本地文件校验和…`, byte-level, throttled) and transfer
+- Current latest build: `dev-6a97e360-b38e`
 
-## 六、FAF 官方对接状态
+## 6. FAF integration status
 
-- OAuth 申请**已批准**（Brutus5000，consent 名 `fafcn`），**凭据未收到**
-- 已通知对方更新 prod Redirect URI：`https://faforever.cn:60/api/auth/callback`（含端口精确白名单）
-- 拿到凭据后按 `docs/fafcn/faf-integration.md` §2.1 checklist 执行
+- OAuth application **approved** (Brutus5000, consent name `fafcn`),
+  **credentials not yet received**
+- FAF notified of the updated prod redirect URI:
+  `https://faforever.cn:60/api/auth/callback` (exact port whitelist)
+- Domain concern resolved: FAF asked that `faforever.cn` not look official →
+  disclaimer banner on the home page + global footer added (§2.3 of
+  `faf-integration.md`)
+- When credentials arrive, follow the §2.1 checklist in
+  `docs/fafcn/faf-integration.md`
 
-## 七、排障决策树
+## 7. Troubleshooting decision tree
 
-1. `cargo xtask fafcn majiko-health` —— 看哪层红
-2. 服务层红 → 上服务器 `journalctl -u fafcn -n 50`
-3. 公网层红、服务层绿 → 朋友那边：边缘转发断了（内网 IP 变了）/ DDNS 没同步（公网 IP 变了）/ 证书问题
-4. 公网端口出现 `CN=Lucky` 自签证书 → 朋友的 Lucky 上域名 vhost/证书绑定坏了
-5. `faforever.cn` 解析不到或 IP 不对 → 朋友的 DDNS 任务挂了（或域名忘续费）
+1. `cargo xtask fafcn majiko-health` — see which layer is red
+2. Service layer red → SSH in, `journalctl -u fafcn -n 50`
+3. Public layer red, service green → friend's side: edge forward broken (LAN
+   IP changed) / DDNS stale (public IP changed) / cert issue
+4. Public port serves a self-signed `CN=Lucky` cert → the friend's Lucky
+   vhost/cert binding for the domain is broken
+5. `faforever.cn` doesn't resolve or resolves wrong → friend's DDNS task is
+   down (or the domain expired)
 
-## 八、关键文档
+## 8. Key documents
 
-- 部署 runbook：`docs/fafcn/how_to_deploy_fafcn_on_majiko.md`（本备忘的详版）
-- FAF 对接设计：`docs/fafcn/faf-integration.md`
-- 通用部署（新服务器）：`docs/fafcn/how_to_deploy_fafcn.md`
+- Deploy runbook: `docs/fafcn/how_to_deploy_fafcn_on_majiko.md` (the detailed
+  version of this note)
+- FAF integration design: `docs/fafcn/faf-integration.md`
+- File-sync architecture: `docs/fafcn/file-sync.md`
+- bin channel (game binary) policy: `docs/fafcn/game-binary-channel.md`
+- Generic fresh-server runbook: `docs/fafcn/how_to_deploy_fafcn.md`

@@ -44,17 +44,23 @@ Everything the mirror serves belongs to a well-known channel
 (`crates/fafcn-gamedata/src/channels.rs`):
 
 ```rust
-// crates/fafcn-gamedata/src/channels.rs ~line 30 — channel registry
+// crates/fafcn-gamedata/src/channels.rs ~line 45 — channel registry
 pub const CHANNELS: &[&str] = &[
     CHANNEL_GAMEDATA,      // "gamedata": env/units/textures.nx2 patch archives
     CHANNEL_MAP_GENERATOR, // "map-generator": newest 3 MapGenerator_*.jar
     CHANNEL_FAF_CLIENT,    // "faf-client": installer, mirror-only (not synced)
     CHANNEL_MAPS,          // "maps": FAF maps, merged uploads
     CHANNEL_COOP,          // "coop": co-op mission files, synced to FAForever root
+    CHANNEL_BIN,           // "bin": FAF-patched ForgedAlliance.exe (policy: see game-binary-channel.md)
 ];
 
-// Channels the sync client syncs into the FAForever folder (~line 55):
-pub const SYNC_CHANNELS: &[&str] = &[CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, CHANNEL_COOP];
+// Channels the sync client syncs into the FAForever folder (~line 65):
+pub const SYNC_CHANNELS: &[&str] = &[
+    CHANNEL_GAMEDATA,
+    CHANNEL_MAP_GENERATOR,
+    CHANNEL_COOP,
+    CHANNEL_BIN,
+];
 ```
 
 Per-channel rules that new code MUST respect:
@@ -65,6 +71,7 @@ Per-channel rules that new code MUST respect:
 | `map-generator` | `FAForever/map_generator`                                            | Newest jar version (manual upload); auto-mirror uses the GitHub release tag       | Prunes jars beyond newest 3            | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
 | `faf-client`    | — (web download)                                                     | From installer filename on manual upload; auto-mirror uses the GitHub release tag | —                                      | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater                                            |
 | `coop` | FAForever **root** (paths carry `bin/`/`gamedata/` prefixes) | fa-coop `mod_info.lua` version, fetched from GitHub at upload time | Never deletes extras | Fixed names → overwritten in place; **manual upload only** (see TODO below) |
+| `bin` | `FAForever/bin` | Same as the gamedata patch version (exe tracks the game version) | Never deletes extras | Fixed name → overwritten in place; manual upload via the 上传补丁 flow when `bin/ForgedAlliance.exe` exists locally; **policy: read `game-binary-channel.md`** |
 | `maps` | FAF Client's `maps_and_mods/maps` | Date stamp (no single version) | Prunes superseded `name.vNNNN` versions | `commit_merge`: replaced map versions deleted, others kept |
 
 **Why the coop channel touches `bin/`:** a coop game boots from the coop init
