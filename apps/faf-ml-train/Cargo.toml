@@ -1,0 +1,21 @@
+[package]
+name = "faf-ml-train"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Train / predict CLI for the faf-ml-model SSD-style icon detector."
+license = "MIT"
+
+[[bin]]
+name = "faf-ml-train"
+path = "src/main.rs"
+
+[dependencies]
+faf-ml-model = { path = "../../crates/faf-ml-model" }
+burn = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
+image = "0.25"

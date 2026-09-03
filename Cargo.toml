@@ -34,7 +34,9 @@ members = [
     "crates/fafcn-gamedata",
     "apps/fafcn-sync",
     "crates/faf-ml-core",
+    "crates/faf-ml-model",
     "apps/faf-ml-server",
+    "apps/faf-ml-train",
     "apps/faf-ml-web",
 ]
 resolver = "3"
