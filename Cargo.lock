@@ -4994,6 +4994,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "faf-ml-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "faf-ml-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "faf-ml-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "faf-ml-web"
+version = "0.1.0"
+dependencies = [
+ "dioxus",
+ "faf-ml-core",
+ "gloo-net",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "faf-party-plugin"
 version = "0.1.0"
 dependencies = [

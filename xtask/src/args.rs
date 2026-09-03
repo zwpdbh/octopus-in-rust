@@ -6,6 +6,7 @@ pub enum App {
     Fafcn,
     FafSim,
     Qqbot,
+    FafMl,
 }
 
 /// Commands that apply to the whole workspace rather than a single app.
@@ -34,6 +35,7 @@ impl Task {
             "fafcn" => Self::parse_app(App::Fafcn, args, "help"),
             "faf-sim" => Self::parse_app(App::FafSim, args, "run"),
             "qqbot" => Self::parse_app(App::Qqbot, args, "help"),
+            "faf-ml" => Self::parse_app(App::FafMl, args, "help"),
             "test" => Ok(Task::Global(GlobalCommand::Test)),
             "help" | "-h" | "--help" => {
                 print_top_help();
@@ -125,6 +127,31 @@ pub fn print_faf_sim_help() {
     println!("  cargo xtask faf-sim web serve --port 3000");
 }
 
+pub fn print_faf_ml_help() {
+    println!("cargo xtask faf-ml — FAF unit-detection ML platform");
+    println!();
+    println!("Usage:");
+    println!("  cargo xtask faf-ml <command> [args]");
+    println!();
+    println!("Commands:");
+    println!("  backend    Start the Axum backend on :3100 (cargo run -p faf-ml-server);");
+    println!("             serves the release web build too (run build-web first)");
+    println!("  frontend   Start the Dioxus dev server with hot reload on :8081");
+    println!("             (dx serve; debug builds call the backend on localhost:3100)");
+    println!("  build-web  Build the web UI (release by default — that's what the");
+    println!("             backend serves). Options: --debug");
+    println!("  datagen    Generate synthetic training data (args pass through to");
+    println!("             faf-datagen): cargo xtask faf-ml datagen --count 1000");
+    println!("  import     Import a datagen output dir into the RUNNING backend");
+    println!("             (default: data/faf-detect): cargo xtask faf-ml import [dir]");
+    println!();
+    println!("Typical loop:");
+    println!("  cargo xtask faf-ml build-web        # once (or after UI changes)");
+    println!("  cargo xtask faf-ml backend          # then browse http://localhost:3100");
+    println!("  cargo xtask faf-ml datagen --count 1000");
+    println!("  cargo xtask faf-ml import           # while backend runs");
+}
+
 pub fn print_top_help() {
     println!("xtask — development tasks for the Octopus workspace");
     println!();
@@ -134,6 +161,7 @@ pub fn print_top_help() {
     println!("Apps:");
     println!("  fafcn      FAF construction simulator (Dioxus frontend + Axum backend)");
     println!("  faf-sim    FAF eco/build simulator");
+    println!("  faf-ml     FAF unit-detection ML platform (Dioxus frontend + Axum backend)");
     println!("  qqbot      QQ bot service manager");
     println!();
     println!("Global commands:");

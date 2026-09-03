@@ -1,0 +1,161 @@
+//! Shared types for the faf-ml platform: screenshot metadata, bounding-box
+//! labels, dataset snapshots, and YOLO line conversion helpers.
+//!
+//! Both `faf-ml-server` and `faf-ml-web` depend on this crate so the wire
+//! format and the on-disk JSON layout stay in sync.
+
+use std::fmt;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// One uploaded screenshot's metadata (stored in `screenshots/index.json`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenshotMeta {
+    pub id: Uuid,
+    /// Original file name as uploaded (kept for display only).
+    pub filename: String,
+    pub width: u32,
+    pub height: u32,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+/// One labeled bounding box, in **absolute pixel** coordinates of the
+/// full-size image (`x`, `y` = top-left corner). The web UI scales these by
+/// the displayed-vs-natural image ratio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LabeledBox {
+    /// Class name (must exist in `classes.txt`).
+    pub class: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Immutable dataset snapshot (stored in `datasets/<name>.json`). Labels are
+/// embedded so later label edits never mutate a snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetManifest {
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub entries: Vec<DatasetEntry>,
+}
+
+/// One image's contribution to a dataset snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetEntry {
+    pub image_id: Uuid,
+    pub labels: Vec<LabeledBox>,
+}
+
+/// Error returned when parsing a YOLO label line fails.
+#[derive(Debug, Clone, PartialEq)]
+pub enum YoloError {
+    /// Line does not have exactly 5 whitespace-separated fields.
+    FieldCount,
+    /// Class id field is not a valid non-negative integer.
+    BadClassId,
+    /// Class id has no entry in the provided class list.
+    UnknownClass(usize),
+    /// A coordinate field is not a valid float.
+    BadCoordinate,
+}
+
+impl fmt::Display for YoloError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            YoloError::FieldCount => write!(f, "expected 5 fields: <class> <cx> <cy> <w> <h>"),
+            YoloError::BadClassId => write!(f, "invalid class id"),
+            YoloError::UnknownClass(id) => write!(f, "class id {id} not in class list"),
+            YoloError::BadCoordinate => write!(f, "invalid coordinate"),
+        }
+    }
+}
+
+impl std::error::Error for YoloError {}
+
+impl LabeledBox {
+    /// Convert to a YOLO-format line: `<class_id> <cx> <cy> <w> <h>` with all
+    /// values normalized to 0..=1 relative to the image size.
+    pub fn to_yolo(&self, classes: &[String], image_width: u32, image_height: u32) -> String {
+        let class_id = classes.iter().position(|c| c == &self.class).unwrap_or(0);
+        let cx = (self.x + self.w / 2.0) / image_width as f32;
+        let cy = (self.y + self.h / 2.0) / image_height as f32;
+        let w = self.w / image_width as f32;
+        let h = self.h / image_height as f32;
+        format!("{class_id} {cx:.6} {cy:.6} {w:.6} {h:.6}")
+    }
+
+    /// Parse a YOLO-format line back into absolute pixel coordinates.
+    ///
+    /// `classes` maps class ids to names (line number = class id, matching
+    /// the `classes.txt` convention).
+    pub fn from_yolo(
+        line: &str,
+        classes: &[String],
+        image_width: u32,
+        image_height: u32,
+    ) -> Result<Self, YoloError> {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Err(YoloError::FieldCount);
+        }
+        let class_id: usize = fields[0].parse().map_err(|_| YoloError::BadClassId)?;
+        let class = classes
+            .get(class_id)
+            .ok_or(YoloError::UnknownClass(class_id))?
+            .clone();
+        let coord = |s: &str| s.parse::<f32>().map_err(|_| YoloError::BadCoordinate);
+        let cx = coord(fields[1])?;
+        let cy = coord(fields[2])?;
+        let w = coord(fields[3])? * image_width as f32;
+        let h = coord(fields[4])? * image_height as f32;
+        Ok(LabeledBox {
+            class,
+            x: cx * image_width as f32 - w / 2.0,
+            y: cy * image_height as f32 - h / 2.0,
+            w,
+            h,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classes() -> Vec<String> {
+        vec!["tank".to_string(), "bomber".to_string()]
+    }
+
+    #[test]
+    fn yolo_round_trip() {
+        let b = LabeledBox {
+            class: "bomber".to_string(),
+            x: 100.0,
+            y: 50.0,
+            w: 40.0,
+            h: 20.0,
+        };
+        let line = b.to_yolo(&classes(), 640, 640);
+        let back = LabeledBox::from_yolo(&line, &classes(), 640, 640).unwrap();
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert_eq!(back.class, "bomber");
+        assert!(close(back.x, b.x) && close(back.y, b.y));
+        assert!(close(back.w, b.w) && close(back.h, b.h));
+    }
+
+    #[test]
+    fn yolo_rejects_bad_lines() {
+        assert_eq!(
+            LabeledBox::from_yolo("1 0.5 0.5 0.1", &classes(), 640, 640).unwrap_err(),
+            YoloError::FieldCount
+        );
+        assert_eq!(
+            LabeledBox::from_yolo("9 0.5 0.5 0.1 0.1", &classes(), 640, 640).unwrap_err(),
+            YoloError::UnknownClass(9)
+        );
+    }
+}
