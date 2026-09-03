@@ -16,7 +16,7 @@ members = [
     "crates/faf-units",
     "crates/faf-dioxus-ui",
     "crates/faf-blueprints",
-    "crates/faf-downloader",
+    "crates/faf-unit-tools",
     "plugins/example-http",
     "plugins/faf-units",
     "plugins/faf-party",

@@ -1,13 +1,13 @@
 [package]
-name = "faf-downloader"
+name = "faf-unit-tools"
 version = "0.1.0"
 edition = "2021"
 authors = ["octopus contributors"]
-description = "CLI for downloading and persisting FAF unit data."
+description = "CLI utilities for FAF unit data: download the unit database, cross-check strategic icon sprites against it."
 license = "MIT"
 
 [[bin]]
-name = "faf-downloader"
+name = "faf-unit-tools"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,8 +1,13 @@
+//! `download` subcommand — download and persist the FAF unit database.
+//!
+//! (This is the former `faf-downloader` crate, unchanged apart from being a
+//! subcommand now.)
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::{Args, ValueEnum};
 use faf_units::FafUnitIndex;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -17,9 +22,8 @@ enum OutputFormat {
     Sqlite,
 }
 
-#[derive(Debug, Parser)]
-#[command(name = "faf-downloader", about = "Download and persist FAF unit data.")]
-struct Cli {
+#[derive(Debug, Args)]
+pub struct DownloadArgs {
     /// URL of the unit index JSON.
     #[arg(short, long, default_value = DEFAULT_INDEX_URL)]
     url: String,
@@ -41,14 +45,7 @@ struct Cli {
     translations: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
-    let cli = Cli::parse();
-
+pub async fn run(cli: DownloadArgs) -> Result<()> {
     info!("Downloading FAF unit data from {}", cli.url);
     let index = download_index(&cli.url).await?;
 

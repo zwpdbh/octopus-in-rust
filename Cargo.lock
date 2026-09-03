@@ -4968,22 +4968,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "faf-downloader"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "faf-units",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "faf-game-engine"
 version = "0.1.0"
 dependencies = [
@@ -5082,6 +5066,22 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "faf-unit-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "faf-units",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
