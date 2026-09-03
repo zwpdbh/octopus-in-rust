@@ -21,6 +21,7 @@ members = [
     "plugins/faf-units",
     "plugins/faf-party",
     "apps/faf-sim-cli",
+    "apps/faf-datagen",
     "apps/fafcn-server",
     "apps/qqbot",
     "apps/qqbot-core",

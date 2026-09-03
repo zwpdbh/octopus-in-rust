@@ -1,0 +1,23 @@
+[package]
+name = "faf-datagen"
+version = "0.1.0"
+edition = "2021"
+authors = ["octopus contributors"]
+description = "Synthetic training-data generator for FAF strategic-icon detection (phase 1 of the unit-detection ML project)."
+license = "MIT"
+
+[[bin]]
+name = "faf-datagen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+rand = { workspace = true }
+image = "0.25"
+image_dds = { version = "0.7", default-features = false, features = [
+  "ddsfile",
+  "image",
+] }
+# note: use image_dds's re-exported ddsfile (image_dds::ddsfile::Dds) — a direct
+# ddsfile dep would be a different version and the types wouldn't match
