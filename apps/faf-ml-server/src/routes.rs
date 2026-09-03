@@ -5,7 +5,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 
@@ -32,7 +32,8 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/screenshots/{id}",
-            delete(handlers::screenshots::delete_screenshot),
+            delete(handlers::screenshots::delete_screenshot)
+                .patch(handlers::screenshots::update_screenshot),
         )
         .route("/api/classes", get(handlers::classes::get_classes))
         .route(

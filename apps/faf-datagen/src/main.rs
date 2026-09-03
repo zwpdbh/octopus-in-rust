@@ -203,12 +203,48 @@ fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
 
 // ── backgrounds ─────────────────────────────────────────────────────────────
 
+/// Loads background images from `dir`.
+///
+/// Two modes:
+/// - plain directory of PNGs (e.g. a manual `data/faf-backgrounds/` folder):
+///   every PNG is used.
+/// - the faf-ml platform's screenshot store (`data/faf-ml/screenshots`,
+///   recognized by its `index.json`): only screenshots whose kind is
+///   `background` are used — battle screenshots must never become canvases,
+///   because their real units would end up as unlabeled ghosts in the
+///   synthetic data.
 fn load_backgrounds(dir: &Path, min_size: u32) -> Result<Vec<RgbaImage>> {
+    let allowed: Option<Vec<String>> = match std::fs::read_to_string(dir.join("index.json")) {
+        Ok(raw) => {
+            let metas: Vec<faf_ml_core::ScreenshotMeta> = serde_json::from_str(&raw)
+                .with_context(|| format!("parsing {:?}", dir.join("index.json")))?;
+            let ids = metas
+                .iter()
+                .filter(|m| m.kind == faf_ml_core::ScreenshotKind::Background)
+                .map(|m| format!("{}.png", m.id))
+                .collect::<Vec<_>>();
+            println!(
+                "platform store detected: {} of {} screenshots marked as background",
+                ids.len(),
+                metas.len()
+            );
+            Some(ids)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+
     let mut out = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {dir:?}"))? {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) != Some("png") {
             continue;
+        }
+        if let Some(allowed) = &allowed {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !allowed.iter().any(|a| a == name) {
+                continue;
+            }
         }
         let img = image::open(&path)
             .with_context(|| format!("opening {path:?}"))?

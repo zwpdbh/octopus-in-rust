@@ -15,6 +15,10 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
 image = "0.25"
+# Read the faf-ml platform's screenshot index (kind filtering) when the
+# background pool IS the platform's screenshot store.
+faf-ml-core = { path = "../../crates/faf-ml-core" }
+serde_json = { workspace = true }
 image_dds = { version = "0.7", default-features = false, features = [
   "ddsfile",
   "image",

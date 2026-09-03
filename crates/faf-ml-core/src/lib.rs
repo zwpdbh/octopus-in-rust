@@ -10,6 +10,47 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// What a screenshot is FOR in the training-data pipeline.
+///
+/// The distinction matters because the two kinds have opposite jobs:
+/// `Background` images (empty terrain) are the compositing canvas for
+/// faf-datagen; `Battle` images (real units) are the held-out test /
+/// correction pool and must never be composited on or trained against
+/// directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenshotKind {
+    /// Uploaded but not yet triaged. The safe default: excluded from every
+    /// pool until a human marks it (a misclassified battle shot in the
+    /// background pool would poison datagen with unlabeled real units).
+    #[default]
+    Unclassified,
+    /// Real battle frame with units — held-out test/correction pool.
+    Battle,
+    /// Empty terrain — faf-datagen's background pool.
+    Background,
+    /// Imported faf-datagen output (synthetic, auto-labeled).
+    Synthetic,
+}
+
+impl ScreenshotKind {
+    /// Query-string / CLI spelling.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unclassified => "unclassified",
+            Self::Battle => "battle",
+            Self::Background => "background",
+            Self::Synthetic => "synthetic",
+        }
+    }
+}
+
+impl fmt::Display for ScreenshotKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One uploaded screenshot's metadata (stored in `screenshots/index.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenshotMeta {
@@ -19,6 +60,9 @@ pub struct ScreenshotMeta {
     pub width: u32,
     pub height: u32,
     pub uploaded_at: DateTime<Utc>,
+    /// Pipeline role; defaults to `battle` for pre-existing index entries.
+    #[serde(default)]
+    pub kind: ScreenshotKind,
 }
 
 /// One labeled bounding box, in **absolute pixel** coordinates of the

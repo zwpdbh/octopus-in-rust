@@ -6229,9 +6229,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "faf-ml-core",
  "image",
  "image_dds",
  "rand 0.10.2",
+ "serde_json",
 ]
 
 [[package]]

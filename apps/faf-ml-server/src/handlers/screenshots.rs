@@ -2,13 +2,14 @@
 
 use axum::{
     body::Bytes,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use chrono::Utc;
-use faf_ml_core::ScreenshotMeta;
+use faf_ml_core::{ScreenshotKind, ScreenshotMeta};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
@@ -44,7 +45,12 @@ pub fn write_index(state: &AppState, metas: &[ScreenshotMeta]) -> Result<()> {
 }
 
 /// Store one PNG as a new screenshot (image file + index entry).
-pub fn store_screenshot(state: &AppState, filename: &str, bytes: &[u8]) -> Result<ScreenshotMeta> {
+pub fn store_screenshot(
+    state: &AppState,
+    filename: &str,
+    bytes: &[u8],
+    kind: ScreenshotKind,
+) -> Result<ScreenshotMeta> {
     let (width, height) = png_dimensions(bytes)
         .ok_or_else(|| Error::BadRequest(format!("{filename:?} is not a valid PNG")))?;
     let meta = ScreenshotMeta {
@@ -53,6 +59,7 @@ pub fn store_screenshot(state: &AppState, filename: &str, bytes: &[u8]) -> Resul
         width,
         height,
         uploaded_at: Utc::now(),
+        kind,
     };
     std::fs::write(state.image_path(meta.id), bytes)?;
     let mut metas = read_index(state)?;
@@ -61,12 +68,21 @@ pub fn store_screenshot(state: &AppState, filename: &str, bytes: &[u8]) -> Resul
     Ok(meta)
 }
 
-/// `POST /api/screenshots` — multipart upload of one or more PNG files.
+/// `POST /api/screenshots?kind=battle|background` — multipart upload of one
+/// or more PNG files. `kind` defaults to `battle` (real frame with units);
+/// pass `background` for empty-terrain shots destined for faf-datagen.
 ///
 /// Every form field carrying a file is stored; returns the metadata of all
 /// newly created screenshots.
+#[derive(Debug, Deserialize)]
+pub struct UploadQuery {
+    #[serde(default)]
+    kind: ScreenshotKind,
+}
+
 pub async fn upload_screenshots(
     State(state): State<AppState>,
+    Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> Result<Json<Vec<ScreenshotMeta>>> {
     let mut uploaded = Vec::new();
@@ -82,7 +98,7 @@ pub async fn upload_screenshots(
             .bytes()
             .await
             .map_err(|e| Error::BadRequest(format!("failed to read {filename:?}: {e}")))?;
-        uploaded.push(store_screenshot(&state, &filename, &bytes)?);
+        uploaded.push(store_screenshot(&state, &filename, &bytes, query.kind)?);
     }
     if uploaded.is_empty() {
         return Err(Error::BadRequest("no files in multipart body".to_string()));
@@ -105,6 +121,30 @@ pub async fn get_image(
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
     Ok((headers, bytes))
+}
+
+/// `PATCH /api/screenshots/:id` — update metadata (the post-upload triage:
+/// marking a shot as `battle` vs `background`).
+#[derive(Debug, Deserialize)]
+pub struct UpdateScreenshot {
+    kind: ScreenshotKind,
+}
+
+pub async fn update_screenshot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(update): Json<UpdateScreenshot>,
+) -> Result<Json<ScreenshotMeta>> {
+    let id: Uuid = id.parse().map_err(|_| Error::NotFound)?;
+    let mut metas = read_index(&state)?;
+    let meta = metas
+        .iter_mut()
+        .find(|m| m.id == id)
+        .ok_or(Error::NotFound)?;
+    meta.kind = update.kind;
+    let updated = meta.clone();
+    write_index(&state, &metas)?;
+    Ok(Json(updated))
 }
 
 /// `DELETE /api/screenshots/:id` — remove the image, its labels, and its

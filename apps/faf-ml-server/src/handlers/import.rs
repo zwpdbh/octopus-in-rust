@@ -94,7 +94,12 @@ pub async fn import_datagen(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown.png");
-        let meta = super::screenshots::store_screenshot(&state, filename, &bytes)?;
+        let meta = super::screenshots::store_screenshot(
+            &state,
+            filename,
+            &bytes,
+            faf_ml_core::ScreenshotKind::Synthetic,
+        )?;
 
         // Convert the matching YOLO label file (same stem) to JSON labels.
         let label_path = dir.join("labels").join(format!(
