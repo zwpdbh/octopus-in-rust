@@ -1,7 +1,12 @@
 //! Shared application state for Axum handlers.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
+use faf_ml_core::DatagenJob;
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -11,13 +16,19 @@ use crate::error::{Error, Result};
 pub struct AppState {
     pub data_dir: Arc<PathBuf>,
     pub assets_dir: Arc<PathBuf>,
+    /// Strategic-icon sprite directory (`FAF_ML_ICONS_DIR`) for datagen jobs.
+    pub icons_dir: Arc<PathBuf>,
+    /// In-memory datagen job registry (progress is polled, not streamed).
+    pub jobs: Arc<Mutex<HashMap<Uuid, DatagenJob>>>,
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf, assets_dir: PathBuf) -> Result<Self> {
+    pub fn new(data_dir: PathBuf, assets_dir: PathBuf, icons_dir: PathBuf) -> Result<Self> {
         let state = Self {
             data_dir: Arc::new(data_dir),
             assets_dir: Arc::new(assets_dir),
+            icons_dir: Arc::new(icons_dir),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
         };
         std::fs::create_dir_all(state.screenshots_dir())?;
         std::fs::create_dir_all(state.labels_dir())?;

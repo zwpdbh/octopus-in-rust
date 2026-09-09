@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 burn = { workspace = true, features = ["wgpu", "ndarray"] }
 anyhow = { workspace = true }
+faf-ml-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = "0.25"

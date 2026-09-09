@@ -21,7 +21,6 @@ members = [
     "plugins/faf-units",
     "plugins/faf-party",
     "apps/faf-sim-cli",
-    "apps/faf-datagen",
     "apps/fafcn-server",
     "apps/qqbot",
     "apps/qqbot-core",
@@ -35,6 +34,7 @@ members = [
     "apps/fafcn-sync",
     "crates/faf-ml-core",
     "crates/faf-ml-model",
+    "crates/faf-ml-datagen",
     "apps/faf-ml-server",
     "apps/faf-ml-train",
     "apps/faf-ml-web",
@@ -52,6 +52,7 @@ faf-units = { path = "crates/faf-units" }
 faf-sim-service = { path = "crates/faf-sim-service" }
 fafcn-gamedata = { path = "crates/fafcn-gamedata" }
 faf-ml-core = { path = "crates/faf-ml-core" }
+faf-ml-datagen = { path = "crates/faf-ml-datagen" }
 llm-provider = { path = "crates/llm-provider" }
 agent-core = { path = "crates/agent-core" }
 qqbot-config = { path = "crates/qqbot-config" }

@@ -140,16 +140,12 @@ pub fn print_faf_ml_help() {
     println!("             (dx serve; debug builds call the backend on localhost:3100)");
     println!("  build-web  Build the web UI (release by default — that's what the");
     println!("             backend serves). Options: --debug");
-    println!("  datagen    Generate synthetic training data (args pass through to");
-    println!("             faf-datagen): cargo xtask faf-ml datagen --count 1000");
-    println!("  import     Import a datagen output dir into the RUNNING backend");
-    println!("             (default: data/faf-detect): cargo xtask faf-ml import [dir]");
+    println!("             (datagen runs inside the server now — the web UI's Datagen");
+    println!("             view is the generation flow; there is no CLI anymore)");
     println!();
     println!("Typical loop:");
     println!("  cargo xtask faf-ml build-web        # once (or after UI changes)");
     println!("  cargo xtask faf-ml backend          # then browse http://localhost:3100");
-    println!("  cargo xtask faf-ml datagen --count 1000");
-    println!("  cargo xtask faf-ml import           # while backend runs");
 }
 
 pub fn print_top_help() {
@@ -175,6 +171,9 @@ pub fn print_top_help() {
     println!("  cargo xtask faf-sim web");
     println!("  cargo xtask faf-sim web build --release");
     println!("  cargo xtask faf-sim web serve --port 3000");
+    println!("  cargo xtask faf-ml build-web");
+    println!("  cargo xtask faf-ml backend");
+    println!("  cargo xtask faf-ml frontend");
     println!("  cargo xtask qqbot build");
     println!("  cargo xtask qqbot start");
     println!("  cargo xtask qqbot status");

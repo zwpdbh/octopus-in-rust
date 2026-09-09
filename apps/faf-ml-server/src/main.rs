@@ -1,5 +1,5 @@
-//! Backend server for the faf-ml data platform (phase 0: collect → review →
-//! snapshot).
+//! Backend server for the faf-ml data platform (collect → review → generate
+//! → snapshot).
 //!
 //! Serves the Dioxus web build as static files and exposes:
 //!
@@ -9,7 +9,9 @@
 //! - `GET/PUT /api/screenshots/:id/labels` — read/replace bounding boxes.
 //! - `DELETE /api/screenshots/:id` — remove image + labels.
 //! - `GET /api/classes` — class list.
-//! - `POST /api/import/datagen` — import a faf-datagen output directory.
+//! - `POST /api/datagen` — start a synthetic-data generation job (background
+//!   task streaming samples into the store as `synthetic` screenshots).
+//! - `GET /api/datagen/jobs[/{id}]` — poll job progress.
 //! - `GET/POST /api/datasets` — list / create immutable dataset snapshots.
 
 mod config;
@@ -69,6 +71,7 @@ async fn main() -> Result<()> {
     let state = AppState::new(
         server_config.data_dir.clone(),
         server_config.assets_dir.clone(),
+        server_config.icons_dir.clone(),
     )?;
 
     tracing::info!(data_dir = %state.data_dir.display(), "data store ready");

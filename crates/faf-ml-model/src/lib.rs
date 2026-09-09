@@ -4,7 +4,8 @@
 
 //! faf-ml-model — SSD-style single-shot detector for FAF strategic icons.
 //!
-//! Consumes `faf-datagen` output (640×640 PNGs + YOLO labels, 193 classes of
+//! Consumes the faf-ml platform store (synthetic screenshots + JSON labels)
+//! or a YOLO datagen dir (640×640 PNGs + YOLO labels, 193 classes of
 //! tiny near-square sprites). Design:
 //!   * VGG-ish backbone (3×3 same-pad convs + relu, stride-2 downsampling —
 //!     NO BatchNorm: synthetic domain, keeps train/eval identical) with

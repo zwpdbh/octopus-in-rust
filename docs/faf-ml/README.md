@@ -8,7 +8,8 @@
 
 ## The one-paragraph version of the whole approach
 
-Manual labeling doesn't scale, so we don't do it: `faf-datagen` pastes the
+Manual labeling doesn't scale, so we don't do it: `faf-ml-datagen` (driven
+from the server's Datagen view) pastes the
 game's own strategic-icon sprites onto crops of **empty-terrain screenshots**,
 which yields perfectly labeled synthetic training data for free. A small SSD
 detector (`crates/faf-ml-model`) trains on that. Real **battle** screenshots
@@ -17,14 +18,14 @@ screenshots, fix the *generator* (colors/scale), not the labels. Later, the
 model pre-labels real shots and you correct them in the web UI — that
 correction set closes the domain gap.
 
-## What's built and verified (as of 2026-09-03)
+## What's built and verified (as of 2026-09-09)
 
 | Piece | Where | State |
 |---|---|---|
-| Synthetic data generator | `apps/faf-datagen` (`cargo xtask faf-ml datagen`) | ✅ works; tint + scale + clustering; YOLO labels |
-| Web platform (phase 0) | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen import |
+| Synthetic data generator | `crates/faf-ml-datagen` (runs as a server job; the `faf-datagen` CLI is gone) | ✅ works; tint + scale + clustering; streams samples into the store as `synthetic` screenshots with JSON labels |
+| Web platform | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen jobs (`POST /api/datagen` + polling) |
 | Icon↔unit mapping | `crates/faf-unit-tools` (`icon-map` subcommand) | ✅ 114 classes ↔ 501 units; artifact at `data/faf-ml/icon-map.json` |
-| SSD detector | `crates/faf-ml-model` + `apps/faf-ml-train` | ✅ implemented, 16/16 tests, smoke-trained; **never trained for real** |
+| SSD detector | `crates/faf-ml-model` + `apps/faf-ml-train` | ✅ implemented, 17/17 tests, smoke-trained; **never trained for real** |
 
 Not built yet: training/eval inside the web UI (phases 2–3), Windows capture
 client, the analysis view itself.
@@ -45,16 +46,19 @@ cargo xtask faf-ml backend          # → http://localhost:3100
 #    the "needs triage" filter shows what's left to mark.)
 
 # 2. GENERATE synthetic data (reads ONLY background-marked shots):
-cargo xtask faf-ml datagen -- --count 2000 --screenshots data/faf-ml/screenshots
+#    open the Datagen view (http://localhost:3100/datagen), set count/size/
+#    scale, Generate. Samples stream into the store while the job runs;
+#    the jobs table polls until done.
 
-# 3. DOMAIN-GAP CHECK (5 min, do not skip): open
-#    data/faf-detect/previews/000000.png next to a real screenshot.
+# 3. DOMAIN-GAP CHECK (5 min, do not skip): open a synthetic sample (Gallery
+#    → "synthetic" filter) next to a REAL screenshot.
 #    Icons must match the real render in SIZE + COLOR + sharpness.
-#    If not: tune --scale-min/--scale-max and TEAM_COLORS in
-#    apps/faf-datagen/src/main.rs, regenerate.
+#    If not: tune scale-min/scale-max and TEAM_COLORS in
+#    crates/faf-ml-datagen/src/lib.rs, regenerate.
 
-# 4. TRAIN (release mode — debug conv is painfully slow):
-cargo run -p faf-ml-train --release -- train --data data/faf-detect --epochs 50
+# 4. TRAIN on the platform store (release mode — debug conv is painfully slow):
+cargo run -p faf-ml-train --release -- train --data data/faf-ml --epochs 50
+# (the loader auto-detects the store layout: synthetic screenshots + labels/*.json)
 # checkpoints land in data/faf-ml/runs/<timestamp>/ (model.mpk + config.json)
 
 # 5. THE MOMENT OF TRUTH — predict on a HELD-OUT battle screenshot:
@@ -116,14 +120,16 @@ cargo run -p faf-ml-train --release -- predict \
   (`cargo xtask book` there).
 - The icon↔blueprint reasoning: re-run
   `cargo run -p faf-unit-tools -- icon-map --out data/faf-ml/icon-map.json`.
-- Platform READMEs: `apps/faf-ml-server/README.md`, `apps/faf-ml-web/README.md`,
-  `apps/faf-datagen/README.md`.
+- Platform READMEs: `apps/faf-ml-server/README.md`, `apps/faf-ml-web/README.md`.
 
 ## Phase roadmap (for orientation)
 
-- **Phase 0 ✅** — platform: upload/triage/label/snapshot + datagen import
-- **Phase 1 (partially done)** — datagen reads platform backgrounds ✅;
-  remaining: datagen-as-a-job in the server, dataset compose view
+- **Phase 0 ✅** — platform: upload/triage/label/snapshot
+- **Phase 1 ✅ (mostly)** — datagen is a server job driven from the web
+  Datagen view; the `faf-datagen` CLI and the `/api/import/datagen` endpoint
+  are gone (generation is internal, labels stream straight into the store).
+  `faf-ml-train --data data/faf-ml` reads the platform store directly.
+  Remaining: dataset compose view
 - **Next real milestone** — detector trained on synthetic data detecting
   units on a held-out real screenshot (steps 1–5 above)
 - **Phase 2** — training jobs + live metrics in the web UI

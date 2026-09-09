@@ -26,6 +26,10 @@ pub struct ServerConfig {
 
     /// Directory containing the built Dioxus web assets.
     pub assets_dir: PathBuf,
+
+    /// Directory containing the strategic-icon `.dds` sprites datagen
+    /// composites onto background screenshots.
+    pub icons_dir: PathBuf,
 }
 
 impl ServerConfig {
@@ -36,6 +40,8 @@ impl ServerConfig {
     /// - `FAF_ML_DATA_DIR` — data store root (default: `data/faf-ml`).
     /// - `FAF_ML_WEB_DIST` — built web assets directory (default:
     ///   `target/dx/faf-ml-web/release/web/public`).
+    /// - `FAF_ML_ICONS_DIR` — strategic-icon sprite directory for datagen
+    ///   (default: `tmp/custom-strategic-icons`).
     pub fn from_env() -> crate::Result<Self> {
         let root = workspace_root();
         Ok(Self {
@@ -44,6 +50,10 @@ impl ServerConfig {
             assets_dir: crate::env::path_or(
                 "FAF_ML_WEB_DIST",
                 root.join("target/dx/faf-ml-web/release/web/public"),
+            ),
+            icons_dir: crate::env::path_or(
+                "FAF_ML_ICONS_DIR",
+                root.join("tmp/custom-strategic-icons"),
             ),
         })
     }

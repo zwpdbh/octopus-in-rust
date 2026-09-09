@@ -10,6 +10,7 @@ license = "MIT"
 dioxus = { workspace = true, features = ["web", "router"] }
 faf-ml-core = { workspace = true }
 gloo-net = { workspace = true }
+gloo-timers = { version = "0.3", features = ["futures"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }

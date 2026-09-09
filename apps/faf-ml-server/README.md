@@ -1,9 +1,10 @@
 # faf-ml-server
 
-Backend for the **faf-ml** data platform — phase 0 of the FAF unit-detection
-ML project: collect screenshots → review bounding boxes → freeze immutable
-dataset snapshots. No training here; models arrive in later phases
-(`crates/faf-ml-model`, ported from the d2l workspace).
+Backend for the **faf-ml** data platform of the FAF unit-detection ML
+project: collect screenshots → review bounding boxes → generate synthetic
+training data → freeze immutable dataset snapshots. No training here; models
+arrive in later phases (`crates/faf-ml-model`, ported from the d2l
+workspace).
 
 Serves the `faf-ml-web` Dioxus build as static files (SPA fallback to
 `index.html`) and exposes the JSON API below.
@@ -16,6 +17,7 @@ cargo run -p faf-ml-server
 #   FAF_ML_PORT=3100
 #   FAF_ML_DATA_DIR=data/faf-ml                                (gitignored)
 #   FAF_ML_WEB_DIST=target/dx/faf-ml-web/release/web/public
+#   FAF_ML_ICONS_DIR=tmp/custom-strategic-icons                (datagen sprites)
 ```
 
 Logs: stdout + `data/logs/faf-ml-server.log`.
@@ -32,11 +34,15 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `PUT /api/screenshots/{id}/labels` | replace the box list |
 | `DELETE /api/screenshots/{id}` | remove image + labels + index entry |
 | `GET /api/classes` | class names from `classes.txt` |
-| `POST /api/import/datagen` | `{dir}` → import a `faf-datagen` output dir: copies `images/*.png` in as new screenshots, converts `labels/*.txt` (YOLO, normalized) to absolute-pixel JSON, merges `classes.txt` |
+| `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt` |
+| `GET /api/datagen/jobs` | all datagen jobs (newest first) |
+| `GET /api/datagen/jobs/{id}` | one job (the web UI polls this while `running`) |
 | `GET /api/datasets` | list dataset manifests |
 | `POST /api/datasets` | `{name, image_ids}` → immutable snapshot embedding the current labels (409 if the name exists) |
 
-Shared wire types live in `crates/faf-ml-core`.
+Generation logic lives in `crates/faf-ml-datagen` (the former `faf-datagen`
+CLI, now a library); shared wire types (`DatagenConfig`, `DatagenJob`,
+`DatagenStatus`, …) live in `crates/faf-ml-core`.
 
 ## Data layout
 
@@ -49,9 +55,9 @@ data/faf-ml/
   datasets/<name>.json     DatasetManifest (labels embedded → immutable)
 ```
 
-## Explicitly NOT in phase 0
+## Explicitly NOT built yet
 
-- datagen-as-a-job, training runs + WS metrics, eval view (phases 1–3)
+- training runs + WS metrics, eval view (phases 2–3)
 - draw-new-box interactions (review/edit only), tagging/filtering, auth
 - Windows capture client (later — eframe if a GUI is needed)
 
@@ -66,6 +72,8 @@ Quick smoke test:
 ```sh
 curl localhost:3100/api/health
 curl -X POST localhost:3100/api/screenshots -F "files=@/path/to/shot.png"
-curl -X POST localhost:3100/api/import/datagen \
-  -H 'Content-Type: application/json' -d '{"dir":"data/faf-detect"}'
+# after marking a shot as background:
+curl -X POST localhost:3100/api/datagen \
+  -H 'Content-Type: application/json' -d '{"count":10}'
+curl localhost:3100/api/datagen/jobs
 ```

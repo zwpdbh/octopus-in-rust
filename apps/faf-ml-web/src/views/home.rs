@@ -24,6 +24,11 @@ pub fn Home() -> Element {
                         desc: "Upload screenshots (PNG) and manage the raw image pool.",
                     }
                     FeatureCard {
+                        to: Route::Datagen {},
+                        title: "Datagen",
+                        desc: "Generate synthetic, perfectly labeled training samples from background screenshots.",
+                    }
+                    FeatureCard {
                         to: Route::Datasets {},
                         title: "Datasets",
                         desc: "Snapshot labeled images into immutable, versioned datasets.",
@@ -32,7 +37,8 @@ pub fn Home() -> Element {
                 div { class: "mt-10 rounded-lg border border-neutral-800 bg-neutral-900 p-5",
                     h2 { class: "text-base font-semibold text-white mb-2", "Workflow" }
                     ol { class: "list-decimal list-inside text-sm text-neutral-400 space-y-1",
-                        li { "Upload screenshots in the Gallery (or import faf-datagen output via the API)." }
+                        li { "Upload screenshots in the Gallery, then triage: battle (held-out test) vs background (datagen canvas)." }
+                        li { "Generate synthetic labeled samples from the Datagen view." }
                         li { "Open an image, click a box to select it, fix its class, delete wrong boxes, save." }
                         li { "Create a dataset snapshot once a batch is reviewed — snapshots embed their labels and never change." }
                     }

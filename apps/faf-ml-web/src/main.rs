@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 mod net;
 mod views;
 
-use views::{Datasets, Gallery, Home, Label, Navbar};
+use views::{Datagen, Datasets, Gallery, Home, Label, Navbar};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -22,6 +22,8 @@ enum Route {
         Gallery {},
         #[route("/label/:id")]
         Label { id: String },
+        #[route("/datagen")]
+        Datagen {},
         #[route("/datasets")]
         Datasets {},
 }

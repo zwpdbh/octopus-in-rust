@@ -38,7 +38,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Train on a faf-datagen directory; checkpoints to <out>/<timestamp>/
+    /// Train on a dataset directory: the platform store (data/faf-ml,
+    /// auto-detected via screenshots/index.json) or a YOLO datagen dir;
+    /// checkpoints to <out>/<timestamp>/
     Train(TrainArgs),
     /// Run a checkpoint on one image; prints detections, draws a preview
     Predict(PredictArgs),
@@ -46,8 +48,9 @@ enum Command {
 
 #[derive(Args)]
 struct TrainArgs {
-    /// faf-datagen output directory (images/ + labels/ + classes.txt)
-    #[arg(long, default_value = "data/faf-detect")]
+    /// Dataset directory: the faf-ml platform store (screenshots/ +
+    /// labels/*.json + classes.txt) or a YOLO dir (images/ + labels/*.txt)
+    #[arg(long, default_value = "data/faf-ml")]
     data: PathBuf,
     #[arg(long, default_value_t = 50)]
     epochs: usize,

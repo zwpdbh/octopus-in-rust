@@ -15,6 +15,7 @@ pub fn Navbar() -> Element {
                 div { class: "flex-1" }
                 NavLink { to: Route::Home {}, label: "Home" }
                 NavLink { to: Route::Gallery {}, label: "Gallery" }
+                NavLink { to: Route::Datagen {}, label: "Datagen" }
                 NavLink { to: Route::Datasets {}, label: "Datasets" }
             }
             div { class: "flex-1 min-h-0 flex flex-col",

@@ -10,3 +10,6 @@ license = "MIT"
 serde = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

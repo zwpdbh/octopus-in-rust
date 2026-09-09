@@ -70,7 +70,7 @@ pub fn store_screenshot(
 
 /// `POST /api/screenshots?kind=battle|background` — multipart upload of one
 /// or more PNG files. `kind` defaults to `battle` (real frame with units);
-/// pass `background` for empty-terrain shots destined for faf-datagen.
+/// pass `background` for empty-terrain shots destined for datagen.
 ///
 /// Every form field carrying a file is stored; returns the metadata of all
 /// newly created screenshots.

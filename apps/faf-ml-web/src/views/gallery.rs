@@ -100,8 +100,8 @@ fn start_upload(files: Vec<web_sys::File>, mut status: Signal<String>, mut refre
 #[component]
 pub fn Gallery() -> Element {
     // Bump to force the list resource to re-run after an upload/delete/triage.
-    let mut refresh = use_signal(|| 0u32);
-    let mut status = use_signal(String::new);
+    let refresh = use_signal(|| 0u32);
+    let status = use_signal(String::new);
     let mut filter = use_signal(|| GalleryFilter::Triage);
     let mut dragging = use_signal(|| false);
 
@@ -130,11 +130,7 @@ pub fn Gallery() -> Element {
 
                 // Drag-and-drop zone.
                 div {
-                    class: if *dragging.read() {
-                        "mb-4 rounded-lg border-2 border-dashed border-blue-500 bg-blue-950/40 p-8 text-center text-blue-300 transition-colors"
-                    } else {
-                        "mb-4 rounded-lg border-2 border-dashed border-neutral-700 bg-neutral-900 p-8 text-center text-neutral-400 transition-colors"
-                    },
+                    class: if *dragging.read() { "mb-4 rounded-lg border-2 border-dashed border-blue-500 bg-blue-950/40 p-8 text-center text-blue-300 transition-colors" } else { "mb-4 rounded-lg border-2 border-dashed border-neutral-700 bg-neutral-900 p-8 text-center text-neutral-400 transition-colors" },
                     ondragover: move |e| {
                         e.prevent_default();
                         dragging.set(true);
@@ -158,13 +154,9 @@ pub fn Gallery() -> Element {
 
                 // Filter chips.
                 div { class: "flex gap-2 mb-4 text-xs",
-                    for (f, label) in FILTERS {
+                    for (f , label) in FILTERS {
                         button {
-                            class: if *filter.read() == f {
-                                "px-3 py-1 rounded bg-neutral-200 text-neutral-900 font-semibold"
-                            } else {
-                                "px-3 py-1 rounded bg-neutral-800 text-neutral-400 hover:bg-neutral-700"
-                            },
+                            class: if *filter.read() == f { "px-3 py-1 rounded bg-neutral-200 text-neutral-900 font-semibold" } else { "px-3 py-1 rounded bg-neutral-800 text-neutral-400 hover:bg-neutral-700" },
                             onclick: move |_| filter.set(f),
                             "{label}"
                         }
@@ -172,14 +164,20 @@ pub fn Gallery() -> Element {
                 }
 
                 match &*shots.read() {
-                    None => rsx! { p { class: "text-neutral-400", "Loading..." } },
-                    Some(Err(e)) => rsx! { p { class: "text-red-400", "{e}" } },
+                    None => rsx! {
+                        p { class: "text-neutral-400", "Loading..." }
+                    },
+                    Some(Err(e)) => rsx! {
+                        p { class: "text-red-400", "{e}" }
+                    },
                     Some(Ok(list)) if list.is_empty() => rsx! {
                         p { class: "text-neutral-400", "No screenshots yet — drop some PNGs above." }
                     },
                     Some(Ok(list)) => {
-                        let shown: Vec<&ScreenshotMeta> =
-                            list.iter().filter(|s| filter.read().matches(s)).collect();
+                        let shown: Vec<&ScreenshotMeta> = list
+                            .iter()
+                            .filter(|s| filter.read().matches(s))
+                            .collect();
                         rsx! {
                             if shown.is_empty() {
                                 p { class: "text-neutral-400", "Nothing in this view." }
@@ -232,7 +230,9 @@ fn ShotCard(shot: ScreenshotMeta, refresh: Signal<u32>) -> Element {
     rsx! {
         div { class: "rounded-lg border border-neutral-800 bg-neutral-900 overflow-hidden",
             Link {
-                to: Route::Label { id: shot.id.to_string() },
+                to: Route::Label {
+                    id: shot.id.to_string(),
+                },
                 div { class: "relative",
                     img {
                         class: "w-full aspect-video object-cover",
@@ -251,16 +251,13 @@ fn ShotCard(shot: ScreenshotMeta, refresh: Signal<u32>) -> Element {
             div { class: "flex items-center gap-1 px-3 py-2 text-[11px]",
                 // Triage toggle (synthetic shots are imported, not triaged).
                 if shot.kind != ScreenshotKind::Synthetic {
-                    for (k, label, kind_id) in [
+                    for (k , label , kind_id) in [
                         (ScreenshotKind::Battle, "battle", battle_id.clone()),
                         (ScreenshotKind::Background, "background", background_id.clone()),
-                    ] {
+                    ]
+                    {
                         button {
-                            class: if shot.kind == k {
-                                "px-2 py-1 rounded bg-neutral-200 text-neutral-900 font-semibold"
-                            } else {
-                                "px-2 py-1 rounded bg-neutral-800 text-neutral-400 hover:bg-neutral-700"
-                            },
+                            class: if shot.kind == k { "px-2 py-1 rounded bg-neutral-200 text-neutral-900 font-semibold" } else { "px-2 py-1 rounded bg-neutral-800 text-neutral-400 hover:bg-neutral-700" },
                             onclick: move |_| set_kind(kind_id.clone(), k, refresh),
                             "{label}"
                         }
@@ -273,9 +270,9 @@ fn ShotCard(shot: ScreenshotMeta, refresh: Signal<u32>) -> Element {
                     onclick: move |_| {
                         let id = delete_id.clone();
                         spawn(async move {
-                            let _ = Request::delete(&crate::net::api_url(&format!(
-                                    "/api/screenshots/{id}"
-                                )))
+                            let _ = Request::delete(
+                                    &crate::net::api_url(&format!("/api/screenshots/{id}")),
+                                )
                                 .send()
                                 .await;
                             *refresh.write() += 1;

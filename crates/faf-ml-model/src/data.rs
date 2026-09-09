@@ -1,6 +1,10 @@
-//! Loader for `faf-datagen` output directories:
-//!   images/000000.png, labels/000000.txt (YOLO: `<class_id> <cx> <cy> <w> <h>`
-//!   normalized), classes.txt (line number = class id).
+//! Dataset loaders. Two on-disk layouts are supported:
+//!   1. YOLO datagen dir (backwards compatibility): images/000000.png,
+//!      labels/000000.txt (YOLO: `<class_id> <cx> <cy> <w> <h>` normalized),
+//!      classes.txt (line number = class id).
+//!   2. The faf-ml platform store: screenshots/<uuid>.png + index.json,
+//!      labels/<uuid>.json ([LabeledBox], absolute pixels), classes.txt.
+//!      Only `synthetic`-kind screenshots become training samples.
 //!
 //! Images are decoded lazily per batch from the host (thousands of 640×640
 //! frames don't fit one GPU buffer — the Fashion-MNIST lesson); anchor
@@ -12,6 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Device, Int, Tensor, TensorData};
+use faf_ml_core::{LabeledBox, ScreenshotKind, ScreenshotMeta};
 
 use crate::anchors::CenterBox;
 use crate::matching::AnchorTargets;
@@ -34,7 +39,7 @@ pub struct Sample {
     pub gt: Vec<GtBox>,
 }
 
-/// A faf-datagen dataset directory, loaded (labels eagerly, images lazily).
+/// A dataset directory, loaded (labels eagerly, images lazily).
 #[derive(Debug, Clone)]
 pub struct DetectDataset {
     pub classes: Vec<String>,
@@ -51,23 +56,73 @@ pub struct TrainBatch<B: Backend> {
 }
 
 impl DetectDataset {
+    /// Load a dataset directory, dispatching on layout: a dir containing
+    /// `screenshots/index.json` is the platform store ([`Self::load_store`]);
+    /// anything else is treated as a YOLO datagen dir ([`Self::load_yolo_dir`]).
+    pub fn load(dir: &Path, input_size: u32) -> Result<Self> {
+        if dir.join("screenshots").join("index.json").is_file() {
+            Self::load_store(dir, input_size)
+        } else {
+            Self::load_yolo_dir(dir, input_size)
+        }
+    }
+
+    /// Load the faf-ml platform store: `synthetic`-kind screenshots from
+    /// `screenshots/`, their `labels/<uuid>.json` (absolute-pixel
+    /// `LabeledBox`es normalized by the meta dims), and `classes.txt`.
+    pub fn load_store(dir: &Path, input_size: u32) -> Result<Self> {
+        let classes = read_classes(dir)?;
+
+        let index_path = dir.join("screenshots").join("index.json");
+        let raw = fs::read_to_string(&index_path)
+            .with_context(|| format!("reading {}", index_path.display()))?;
+        let metas: Vec<ScreenshotMeta> = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing {}", index_path.display()))?;
+
+        let mut samples = Vec::new();
+        for meta in metas.iter().filter(|m| m.kind == ScreenshotKind::Synthetic) {
+            let image_path = dir.join("screenshots").join(format!("{}.png", meta.id));
+            anyhow::ensure!(
+                image_path.exists(),
+                "index entry {} has no image {}",
+                meta.id,
+                image_path.display()
+            );
+            let label_path = dir.join("labels").join(format!("{}.json", meta.id));
+            let labels: Vec<LabeledBox> = match fs::read_to_string(&label_path) {
+                Ok(raw) => serde_json::from_str(&raw)
+                    .with_context(|| format!("parsing {}", label_path.display()))?,
+                // A missing label file means an all-negative sample.
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(err) => {
+                    return Err(err).with_context(|| format!("reading {}", label_path.display()))
+                }
+            };
+            let gt = labels
+                .iter()
+                .map(|b| labeled_box_to_gt(b, &classes, meta.width, meta.height))
+                .collect::<Result<_>>()
+                .with_context(|| format!("parsing {}", label_path.display()))?;
+            samples.push(Sample { image_path, gt });
+        }
+        anyhow::ensure!(
+            !samples.is_empty(),
+            "no synthetic-kind screenshots in {}",
+            dir.display()
+        );
+
+        Ok(Self {
+            classes,
+            samples,
+            input_size,
+        })
+    }
+
     /// Load `classes.txt` + `labels/*.txt`, pairing each label file with its
     /// `images/<stem>.png`. Label files sort lexicographically (zero-padded
     /// stems keep this numeric).
-    pub fn load(dir: &Path, input_size: u32) -> Result<Self> {
-        let classes_text = fs::read_to_string(dir.join("classes.txt"))
-            .with_context(|| format!("reading {}", dir.join("classes.txt").display()))?;
-        let classes: Vec<String> = classes_text
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect();
-        anyhow::ensure!(
-            !classes.is_empty(),
-            "classes.txt is empty in {}",
-            dir.display()
-        );
+    pub fn load_yolo_dir(dir: &Path, input_size: u32) -> Result<Self> {
+        let classes = read_classes(dir)?;
 
         let labels_dir = dir.join("labels");
         let mut label_files: Vec<PathBuf> = fs::read_dir(&labels_dir)
@@ -153,6 +208,48 @@ impl DetectDataset {
             pos_mask: Tensor::from_data(TensorData::new(mask, [batch, n_anchors]), device),
         })
     }
+}
+
+/// Read `classes.txt` (one class per line; line number = class id).
+fn read_classes(dir: &Path) -> Result<Vec<String>> {
+    let classes_text = fs::read_to_string(dir.join("classes.txt"))
+        .with_context(|| format!("reading {}", dir.join("classes.txt").display()))?;
+    let classes: Vec<String> = classes_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    anyhow::ensure!(
+        !classes.is_empty(),
+        "classes.txt is empty in {}",
+        dir.display()
+    );
+    Ok(classes)
+}
+
+/// Convert one absolute-pixel platform label into a normalized center-form
+/// GT box, resolving the class name against the class list.
+fn labeled_box_to_gt(
+    b: &LabeledBox,
+    classes: &[String],
+    image_width: u32,
+    image_height: u32,
+) -> Result<GtBox> {
+    let class_id = classes
+        .iter()
+        .position(|c| c == &b.class)
+        .with_context(|| format!("class {:?} not in classes.txt", b.class))?;
+    let (w, h) = (image_width as f32, image_height as f32);
+    Ok(GtBox {
+        class_id,
+        bbox: CenterBox {
+            cx: (b.x + b.w / 2.0) / w,
+            cy: (b.y + b.h / 2.0) / h,
+            w: b.w / w,
+            h: b.h / h,
+        },
+    })
 }
 
 /// Parse YOLO label text into normalized center-form GT boxes.
@@ -257,5 +354,28 @@ mod tests {
         assert!(parse_yolo_labels("99 0.5 0.5 0.1 0.1", 20).is_err());
         assert!(parse_yolo_labels("x 0.5 0.5 0.1 0.1", 20).is_err());
         assert!(parse_yolo_labels("1 0.5 0.5 0.1 z", 20).is_err());
+    }
+
+    #[test]
+    fn labeled_box_converts_to_normalized_gt() {
+        let classes = vec!["tank".to_string(), "bomber".to_string()];
+        let b = LabeledBox {
+            class: "bomber".to_string(),
+            x: 100.0,
+            y: 50.0,
+            w: 40.0,
+            h: 20.0,
+        };
+        let gt = labeled_box_to_gt(&b, &classes, 640, 640).unwrap();
+        assert_eq!(gt.class_id, 1);
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(close(gt.bbox.cx, 120.0 / 640.0) && close(gt.bbox.cy, 60.0 / 640.0));
+        assert!(close(gt.bbox.w, 40.0 / 640.0) && close(gt.bbox.h, 20.0 / 640.0));
+
+        let unknown = LabeledBox {
+            class: "ufo".to_string(),
+            ..b
+        };
+        assert!(labeled_box_to_gt(&unknown, &classes, 640, 640).is_err());
     }
 }

@@ -1,9 +1,11 @@
+mod datagen;
 mod datasets;
 mod gallery;
 mod home;
 mod label;
 mod navbar;
 
+pub use datagen::Datagen;
 pub use datasets::Datasets;
 pub use gallery::Gallery;
 pub use home::Home;

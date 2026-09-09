@@ -83,7 +83,7 @@ pub fn predict<B: Backend>(
 }
 
 /// Draw detection boxes onto an image (thin 1-px rects, green; the same
-/// minimal style as faf-datagen's `draw_preview`). Labels are printed by the
+/// minimal style as datagen's old `draw_preview`). Labels are printed by the
 /// caller — no text rendering here.
 pub fn draw_detections(img: &RgbImage, detections: &[Detection]) -> RgbImage {
     let mut out = img.clone();

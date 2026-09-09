@@ -5,7 +5,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Router,
 };
 
@@ -36,9 +36,14 @@ pub fn router() -> Router<AppState> {
                 .patch(handlers::screenshots::update_screenshot),
         )
         .route("/api/classes", get(handlers::classes::get_classes))
+        .route("/api/datagen", post(handlers::datagen::start_datagen))
         .route(
-            "/api/import/datagen",
-            post(handlers::import::import_datagen),
+            "/api/datagen/jobs",
+            get(handlers::datagen::list_datagen_jobs),
+        )
+        .route(
+            "/api/datagen/jobs/{id}",
+            get(handlers::datagen::get_datagen_job),
         )
         .route(
             "/api/datasets",

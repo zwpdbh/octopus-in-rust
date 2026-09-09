@@ -1,5 +1,5 @@
 //! Shared types for the faf-ml platform: screenshot metadata, bounding-box
-//! labels, dataset snapshots, and YOLO line conversion helpers.
+//! labels, dataset snapshots, datagen jobs, and YOLO line conversion helpers.
 //!
 //! Both `faf-ml-server` and `faf-ml-web` depend on this crate so the wire
 //! format and the on-disk JSON layout stay in sync.
@@ -10,11 +10,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod datagen;
+
+pub use datagen::{DatagenConfig, DatagenJob, DatagenStatus};
+
 /// What a screenshot is FOR in the training-data pipeline.
 ///
 /// The distinction matters because the two kinds have opposite jobs:
 /// `Background` images (empty terrain) are the compositing canvas for
-/// faf-datagen; `Battle` images (real units) are the held-out test /
+/// faf-ml-datagen; `Battle` images (real units) are the held-out test /
 /// correction pool and must never be composited on or trained against
 /// directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -27,9 +31,9 @@ pub enum ScreenshotKind {
     Unclassified,
     /// Real battle frame with units — held-out test/correction pool.
     Battle,
-    /// Empty terrain — faf-datagen's background pool.
+    /// Empty terrain — datagen's background pool.
     Background,
-    /// Imported faf-datagen output (synthetic, auto-labeled).
+    /// Datagen output (synthetic, auto-labeled).
     Synthetic,
 }
 

@@ -44,7 +44,7 @@ pub struct IconMapArgs {
 }
 
 /// Sprite state suffixes — longest first so `_selectedover` strips before
-/// `_selected`/`_over` (same rule as faf-datagen's `load_sprites`).
+/// `_selected`/`_over` (same rule as faf-ml-datagen's `load_sprites`).
 const STATE_SUFFIXES: [&str; 4] = ["_selectedover", "_selected", "_over", "_rest"];
 
 /// Icon class name from a sprite filename:
