@@ -1,158 +1,252 @@
-//! Dummy training service: simulates a burn training run on a dedicated
-//! thread, emitting metrics events that the `/ws/training` handler streams
-//! to the web UI (the fafcn eco-sim pattern: heavy work off-thread, typed
-//! events over a channel, commands back in).
+//! Real training service: runs the SSD training loop (`faf-ml-model::train`)
+//! on a dedicated thread and publishes events into a server-side **registry**,
+//! so a run's status is monitorable at any time (`GET /api/training/status`)
+//! and WebSocket viewers can attach/detach freely — a disconnect never
+//! interrupts training (real runs take tens of minutes).
 //!
-//! **SWAP POINT (Phase 2):** replace `run_loop`'s dummy curve math with a
-//! call into the real training loop (currently in `apps/faf-ml-train`,
-//! to be moved into a library crate). It must emit the same
-//! `TrainingServerMessage` events — the WS handler and web page stay
-//! unchanged. The thread-per-run + command-channel structure is already
-//! what a GPU training loop needs (non-async, cancellable).
+//! The dummy curve generator that used to live here is gone; the dummy's
+//! protocol shapes (`TrainingServerMessage::Metrics` per batch + epoch-end
+//! point with `valid_loss`) are preserved so the web monitor and MCP tools
+//! see no difference.
 
 use std::{
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use faf_ml_core::{
-    TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingServerMessage, TrainingStatus,
+    TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingRunResult,
+    TrainingServerMessage, TrainingStatus,
 };
+use faf_ml_model::train::{train, TrainControl, TrainEvent, TrainParams};
+use tokio::sync::broadcast;
 
-/// Batches per epoch used to shape dummy runs (~205 store samples at the
-/// detector's batch-4 GPU cap).
-const BATCHES_PER_EPOCH: usize = 51;
+use crate::state::AppState;
 
-/// Channels to drive and observe a running training thread (mirrors
-/// `SimController` in faf-sim-service).
-pub struct TrainingController {
-    pub cmd_tx: Sender<TrainingCommand>,
-    pub event_rx: Receiver<TrainingServerMessage>,
+/// Live registry entry for the current/last training run (`result == None`
+/// means a run is active — which is also the busy guard).
+pub struct RunState {
+    pub config: TrainingConfig,
+    pub started_at: DateTime<Utc>,
+    pub status: TrainingStatus,
+    /// Every metrics point so far (replayed to newly attached viewers).
+    pub points: Vec<TrainingMetricsPoint>,
+    /// Live event feed for WS viewers (created with the run).
+    pub events_tx: broadcast::Sender<TrainingServerMessage>,
+    /// Command channel into the training thread (cloneable, so any attached
+    /// viewer — not just the starter — can pause/resume/stop).
+    pub cmd_tx: std::sync::mpsc::Sender<TrainingCommand>,
+    pub result: Option<TrainingRunResult>,
 }
+
+/// Shared throttle: post-batch sleep duration in batches/sec (≤ 0 = unlimited).
+type SpeedLimit = Arc<Mutex<f64>>;
 
 pub struct TrainingService;
 
 impl TrainingService {
-    /// Spawn a training thread for `config`, ticking at `speed` batches per
-    /// wall-clock second.
-    pub fn run(config: TrainingConfig, speed: f64) -> TrainingController {
-        let (cmd_tx, cmd_rx) = channel::<TrainingCommand>();
-        let (event_tx, event_rx) = channel::<TrainingServerMessage>();
-        thread::spawn(move || run_loop(config, speed.max(0.1), cmd_rx, event_tx));
-        TrainingController { cmd_tx, event_rx }
+    /// Start a real training run. Fails when a run is already active.
+    /// Viewers attach through the registry (`AppState::training_run`).
+    pub fn run(state: &AppState, config: TrainingConfig, speed: f64) -> anyhow::Result<()> {
+        let (events_tx, _) = broadcast::channel(1024);
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TrainingCommand>();
+        {
+            let mut guard = state
+                .training_run
+                .lock()
+                .expect("training registry poisoned");
+            if guard.as_ref().is_some_and(|r| r.result.is_none()) {
+                return Err(anyhow!("a training run is already active"));
+            }
+            *guard = Some(RunState {
+                config: config.clone(),
+                started_at: Utc::now(),
+                status: TrainingStatus::Running,
+                points: Vec::new(),
+                events_tx: events_tx.clone(),
+                cmd_tx,
+                result: None,
+            });
+        }
+
+        let registry = state.training_run.clone();
+        let params = TrainParams {
+            data: state.data_dir.as_ref().clone(),
+            out: state.data_dir.join("runs"),
+            epochs: config.epochs,
+            batch: config.batch_size,
+            lr: config.lr,
+            valid_fraction: config.valid_fraction,
+            max_batches: config.max_batches,
+        };
+        let cpu = config.cpu;
+        thread::spawn(move || run_training_thread(registry, params, cpu, speed, cmd_rx, events_tx));
+        Ok(())
     }
 }
 
-/// Deterministic pseudo-noise in [-0.5, 0.5) — no rand dependency needed
-/// for a demo curve.
-fn noise(seq: u64) -> f64 {
-    (seq.wrapping_mul(2_654_435_761).wrapping_add(891) % 1000) as f64 / 1000.0 - 0.5
+/// Emit helper: record into the registry AND broadcast to live viewers.
+fn emit(
+    registry: &Arc<Mutex<Option<RunState>>>,
+    events_tx: &broadcast::Sender<TrainingServerMessage>,
+    msg: TrainingServerMessage,
+) {
+    {
+        let mut guard = registry.lock().expect("training registry poisoned");
+        if let Some(run) = guard.as_mut() {
+            match &msg {
+                TrainingServerMessage::Metrics(point) => run.points.push(point.clone()),
+                TrainingServerMessage::Status(status) => run.status = status.clone(),
+                TrainingServerMessage::Error(_) | TrainingServerMessage::Finished => {}
+            }
+        }
+    }
+    let _ = events_tx.send(msg);
 }
 
-fn run_loop(
-    config: TrainingConfig,
-    mut speed: f64,
-    cmd_rx: Receiver<TrainingCommand>,
-    event_tx: Sender<TrainingServerMessage>,
+fn set_result(registry: &Arc<Mutex<Option<RunState>>>, result: TrainingRunResult) {
+    let mut guard = registry.lock().expect("training registry poisoned");
+    if let Some(run) = guard.as_mut() {
+        run.result = Some(result);
+    }
+}
+
+/// The training thread: translate `TrainEvent`s into protocol messages and
+/// the command channel into `TrainControl`.
+fn run_training_thread(
+    registry: Arc<Mutex<Option<RunState>>>,
+    params: TrainParams,
+    cpu: bool,
+    speed: f64,
+    cmd_rx: std::sync::mpsc::Receiver<TrainingCommand>,
+    events_tx: broadcast::Sender<TrainingServerMessage>,
 ) {
-    let started = Instant::now();
-    let total_batches = BATCHES_PER_EPOCH * config.epochs;
     let mut seq = 0u64;
-    let mut paused = false;
-    let mut stopped = false;
+    let speed_limit: SpeedLimit = Arc::new(Mutex::new(speed));
+    // (paused, aborted) behind a mutex so `control` can be `Fn`.
+    let control_state = Arc::new(Mutex::new((false, false)));
 
-    let _ = event_tx.send(TrainingServerMessage::Status(TrainingStatus::Running));
+    let emit_status = |status: TrainingStatus| {
+        emit(&registry, &events_tx, TrainingServerMessage::Status(status));
+    };
 
-    'epochs: for epoch in 1..=config.epochs {
-        let mut epoch_total = 0.0;
-        let mut batch = 1;
-        while batch <= BATCHES_PER_EPOCH {
-            // Drain pending commands before each tick.
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(TrainingCommand::Pause) => {
-                        paused = true;
-                        let _ =
-                            event_tx.send(TrainingServerMessage::Status(TrainingStatus::Paused));
-                    }
-                    Ok(TrainingCommand::Resume) => {
-                        paused = false;
-                        let _ =
-                            event_tx.send(TrainingServerMessage::Status(TrainingStatus::Running));
-                    }
-                    Ok(TrainingCommand::Stop) => {
-                        stopped = true;
-                        break 'epochs;
-                    }
-                    Ok(TrainingCommand::SetSpeed { batches_per_sec }) => {
-                        speed = batches_per_sec.max(0.1);
-                    }
-                    Err(_) => break,
-                }
-            }
-            if paused {
-                // Hold position: a paused run neither emits nor advances.
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-
-            // Dummy loss curve: exponential decay + noise floor.
-            seq += 1;
-            let p = seq as f64 / total_batches as f64;
-            let total = 0.08 + 1.2 * (-3.5 * p).exp() + noise(seq) * 0.02;
-            let cls = total * 0.7 + noise(seq + 1) * 0.01;
-            let bbox = total * 0.3 + noise(seq + 2) * 0.01;
-            epoch_total += total;
-            if event_tx
-                .send(TrainingServerMessage::Metrics(TrainingMetricsPoint {
+    let mut on_event = |event: TrainEvent| {
+        seq += 1;
+        match event {
+            TrainEvent::Batch {
+                epoch,
+                batch,
+                total_batches,
+                cls_loss,
+                bbox_loss,
+                total_loss,
+            } => emit(
+                &registry,
+                &events_tx,
+                TrainingServerMessage::Metrics(TrainingMetricsPoint {
                     seq,
                     epoch,
                     batch,
                     total_batches,
-                    train_loss: total,
-                    cls_loss: cls,
-                    bbox_loss: bbox,
+                    train_loss: total_loss as f64,
+                    cls_loss: cls_loss as f64,
+                    bbox_loss: bbox_loss as f64,
                     valid_loss: None,
                     map: None,
-                }))
-                .is_err()
-            {
-                return; // client gone
-            }
-            batch += 1;
-            thread::sleep(Duration::from_secs_f64(1.0 / speed));
-        }
-
-        // Epoch end: one eval point (epoch-mean train loss + valid + mAP).
-        seq += 1;
-        let mean = epoch_total / BATCHES_PER_EPOCH as f64;
-        let p = epoch as f64 / config.epochs as f64;
-        if event_tx
-            .send(TrainingServerMessage::Metrics(TrainingMetricsPoint {
-                seq,
+                }),
+            ),
+            TrainEvent::EpochEnd {
                 epoch,
-                batch: BATCHES_PER_EPOCH,
-                total_batches,
-                train_loss: mean,
-                cls_loss: mean * 0.7,
-                bbox_loss: mean * 0.3,
-                valid_loss: Some(mean * 1.08 + noise(seq) * 0.02),
-                map: Some(0.62 * (1.0 - (-4.0 * p).exp()) + noise(seq) * 0.005),
-            }))
-            .is_err()
-        {
-            return;
+                total_epochs: _,
+                train_cls,
+                train_bbox,
+                valid_cls,
+                valid_bbox,
+            } => emit(
+                &registry,
+                &events_tx,
+                TrainingServerMessage::Metrics(TrainingMetricsPoint {
+                    seq,
+                    epoch,
+                    batch: 0, // epoch-eval point (progress line shows latest batch point anyway)
+                    total_batches: 0,
+                    train_loss: (train_cls + train_bbox) as f64,
+                    cls_loss: train_cls as f64,
+                    bbox_loss: train_bbox as f64,
+                    valid_loss: Some((valid_cls + valid_bbox) as f64),
+                    map: None,
+                }),
+            ),
+            TrainEvent::Done {
+                run_dir,
+                duration_secs,
+            } => {
+                set_result(
+                    &registry,
+                    TrainingRunResult::Done {
+                        run_dir: run_dir.display().to_string(),
+                        duration_secs,
+                    },
+                );
+                emit_status(TrainingStatus::Done { duration_secs });
+            }
         }
-    }
+        // Post-batch throttle (0 or negative = unlimited).
+        let limit = *speed_limit.lock().expect("speed mutex poisoned");
+        if limit > 0.0 {
+            thread::sleep(Duration::from_secs_f64(1.0 / limit));
+        }
+    };
 
-    let duration_secs = started.elapsed().as_secs();
-    let _ = event_tx.send(TrainingServerMessage::Status(if stopped {
-        TrainingStatus::Failed {
-            error: "stopped by user".to_string(),
+    let control = {
+        let control_state = control_state.clone();
+        let speed_limit = speed_limit.clone();
+        move || {
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    TrainingCommand::Pause => {
+                        control_state.lock().expect("control mutex poisoned").0 = true;
+                        emit_status(TrainingStatus::Paused);
+                    }
+                    TrainingCommand::Resume => {
+                        control_state.lock().expect("control mutex poisoned").0 = false;
+                        emit_status(TrainingStatus::Running);
+                    }
+                    TrainingCommand::Stop => {
+                        control_state.lock().expect("control mutex poisoned").1 = true;
+                    }
+                    TrainingCommand::SetSpeed { batches_per_sec } => {
+                        *speed_limit.lock().expect("speed mutex poisoned") = batches_per_sec;
+                    }
+                }
+            }
+            let (paused, aborted) = *control_state.lock().expect("control mutex poisoned");
+            if aborted {
+                TrainControl::Abort
+            } else if paused {
+                TrainControl::Pause
+            } else {
+                TrainControl::Continue
+            }
         }
+    };
+
+    let result = if cpu {
+        train::<faf_ml_model::CpuAdB>(&params, &mut on_event, &control)
     } else {
-        TrainingStatus::Done { duration_secs }
-    }));
-    // Dropping event_tx signals the WS handler to send `Finished`.
+        train::<faf_ml_model::AdB>(&params, &mut on_event, &control)
+    };
+    if let Err(err) = result {
+        let error = format!("{err:#}");
+        set_result(
+            &registry,
+            TrainingRunResult::Failed {
+                error: error.clone(),
+            },
+        );
+        emit_status(TrainingStatus::Failed { error });
+    }
 }

@@ -77,4 +77,14 @@ pub fn router() -> Router<AppState> {
             "/ws/training",
             get(handlers::training_ws::training_ws_handler),
         )
+        .route(
+            "/api/training/status",
+            get(handlers::training_ws::get_training_status),
+        )
+        .route("/api/runs", get(handlers::predict::list_runs))
+        .route("/api/predict", post(handlers::predict::predict_json))
+        .route(
+            "/api/predict/annotate",
+            post(handlers::predict::predict_annotate),
+        )
 }

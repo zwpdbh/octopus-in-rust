@@ -6301,8 +6301,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "burn",
+ "chrono",
  "faf-ml-core",
  "image",
+ "rand 0.10.2",
  "serde",
  "serde_json",
 ]
@@ -6313,11 +6315,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "burn",
  "chrono",
  "dotenvy",
  "faf-blueprints",
  "faf-ml-core",
  "faf-ml-datagen",
+ "faf-ml-model",
  "faf-units",
  "image",
  "serde",
@@ -6328,20 +6332,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "faf-ml-train"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "burn",
- "chrono",
- "clap",
- "faf-ml-model",
- "image",
- "rand 0.10.2",
- "serde_json",
 ]
 
 [[package]]

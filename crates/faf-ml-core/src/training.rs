@@ -2,6 +2,7 @@
 //! `faf-ml-server` and `faf-ml-web` (JSON text frames, externally-tagged
 //! enums — same style as `faf-sim-protocol`).
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Training-run parameters (mirrors the `faf-ml-train train` CLI args).
@@ -17,6 +18,15 @@ pub struct TrainingConfig {
     /// Learning rate.
     #[serde(default = "default_lr")]
     pub lr: f64,
+    /// Fraction of samples held out for validation (epoch-end eval).
+    #[serde(default = "default_valid_fraction")]
+    pub valid_fraction: f32,
+    /// Cap optimizer steps per epoch (smoke runs; `None` = full epochs).
+    #[serde(default)]
+    pub max_batches: Option<usize>,
+    /// Use the portable CPU (NdArray) backend instead of Wgpu/Vulkan.
+    #[serde(default)]
+    pub cpu: bool,
 }
 
 impl Default for TrainingConfig {
@@ -25,6 +35,9 @@ impl Default for TrainingConfig {
             epochs: default_epochs(),
             batch_size: default_batch_size(),
             lr: default_lr(),
+            valid_fraction: default_valid_fraction(),
+            max_batches: None,
+            cpu: false,
         }
     }
 }
@@ -37,6 +50,9 @@ fn default_batch_size() -> usize {
 }
 fn default_lr() -> f64 {
     1e-3
+}
+fn default_valid_fraction() -> f32 {
+    0.1
 }
 
 /// One chart point, emitted per training batch (epoch-eval fields set only
@@ -68,9 +84,12 @@ pub enum TrainingClientMessage {
     /// Start a training run (must be the first message on the socket).
     Start {
         config: TrainingConfig,
-        /// Dummy tick rate in batches per wall-clock second.
+        /// Post-batch throttle in batches/sec (≤ 0 = unlimited).
         speed: f64,
     },
+    /// Attach as a viewer to the currently active run (replay + live stream;
+    /// does not start anything).
+    Attach,
     /// Runtime command for a running job.
     Command(TrainingCommand),
 }
@@ -93,6 +112,71 @@ pub enum TrainingStatus {
     Paused,
     Done { duration_secs: u64 },
     Failed { error: String },
+}
+
+/// Final outcome of a training run (`GET /api/training/status`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum TrainingRunResult {
+    Done { run_dir: String, duration_secs: u64 },
+    Failed { error: String },
+}
+
+/// `GET /api/training/status` response: the current or most recent training
+/// run (the web page renders this on load; the WS streams live updates).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrainingRunStatus {
+    pub config: TrainingConfig,
+    pub started_at: DateTime<Utc>,
+    pub status: TrainingStatus,
+    /// Metrics points produced so far.
+    pub points: usize,
+    pub latest: Option<TrainingMetricsPoint>,
+    #[serde(default)]
+    pub result: Option<TrainingRunResult>,
+}
+
+/// One checkpoint run directory (`GET /api/runs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunInfo {
+    /// Directory name (timestamp, e.g. `20260910-123045`).
+    pub name: String,
+    /// Number of classes the model detects.
+    pub classes: usize,
+}
+
+/// `POST /api/predict(/annotate)` body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PredictRequest {
+    /// Run directory name under `runs/` (no path separators).
+    pub run: String,
+    /// Store screenshot to run the detector on.
+    pub image_id: uuid::Uuid,
+    /// Minimum class score to keep a detection (default 0.3).
+    #[serde(default)]
+    pub score_threshold: Option<f32>,
+    /// Use the portable CPU (NdArray) backend instead of Wgpu/Vulkan.
+    #[serde(default)]
+    pub cpu: bool,
+}
+
+/// One detection, in absolute pixels of the model input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetectionView {
+    pub class: String,
+    pub score: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+/// `POST /api/predict` response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PredictResponse {
+    pub run: String,
+    pub image_id: uuid::Uuid,
+    pub detections: Vec<DetectionView>,
 }
 
 /// Server → browser messages.

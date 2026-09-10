@@ -49,7 +49,11 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/units/{id}` | one unit summary (case-insensitive exact id; 404 when unknown) |
 | `GET /api/units/{id}/icons` | the unit's blueprint default icon + every custom-set icon class mapped to it from `icon-map.json`; sharing units are `{id, name}` pairs, four FAF factions only (mod factions like Nomads excluded) |
 | `GET /api/portraits/{id}` | unit portrait PNG from `FAF_ML_PORTRAITS_DIR` (default `assets/icons/units`) |
-| `GET /ws/training` | WebSocket training monitor (fafcn `/ws/simulate` pattern): first frame `Start {config, speed}` spawns a training thread (currently a dummy curve generator — the swap point for real burn training); server streams `TrainingServerMessage` (`metrics`/`status`/`error`/`finished`), client `Command` frames pause/resume/stop/set-speed |
+| `GET /ws/training` | WebSocket training (fafcn `/ws/simulate` pattern): `Start {config, speed}` starts a REAL burn training run (`faf-ml-model::train` on a dedicated thread); `Attach` replays + streams the active run without starting anything. The run lives in a server-side registry and survives viewer disconnects; `Command` frames pause/resume/stop/set-speed |
+| `GET /api/training/status` | the training registry as JSON (config, status, points, latest, result with run_dir) — 404 before the first run |
+| `GET /api/runs` | checkpoint runs under `runs/` (name = timestamp, class count) |
+| `POST /api/predict` | `{run, image_id, score_threshold?, cpu?}` → detections JSON (class, score, pixel box) |
+| `POST /api/predict/annotate` | same body → annotated PNG bytes |
 
 Generation logic lives in `crates/faf-ml-datagen` (the former `faf-datagen`
 CLI, now a library); shared wire types (`DatagenConfig`, `DatagenJob`,

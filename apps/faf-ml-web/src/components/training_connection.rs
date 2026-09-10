@@ -21,9 +21,33 @@ impl TrainingConnection {
     /// Callbacks are intentionally `.forget()`ed — one connection per page,
     /// dropped only when the page resets (same trade-off as fafcn's
     /// `SimConnection`).
+    /// Open a WebSocket and START a new training run.
     pub fn open(
         config: TrainingConfig,
         speed: f64,
+        on_message: impl FnMut(TrainingServerMessage) + 'static,
+        on_status: impl FnMut(String) + 'static,
+    ) -> Result<Self, JsValue> {
+        let start_text = serde_json::to_string(&TrainingClientMessage::Start { config, speed })
+            .unwrap_or_default();
+        Self::connect(start_text, on_message, on_status)
+    }
+
+    /// Open a WebSocket and ATTACH to the currently active run (replay +
+    /// live stream; starts nothing). Used when the page loads mid-run.
+    pub fn open_attach(
+        on_message: impl FnMut(TrainingServerMessage) + 'static,
+        on_status: impl FnMut(String) + 'static,
+    ) -> Result<Self, JsValue> {
+        Self::connect(
+            serde_json::to_string(&TrainingClientMessage::Attach).unwrap_or_default(),
+            on_message,
+            on_status,
+        )
+    }
+
+    fn connect(
+        start_text: String,
         on_message: impl FnMut(TrainingServerMessage) + 'static,
         on_status: impl FnMut(String) + 'static,
     ) -> Result<Self, JsValue> {
@@ -33,9 +57,6 @@ impl TrainingConnection {
         // Wrap callbacks so multiple closures can share them.
         let on_message = Rc::new(RefCell::new(on_message));
         let on_status = Rc::new(RefCell::new(on_status));
-
-        let start_text = serde_json::to_string(&TrainingClientMessage::Start { config, speed })
-            .unwrap_or_default();
 
         let status = on_status.clone();
         let onopen = Closure::wrap(Box::new(move |e: Event| {

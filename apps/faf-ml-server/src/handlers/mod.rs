@@ -6,6 +6,7 @@ pub mod datasets;
 pub mod health;
 pub mod labels;
 pub mod portraits;
+pub mod predict;
 pub mod screenshots;
 pub mod training_ws;
 pub mod units;

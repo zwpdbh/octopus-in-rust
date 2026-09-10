@@ -25,10 +25,13 @@
 //!   database for the Units pages (shared ETFreeman database via
 //!   `faf-blueprints`).
 //! - `GET /api/portraits/:id` — unit portrait PNGs for the Units page.
-//! - `GET /ws/training` — WebSocket training monitor: `Start {config, speed}`
-//!   starts a (currently dummy) training thread streaming metrics events;
-//!   `Command` frames pause/resume/stop/change speed (fafcn `/ws/simulate`
-//!   pattern).
+//! - `GET /ws/training` — WebSocket training: `Start {config, speed}` starts
+//!   a REAL burn training thread (server-side registry, survives viewer
+//!   disconnects); `Attach` replays + streams an active run; `Command` frames
+//!   pause/resume/stop/change speed.
+//! - `GET /api/training/status` — the run registry as JSON.
+//! - `GET /api/runs` — checkpoint list; `POST /api/predict(/annotate)` — run
+//!   a checkpoint on a store screenshot (JSON detections / annotated PNG).
 
 mod config;
 mod env;

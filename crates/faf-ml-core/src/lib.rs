@@ -15,7 +15,8 @@ mod training;
 
 pub use datagen::{DatagenConfig, DatagenJob, DatagenStatus};
 pub use training::{
-    TrainingClientMessage, TrainingCommand, TrainingConfig, TrainingMetricsPoint,
+    DetectionView, PredictRequest, PredictResponse, RunInfo, TrainingClientMessage,
+    TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingRunResult, TrainingRunStatus,
     TrainingServerMessage, TrainingStatus,
 };
 

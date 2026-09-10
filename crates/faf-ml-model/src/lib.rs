@@ -24,6 +24,7 @@ pub mod loss;
 pub mod matching;
 pub mod model;
 pub mod predict;
+pub mod train;
 
 use burn::backend::{Autodiff, Wgpu};
 

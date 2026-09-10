@@ -25,7 +25,9 @@ collect ──► triage ──► generate ──► review ──► snapshot 
 | `faf_ml_dataset_create` | immutable snapshot of chosen pools (default `synthetic`) |
 | `faf_ml_datasets_list` | list snapshots |
 | `faf_ml_dataset_delete` | delete a snapshot file |
-| `faf_ml_training_start` | start a training run (dummy pipeline for now) → run handle |
+| `faf_ml_training_start` | start a REAL training run (server-side, survives disconnects) → run handle |
+| `faf_ml_runs_list` | list checkpoint runs (pick one for predict) |
+| `faf_ml_predict` | run a checkpoint on a store screenshot → detections |
 | `faf_ml_training_status` | progress + live losses/mAP (the MCP server owns the `/ws/training` socket internally) |
 | `faf_ml_training_command` | pause / resume / stop / set_speed |
 

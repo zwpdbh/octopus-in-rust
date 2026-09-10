@@ -98,7 +98,13 @@ pub struct TrainingStartParams {
     batch_size: Option<usize>,
     /// Learning rate (default 0.001).
     lr: Option<f64>,
-    /// Tick rate in batches/sec for the dummy pipeline (default 10).
+    /// Validation fraction held out for epoch-end eval (default 0.1).
+    valid_fraction: Option<f32>,
+    /// Cap optimizer steps per epoch (smoke runs; omit for full training).
+    max_batches: Option<usize>,
+    /// Use the CPU backend instead of Wgpu/Vulkan (slow; default false).
+    cpu: Option<bool>,
+    /// Post-batch throttle in batches/sec (default 0 = unlimited).
     speed: Option<f64>,
 }
 
@@ -116,6 +122,19 @@ pub struct TrainingCommandParams {
     command: String,
     /// Required when command = set_speed.
     batches_per_sec: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PredictParams {
+    /// Run directory name (timestamp) from faf_ml_runs_list.
+    run: String,
+    /// Store screenshot id (uuid) to run the detector on — e.g. a held-out
+    /// battle shot from faf_ml_screenshots_list.
+    image_id: String,
+    /// Minimum class score to keep a detection (default 0.3).
+    score_threshold: Option<f32>,
+    /// Use the CPU backend instead of Wgpu/Vulkan (default false).
+    cpu: Option<bool>,
 }
 
 // ── tools ───────────────────────────────────────────────────────────────────
@@ -397,10 +416,63 @@ impl FafMl {
     }
 
     #[tool(
-        description = "Start a training run (currently a dummy pipeline generating \
-                          realistic loss/mAP curves over the same WebSocket path the real \
-                          burn training will use). Returns a run handle for \
-                          faf_ml_training_status / faf_ml_training_command."
+        description = "List checkpoint runs under the platform's runs/ dir (model name = \
+                          timestamp; pick one for faf_ml_predict)."
+    )]
+    async fn faf_ml_runs_list(&self) -> String {
+        match self.api.get::<Vec<faf_ml_core::RunInfo>>("/api/runs").await {
+            Ok(runs) if runs.is_empty() => "no checkpoint runs yet".to_string(),
+            Ok(runs) => runs
+                .iter()
+                .map(|r| format!("- {} · {} classes", r.name, r.classes))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Err(e) => format!("error: {e:#}"),
+        }
+    }
+
+    #[tool(
+        description = "Run a trained checkpoint on a store screenshot and return the \
+                          detections (class, score, pixel box) — the 'moment of truth' \
+                          eval on held-out battle shots."
+    )]
+    async fn faf_ml_predict(&self, Parameters(p): Parameters<PredictParams>) -> String {
+        let image_id = match p.image_id.parse() {
+            Ok(id) => id,
+            Err(_) => return format!("error: invalid screenshot id {:?}", p.image_id),
+        };
+        let req = faf_ml_core::PredictRequest {
+            run: p.run,
+            image_id,
+            score_threshold: p.score_threshold,
+            cpu: p.cpu.unwrap_or(false),
+        };
+        match self
+            .api
+            .post_json::<_, faf_ml_core::PredictResponse>("/api/predict", &req)
+            .await
+        {
+            Ok(resp) if resp.detections.is_empty() => {
+                "no detections above the score threshold".to_string()
+            }
+            Ok(resp) => {
+                let mut out = format!("{} detections:\n", resp.detections.len());
+                for d in resp.detections {
+                    out.push_str(&format!(
+                        "- {} · {:.3} · [{:.0}, {:.0}, {:.0}, {:.0}]\n",
+                        d.class, d.score, d.x1, d.y1, d.x2, d.y2
+                    ));
+                }
+                out
+            }
+            Err(e) => format!("error: {e:#}"),
+        }
+    }
+
+    #[tool(
+        description = "Start a REAL training run on the server (Wgpu/Vulkan by default; \
+                          the run lives server-side and survives disconnects). Returns a \
+                          run handle for faf_ml_training_status / faf_ml_training_command."
     )]
     async fn faf_ml_training_start(
         &self,
@@ -416,9 +488,18 @@ impl FafMl {
         if let Some(v) = p.lr {
             config.lr = v;
         }
+        if let Some(v) = p.valid_fraction {
+            config.valid_fraction = v;
+        }
+        if let Some(v) = p.max_batches {
+            config.max_batches = Some(v);
+        }
+        if let Some(v) = p.cpu {
+            config.cpu = v;
+        }
         match self
             .training
-            .start(self.api.base(), config, p.speed.unwrap_or(10.0))
+            .start(self.api.base(), config, p.speed.unwrap_or(0.0))
             .await
         {
             Ok(handle) => format!(
@@ -467,7 +548,17 @@ impl FafMl {
                 }
                 out
             }
-            Err(e) => format!("error: {e:#}"),
+            Err(e) => {
+                // Local handle miss → fall back to the server registry.
+                match self
+                    .api
+                    .get::<faf_ml_core::TrainingRunStatus>("/api/training/status")
+                    .await
+                {
+                    Ok(status) => format_run_status(&status),
+                    Err(_) => format!("error: {e:#}"),
+                }
+            }
         }
     }
 
@@ -494,6 +585,43 @@ impl FafMl {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+/// Render a server-side `TrainingRunStatus` (registry response) as text.
+fn format_run_status(status: &faf_ml_core::TrainingRunStatus) -> String {
+    let state = match &status.status {
+        faf_ml_core::TrainingStatus::Running => "running".to_string(),
+        faf_ml_core::TrainingStatus::Paused => "paused".to_string(),
+        faf_ml_core::TrainingStatus::Done { duration_secs } => {
+            format!("done ({duration_secs}s)")
+        }
+        faf_ml_core::TrainingStatus::Failed { error } => format!("failed: {error}"),
+    };
+    let mut out = format!("status: {state} · {} metrics points", status.points);
+    if let Some(l) = &status.latest {
+        out.push_str(&format!(
+            "\nepoch {} · batch {}/{} · train {:.4} · cls {:.4} · bbox {:.4}",
+            l.epoch, l.batch, l.total_batches, l.train_loss, l.cls_loss, l.bbox_loss
+        ));
+        if let Some(v) = l.valid_loss {
+            out.push_str(&format!(" · valid {v:.4}"));
+        }
+        if let Some(m) = l.map {
+            out.push_str(&format!(" · mAP {m:.3}"));
+        }
+    }
+    if let Some(result) = &status.result {
+        out.push_str(&match result {
+            faf_ml_core::TrainingRunResult::Done {
+                run_dir,
+                duration_secs,
+            } => format!("\nresult: done in {duration_secs}s → {run_dir}"),
+            faf_ml_core::TrainingRunResult::Failed { error } => {
+                format!("\nresult: failed — {error}")
+            }
+        });
+    }
+    out
+}
 
 impl FafMl {
     async fn run_status(&self) -> anyhow::Result<String> {

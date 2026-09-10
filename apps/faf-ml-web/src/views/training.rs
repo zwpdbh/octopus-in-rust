@@ -1,10 +1,26 @@
 use dioxus::prelude::*;
 use faf_dioxus_ui::{ChartMetric, ChartSeries, ChartTab, RGBColor, UplotChart};
 use faf_ml_core::{
-    TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingServerMessage, TrainingStatus,
+    TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingRunStatus,
+    TrainingServerMessage, TrainingStatus,
 };
+use gloo_net::http::Request;
 
 use crate::components::TrainingConnection;
+
+/// Fetch the current/last training run (404 when none ever ran).
+async fn fetch_status() -> Result<TrainingRunStatus, String> {
+    let resp = Request::get(&crate::net::api_url("/api/training/status"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status() == 404 {
+        return Err("no training run yet".to_string());
+    }
+    resp.json::<TrainingRunStatus>()
+        .await
+        .map_err(|e| e.to_string())
+}
 
 /// Page lifecycle; drives which controls are enabled (mirrors fafcn's
 /// `SimulationStatus`).
@@ -38,8 +54,14 @@ fn y_map(p: &TrainingMetricsPoint) -> f64 {
     p.map.unwrap_or(f64::NAN)
 }
 
-/// Parse the three config fields (empty = keep default).
-fn parse_config(epochs: &str, batch_size: &str, lr: &str) -> Result<TrainingConfig, String> {
+/// Parse the config fields (empty = keep default).
+fn parse_config(
+    epochs: &str,
+    batch_size: &str,
+    lr: &str,
+    valid_fraction: &str,
+    cpu: bool,
+) -> Result<TrainingConfig, String> {
     let mut config = TrainingConfig::default();
     let raw = epochs.trim();
     if !raw.is_empty() {
@@ -57,12 +79,69 @@ fn parse_config(epochs: &str, batch_size: &str, lr: &str) -> Result<TrainingConf
     if !raw.is_empty() {
         config.lr = raw.parse().map_err(|_| format!("invalid lr: {raw:?}"))?;
     }
+    let raw = valid_fraction.trim();
+    if !raw.is_empty() {
+        config.valid_fraction = raw
+            .parse()
+            .map_err(|_| format!("invalid valid fraction: {raw:?}"))?;
+    }
+    config.cpu = cpu;
     Ok(config)
 }
 
-/// Training monitor: start/pause/resume/reset a (currently dummy) training
-/// run and watch its metrics live. Mirrors fafcn's simulate page: a
-/// WebSocket streams events into a signal, uPlot renders the buffer.
+/// Wire the metrics/status handlers and open a connection: `Some((config,
+/// speed))` starts a new run, `None` attaches to the active one.
+fn connect(
+    start: Option<(TrainingConfig, f64)>,
+    mut connection: Signal<Option<TrainingConnection>>,
+    mut status: Signal<PageStatus>,
+    mut detail: Signal<String>,
+    mut data: Signal<Vec<TrainingMetricsPoint>>,
+    mut latest: Signal<Option<TrainingMetricsPoint>>,
+) {
+    let on_message = move |msg: TrainingServerMessage| match msg {
+        TrainingServerMessage::Metrics(point) => {
+            latest.set(Some(point.clone()));
+            data.write().push(point);
+        }
+        TrainingServerMessage::Status(TrainingStatus::Running) => {
+            status.set(PageStatus::Running);
+        }
+        TrainingServerMessage::Status(TrainingStatus::Paused) => {
+            status.set(PageStatus::Paused);
+        }
+        TrainingServerMessage::Status(TrainingStatus::Done { duration_secs }) => {
+            status.set(PageStatus::Finished);
+            detail.set(format!("done in {duration_secs}s"));
+        }
+        TrainingServerMessage::Status(TrainingStatus::Failed { error }) => {
+            status.set(PageStatus::Finished);
+            detail.set(format!("failed: {error}"));
+        }
+        TrainingServerMessage::Finished | TrainingServerMessage::Error(_) => {}
+    };
+    let on_status = move |text: String| {
+        if text == "finished" {
+            status.set(PageStatus::Finished);
+        } else if text != "connected" {
+            detail.set(text);
+        }
+    };
+    let result = match start {
+        Some((config, speed)) => TrainingConnection::open(config, speed, on_message, on_status),
+        None => TrainingConnection::open_attach(on_message, on_status),
+    };
+    match result {
+        Ok(conn) => connection.set(Some(conn)),
+        Err(e) => detail.set(format!("failed to connect: {e:?}")),
+    }
+}
+
+/// Training monitor: start/pause/resume/reset a training run and watch its
+/// metrics live. On load it checks the server registry — if a run is active
+/// it attaches (the replay refills the charts); a finished run shows its
+/// outcome. Mirrors fafcn's simulate page: a WebSocket streams events into a
+/// signal, uPlot renders the buffer.
 #[component]
 pub fn Training() -> Element {
     let mut status = use_signal(|| PageStatus::Idle);
@@ -75,8 +154,54 @@ pub fn Training() -> Element {
     let epochs = use_signal(|| defaults.epochs.to_string());
     let batch_size = use_signal(|| defaults.batch_size.to_string());
     let mut lr = use_signal(|| defaults.lr.to_string());
-    let speed = use_signal(|| "10".to_string());
-    let speed_value = move || speed.read().parse::<f64>().unwrap_or(10.0);
+    let valid_fraction = use_signal(|| defaults.valid_fraction.to_string());
+    let mut cpu = use_signal(|| false);
+    let speed = use_signal(|| "0".to_string());
+    let speed_value = move || speed.read().parse::<f64>().unwrap_or(0.0);
+
+    // On mount: attach to an active run (replay refills the charts) or show
+    // the last run's outcome. Runs once (attached flag).
+    let status_res = use_resource(fetch_status);
+    let mut attached = use_signal(|| false);
+    use_effect(move || {
+        if *attached.read() {
+            return;
+        }
+        let run = status_res
+            .read()
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .cloned();
+        let Some(run) = run else {
+            return;
+        };
+        attached.set(true);
+        match run.status {
+            TrainingStatus::Running => {
+                status.set(PageStatus::Running);
+                detail.set("attached to the running job — replaying metrics".to_string());
+                connect(None, connection, status, detail, data, latest);
+            }
+            TrainingStatus::Paused => {
+                status.set(PageStatus::Paused);
+                detail.set("attached to the paused job — replaying metrics".to_string());
+                connect(None, connection, status, detail, data, latest);
+            }
+            _ => {
+                if let Some(result) = &run.result {
+                    detail.set(match result {
+                        faf_ml_core::TrainingRunResult::Done {
+                            run_dir,
+                            duration_secs,
+                        } => format!("last run: done in {duration_secs}s → {run_dir}"),
+                        faf_ml_core::TrainingRunResult::Failed { error } => {
+                            format!("last run: failed — {error}")
+                        }
+                    });
+                }
+            }
+        }
+    });
 
     // Forward speed changes to a running/paused job (mirrors the sim page).
     use_effect(move || {
@@ -89,7 +214,13 @@ pub fn Training() -> Element {
     });
 
     let start = move |_| {
-        let config = match parse_config(&epochs.read(), &batch_size.read(), &lr.read()) {
+        let config = match parse_config(
+            &epochs.read(),
+            &batch_size.read(),
+            &lr.read(),
+            &valid_fraction.read(),
+            *cpu.read(),
+        ) {
             Ok(config) => config,
             Err(e) => {
                 detail.set(e);
@@ -99,39 +230,14 @@ pub fn Training() -> Element {
         data.write().clear();
         latest.set(None);
         detail.set(String::new());
-
-        let on_message = move |msg: TrainingServerMessage| match msg {
-            TrainingServerMessage::Metrics(point) => {
-                latest.set(Some(point.clone()));
-                data.write().push(point);
-            }
-            TrainingServerMessage::Status(TrainingStatus::Running) => {
-                status.set(PageStatus::Running);
-            }
-            TrainingServerMessage::Status(TrainingStatus::Paused) => {
-                status.set(PageStatus::Paused);
-            }
-            TrainingServerMessage::Status(TrainingStatus::Done { duration_secs }) => {
-                status.set(PageStatus::Finished);
-                detail.set(format!("done in {duration_secs}s"));
-            }
-            TrainingServerMessage::Status(TrainingStatus::Failed { error }) => {
-                status.set(PageStatus::Finished);
-                detail.set(format!("failed: {error}"));
-            }
-            TrainingServerMessage::Finished | TrainingServerMessage::Error(_) => {}
-        };
-        let on_status = move |text: String| {
-            if text == "finished" {
-                status.set(PageStatus::Finished);
-            } else if text != "connected" {
-                detail.set(text);
-            }
-        };
-        match TrainingConnection::open(config, speed_value(), on_message, on_status) {
-            Ok(conn) => connection.set(Some(conn)),
-            Err(e) => detail.set(format!("failed to connect: {e:?}")),
-        }
+        connect(
+            Some((config, speed_value())),
+            connection,
+            status,
+            detail,
+            data,
+            latest,
+        );
     };
 
     let send = move |cmd: TrainingCommand| {
@@ -174,14 +280,13 @@ pub fn Training() -> Element {
                 // Controls.
                 div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-4 mb-4",
                     p { class: "text-xs text-neutral-400 mb-3",
-                        "Runs a training job on the server (currently a "
-                        b { "dummy pipeline" }
-                        " generating realistic curves) and streams metrics over a WebSocket — the same path the real burn training will use."
+                        "Runs a real SSD training job on the server (Wgpu/Vulkan, or CPU) and streams metrics over a WebSocket. The job lives server-side: this page can be closed and re-opened — it re-attaches and replays."
                     }
-                    div { class: "grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 mb-4",
+                    div { class: "grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 mb-4",
                         SliderField { label: "epochs", min: "1", max: "100", step: "1", value: epochs }
-                        SliderField { label: "batch size", min: "1", max: "8", step: "1", value: batch_size }
-                        SliderField { label: "speed (batches/s)", min: "1", max: "50", step: "1", value: speed }
+                        SliderField { label: "batch size (GPU cap: 4)", min: "1", max: "4", step: "1", value: batch_size }
+                        SliderField { label: "valid fraction", min: "0", max: "0.3", step: "0.05", value: valid_fraction }
+                        SliderField { label: "speed (batches/s, 0=unlimited)", min: "0", max: "50", step: "1", value: speed }
                         label { class: "flex flex-col gap-1 text-xs text-neutral-400",
                             div { class: "flex items-center justify-between",
                                 span { "learning rate" }
@@ -192,6 +297,15 @@ pub fn Training() -> Element {
                                 value: "{lr}",
                                 oninput: move |e| lr.set(e.value()),
                             }
+                        }
+                        label { class: "flex items-end gap-2 pb-2 text-xs text-neutral-400 cursor-pointer",
+                            input {
+                                r#type: "checkbox",
+                                class: "accent-blue-500",
+                                checked: *cpu.read(),
+                                onchange: move |e| cpu.set(e.value().parse().unwrap_or(false)),
+                            }
+                            "cpu backend (slow, no GPU)"
                         }
                     }
                     div { class: "flex items-center gap-2",
