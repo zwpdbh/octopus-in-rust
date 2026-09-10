@@ -49,6 +49,11 @@ cargo xtask faf-ml backend          # → http://localhost:3100
 #    open the Datagen view (http://localhost:3100/datagen), set count/size/
 #    scale, Generate. Samples stream into the store while the job runs;
 #    the jobs table polls until done.
+#    Each sample is tagged with its job id, so a bad set is removed with the
+#    job row's "Delete samples" button (deletes job + its samples). Older
+#    untagged sets: Gallery → "synthetic" filter → "Clear N synthetic".
+#    (Jobs live in server memory — a restart wipes the jobs table, but the
+#    job→sample link is persisted in index.json.)
 
 # 3. DOMAIN-GAP CHECK (5 min, do not skip): open a synthetic sample (Gallery
 #    → "synthetic" filter) next to a REAL screenshot.

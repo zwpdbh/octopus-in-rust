@@ -33,10 +33,12 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/screenshots/{id}/labels` | box list (JSON, `[]` when unlabeled) |
 | `PUT /api/screenshots/{id}/labels` | replace the box list |
 | `DELETE /api/screenshots/{id}` | remove image + labels + index entry |
+| `DELETE /api/screenshots?kind={kind}` | bulk-remove every screenshot of one kind (image + labels + index entries); `kind` is mandatory. Clearing `synthetic` also drops finished datagen jobs from the registry |
 | `GET /api/classes` | class names from `classes.txt` |
 | `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt` |
 | `GET /api/datagen/jobs` | all datagen jobs (newest first) |
 | `GET /api/datagen/jobs/{id}` | one job (the web UI polls this while `running`) |
+| `DELETE /api/datagen/jobs/{id}` | remove a finished job AND its generated sample set (400 while `running`); samples predate job tracking → use bulk delete instead |
 | `GET /api/datasets` | list dataset manifests |
 | `POST /api/datasets` | `{name, image_ids}` → immutable snapshot embedding the current labels (409 if the name exists) |
 

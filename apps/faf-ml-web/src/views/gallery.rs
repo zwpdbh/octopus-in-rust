@@ -178,7 +178,17 @@ pub fn Gallery() -> Element {
                             .iter()
                             .filter(|s| filter.read().matches(s))
                             .collect();
+                        let clear_count = shown.len();
                         rsx! {
+                            if *filter.read() == GalleryFilter::Synthetic && clear_count > 0 {
+                                div { class: "mb-3",
+                                    button {
+                                        class: "px-3 py-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-200 text-xs font-semibold transition-colors",
+                                        onclick: move |_| clear_synthetic(clear_count, status, refresh),
+                                        "Clear {clear_count} synthetic sample(s)"
+                                    }
+                                }
+                            }
                             if shown.is_empty() {
                                 p { class: "text-neutral-400", "Nothing in this view." }
                             }
@@ -193,6 +203,34 @@ pub fn Gallery() -> Element {
             }
         }
     }
+}
+
+/// Bulk-delete every synthetic sample after a confirm dialog (covers
+/// samples that predate per-job tracking, which job-row deletion cannot
+/// attribute). Free fn for the same reason as `set_kind`.
+fn clear_synthetic(count: usize, mut status: Signal<String>, mut refresh: Signal<u32>) {
+    let confirmed = web_sys::window()
+        .and_then(|w| {
+            w.confirm_with_message(&format!(
+                "Delete all {count} synthetic sample(s)? This cannot be undone."
+            ))
+            .ok()
+        })
+        .unwrap_or(false);
+    if !confirmed {
+        return;
+    }
+    spawn(async move {
+        let resp = Request::delete(&crate::net::api_url("/api/screenshots?kind=synthetic"))
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.ok() => status.set("cleared synthetic samples".to_string()),
+            Ok(r) => status.set(format!("clear failed: HTTP {}", r.status())),
+            Err(e) => status.set(format!("clear failed: {e}")),
+        }
+        *refresh.write() += 1;
+    });
 }
 
 /// PATCH the screenshot's kind (the triage action), then refresh the list.

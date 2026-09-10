@@ -67,9 +67,10 @@ fn merge_classes(state: &AppState, source: &[String]) -> Result<usize> {
 }
 
 /// Store one generated sample: PNG-encode, register as a `synthetic`
-/// screenshot, write its labels JSON.
+/// screenshot (tagged with the producing job), write its labels JSON.
 fn store_sample(
     state: &AppState,
+    job_id: Uuid,
     index: usize,
     img: RgbaImage,
     boxes: Vec<faf_ml_datagen::GenBox>,
@@ -81,6 +82,7 @@ fn store_sample(
         &format!("datagen-{index:06}.png"),
         png.get_ref(),
         ScreenshotKind::Synthetic,
+        Some(job_id),
     )
     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -134,7 +136,7 @@ fn run_datagen_job(
         if first_error.is_some() {
             return;
         }
-        match store_sample(state, stored, img, boxes) {
+        match store_sample(state, job_id, stored, img, boxes) {
             Ok(_) => {
                 stored += 1;
                 if let Some(job) = state
@@ -255,4 +257,34 @@ pub async fn get_datagen_job(
         .cloned()
         .ok_or(Error::NotFound)?;
     Ok(Json(job))
+}
+
+/// `DELETE /api/datagen/jobs/{id}` — delete a finished job AND the sample
+/// set it generated (image files, labels JSONs, index entries). Samples
+/// generated before job tracking exist have no `job_id`; remove those via
+/// `DELETE /api/screenshots?kind=synthetic` instead.
+pub async fn delete_datagen_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<String> {
+    let id: Uuid = id.parse().map_err(|_| Error::NotFound)?;
+    let job = state
+        .jobs
+        .lock()
+        .expect("job registry mutex poisoned")
+        .get(&id)
+        .cloned()
+        .ok_or(Error::NotFound)?;
+    if matches!(job.status, DatagenStatus::Running { .. }) {
+        return Err(Error::BadRequest(
+            "job is still running — wait for it to finish before deleting".to_string(),
+        ));
+    }
+    let removed = super::screenshots::delete_matching(&state, |m| m.job_id == Some(id))?;
+    state
+        .jobs
+        .lock()
+        .expect("job registry mutex poisoned")
+        .remove(&id);
+    Ok(format!("removed job {id} and {removed} sample(s)"))
 }

@@ -45,11 +45,13 @@ pub fn write_index(state: &AppState, metas: &[ScreenshotMeta]) -> Result<()> {
 }
 
 /// Store one PNG as a new screenshot (image file + index entry).
+/// `job_id` links a synthetic sample to the datagen job that produced it.
 pub fn store_screenshot(
     state: &AppState,
     filename: &str,
     bytes: &[u8],
     kind: ScreenshotKind,
+    job_id: Option<Uuid>,
 ) -> Result<ScreenshotMeta> {
     let (width, height) = png_dimensions(bytes)
         .ok_or_else(|| Error::BadRequest(format!("{filename:?} is not a valid PNG")))?;
@@ -60,6 +62,7 @@ pub fn store_screenshot(
         height,
         uploaded_at: Utc::now(),
         kind,
+        job_id,
     };
     std::fs::write(state.image_path(meta.id), bytes)?;
     let mut metas = read_index(state)?;
@@ -69,8 +72,8 @@ pub fn store_screenshot(
 }
 
 /// `POST /api/screenshots?kind=battle|background` — multipart upload of one
-/// or more PNG files. `kind` defaults to `battle` (real frame with units);
-/// pass `background` for empty-terrain shots destined for datagen.
+/// or more PNG files. `kind` defaults to `unclassified` (shown as "needs
+/// triage" in the web UI until a human marks the shot).
 ///
 /// Every form field carrying a file is stored; returns the metadata of all
 /// newly created screenshots.
@@ -98,7 +101,9 @@ pub async fn upload_screenshots(
             .bytes()
             .await
             .map_err(|e| Error::BadRequest(format!("failed to read {filename:?}: {e}")))?;
-        uploaded.push(store_screenshot(&state, &filename, &bytes, query.kind)?);
+        uploaded.push(store_screenshot(
+            &state, &filename, &bytes, query.kind, None,
+        )?);
     }
     if uploaded.is_empty() {
         return Err(Error::BadRequest("no files in multipart body".to_string()));
@@ -164,4 +169,50 @@ pub async fn delete_screenshot(
     let _ = std::fs::remove_file(state.image_path(id));
     let _ = std::fs::remove_file(state.labels_path(id));
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Remove every screenshot matching `pred` (image + labels + index entry);
+/// shared by bulk deletion and datagen-job cascade deletion. Returns the
+/// number of screenshots removed.
+pub fn delete_matching(state: &AppState, pred: impl Fn(&ScreenshotMeta) -> bool) -> Result<usize> {
+    let mut metas = read_index(state)?;
+    let (victims, kept): (Vec<ScreenshotMeta>, Vec<ScreenshotMeta>) =
+        metas.drain(..).partition(|m| pred(m));
+    if victims.is_empty() {
+        return Ok(0);
+    }
+    write_index(state, &kept)?;
+    for meta in &victims {
+        let _ = std::fs::remove_file(state.image_path(meta.id));
+        let _ = std::fs::remove_file(state.labels_path(meta.id));
+    }
+    Ok(victims.len())
+}
+
+/// `DELETE /api/screenshots?kind=synthetic` — bulk-remove every screenshot
+/// of one kind (the kind is mandatory so this can never nuke everything by
+/// accident). Returns the number removed.
+///
+/// Clearing `synthetic` also drops finished datagen jobs from the registry:
+/// their sample sets no longer exist, so a "done — N samples" row would be
+/// a lie. Running jobs are left alone (they are still producing samples).
+#[derive(Debug, Deserialize)]
+pub struct BulkDeleteQuery {
+    kind: ScreenshotKind,
+}
+
+pub async fn bulk_delete_screenshots(
+    State(state): State<AppState>,
+    Query(query): Query<BulkDeleteQuery>,
+) -> Result<String> {
+    let kind = query.kind;
+    let removed = delete_matching(&state, |m| m.kind == kind)?;
+    if kind == ScreenshotKind::Synthetic {
+        state
+            .jobs
+            .lock()
+            .expect("job registry mutex poisoned")
+            .retain(|_, job| matches!(job.status, faf_ml_core::DatagenStatus::Running { .. }));
+    }
+    Ok(format!("removed {removed} {kind} screenshot(s)"))
 }

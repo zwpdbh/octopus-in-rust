@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
             "/api/screenshots",
             post(handlers::screenshots::upload_screenshots)
                 .get(handlers::screenshots::list_screenshots)
+                .delete(handlers::screenshots::bulk_delete_screenshots)
                 // Screenshots are a few MB each; lift the 2 MB default.
                 .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
         )
@@ -43,7 +44,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/datagen/jobs/{id}",
-            get(handlers::datagen::get_datagen_job),
+            get(handlers::datagen::get_datagen_job).delete(handlers::datagen::delete_datagen_job),
         )
         .route(
             "/api/datasets",

@@ -64,9 +64,14 @@ pub struct ScreenshotMeta {
     pub width: u32,
     pub height: u32,
     pub uploaded_at: DateTime<Utc>,
-    /// Pipeline role; defaults to `battle` for pre-existing index entries.
+    /// Pipeline role; defaults to `unclassified` ("needs triage") for
+    /// pre-existing index entries.
     #[serde(default)]
     pub kind: ScreenshotKind,
+    /// The datagen job that produced this sample (`None` for uploads and
+    /// for samples generated before job tracking existed).
+    #[serde(default)]
+    pub job_id: Option<Uuid>,
 }
 
 /// One labeled bounding box, in **absolute pixel** coordinates of the

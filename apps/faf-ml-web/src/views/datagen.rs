@@ -71,6 +71,29 @@ fn bump_refresh(mut refresh: Signal<u32>) {
     *refresh.write() += 1;
 }
 
+/// `DELETE /api/datagen/jobs/{id}` — remove the job and its whole sample
+/// set, after a confirm dialog.
+fn delete_job_samples(id: String, refresh: Signal<u32>) {
+    let confirmed = web_sys::window()
+        .and_then(|w| {
+            w.confirm_with_message(
+                "Delete this job and every synthetic sample it generated? \
+                 This cannot be undone.",
+            )
+            .ok()
+        })
+        .unwrap_or(false);
+    if !confirmed {
+        return;
+    }
+    spawn(async move {
+        let _ = Request::delete(&crate::net::api_url(&format!("/api/datagen/jobs/{id}")))
+            .send()
+            .await;
+        bump_refresh(refresh);
+    });
+}
+
 /// Submit the form: start the job, then refresh the jobs table.
 fn submit(
     count: Signal<String>,
@@ -186,7 +209,7 @@ pub fn Datagen() -> Element {
                     Some(Ok(list)) => rsx! {
                         div { class: "space-y-2",
                             for job in list.iter() {
-                                JobRow { key: "{job.id}", job: job.clone() }
+                                JobRow { key: "{job.id}", job: job.clone(), refresh }
                             }
                         }
                     },
@@ -213,10 +236,12 @@ fn Field(label: &'static str, placeholder: String, mut value: Signal<String>) ->
 }
 
 /// One job row: config summary, progress, status; Done links to the
-/// Gallery's synthetic filter.
+/// Gallery's synthetic filter. Non-running jobs get a delete button that
+/// removes the job together with its generated sample set.
 #[component]
-fn JobRow(job: DatagenJob) -> Element {
+fn JobRow(job: DatagenJob, refresh: Signal<u32>) -> Element {
     let started = job.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let job_id = job.id.to_string();
     let summary = format!(
         "count {} · size {} · max-units {} · scale {:.2}–{:.2} · seed {}",
         job.config.count,
@@ -236,6 +261,7 @@ fn JobRow(job: DatagenJob) -> Element {
         DatagenStatus::Failed { error } => (format!("failed: {error}"), "text-red-400"),
     };
     let is_done = matches!(job.status, DatagenStatus::Done { .. });
+    let is_running = matches!(job.status, DatagenStatus::Running { .. });
 
     rsx! {
         div { class: "rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3",
@@ -244,6 +270,14 @@ fn JobRow(job: DatagenJob) -> Element {
                 span { class: "text-sm text-neutral-300", "{summary}" }
                 div { class: "flex-1" }
                 span { class: "text-sm {status_class}", "{status_text}" }
+                if !is_running {
+                    button {
+                        class: "px-2 py-1 rounded text-xs text-red-400 hover:bg-neutral-800 transition-colors",
+                        title: "Delete this job and all samples it generated",
+                        onclick: move |_| delete_job_samples(job_id.clone(), refresh),
+                        "Delete samples"
+                    }
+                }
             }
             if is_done {
                 p { class: "text-xs text-neutral-500 mt-1",

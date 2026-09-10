@@ -8,10 +8,15 @@
 //! - `GET /api/screenshots/:id/image` — serve the PNG.
 //! - `GET/PUT /api/screenshots/:id/labels` — read/replace bounding boxes.
 //! - `DELETE /api/screenshots/:id` — remove image + labels.
+//! - `DELETE /api/screenshots?kind=...` — bulk-remove every screenshot of
+//!   one kind (e.g. clearing all `synthetic` samples, which also drops
+//!   finished datagen jobs from the registry).
 //! - `GET /api/classes` — class list.
 //! - `POST /api/datagen` — start a synthetic-data generation job (background
 //!   task streaming samples into the store as `synthetic` screenshots).
 //! - `GET /api/datagen/jobs[/{id}]` — poll job progress.
+//! - `DELETE /api/datagen/jobs/:id` — remove a finished job and the sample
+//!   set it generated.
 //! - `GET/POST /api/datasets` — list / create immutable dataset snapshots.
 
 mod config;
