@@ -1,10 +1,17 @@
 //! Unit listing routes for the Units page (ported from fafcn-server).
 
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{
+    extract::{Path, State},
+    response::IntoResponse,
+    Json,
+};
 use faf_blueprints::{TechLevel, UnitBlueprint};
 use serde::Serialize;
 
-use crate::state::AppState;
+use crate::{
+    error::{Error, Result},
+    state::AppState,
+};
 
 /// Summary sent to the frontend for unit selection.
 ///
@@ -53,6 +60,21 @@ fn infer_faction(id: &str) -> &str {
         Some('S') => "seraphim",
         _ => "unknown",
     }
+}
+
+/// `GET /api/units/{id}` — one unit summary (case-insensitive exact id).
+pub async fn get_unit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse> {
+    let unit = state
+        .blueprints
+        .all_units()
+        .into_iter()
+        .find(|bp| bp.unit_id().eq_ignore_ascii_case(&id))
+        .map(UnitSummary::from)
+        .ok_or(Error::NotFound)?;
+    Ok(Json(unit))
 }
 
 /// `GET /api/units` — all unit summaries (four playable factions only).

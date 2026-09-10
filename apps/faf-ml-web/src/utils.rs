@@ -27,6 +27,18 @@ pub fn tech_level_short(tech: TechLevel) -> &'static str {
     }
 }
 
+/// Faction spelling used in `public/strategic/` overlay filenames
+/// (`UEF_icon_*.png`, `Aeon_icon_*.png`, ...).
+pub fn faction_file_prefix(faction: &str) -> &str {
+    match faction.to_lowercase().as_str() {
+        "uef" => "UEF",
+        "cybran" => "Cybran",
+        "aeon" => "Aeon",
+        "seraphim" => "Seraphim",
+        _ => faction,
+    }
+}
+
 /// Hex faction color for borders and highlights.
 pub fn faction_color(faction: &str) -> &'static str {
     match faction.to_lowercase().as_str() {

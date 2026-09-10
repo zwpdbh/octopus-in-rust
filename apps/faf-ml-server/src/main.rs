@@ -21,8 +21,9 @@
 //! - `DELETE /api/datagen/jobs/:id` — remove a finished job and the sample
 //!   set it generated.
 //! - `GET/POST /api/datasets` — list / create immutable dataset snapshots.
-//! - `GET /api/units` + `GET /api/units/meta` — unit database for the Units
-//!   page (shared ETFreeman unit database via `faf-blueprints`).
+//! - `GET /api/units` + `GET /api/units/meta` + `GET /api/units/:id` — unit
+//!   database for the Units pages (shared ETFreeman database via
+//!   `faf-blueprints`).
 //! - `GET /api/portraits/:id` — unit portrait PNGs for the Units page.
 
 mod config;

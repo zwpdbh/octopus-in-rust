@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::components::UnitSummary;
 use crate::utils::faction_color;
+use crate::Route;
 
 /// Ratio of `other` against `base` for one stat (clamped to avoid div-by-zero).
 fn ratio(base: f64, other: f64) -> f64 {
@@ -76,7 +77,10 @@ pub fn ComparisonPanel(selected: Signal<Vec<UnitSummary>>) -> Element {
                                     class: "w-12 h-12 object-contain rounded shrink-0",
                                 }
                                 div { class: "flex-1 min-w-0",
-                                    div { class: "text-sm font-medium truncate", style: "color: {color};",
+                                    Link {
+                                        class: "text-sm font-medium truncate hover:underline block",
+                                        style: "color: {color};",
+                                        to: Route::UnitDetail { id: unit.id.clone() },
                                         "{unit.name}"
                                         span { class: "ml-1.5 text-[10px] uppercase tracking-wide text-neutral-500",
                                             "{unit.faction}"
@@ -114,7 +118,9 @@ pub fn ComparisonPanel(selected: Signal<Vec<UnitSummary>>) -> Element {
                                             alt: "{base.name}",
                                             class: "w-10 h-10 object-contain rounded shrink-0",
                                         }
-                                        div { class: "text-sm font-semibold text-white",
+                                        Link {
+                                            class: "text-sm font-semibold text-white hover:underline",
+                                            to: Route::UnitDetail { id: base.id.clone() },
                                             "1 {base.name}"
                                             span { class: "ml-1.5 text-[10px] uppercase tracking-wide text-neutral-500",
                                                 "{base.faction}"
@@ -136,7 +142,9 @@ pub fn ComparisonPanel(selected: Signal<Vec<UnitSummary>>) -> Element {
                                                             alt: "{target.name}",
                                                             class: "w-7 h-7 object-contain rounded shrink-0",
                                                         }
-                                                        span { class: "text-sm text-neutral-300 truncate",
+                                                        Link {
+                                                            class: "text-sm text-neutral-300 truncate hover:underline",
+                                                            to: Route::UnitDetail { id: target.id.clone() },
                                                             "≈ {target.name}"
                                                             span { class: "ml-1 text-[10px] uppercase tracking-wide text-neutral-500",
                                                                 "{target.faction}"

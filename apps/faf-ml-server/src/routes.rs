@@ -60,6 +60,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/units", get(handlers::units::list_units))
         .route("/api/units/meta", get(handlers::units::units_meta))
+        .route("/api/units/{id}", get(handlers::units::get_unit))
         .route(
             "/api/portraits/{id}",
             get(handlers::portraits::get_portrait),

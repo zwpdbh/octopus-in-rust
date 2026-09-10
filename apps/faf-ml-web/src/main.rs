@@ -12,7 +12,7 @@ mod net;
 mod utils;
 mod views;
 
-use views::{Datagen, Datasets, Gallery, Home, Label, Navbar, Units};
+use views::{Datagen, Datasets, Gallery, Home, Label, Navbar, UnitDetail, Units};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -26,6 +26,8 @@ enum Route {
         Label { id: String },
         #[route("/units")]
         Units {},
+        #[route("/units/:id")]
+        UnitDetail { id: String },
         #[route("/datagen")]
         Datagen {},
         #[route("/datasets")]
