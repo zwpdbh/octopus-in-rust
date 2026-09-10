@@ -1,8 +1,6 @@
 use dioxus::prelude::*;
-use dioxus::web::WebEventExt;
-use faf_ml_core::LabeledBox;
+use faf_ml_core::{LabeledBox, ScreenshotMeta};
 use gloo_net::http::Request;
-use wasm_bindgen::JsCast;
 
 /// Fetch the box list for one screenshot.
 async fn fetch_labels(id: &str) -> Result<Vec<LabeledBox>, String> {
@@ -28,6 +26,25 @@ async fn fetch_classes() -> Result<Vec<String>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Fetch this screenshot's metadata (natural dimensions for the SVG viewBox).
+///
+/// NB: reading `naturalWidth` off the DOM via `as_web_event()` is not an
+/// option — dioxus-web 0.7.9's `WebImageEvent::as_any` returns the raw event,
+/// so `as_web_event()` always panics on image load events.
+async fn fetch_meta(id: &str) -> Result<ScreenshotMeta, String> {
+    let shots = Request::get(&crate::net::api_url("/api/screenshots"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Vec<ScreenshotMeta>>()
+        .await
+        .map_err(|e| e.to_string())?;
+    shots
+        .into_iter()
+        .find(|s| s.id.to_string() == id)
+        .ok_or_else(|| "screenshot not found".to_string())
+}
+
 /// Label view: image with an SVG overlay of the existing bounding boxes.
 ///
 /// Boxes live in absolute pixel coordinates of the natural image; the SVG
@@ -39,7 +56,6 @@ pub fn Label(id: String) -> Element {
     let mut boxes: Signal<Vec<LabeledBox>> = use_signal(Vec::new);
     let mut loaded = use_signal(|| false);
     let mut selected: Signal<Option<usize>> = use_signal(|| None);
-    let mut natural: Signal<Option<(u32, u32)>> = use_signal(|| None);
     let mut status = use_signal(String::new);
 
     let labels_res = use_resource({
@@ -50,6 +66,13 @@ pub fn Label(id: String) -> Element {
         }
     });
     let classes_res = use_resource(fetch_classes);
+    let meta_res = use_resource({
+        let id = id.clone();
+        move || {
+            let id = id.clone();
+            async move { fetch_meta(&id).await }
+        }
+    });
 
     // Copy fetched labels into the editable signal exactly once.
     use_effect(move || {
@@ -77,17 +100,13 @@ pub fn Label(id: String) -> Element {
                                     class: "w-full h-auto block",
                                     src: crate::net::image_url(&id),
                                     alt: "screenshot",
-                                    onload: move |e| {
-                                        let img = e
-                                            .as_web_event()
-                                            .target()
-                                            .and_then(|t| t.dyn_into::<web_sys::HtmlImageElement>().ok());
-                                        if let Some(img) = img {
-                                            natural.set(Some((img.natural_width(), img.natural_height())));
-                                        }
-                                    },
                                 }
-                                if let Some((nw, nh)) = *natural.read() {
+                                if let Some((nw, nh)) = meta_res
+                                    .read()
+                                    .as_ref()
+                                    .and_then(|r| r.as_ref().ok())
+                                    .map(|m| (m.width, m.height))
+                                {
                                     svg {
                                         class: "absolute inset-0 w-full h-full",
                                         view_box: "0 0 {nw} {nh}",
