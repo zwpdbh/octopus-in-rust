@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use faf_ml_core::UnitIcons;
 use gloo_net::http::Request;
 
 use crate::components::UnitSummary;
@@ -17,6 +18,17 @@ async fn fetch_unit(id: &str) -> Result<UnitSummary, String> {
     resp.json::<UnitSummary>().await.map_err(|e| e.to_string())
 }
 
+/// Fetch the strategic-icon mapping for one unit.
+async fn fetch_unit_icons(id: &str) -> Result<UnitIcons, String> {
+    Request::get(&crate::net::api_url(&format!("/api/units/{id}/icons")))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<UnitIcons>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// One stat row in a detail section.
 #[component]
 fn StatRow(label: &'static str, value: String) -> Element {
@@ -33,13 +45,13 @@ fn StatRow(label: &'static str, value: String) -> Element {
 /// comparison sidebar.
 #[component]
 pub fn UnitDetail(id: String) -> Element {
-    let unit = use_resource({
-        let id = id.clone();
-        move || {
-            let id = id.clone();
-            async move { fetch_unit(&id).await }
-        }
-    });
+    // `use_reactive!` re-runs the resources when the `:id` prop changes —
+    // navigating from one unit detail page to another reuses this component
+    // instance, so plain captured props would go stale.
+    let unit = use_resource(use_reactive!(|(id)| async move { fetch_unit(&id).await }));
+    let icons = use_resource(use_reactive!(
+        |(id)| async move { fetch_unit_icons(&id).await }
+    ));
 
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
@@ -54,16 +66,7 @@ pub fn UnitDetail(id: String) -> Element {
                     Some(Err(e)) => rsx! { p { class: "text-red-400 mt-6", "{e}" } },
                     Some(Ok(u)) => {
                         let color = faction_color(&u.faction);
-                        let strategic_src = u
-                            .strategic_icon_name
-                            .as_deref()
-                            .map(|icon| {
-                                format!(
-                                    "/strategic/{}_{}.png",
-                                    faction_file_prefix(&u.faction),
-                                    icon
-                                )
-                            });
+                        let faction_prefix = faction_file_prefix(&u.faction);
                         let eco_rows: Vec<(&'static str, f64)> = [
                             ("Mass generation /s", u.eco_effect.generate_mass_rate),
                             ("Energy generation /s", u.eco_effect.generate_energy_rate),
@@ -96,12 +99,77 @@ pub fn UnitDetail(id: String) -> Element {
                                             span { class: "px-2 py-0.5 rounded bg-neutral-800 text-neutral-300", "{kind}" }
                                         }
                                     }
-                                    if let (Some(src), Some(icon)) = (strategic_src, &u.strategic_icon_name) {
-                                        div { class: "flex items-center gap-2 mt-3",
-                                            img { class: "w-5 h-5 object-contain", src: "{src}", alt: "{icon}" }
-                                            span { class: "text-xs text-neutral-500 font-mono", "{icon}" }
+                                }
+                            }
+
+                            // Strategic icons: blueprint default + custom-set
+                            // classes mapped to this unit (icon ↔ unit is
+                            // many-to-many — the ambiguity is shown inline).
+                            div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-4 mb-4",
+                                h2 { class: "text-sm font-semibold text-white mb-2", "Strategic icons" }
+                                match &*icons.read() {
+                                    None => rsx! { p { class: "text-xs text-neutral-500", "Loading..." } },
+                                    Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "{e}" } },
+                                    Some(Ok(ui)) => rsx! {
+                                        if let Some(blueprint_icon) = &ui.blueprint_icon {
+                                            div { class: "flex items-center gap-3 py-1.5 border-b border-neutral-800/60",
+                                                img {
+                                                    class: "w-5 h-5 object-contain shrink-0",
+                                                    src: "/strategic/{faction_prefix}_{blueprint_icon}.png",
+                                                    alt: "{blueprint_icon}",
+                                                }
+                                                span { class: "text-xs font-mono text-neutral-300", "{blueprint_icon}" }
+                                                span { class: "text-[10px] text-neutral-500", "blueprint default" }
+                                            }
                                         }
-                                    }
+                                        for mapping in ui.mapped_icons.iter() {
+                                            {
+                                                let shared: Vec<faf_ml_core::SharedUnit> = mapping
+                                                    .units
+                                                    .iter()
+                                                    .filter(|other| other.id != ui.unit_id)
+                                                    .cloned()
+                                                    .collect();
+                                                rsx! {
+                                                    div { key: "{mapping.class}", class: "py-1.5 border-b border-neutral-800/60 last:border-0",
+                                                        div { class: "flex items-center gap-3",
+                                                            img {
+                                                                class: "w-5 h-5 object-contain shrink-0",
+                                                                src: crate::net::api_url(&format!(
+                                                                    "/api/datagen/sprites/{}/image", mapping.class
+                                                                )),
+                                                                alt: "{mapping.class}",
+                                                            }
+                                                            span { class: "text-xs font-mono text-neutral-300", "{mapping.class}" }
+                                                            if shared.is_empty() {
+                                                                span { class: "text-[10px] text-green-500", "unique to this unit" }
+                                                            }
+                                                        }
+                                                        if !shared.is_empty() {
+                                                            div { class: "flex items-center flex-wrap gap-1.5 mt-1.5 ml-8",
+                                                                span { class: "text-[10px] text-amber-500", "shared with:" }
+                                                                for other in shared {
+                                                                    Link {
+                                                                        key: "{other.id}",
+                                                                        to: Route::UnitDetail { id: other.id.clone() },
+                                                                        title: "{other.name}",
+                                                                        img {
+                                                                            class: "w-8 h-8 object-contain rounded bg-black border border-neutral-800 p-0.5 hover:border-neutral-500 transition-colors",
+                                                                            src: crate::net::portrait_url(&other.id),
+                                                                            alt: "{other.name}",
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ui.blueprint_icon.is_none() && ui.mapped_icons.is_empty() {
+                                            p { class: "text-xs text-neutral-500", "No strategic icon mapped." }
+                                        }
+                                    },
                                 }
                             }
 

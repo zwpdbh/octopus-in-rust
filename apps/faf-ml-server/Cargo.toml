@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 faf-blueprints = { workspace = true }
+faf-units = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["multipart"] }
 chrono = { workspace = true }

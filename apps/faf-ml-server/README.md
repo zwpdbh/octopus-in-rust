@@ -46,6 +46,7 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/units` | all unit summaries (4 playable factions) from the shared ETFreeman unit database (`faf-blueprints`; override the units file with `FAFCN_UNITS_FILE`) |
 | `GET /api/units/meta` | unit database version + upstream attribution |
 | `GET /api/units/{id}` | one unit summary (case-insensitive exact id; 404 when unknown) |
+| `GET /api/units/{id}/icons` | the unit's blueprint default icon + every custom-set icon class mapped to it from `icon-map.json`; sharing units are `{id, name}` pairs, four FAF factions only (mod factions like Nomads excluded) |
 | `GET /api/portraits/{id}` | unit portrait PNG from `FAF_ML_PORTRAITS_DIR` (default `assets/icons/units`) |
 
 Generation logic lives in `crates/faf-ml-datagen` (the former `faf-datagen`

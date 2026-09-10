@@ -23,6 +23,11 @@ pub struct AppState {
     pub portraits_dir: Arc<PathBuf>,
     /// Unit blueprints backing `/api/units` (shared ETFreeman unit database).
     pub blueprints: Arc<FafBlueprints>,
+    /// Display name per unit id (uppercase): the game nickname
+    /// (`General.UnitName`, e.g. "Spook") when set, otherwise the ordinary
+    /// description (e.g. "Spy Plane"). Loaded from the raw unit index so
+    /// `faf-blueprints` stays untouched.
+    pub unit_display_names: Arc<HashMap<String, String>>,
     /// In-memory datagen job registry (progress is polled, not streamed).
     pub jobs: Arc<Mutex<HashMap<Uuid, DatagenJob>>>,
 }
@@ -34,6 +39,25 @@ impl AppState {
         icons_dir: PathBuf,
         portraits_dir: PathBuf,
     ) -> Result<Self> {
+        let unit_index = match std::env::var("FAFCN_UNITS_FILE") {
+            Ok(path) => faf_units::FafUnitIndex::new(path.into()),
+            Err(_) => faf_units::FafUnitIndex::default(),
+        }
+        .map_err(|e| Error::Internal(format!("loading unit index: {e:#}")))?;
+        let unit_display_names: HashMap<String, String> = unit_index
+            .units
+            .iter()
+            .map(|u| {
+                let name = u
+                    .general
+                    .as_ref()
+                    .and_then(|g| g.unit_name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| u.description.clone());
+                (u.id.to_ascii_uppercase(), name)
+            })
+            .collect();
+
         let state = Self {
             data_dir: Arc::new(data_dir),
             assets_dir: Arc::new(assets_dir),
@@ -43,6 +67,7 @@ impl AppState {
                 FafBlueprints::new()
                     .map_err(|e| Error::Internal(format!("loading unit blueprints: {e:#}")))?,
             ),
+            unit_display_names: Arc::new(unit_display_names),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         };
         std::fs::create_dir_all(state.screenshots_dir())?;
@@ -69,6 +94,11 @@ impl AppState {
 
     pub fn classes_path(&self) -> PathBuf {
         self.data_dir.join("classes.txt")
+    }
+
+    /// Strategic-icon ↔ unit mapping artifact (`faf-unit-tools icon-map`).
+    pub fn icon_map_path(&self) -> PathBuf {
+        self.data_dir.join("icon-map.json")
     }
 
     pub fn image_path(&self, id: Uuid) -> PathBuf {

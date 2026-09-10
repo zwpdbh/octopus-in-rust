@@ -74,6 +74,51 @@ pub struct ScreenshotMeta {
     pub job_id: Option<Uuid>,
 }
 
+/// `icon-map.json`: strategic-icon class ↔ unit id mapping (many-to-many).
+///
+/// Lives OUTSIDE `faf-blueprints` on purpose: the blueprints stay a pure
+/// read-only view of the game database, while icon sets (custom strategic
+/// icons the ML pipeline trains on) are maintained separately. Regenerate
+/// with `faf-unit-tools icon-map`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct IconMap {
+    /// icon class (no `icon_` prefix, e.g. `fighter3_intel`) → unit ids
+    /// sharing that icon. One unit may appear under several classes
+    /// (multiple icon sets), one class may cover several units.
+    pub mapping: std::collections::HashMap<String, Vec<String>>,
+    /// Icon classes no unit maps to (custom-set extras).
+    #[serde(default)]
+    pub orphan_icons: Vec<String>,
+    /// Blueprint `strategic_icon_name`s not covered by the custom icon set.
+    #[serde(default)]
+    pub uncovered_icon_names: Vec<String>,
+}
+
+/// A unit sharing an icon class (id + display name).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedUnit {
+    pub id: String,
+    pub name: String,
+}
+
+/// One icon class mapped to a unit, plus every unit sharing that class
+/// (four FAF factions only — mod factions like Nomads are excluded).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IconClassMapping {
+    pub class: String,
+    pub units: Vec<SharedUnit>,
+}
+
+/// `GET /api/units/:id/icons` response: a unit's blueprint default icon and
+/// every custom-set icon class mapped to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitIcons {
+    pub unit_id: String,
+    /// The unit database's own `strategic_icon_name` (with `icon_` prefix).
+    pub blueprint_icon: Option<String>,
+    pub mapped_icons: Vec<IconClassMapping>,
+}
+
 /// One labeled bounding box, in **absolute pixel** coordinates of the
 /// full-size image (`x`, `y` = top-left corner). The web UI scales these by
 /// the displayed-vs-natural image ratio.
