@@ -38,6 +38,7 @@ members = [
     "apps/faf-ml-server",
     "apps/faf-ml-train",
     "apps/faf-ml-web",
+    "apps/faf-ml-mcp",
 ]
 resolver = "3"
 

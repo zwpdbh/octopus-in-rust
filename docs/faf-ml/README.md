@@ -26,9 +26,17 @@ correction set closes the domain gap.
 | Web platform | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen jobs (`POST /api/datagen` + polling + per-job/bulk sample deletion), Units page (fafcn-web unit browser ported: `/api/units` + portraits) |
 | Icon↔unit mapping | `crates/faf-unit-tools` (`icon-map` subcommand) | ✅ 114 classes ↔ 501 units; artifact at `data/faf-ml/icon-map.json`; the Units page (`/units`) is its future UI home |
 | SSD detector | `crates/faf-ml-model` + `apps/faf-ml-train` | ✅ implemented, 17/17 tests, smoke-trained; **never trained for real** |
+| Training monitor | `/training` page + `GET /ws/training` (server `training_service.rs`) | ✅ live loss/mAP charts (uPlot) with pause/resume/stop/speed — currently a **dummy pipeline**; `training_service.rs` is the swap point for the real burn loop |
+| MCP server | `apps/faf-ml-mcp` (rmcp, stdio) | ✅ 15 workflow-level tools (screenshots/datagen/datasets/training) — LLM agents drive the same API the web UI uses |
 
-Not built yet: training/eval inside the web UI (phases 2–3), Windows capture
-client, the analysis view itself.
+Not built yet: real training/eval inside the web UI (phases 2–3), Windows
+capture client, the analysis view itself.
+
+**Design goal — one backend, two clients.** The platform exposes the same
+typed JSON/WS API to everyone: humans walk the web UI's workflow (each page
+shows its step banner), and LLM agents drive the identical steps through the
+`faf-ml-mcp` MCP server (thin workflow-level tools; REST stays canonical).
+Keep every future feature reachable from both paths.
 
 ## ▶ Your next session, step by step
 

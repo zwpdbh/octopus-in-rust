@@ -140,6 +140,9 @@ pub fn print_faf_ml_help() {
     println!("             (dx serve; debug builds call the backend on localhost:3100)");
     println!("  build-web  Build the web UI (release by default — that's what the");
     println!("             backend serves). Options: --debug");
+    println!("  mcp        Build the MCP server, then launch kimi with the faf-ml");
+    println!("             tools session-scoped (--mcp-config; global config untouched).");
+    println!("             Requires the backend on :3100 (cargo xtask faf-ml backend)");
     println!("             (datagen runs inside the server now — the web UI's Datagen");
     println!("             view is the generation flow; there is no CLI anymore)");
     println!();
