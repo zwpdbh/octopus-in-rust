@@ -65,19 +65,21 @@ see below.
 
 ### First thing next session — finish the smoke verification
 
-Run services in FOREGROUND terminals (user preference — no background tasks):
+Run services in FOREGROUND terminals (user preference — no background tasks),
+drive the smoke run through the platform itself (no ad-hoc scripts):
 
 ```bash
 # terminal 1 (release server — debug NdArray conv is ~5 min/BATCH, unusable)
-FAF_ML_PORT=3101 ./target/release/faf-ml-server   # already built
-# terminal 2
-python3 scripts/test-training-ws.py   # epochs=1, max_batches=2, cpu=true
+cargo run -p faf-ml-server --release
+# terminal 2 (agent) or browser:
+cargo xtask faf-ml mcp   # kimi with the faf-ml tools
 ```
 
-Expect: metrics stream → epoch-end point with `valid_loss` → `Finished`,
-`GET /api/training/status` reports `result.done.run_dir`, `GET /api/runs`
-lists it. Then `POST /api/predict` on the battle shot for a real detection
-pass.
+Smoke run via MCP (or the Training page — same thing): `faf_ml_training_start`
+with `epochs=1, max_batches=2, cpu=true` → watch `faf_ml_training_status`
+until done → `faf_ml_runs_list` shows the checkpoint → `faf_ml_predict` on the
+battle shot returns detections JSON. Browser equivalent: Training page Start
+(epochs=1) → charts draw → status banner shows the run dir.
 
 ⚠ **Compute reality check**: this WSL box has NO real GPU — wgpu falls back
 to llvmpipe (software). Real 50-epoch training should run on Windows (native
