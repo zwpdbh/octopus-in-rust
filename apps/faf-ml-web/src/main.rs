@@ -11,6 +11,7 @@ mod components;
 mod net;
 mod utils;
 mod views;
+mod workflow;
 
 use views::{Datagen, Datasets, Gallery, Home, Label, Navbar, Training, UnitDetail, Units};
 

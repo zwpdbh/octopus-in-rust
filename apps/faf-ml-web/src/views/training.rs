@@ -165,6 +165,7 @@ pub fn Training() -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-6xl mx-auto",
+                crate::workflow::WorkflowBanner { step: 5 }
                 div { class: "flex items-center gap-3 mb-4",
                     h1 { class: "text-2xl font-bold text-white", "Training monitor" }
                     span { class: "px-2 py-0.5 rounded text-xs font-semibold {badge_class}", "{badge_text}" }

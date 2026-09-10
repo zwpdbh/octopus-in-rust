@@ -58,6 +58,10 @@ pub fn router() -> Router<AppState> {
             "/api/datasets",
             get(handlers::datasets::list_datasets).post(handlers::datasets::create_dataset),
         )
+        .route(
+            "/api/datasets/{name}",
+            delete(handlers::datasets::delete_dataset),
+        )
         .route("/api/units", get(handlers::units::list_units))
         .route("/api/units/meta", get(handlers::units::units_meta))
         .route("/api/units/{id}", get(handlers::units::get_unit))

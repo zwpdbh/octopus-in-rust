@@ -185,6 +185,7 @@ pub fn Datagen() -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-4xl mx-auto",
+                crate::workflow::WorkflowBanner { step: 2 }
                 h1 { class: "text-2xl font-bold text-white mb-6", "Synthetic data generation" }
 
                 // Generation form.

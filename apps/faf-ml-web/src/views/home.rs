@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::workflow;
 use crate::Route;
 
 /// Landing page: what this platform is + quick links into the workflow.
@@ -13,9 +14,9 @@ pub fn Home() -> Element {
                 }
                 h1 { class: "text-4xl font-bold text-white mb-4", "faf-ml data platform" }
                 p { class: "text-lg text-neutral-300 mb-10",
-                    "Phase 0 of the FAF unit-detection pipeline: collect screenshots, "
-                    "review pre-generated bounding boxes, and freeze labeled data into "
-                    "immutable dataset snapshots. Training and evaluation come later."
+                    "The FAF unit-detection pipeline: collect screenshots, generate and "
+                    "review labeled data, then train and monitor a detector that "
+                    "identifies units from a screenshot."
                 }
                 div { class: "grid grid-cols-1 sm:grid-cols-2 gap-4",
                     FeatureCard {
@@ -35,12 +36,32 @@ pub fn Home() -> Element {
                     }
                 }
                 div { class: "mt-10 rounded-lg border border-neutral-800 bg-neutral-900 p-5",
-                    h2 { class: "text-base font-semibold text-white mb-2", "Workflow" }
-                    ol { class: "list-decimal list-inside text-sm text-neutral-400 space-y-1",
-                        li { "Upload screenshots in the Gallery, then triage: battle (held-out test) vs background (datagen canvas)." }
-                        li { "Generate synthetic labeled samples from the Datagen view." }
-                        li { "Open an image, click a box to select it, fix its class, delete wrong boxes, save." }
-                        li { "Create a dataset snapshot once a batch is reviewed — snapshots embed their labels and never change." }
+                    h2 { class: "text-base font-semibold text-white mb-1", "The unit-detection workflow" }
+                    p { class: "text-xs text-neutral-500 mb-4",
+                        "Follow these steps in order to turn raw game screenshots into a "
+                        "model that identifies units from a screenshot. Each step's page "
+                        "shows a banner with the previous and next step."
+                    }
+                    ol { class: "space-y-3",
+                        for (i, step) in workflow::steps().iter().enumerate() {
+                            li { key: "{i}", class: "flex gap-3 text-sm",
+                                span { class: "shrink-0 w-5 h-5 mt-0.5 rounded-full bg-neutral-800 text-amber-400 text-xs font-semibold flex items-center justify-center",
+                                    "{i + 1}"
+                                }
+                                div {
+                                    match &step.route {
+                                        Some(route) => rsx! {
+                                            Link { class: "text-blue-400 hover:underline font-medium", to: route.clone(), "{step.name}" }
+                                        },
+                                        None => rsx! {
+                                            span { class: "text-neutral-500 font-medium", "{step.name}" }
+                                            span { class: "ml-2 px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-500 text-[10px]", "not built yet" }
+                                        },
+                                    }
+                                    p { class: "text-xs text-neutral-500 mt-0.5", "{step.description}" }
+                                }
+                            }
+                        }
                     }
                 }
             }

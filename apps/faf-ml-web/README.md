@@ -4,7 +4,10 @@ Dioxus 0.7 SPA for the **faf-ml** data platform (collect → review → generate
 → snapshot). Mirrors the `fafcn-web` structure: `main.rs` defines the routes,
 `net.rs` resolves the API base URL (`http://localhost:3100` in debug builds,
 same-origin in release), views live in `src/views/`, shared components in
-`src/components/`.
+`src/components/`. `src/workflow.rs` is the single source of truth for the
+unit-detection workflow (ordered steps + routes): the Home page renders it as
+a linked checklist and each step's page shows its `WorkflowBanner` prev/next
+bar.
 
 ## Views
 

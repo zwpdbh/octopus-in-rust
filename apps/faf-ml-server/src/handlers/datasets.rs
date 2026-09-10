@@ -4,8 +4,12 @@
 //! requested image into `datasets/<name>.json` and refuses to overwrite an
 //! existing snapshot.
 
-use axum::{extract::State, Json};
-use faf_ml_core::{DatasetEntry, DatasetManifest};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
+use faf_ml_core::{DatasetEntry, DatasetManifest, ScreenshotKind};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -18,7 +22,14 @@ use crate::{
 #[derive(Debug, Deserialize)]
 pub struct CreateDatasetRequest {
     pub name: String,
+    /// Explicit image list (used when `kinds` is empty).
+    #[serde(default)]
     pub image_ids: Vec<Uuid>,
+    /// When non-empty, image ids are resolved from the screenshot index by
+    /// kind (the typical training snapshot: `synthetic` only) and
+    /// `image_ids` is ignored.
+    #[serde(default)]
+    pub kinds: Vec<ScreenshotKind>,
 }
 
 /// `GET /api/datasets` — list all snapshot manifests.
@@ -49,8 +60,22 @@ pub async fn create_dataset(
             req.name
         )));
     }
+    let image_ids: Vec<Uuid> = if !req.kinds.is_empty() {
+        super::screenshots::read_index(&state)?
+            .into_iter()
+            .filter(|m| req.kinds.contains(&m.kind))
+            .map(|m| m.id)
+            .collect()
+    } else {
+        req.image_ids
+    };
+    if image_ids.is_empty() {
+        return Err(Error::BadRequest(
+            "no screenshots selected for the snapshot".to_string(),
+        ));
+    }
     let mut entries = Vec::new();
-    for image_id in &req.image_ids {
+    for image_id in &image_ids {
         if !state.image_path(*image_id).is_file() {
             return Err(Error::BadRequest(format!("unknown screenshot {image_id}")));
         }
@@ -66,4 +91,19 @@ pub async fn create_dataset(
     };
     std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)?;
     Ok(Json(manifest))
+}
+
+/// `DELETE /api/datasets/{name}` — remove a snapshot file. ("Immutable"
+/// means never mutated, not undeletable.)
+pub async fn delete_dataset(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode> {
+    valid_dataset_name(&name)?;
+    let path = state.dataset_path(&name);
+    if !path.is_file() {
+        return Err(Error::NotFound);
+    }
+    std::fs::remove_file(&path)?;
+    Ok(StatusCode::NO_CONTENT)
 }

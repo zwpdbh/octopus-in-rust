@@ -42,7 +42,8 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/datagen/jobs/{id}` | one job (the web UI polls this while `running`) |
 | `DELETE /api/datagen/jobs/{id}` | remove a finished job AND its generated sample set (400 while `running`); samples predate job tracking → use bulk delete instead |
 | `GET /api/datasets` | list dataset manifests |
-| `POST /api/datasets` | `{name, image_ids}` → immutable snapshot embedding the current labels (409 if the name exists) |
+| `DELETE /api/datasets/{name}` | remove a snapshot file (404 when unknown; "immutable" = never mutated, not undeletable) |
+| `POST /api/datasets` | `{name, image_ids}` or `{name, kinds}` → immutable snapshot embedding the current labels (409 if the name exists, 400 when nothing selected). `kinds` resolves ids from the screenshot index by kind (e.g. `["synthetic"]` for a training set) and takes precedence |
 | `GET /api/units` | all unit summaries (4 playable factions) from the shared ETFreeman unit database (`faf-blueprints`; override the units file with `FAFCN_UNITS_FILE`) |
 | `GET /api/units/meta` | unit database version + upstream attribution |
 | `GET /api/units/{id}` | one unit summary (case-insensitive exact id; 404 when unknown) |
