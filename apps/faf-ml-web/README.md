@@ -16,6 +16,7 @@ same-origin in release), views live in `src/views/`, shared components in
 | `/units` | `Units` | unit database browser ported from fafcn-web (`src/components/unit_*` + `comparison_panel`): search, faction/kind/tech filters, multi-select compare panel; data from `GET /api/units[/meta]`, portraits from `GET /api/portraits/:id`, strategic overlays from `public/strategic/`; sidebar unit names link to the detail page |
 | `/units/:id` | `UnitDetail` | one unit's portrait, identity badges, cost and non-zero economy-effect stats (`GET /api/units/:id`), plus a Strategic icons card (`GET /api/units/:id/icons`): blueprint default icon + custom-set classes mapped to this unit, with sharing units shown when an icon is ambiguous |
 | `/datagen` | `Datagen` | generation form (sliders + icon-class picker → `POST /api/datagen` with `exclude_classes`; the 400 "mark backgrounds first" error is surfaced) + jobs table polling `GET /api/datagen/jobs` every 2 s while any job is running; Done rows link to the Gallery's synthetic filter and have a "Delete samples" button |
+| `/training` | `Training` | live training monitor (currently a dummy pipeline): start/pause/resume/reset + speed control over `/ws/training` (fafcn simulate-page pattern), loss (train/cls/bbox/valid) and mAP charts via `faf-dioxus-ui::UplotChart` (uPlot assets in `public/`, wired in `Dioxus.toml`) |
 | `/datasets` | `Datasets` | list immutable snapshots (name, #images, #boxes, date); create one from all current screenshots |
 
 ## Dev loop

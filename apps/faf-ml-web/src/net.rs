@@ -10,6 +10,16 @@ pub fn api_url(path: &str) -> String {
     format!("{}{}", api_base(), path)
 }
 
+/// Absolute URL for a WebSocket path like `/ws/training`.
+pub fn ws_url(path: &str) -> String {
+    let base = api_base();
+    let ws_base = match base.strip_prefix("https") {
+        Some(rest) => format!("wss{rest}"),
+        None => base.replacen("http", "ws", 1),
+    };
+    format!("{ws_base}{path}")
+}
+
 /// Absolute URL of a screenshot's PNG image.
 pub fn image_url(id: &str) -> String {
     api_url(&format!("/api/screenshots/{id}/image"))

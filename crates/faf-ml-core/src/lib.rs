@@ -11,8 +11,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod datagen;
+mod training;
 
 pub use datagen::{DatagenConfig, DatagenJob, DatagenStatus};
+pub use training::{
+    TrainingClientMessage, TrainingCommand, TrainingConfig, TrainingMetricsPoint,
+    TrainingServerMessage, TrainingStatus,
+};
 
 /// What a screenshot is FOR in the training-data pipeline.
 ///

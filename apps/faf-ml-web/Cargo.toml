@@ -9,9 +9,11 @@ license = "MIT"
 [dependencies]
 dioxus = { workspace = true, features = ["web", "router"] }
 faf-blueprints = { workspace = true }
+faf-dioxus-ui = { workspace = true }
 faf-ml-core = { workspace = true }
 gloo-net = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -26,6 +28,9 @@ web-sys = { workspace = true, features = [
     "FileList",
     "FormData",
     "Blob",
+    "WebSocket",
+    "MessageEvent",
+    "CloseEvent",
 ] }
 
 [features]

@@ -69,4 +69,8 @@ pub fn router() -> Router<AppState> {
             "/api/portraits/{id}",
             get(handlers::portraits::get_portrait),
         )
+        .route(
+            "/ws/training",
+            get(handlers::training_ws::training_ws_handler),
+        )
 }

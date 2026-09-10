@@ -137,6 +137,11 @@ cargo run -p faf-ml-train --release -- predict \
   Remaining: dataset compose view
 - **Next real milestone** — detector trained on synthetic data detecting
   units on a held-out real screenshot (steps 1–5 above)
-- **Phase 2** — training jobs + live metrics in the web UI
+- **Phase 2 (in progress)** — training monitor page live at `/training`:
+  `/ws/training` WebSocket (fafcn eco-sim pattern: dedicated thread → event
+  channel → WS → uPlot charts) with pause/resume/stop/speed, currently fed by
+  a dummy pipeline; `apps/faf-ml-server/src/training_service.rs` is the swap
+  point for the real burn loop. Remaining: move `faf-ml-train`'s loop into a
+  library, validation split, real mAP
 - **Phase 3** — eval/analysis view (per-player unit tables), correction loop,
   then the Windows capture client (eframe if GUI needed)

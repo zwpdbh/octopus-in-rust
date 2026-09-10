@@ -25,6 +25,10 @@
 //!   database for the Units pages (shared ETFreeman database via
 //!   `faf-blueprints`).
 //! - `GET /api/portraits/:id` — unit portrait PNGs for the Units page.
+//! - `GET /ws/training` — WebSocket training monitor: `Start {config, speed}`
+//!   starts a (currently dummy) training thread streaming metrics events;
+//!   `Command` frames pause/resume/stop/change speed (fafcn `/ws/simulate`
+//!   pattern).
 
 mod config;
 mod env;
@@ -32,6 +36,7 @@ mod error;
 mod handlers;
 mod routes;
 mod state;
+mod training_service;
 
 use anyhow::Context;
 use axum::http::{header, Method};

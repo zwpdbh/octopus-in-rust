@@ -67,6 +67,10 @@ pub struct ChartSeries<T> {
     pub y_extractor: ChartMetric<T>,
     /// Optional dash pattern for the line, e.g. `vec![4.0, 4.0]` for a dashed line.
     pub dash: Option<Vec<f64>>,
+    /// Connect the line across `null` (gap) points — needed for sparse
+    /// series (e.g. epoch-end eval metrics), whose isolated points would
+    /// otherwise render as nothing.
+    pub span_gaps: bool,
 }
 
 impl<T> ChartSeries<T> {
@@ -76,11 +80,17 @@ impl<T> ChartSeries<T> {
             color,
             y_extractor,
             dash: None,
+            span_gaps: false,
         }
     }
 
     pub fn with_dash(mut self, dash: impl Into<Vec<f64>>) -> Self {
         self.dash = Some(dash.into());
+        self
+    }
+
+    pub fn with_span_gaps(mut self) -> Self {
+        self.span_gaps = true;
         self
     }
 }
@@ -492,7 +502,16 @@ fn build_series_data<T: Clone>(
     for point in data {
         xs.push(&JsValue::from_f64(x_extractor.extract(point)));
         for (i, s) in series.iter().enumerate() {
-            ys_list[i].push(&JsValue::from_f64(s.y_extractor.extract(point)));
+            {
+                // uPlot gaps must be `null`, not NaN — NaN poisons the shared
+                // y-scale range computation and nothing renders at all.
+                let v = s.y_extractor.extract(point);
+                if v.is_nan() {
+                    ys_list[i].push(&JsValue::NULL);
+                } else {
+                    ys_list[i].push(&JsValue::from_f64(v));
+                }
+            }
         }
     }
     let series_data = Array::new();
@@ -520,6 +539,9 @@ fn build_opts<T: Clone>(
         Reflect::set(&y_series, &"label".into(), &s.label.as_str().into()).unwrap();
         Reflect::set(&y_series, &"stroke".into(), &rgb_to_hex(s.color).into()).unwrap();
         Reflect::set(&y_series, &"width".into(), &JsValue::from_f64(2.0)).unwrap();
+        if s.span_gaps {
+            Reflect::set(&y_series, &"spanGaps".into(), &JsValue::TRUE).unwrap();
+        }
         if let Some(ref dash) = s.dash {
             let dash_arr = Array::new();
             for v in dash {
@@ -896,7 +918,16 @@ fn build_dual_axis_series_data<T: Clone>(
     for point in data {
         xs.push(&JsValue::from_f64(x_extractor.extract(point)));
         for (i, s) in series.iter().enumerate() {
-            ys_list[i].push(&JsValue::from_f64(s.y_extractor.extract(point)));
+            {
+                // uPlot gaps must be `null`, not NaN — NaN poisons the shared
+                // y-scale range computation and nothing renders at all.
+                let v = s.y_extractor.extract(point);
+                if v.is_nan() {
+                    ys_list[i].push(&JsValue::NULL);
+                } else {
+                    ys_list[i].push(&JsValue::from_f64(v));
+                }
+            }
         }
     }
     let series_data = Array::new();
