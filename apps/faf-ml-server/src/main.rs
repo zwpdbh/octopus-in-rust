@@ -13,7 +13,10 @@
 //!   finished datagen jobs from the registry).
 //! - `GET /api/classes` — class list.
 //! - `POST /api/datagen` — start a synthetic-data generation job (background
-//!   task streaming samples into the store as `synthetic` screenshots).
+//!   task streaming samples into the store as `synthetic` screenshots;
+//!   `exclude_classes` in the config skips icon classes).
+//! - `GET /api/datagen/sprites` — list selectable sprite class names.
+//! - `GET /api/datagen/sprites/:class/image` — serve one sprite as PNG.
 //! - `GET /api/datagen/jobs[/{id}]` — poll job progress.
 //! - `DELETE /api/datagen/jobs/:id` — remove a finished job and the sample
 //!   set it generated.

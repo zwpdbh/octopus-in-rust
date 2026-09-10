@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use dioxus::prelude::*;
@@ -13,6 +14,18 @@ async fn fetch_jobs() -> Result<Vec<DatagenJob>, String> {
         .await
         .map_err(|e| e.to_string())?
         .json::<Vec<DatagenJob>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Fetch the selectable sprite class pool (every icon in the server's icons
+/// dir; the user excludes classes from this set before generating).
+async fn fetch_sprite_classes() -> Result<Vec<String>, String> {
+    Request::get(&crate::net::api_url("/api/datagen/sprites"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Vec<String>>()
         .await
         .map_err(|e| e.to_string())
 }
@@ -46,7 +59,8 @@ fn parse_field<T: std::str::FromStr>(field: &str, raw: &str, slot: &mut T) -> Re
     Ok(())
 }
 
-/// Parse the form fields into a config (empty field = server default).
+/// Parse the slider values into a config (sliders always hold a value, but
+/// empty still falls back to the default for safety).
 fn parse_config(
     count: &str,
     size: &str,
@@ -95,6 +109,7 @@ fn delete_job_samples(id: String, refresh: Signal<u32>) {
 }
 
 /// Submit the form: start the job, then refresh the jobs table.
+#[allow(clippy::too_many_arguments)]
 fn submit(
     count: Signal<String>,
     size: Signal<String>,
@@ -102,10 +117,11 @@ fn submit(
     scale_min: Signal<String>,
     scale_max: Signal<String>,
     seed: Signal<String>,
+    excluded: Signal<HashSet<String>>,
     mut status: Signal<String>,
     refresh: Signal<u32>,
 ) {
-    let config = match parse_config(
+    let mut config = match parse_config(
         &count.read(),
         &size.read(),
         &max_units.read(),
@@ -119,6 +135,7 @@ fn submit(
             return;
         }
     };
+    config.exclude_classes = excluded.read().iter().cloned().collect();
     spawn(async move {
         match start_job(&config).await {
             Ok(()) => status.set("job started — progress below".to_string()),
@@ -128,23 +145,29 @@ fn submit(
     });
 }
 
-/// Datagen: generation form + live job table (polls while jobs run).
+/// Datagen: generation form (sliders + icon-class picker) + live job table
+/// (polls while jobs run).
 #[component]
 pub fn Datagen() -> Element {
     // Bump to force the jobs resource to re-run after a submit / poll tick.
     let refresh = use_signal(|| 0u32);
     let status = use_signal(String::new);
-    let count = use_signal(String::new);
-    let size = use_signal(String::new);
-    let max_units = use_signal(String::new);
-    let scale_min = use_signal(String::new);
-    let scale_max = use_signal(String::new);
-    let seed = use_signal(String::new);
+    // Sliders always carry a concrete value; seed them with the defaults.
+    let defaults = DatagenConfig::default();
+    let count = use_signal(|| defaults.count.to_string());
+    let size = use_signal(|| defaults.size.to_string());
+    let max_units = use_signal(|| defaults.max_units.to_string());
+    let scale_min = use_signal(|| defaults.scale_min.to_string());
+    let scale_max = use_signal(|| defaults.scale_max.to_string());
+    let seed = use_signal(|| defaults.seed.to_string());
+    // Icon classes the user EXCLUDED (empty = all included).
+    let mut excluded: Signal<HashSet<String>> = use_signal(HashSet::new);
 
     let jobs = use_resource(move || async move {
         refresh();
         fetch_jobs().await
     });
+    let sprites = use_resource(fetch_sprite_classes);
 
     // Poll every 2 s while any job is Running (no WebSocket until phase 2).
     use_effect(move || {
@@ -159,20 +182,12 @@ pub fn Datagen() -> Element {
         }
     });
 
-    let defaults = DatagenConfig::default();
-    let count_placeholder = defaults.count.to_string();
-    let size_placeholder = defaults.size.to_string();
-    let max_units_placeholder = defaults.max_units.to_string();
-    let scale_min_placeholder = defaults.scale_min.to_string();
-    let scale_max_placeholder = defaults.scale_max.to_string();
-    let seed_placeholder = defaults.seed.to_string();
-
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-4xl mx-auto",
                 h1 { class: "text-2xl font-bold text-white mb-6", "Synthetic data generation" }
 
-                // Generation form (empty fields fall back to the defaults).
+                // Generation form.
                 div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-4 mb-6",
                     h2 { class: "text-sm font-semibold text-white mb-3", "Generate samples" }
                     p { class: "text-xs text-neutral-400 mb-3",
@@ -181,17 +196,120 @@ pub fn Datagen() -> Element {
                         "-marked screenshots (triage them in the Gallery first). Samples stream "
                         "into the store as synthetic, auto-labeled screenshots."
                     }
-                    div { class: "grid grid-cols-2 md:grid-cols-3 gap-2 mb-3",
-                        Field { label: "count", placeholder: count_placeholder, value: count }
-                        Field { label: "size (px)", placeholder: size_placeholder, value: size }
-                        Field { label: "max units", placeholder: max_units_placeholder, value: max_units }
-                        Field { label: "scale min", placeholder: scale_min_placeholder, value: scale_min }
-                        Field { label: "scale max", placeholder: scale_max_placeholder, value: scale_max }
-                        Field { label: "seed", placeholder: seed_placeholder, value: seed }
+                    div { class: "grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4",
+                        SliderField {
+                            label: "count",
+                            desc: "How many synthetic samples to generate in this run.",
+                            min: "10", max: "1000", step: "10",
+                            value: count,
+                        }
+                        SliderField {
+                            label: "size (px)",
+                            desc: "Side length of the square terrain crop each sample is generated on.",
+                            min: "256", max: "1024", step: "32",
+                            value: size,
+                        }
+                        SliderField {
+                            label: "max units",
+                            desc: "Upper bound of icons pasted per sample (each sample gets 1..=max, chosen at random).",
+                            min: "1", max: "50", step: "1",
+                            value: max_units,
+                        }
+                        SliderField {
+                            label: "seed",
+                            desc: "RNG seed — the same config + seed reproduces the exact same sample set.",
+                            min: "0", max: "9999", step: "1",
+                            value: seed,
+                        }
+                        SliderField {
+                            label: "scale min",
+                            desc: "Smallest sprite scale vs the 36×40 source. 0.35 ≈ 13 px — the zoomed-out on-screen size.",
+                            min: "0.1", max: "1.0", step: "0.05",
+                            value: scale_min,
+                        }
+                        SliderField {
+                            label: "scale max",
+                            desc: "Largest sprite scale. Check against real screenshots: icons must match in size, color and sharpness.",
+                            min: "0.2", max: "1.5", step: "0.05",
+                            value: scale_max,
+                        }
                     }
+
+                    // Icon-class picker (everything included unless excluded).
+                    div { class: "mb-4",
+                        match &*sprites.read() {
+                            None => rsx! { p { class: "text-xs text-neutral-500", "Loading sprite classes..." } },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "{e}" } },
+                            Some(Ok(classes)) => {
+                                let total = classes.len();
+                                let excluded_count = excluded.read().len();
+                                rsx! {
+                                    div { class: "flex items-center gap-2 mb-2",
+                                        span { class: "text-xs text-neutral-400",
+                                            "Icon classes — {total - excluded_count} / {total} included"
+                                        }
+                                        div { class: "flex-1" }
+                                        button {
+                                            class: "px-2 py-0.5 rounded text-[11px] text-neutral-300 bg-neutral-800 hover:bg-neutral-700",
+                                            onclick: move |_| excluded.write().clear(),
+                                            "include all"
+                                        }
+                                        button {
+                                            class: "px-2 py-0.5 rounded text-[11px] text-neutral-300 bg-neutral-800 hover:bg-neutral-700",
+                                            onclick: {
+                                                let all: HashSet<String> =
+                                                    classes.iter().cloned().collect();
+                                                move |_| *excluded.write() = all.clone()
+                                            },
+                                            "exclude all"
+                                        }
+                                    }
+                                    p { class: "text-[11px] text-neutral-500 mb-2",
+                                        "Click an icon to exclude/include it (hover for the class name). Dimmed icons are left out of the synthetic data."
+                                    }
+                                    div { class: "max-h-56 overflow-y-auto grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-1 pr-1 rounded border border-neutral-800 bg-neutral-950 p-2",
+                                        for name in classes.iter() {
+                                            {
+                                                let n = name.clone();
+                                                let included = !excluded.read().contains(name);
+                                                let cell_class = if included {
+                                                    "p-1 rounded border border-blue-500/60 bg-neutral-800 hover:border-blue-400 cursor-pointer transition-all"
+                                                } else {
+                                                    "p-1 rounded border border-transparent opacity-30 grayscale hover:opacity-70 cursor-pointer transition-all"
+                                                };
+                                                rsx! {
+                                                    button {
+                                                        key: "{name}",
+                                                        class: cell_class,
+                                                        title: "{name}",
+                                                        onclick: move |_| {
+                                                            let mut set = excluded.write();
+                                                            if !set.remove(&n) {
+                                                                set.insert(n.clone());
+                                                            }
+                                                        },
+                                                        img {
+                                                            class: "w-9 h-10 block mx-auto",
+                                                            src: crate::net::api_url(&format!(
+                                                                "/api/datagen/sprites/{name}/image"
+                                                            )),
+                                                            alt: "{name}",
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     button {
                         class: "px-4 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm font-semibold transition-colors",
-                        onclick: move |_| submit(count, size, max_units, scale_min, scale_max, seed, status, refresh),
+                        onclick: move |_| submit(
+                            count, size, max_units, scale_min, scale_max, seed, excluded, status, refresh,
+                        ),
                         "Generate"
                     }
                     if !status.read().is_empty() {
@@ -219,18 +337,32 @@ pub fn Datagen() -> Element {
     }
 }
 
-/// One labeled form input bound to a string signal.
+/// One labeled slider with its current value and a help line.
 #[component]
-fn Field(label: &'static str, placeholder: String, mut value: Signal<String>) -> Element {
+fn SliderField(
+    label: &'static str,
+    desc: &'static str,
+    min: &'static str,
+    max: &'static str,
+    step: &'static str,
+    mut value: Signal<String>,
+) -> Element {
     rsx! {
         label { class: "flex flex-col gap-1 text-xs text-neutral-400",
-            "{label}"
+            div { class: "flex items-center justify-between",
+                span { "{label}" }
+                span { class: "font-mono text-sm text-neutral-100", "{value}" }
+            }
             input {
-                class: "px-3 py-2 rounded bg-neutral-800 border border-neutral-700 text-sm text-white",
-                placeholder: "{placeholder}",
+                r#type: "range",
+                class: "w-full accent-blue-500",
+                min: "{min}",
+                max: "{max}",
+                step: "{step}",
                 value: "{value}",
                 oninput: move |e| value.set(e.value()),
             }
+            span { class: "text-[11px] text-neutral-500", "{desc}" }
         }
     }
 }
@@ -242,7 +374,7 @@ fn Field(label: &'static str, placeholder: String, mut value: Signal<String>) ->
 fn JobRow(job: DatagenJob, refresh: Signal<u32>) -> Element {
     let started = job.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let job_id = job.id.to_string();
-    let summary = format!(
+    let mut summary = format!(
         "count {} · size {} · max-units {} · scale {:.2}–{:.2} · seed {}",
         job.config.count,
         job.config.size,
@@ -251,6 +383,12 @@ fn JobRow(job: DatagenJob, refresh: Signal<u32>) -> Element {
         job.config.scale_max,
         job.config.seed,
     );
+    if !job.config.exclude_classes.is_empty() {
+        summary.push_str(&format!(
+            " · excl {} icons",
+            job.config.exclude_classes.len()
+        ));
+    }
     let (status_text, status_class) = match &job.status {
         DatagenStatus::Running { done, total } => {
             (format!("running {done}/{total}"), "text-blue-300")

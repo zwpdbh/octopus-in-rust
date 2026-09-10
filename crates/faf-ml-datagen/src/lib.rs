@@ -88,13 +88,39 @@ pub fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
         }
         let class_name = class_name.to_string();
 
-        let bytes = fs::read(&path)?;
-        let dds = image_dds::ddsfile::Dds::read(&mut Cursor::new(bytes))
-            .with_context(|| format!("parsing {name}"))?;
-        let img = image_dds::image_from_dds(&dds, 0).with_context(|| format!("decoding {name}"))?;
-        sprites.push(Sprite { class_name, img });
+        sprites.push(Sprite {
+            class_name,
+            img: decode_dds(&fs::read(&path)?, name)?,
+        });
     }
     Ok(sprites)
+}
+
+/// Decode one DDS file's first mip into RGBA8.
+fn decode_dds(bytes: &[u8], name: &str) -> Result<RgbaImage> {
+    let dds = image_dds::ddsfile::Dds::read(&mut Cursor::new(bytes))
+        .with_context(|| format!("parsing {name}"))?;
+    image_dds::image_from_dds(&dds, 0).with_context(|| format!("decoding {name}"))
+}
+
+/// Load the resting-state sprite of ONE class (the inverse of the
+/// name-stripping in `load_sprites`): tries `icon_{class}_rest.dds`, then
+/// the suffix-less `icon_{class}.dds`. `Ok(None)` when neither exists.
+pub fn load_class_sprite(dir: &Path, class_name: &str) -> Result<Option<Sprite>> {
+    for name in [
+        format!("icon_{class_name}_rest.dds"),
+        format!("icon_{class_name}.dds"),
+    ] {
+        let path = dir.join(&name);
+        if !path.is_file() {
+            continue;
+        }
+        return Ok(Some(Sprite {
+            class_name: class_name.to_string(),
+            img: decode_dds(&fs::read(&path)?, &name)?,
+        }));
+    }
+    Ok(None)
 }
 
 /// Sorted, deduplicated class names of a sprite pool.

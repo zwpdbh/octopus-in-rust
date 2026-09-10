@@ -30,6 +30,10 @@ pub struct DatagenConfig {
     /// RNG seed (fixed by default for reproducible datasets).
     #[serde(default = "default_seed")]
     pub seed: u64,
+    /// Icon classes to EXCLUDE from generation (by sprite class name, e.g.
+    /// `bomber1_directfire`). Empty = every sprite class is included.
+    #[serde(default)]
+    pub exclude_classes: Vec<String>,
 }
 
 impl Default for DatagenConfig {
@@ -41,6 +45,7 @@ impl Default for DatagenConfig {
             scale_min: default_scale_min(),
             scale_max: default_scale_max(),
             seed: default_seed(),
+            exclude_classes: Vec::new(),
         }
     }
 }
@@ -96,6 +101,7 @@ mod tests {
         let config: DatagenConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(config, DatagenConfig::default());
         assert_eq!(config.size, 640);
+        assert!(config.exclude_classes.is_empty());
     }
 
     #[test]

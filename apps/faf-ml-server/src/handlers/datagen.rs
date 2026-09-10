@@ -14,6 +14,8 @@ use std::io::Cursor;
 
 use axum::{
     extract::{Path, State},
+    http::{header, HeaderMap},
+    response::IntoResponse,
     Json,
 };
 use chrono::Utc;
@@ -183,7 +185,7 @@ pub async fn start_datagen(
         ));
     }
 
-    let sprites = faf_ml_datagen::load_sprites(&state.icons_dir)
+    let mut sprites = faf_ml_datagen::load_sprites(&state.icons_dir)
         .map_err(|e| Error::Internal(format!("loading sprites: {e:#}")))?;
     if sprites.is_empty() {
         return Err(Error::Internal(format!(
@@ -191,7 +193,17 @@ pub async fn start_datagen(
             state.icons_dir.display()
         )));
     }
+    // classes.txt is the global training vocabulary: merge ALL sprite class
+    // names (not just this run's selection) so class ids stay stable.
     merge_classes(&state, &faf_ml_datagen::class_names(&sprites))?;
+    if !config.exclude_classes.is_empty() {
+        sprites.retain(|s| !config.exclude_classes.contains(&s.class_name));
+        if sprites.is_empty() {
+            return Err(Error::BadRequest(
+                "exclude_classes filters out every sprite class".to_string(),
+            ));
+        }
+    }
 
     let job = DatagenJob {
         id: Uuid::new_v4(),
@@ -257,6 +269,39 @@ pub async fn get_datagen_job(
         .cloned()
         .ok_or(Error::NotFound)?;
     Ok(Json(job))
+}
+
+/// `GET /api/datagen/sprites` — sorted class names of every sprite in the
+/// icons dir (the selectable pool for `DatagenConfig::exclude_classes`).
+pub async fn list_sprite_classes(State(state): State<AppState>) -> Result<Json<Vec<String>>> {
+    let sprites = faf_ml_datagen::load_sprites(&state.icons_dir)
+        .map_err(|e| Error::Internal(format!("loading sprites: {e:#}")))?;
+    Ok(Json(faf_ml_datagen::class_names(&sprites)))
+}
+
+/// `GET /api/datagen/sprites/{class}/image` — the sprite PNG (the web UI's
+/// icon picker cannot display the source DDS).
+pub async fn get_sprite_image(
+    State(state): State<AppState>,
+    Path(class): Path<String>,
+) -> Result<impl IntoResponse> {
+    // The class becomes a file name — refuse anything path-like.
+    if !class
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(Error::NotFound);
+    }
+    let sprite = faf_ml_datagen::load_class_sprite(&state.icons_dir, &class)
+        .map_err(|e| Error::Internal(format!("decoding sprite {class}: {e:#}")))?
+        .ok_or(Error::NotFound)?;
+    let mut png = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(sprite.img)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| Error::Internal(format!("encoding sprite {class}: {e}")))?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    Ok((headers, png.into_inner()))
 }
 
 /// `DELETE /api/datagen/jobs/{id}` — delete a finished job AND the sample

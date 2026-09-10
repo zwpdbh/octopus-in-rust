@@ -35,7 +35,9 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `DELETE /api/screenshots/{id}` | remove image + labels + index entry |
 | `DELETE /api/screenshots?kind={kind}` | bulk-remove every screenshot of one kind (image + labels + index entries); `kind` is mandatory. Clearing `synthetic` also drops finished datagen jobs from the registry |
 | `GET /api/classes` | class names from `classes.txt` |
-| `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt` |
+| `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt`. `exclude_classes` (default `[]`) skips icon classes; `classes.txt` still merges ALL sprite classes so class ids stay stable |
+| `GET /api/datagen/sprites` | sorted class names of every sprite in the icons dir (the pool the web UI's icon picker excludes from) |
+| `GET /api/datagen/sprites/{class}/image` | the sprite as PNG (the source DDS is not browser-displayable) |
 | `GET /api/datagen/jobs` | all datagen jobs (newest first) |
 | `GET /api/datagen/jobs/{id}` | one job (the web UI polls this while `running`) |
 | `DELETE /api/datagen/jobs/{id}` | remove a finished job AND its generated sample set (400 while `running`); samples predate job tracking → use bulk delete instead |

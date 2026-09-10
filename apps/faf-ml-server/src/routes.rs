@@ -39,6 +39,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/classes", get(handlers::classes::get_classes))
         .route("/api/datagen", post(handlers::datagen::start_datagen))
         .route(
+            "/api/datagen/sprites",
+            get(handlers::datagen::list_sprite_classes),
+        )
+        .route(
+            "/api/datagen/sprites/{class}/image",
+            get(handlers::datagen::get_sprite_image),
+        )
+        .route(
             "/api/datagen/jobs",
             get(handlers::datagen::list_datagen_jobs),
         )
