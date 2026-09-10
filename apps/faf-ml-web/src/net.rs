@@ -15,6 +15,11 @@ pub fn image_url(id: &str) -> String {
     api_url(&format!("/api/screenshots/{id}/image"))
 }
 
+/// Absolute URL of a unit portrait image.
+pub fn portrait_url(unit_id: &str) -> String {
+    api_url(&format!("/api/portraits/{}", unit_id.to_ascii_uppercase()))
+}
+
 fn api_base() -> String {
     if cfg!(debug_assertions) {
         "http://localhost:3100".to_string()

@@ -30,6 +30,10 @@ pub struct ServerConfig {
     /// Directory containing the strategic-icon `.dds` sprites datagen
     /// composites onto background screenshots.
     pub icons_dir: PathBuf,
+
+    /// Directory containing unit portrait PNGs (`{UNIT_ID}.png`) served by
+    /// `/api/portraits/:id` for the Units page.
+    pub portraits_dir: PathBuf,
 }
 
 impl ServerConfig {
@@ -42,6 +46,8 @@ impl ServerConfig {
     ///   `target/dx/faf-ml-web/release/web/public`).
     /// - `FAF_ML_ICONS_DIR` — strategic-icon sprite directory for datagen
     ///   (default: `tmp/custom-strategic-icons`).
+    /// - `FAF_ML_PORTRAITS_DIR` — unit portrait directory for the Units page
+    ///   (default: `assets/icons/units`).
     pub fn from_env() -> crate::Result<Self> {
         let root = workspace_root();
         Ok(Self {
@@ -54,6 +60,10 @@ impl ServerConfig {
             icons_dir: crate::env::path_or(
                 "FAF_ML_ICONS_DIR",
                 root.join("tmp/custom-strategic-icons"),
+            ),
+            portraits_dir: crate::env::path_or(
+                "FAF_ML_PORTRAITS_DIR",
+                root.join("assets/icons/units"),
             ),
         })
     }

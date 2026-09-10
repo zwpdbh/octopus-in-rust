@@ -6291,6 +6291,7 @@ dependencies = [
  "axum",
  "chrono",
  "dotenvy",
+ "faf-blueprints",
  "faf-ml-core",
  "faf-ml-datagen",
  "image",
@@ -6323,6 +6324,7 @@ name = "faf-ml-web"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "faf-blueprints",
  "faf-ml-core",
  "gloo-net",
  "gloo-timers",

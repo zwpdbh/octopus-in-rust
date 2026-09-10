@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use faf_blueprints::FafBlueprints;
 use faf_ml_core::DatagenJob;
 use uuid::Uuid;
 
@@ -18,16 +19,30 @@ pub struct AppState {
     pub assets_dir: Arc<PathBuf>,
     /// Strategic-icon sprite directory (`FAF_ML_ICONS_DIR`) for datagen jobs.
     pub icons_dir: Arc<PathBuf>,
+    /// Unit portrait directory (`FAF_ML_PORTRAITS_DIR`) for the Units page.
+    pub portraits_dir: Arc<PathBuf>,
+    /// Unit blueprints backing `/api/units` (shared ETFreeman unit database).
+    pub blueprints: Arc<FafBlueprints>,
     /// In-memory datagen job registry (progress is polled, not streamed).
     pub jobs: Arc<Mutex<HashMap<Uuid, DatagenJob>>>,
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf, assets_dir: PathBuf, icons_dir: PathBuf) -> Result<Self> {
+    pub fn new(
+        data_dir: PathBuf,
+        assets_dir: PathBuf,
+        icons_dir: PathBuf,
+        portraits_dir: PathBuf,
+    ) -> Result<Self> {
         let state = Self {
             data_dir: Arc::new(data_dir),
             assets_dir: Arc::new(assets_dir),
             icons_dir: Arc::new(icons_dir),
+            portraits_dir: Arc::new(portraits_dir),
+            blueprints: Arc::new(
+                FafBlueprints::new()
+                    .map_err(|e| Error::Internal(format!("loading unit blueprints: {e:#}")))?,
+            ),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         };
         std::fs::create_dir_all(state.screenshots_dir())?;

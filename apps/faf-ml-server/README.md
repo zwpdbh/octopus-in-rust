@@ -43,6 +43,9 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `DELETE /api/datagen/jobs/{id}` | remove a finished job AND its generated sample set (400 while `running`); samples predate job tracking → use bulk delete instead |
 | `GET /api/datasets` | list dataset manifests |
 | `POST /api/datasets` | `{name, image_ids}` → immutable snapshot embedding the current labels (409 if the name exists) |
+| `GET /api/units` | all unit summaries (4 playable factions) from the shared ETFreeman unit database (`faf-blueprints`; override the units file with `FAFCN_UNITS_FILE`) |
+| `GET /api/units/meta` | unit database version + upstream attribution |
+| `GET /api/portraits/{id}` | unit portrait PNG from `FAF_ML_PORTRAITS_DIR` (default `assets/icons/units`) |
 
 Generation logic lives in `crates/faf-ml-datagen` (the former `faf-datagen`
 CLI, now a library); shared wire types (`DatagenConfig`, `DatagenJob`,

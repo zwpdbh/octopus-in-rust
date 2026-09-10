@@ -23,8 +23,8 @@ correction set closes the domain gap.
 | Piece | Where | State |
 |---|---|---|
 | Synthetic data generator | `crates/faf-ml-datagen` (runs as a server job; the `faf-datagen` CLI is gone) | ✅ works; tint + scale + clustering; streams samples into the store as `synthetic` screenshots with JSON labels |
-| Web platform | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen jobs (`POST /api/datagen` + polling) |
-| Icon↔unit mapping | `crates/faf-unit-tools` (`icon-map` subcommand) | ✅ 114 classes ↔ 501 units; artifact at `data/faf-ml/icon-map.json` |
+| Web platform | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen jobs (`POST /api/datagen` + polling + per-job/bulk sample deletion), Units page (fafcn-web unit browser ported: `/api/units` + portraits) |
+| Icon↔unit mapping | `crates/faf-unit-tools` (`icon-map` subcommand) | ✅ 114 classes ↔ 501 units; artifact at `data/faf-ml/icon-map.json`; the Units page (`/units`) is its future UI home |
 | SSD detector | `crates/faf-ml-model` + `apps/faf-ml-train` | ✅ implemented, 17/17 tests, smoke-trained; **never trained for real** |
 
 Not built yet: training/eval inside the web UI (phases 2–3), Windows capture

@@ -21,6 +21,9 @@
 //! - `DELETE /api/datagen/jobs/:id` — remove a finished job and the sample
 //!   set it generated.
 //! - `GET/POST /api/datasets` — list / create immutable dataset snapshots.
+//! - `GET /api/units` + `GET /api/units/meta` — unit database for the Units
+//!   page (shared ETFreeman unit database via `faf-blueprints`).
+//! - `GET /api/portraits/:id` — unit portrait PNGs for the Units page.
 
 mod config;
 mod env;
@@ -80,6 +83,7 @@ async fn main() -> Result<()> {
         server_config.data_dir.clone(),
         server_config.assets_dir.clone(),
         server_config.icons_dir.clone(),
+        server_config.portraits_dir.clone(),
     )?;
 
     tracing::info!(data_dir = %state.data_dir.display(), "data store ready");
