@@ -371,6 +371,7 @@ pub fn Icons() -> Element {
                                 units: unit_list.clone(),
                                 selected: uncovered,
                                 icon_overrides,
+                                overlay_class: "w-10 h-10",
                                 on_select: move |unit: UnitSummary| {
                                     navigator.push(Route::UnitDetail { id: unit.id.clone() });
                                 },

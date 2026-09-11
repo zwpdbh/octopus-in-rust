@@ -18,6 +18,7 @@ pub fn UnitSelector(
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
     #[props(default)] icon_overrides: Option<IconOverrides>,
+    #[props(default)] overlay_class: Option<&'static str>,
 ) -> Element {
     let mut query = use_signal(String::new);
     let active_factions = use_signal(HashSet::<String>::new);
@@ -62,7 +63,7 @@ pub fn UnitSelector(
                 }
             }
             div { class: "flex-1 overflow-auto p-4",
-                CategoryGrid { units: filtered, on_select, selected, icon_overrides }
+                CategoryGrid { units: filtered, on_select, selected, icon_overrides, overlay_class }
             }
         }
     }
@@ -157,6 +158,7 @@ fn CategoryGrid(
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
     #[props(default)] icon_overrides: Option<IconOverrides>,
+    #[props(default)] overlay_class: Option<&'static str>,
 ) -> Element {
     let mut by_category: std::collections::HashMap<String, Vec<UnitSummary>> =
         std::collections::HashMap::new();
@@ -188,6 +190,7 @@ fn CategoryGrid(
                     on_select,
                     selected: selected.clone(),
                     icon_overrides: icon_overrides.clone(),
+                    overlay_class,
                 }
             }
         }
@@ -201,6 +204,7 @@ fn CategoryPanel(
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
     #[props(default)] icon_overrides: Option<IconOverrides>,
+    #[props(default)] overlay_class: Option<&'static str>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -229,6 +233,7 @@ fn CategoryPanel(
                                 on_select,
                                 selected: selected.clone(),
                                 icon_overrides: icon_overrides.clone(),
+                                overlay_class,
                             }
                         }
                     }
@@ -245,6 +250,7 @@ fn TechCell(
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
     #[props(default)] icon_overrides: Option<IconOverrides>,
+    #[props(default)] overlay_class: Option<&'static str>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -259,6 +265,7 @@ fn TechCell(
                     selected: selected.contains(&unit.id),
                     on_select,
                     icon_overrides: icon_overrides.clone(),
+                    overlay_class,
                 }
             }
         }

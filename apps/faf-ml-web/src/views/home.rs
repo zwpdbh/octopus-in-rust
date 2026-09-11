@@ -1,9 +1,8 @@
 use dioxus::prelude::*;
 
 use crate::workflow;
-use crate::Route;
 
-/// Landing page: what this platform is + quick links into the workflow.
+/// Landing page: what this platform is + the workflow checklist.
 #[component]
 pub fn Home() -> Element {
     rsx! {
@@ -18,24 +17,7 @@ pub fn Home() -> Element {
                     "review labeled data, then train and monitor a detector that "
                     "identifies units from a screenshot."
                 }
-                div { class: "grid grid-cols-1 sm:grid-cols-2 gap-4",
-                    FeatureCard {
-                        to: Route::Gallery {},
-                        title: "Gallery",
-                        desc: "Upload screenshots (PNG) and manage the raw image pool.",
-                    }
-                    FeatureCard {
-                        to: Route::Datagen {},
-                        title: "Datagen",
-                        desc: "Generate synthetic, perfectly labeled training samples from background screenshots.",
-                    }
-                    FeatureCard {
-                        to: Route::Datasets {},
-                        title: "Datasets",
-                        desc: "Snapshot labeled images into immutable, versioned datasets.",
-                    }
-                }
-                div { class: "mt-10 rounded-lg border border-neutral-800 bg-neutral-900 p-5",
+                div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-5",
                     h2 { class: "text-base font-semibold text-white mb-1", "The unit-detection workflow" }
                     p { class: "text-xs text-neutral-500 mb-4",
                         "Follow these steps in order to turn raw game screenshots into a "
@@ -65,19 +47,6 @@ pub fn Home() -> Element {
                     }
                 }
             }
-        }
-    }
-}
-
-/// One feature card linking to an app page.
-#[component]
-fn FeatureCard(to: Route, title: &'static str, desc: &'static str) -> Element {
-    rsx! {
-        Link {
-            to,
-            class: "block rounded-lg border border-neutral-800 bg-neutral-900 p-5 hover:border-blue-500 hover:bg-neutral-800/60 transition-colors",
-            h3 { class: "text-lg font-semibold text-white mb-2", "{title}" }
-            p { class: "text-sm text-neutral-400", "{desc}" }
         }
     }
 }

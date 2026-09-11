@@ -18,6 +18,10 @@ pub fn UnitIcon(
     /// overlay with the icon the unit would show under the enabled mods.
     #[props(default)]
     icon_overrides: Option<IconOverrides>,
+    /// Tailwind size classes for the strategic-icon overlay (Icons page
+    /// shows them bigger); defaults to `"w-3.5 h-3.5"`.
+    #[props(default)]
+    overlay_class: Option<&'static str>,
 ) -> Element {
     let id = unit.id.clone();
     let name = unit.name.clone();
@@ -46,7 +50,7 @@ pub fn UnitIcon(
                 img {
                     src: "{src}",
                     alt: "",
-                    class: "absolute top-0.5 left-0.5 w-3.5 h-3.5 object-contain pointer-events-none",
+                    class: "absolute top-0.5 left-0.5 {overlay_class.unwrap_or(\"w-3.5 h-3.5\")} object-contain pointer-events-none",
                 }
             }
         }

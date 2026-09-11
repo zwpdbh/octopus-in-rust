@@ -28,14 +28,18 @@ use faf_ml_core::UnitIconEffective;
 const STATE_SUFFIXES: [&str; 4] = ["_selectedover", "_selected", "_over", "_rest"];
 
 /// Normalize a sprite file stem or mod `IconSet` value to a class name:
-/// strip state suffix, then a leading `icon_`. Handles both conventions:
-/// `icon_chicken_rest` → `chicken`, `SACU_RAS_rest` → `SACU_RAS`.
+/// strip state suffix, then a leading `icon_`, then lowercase (mods mix
+/// cases between `mod_icons.lua` and file names, e.g. `icon_mavor` vs
+/// `icon_Mavor_rest.dds`). Handles both prefix conventions:
+/// `icon_chicken_rest` → `chicken`, `SACU_RAS_rest` → `sacu_ras`.
 pub fn normalize_class(raw: &str) -> String {
     let base = STATE_SUFFIXES
         .iter()
         .find_map(|s| raw.strip_suffix(s))
         .unwrap_or(raw);
-    base.strip_prefix("icon_").unwrap_or(base).to_string()
+    base.strip_prefix("icon_")
+        .unwrap_or(base)
+        .to_ascii_lowercase()
 }
 
 /// One parsed icon-set source (a mod directory, or the legacy flat icons
@@ -328,10 +332,10 @@ mod tests {
         let sacu = parse_mod(&root.join("tmp/SACUIcons")).unwrap();
         assert_eq!(sacu.assignments.len(), 10);
         assert_eq!(sacu.classes.len(), 3);
-        assert!(sacu.classes.contains("SACU_RAS"));
+        assert!(sacu.classes.contains("sacu_ras"));
         assert!(sacu
             .assignments
-            .contains(&("URL0301_RAS".to_string(), "SACU_RAS".to_string())));
+            .contains(&("URL0301_RAS".to_string(), "sacu_ras".to_string())));
     }
 
     #[test]
@@ -393,12 +397,15 @@ mod tests {
     }
 
     #[test]
-    fn normalize_strips_prefix_and_state_suffix() {
+    fn normalize_strips_prefix_state_suffix_and_case() {
         assert_eq!(normalize_class("icon_chicken_rest"), "chicken");
         assert_eq!(normalize_class("icon_chicken_selectedover"), "chicken");
-        assert_eq!(normalize_class("SACU_RAS_rest"), "SACU_RAS");
+        assert_eq!(normalize_class("SACU_RAS_rest"), "sacu_ras");
         assert_eq!(normalize_class("icon_strategic_nuke"), "strategic_nuke");
         assert_eq!(normalize_class("bomber1_directfire"), "bomber1_directfire");
+        // Calibersexp mixes cases: assignment `icon_mavor`, file `icon_Mavor_rest`.
+        assert_eq!(normalize_class("icon_Mavor_rest"), "mavor");
+        assert_eq!(normalize_class("icon_mavor"), "mavor");
     }
 
     #[test]

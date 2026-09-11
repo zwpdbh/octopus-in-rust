@@ -90,7 +90,7 @@ pub fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
         let class_name = class_name
             .strip_prefix("icon_")
             .unwrap_or(class_name)
-            .to_string();
+            .to_ascii_lowercase();
 
         sprites.push(Sprite {
             class_name,
@@ -110,7 +110,10 @@ fn decode_dds(bytes: &[u8], name: &str) -> Result<RgbaImage> {
 /// Load the resting-state sprite of ONE class (the inverse of the
 /// name-stripping in `load_sprites`): tries `icon_{class}_rest.dds`,
 /// `{class}_rest.dds` (prefix-less icon mods), then the suffix-less
-/// variants. `Ok(None)` when none exists.
+/// variants — first with the exact class name, then CASE-INSENSITIVELY by
+/// scanning the directory (mods mix cases between their assignment tables
+/// and file names, e.g. class `mavor` vs `icon_Mavor_rest.dds`).
+/// `Ok(None)` when nothing matches.
 pub fn load_class_sprite(dir: &Path, class_name: &str) -> Result<Option<Sprite>> {
     for name in [
         format!("icon_{class_name}_rest.dds"),
@@ -126,6 +129,32 @@ pub fn load_class_sprite(dir: &Path, class_name: &str) -> Result<Option<Sprite>>
             class_name: class_name.to_string(),
             img: decode_dds(&fs::read(&path)?, &name)?,
         }));
+    }
+    // Case-insensitive fallback: find a file whose normalized class matches.
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {dir:?}"))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(base) = name.strip_suffix(".dds") else {
+            continue;
+        };
+        let stripped = ["_selectedover", "_selected", "_over", "_rest"]
+            .iter()
+            .find_map(|suffix| base.strip_suffix(suffix))
+            .unwrap_or(base);
+        // Skip non-resting state variants (same class with UI markers).
+        if stripped.len() != base.len() && !base.ends_with("_rest") {
+            continue;
+        }
+        let normalized = stripped
+            .strip_prefix("icon_")
+            .unwrap_or(stripped)
+            .to_ascii_lowercase();
+        if normalized == class_name {
+            return Ok(Some(Sprite {
+                class_name: class_name.to_string(),
+                img: decode_dds(&fs::read(entry.path())?, &name)?,
+            }));
+        }
     }
     Ok(None)
 }
@@ -245,4 +274,60 @@ fn generate_sample(
         });
     }
     (canvas, boxes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Workspace root (tests run with CWD = the crate dir).
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn load_sprites_normalizes_prefix_and_case() {
+        let dir = workspace_root().join("tmp/Calibersexp/custom-strategic-icons");
+        let sprites = load_sprites(&dir).unwrap();
+        let names = class_names(&sprites);
+        assert_eq!(names.len(), 18);
+        assert!(names.contains(&"mavor".to_string()));
+        assert!(names.contains(&"atlantis".to_string()));
+
+        let dir = workspace_root().join("tmp/SACUIcons/custom-strategic-icons");
+        let sprites = load_sprites(&dir).unwrap();
+        let names = class_names(&sprites);
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"sacu_ras".to_string()));
+    }
+
+    #[test]
+    fn load_class_sprite_handles_case_mismatch() {
+        // Assignment tables say `icon_mavor`/`icon_Atlantis`, the files are
+        // `icon_Mavor_rest.dds`/`icon_atlantis_rest.dds` — both must load.
+        let dir = workspace_root().join("tmp/Calibersexp/custom-strategic-icons");
+        assert!(load_class_sprite(&dir, "mavor").unwrap().is_some());
+        assert!(load_class_sprite(&dir, "atlantis").unwrap().is_some());
+        // Prefix-less mod (SACUIcons ships `SACU_RAS_rest.dds`).
+        let dir = workspace_root().join("tmp/SACUIcons/custom-strategic-icons");
+        assert!(load_class_sprite(&dir, "sacu_ras").unwrap().is_some());
+        assert!(load_class_sprite(&dir, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn load_sprites_multi_later_dirs_override() {
+        let root = workspace_root();
+        let redux = root.join("tmp/ReduxStrategicIconsLarge/custom-strategic-icons");
+        let calibers = root.join("tmp/Calibersexp/custom-strategic-icons");
+        let sprites = load_sprites_multi(&[&redux, &calibers]).unwrap();
+        let names = class_names(&sprites);
+        // Redux classes survive; Calibersexp classes merge in; no dupes.
+        assert!(names.contains(&"bomber1_directfire".to_string()));
+        assert!(names.contains(&"mavor".to_string()));
+        let total = names.len();
+        let mut deduped = names.clone();
+        deduped.dedup();
+        assert_eq!(total, deduped.len());
+    }
 }
