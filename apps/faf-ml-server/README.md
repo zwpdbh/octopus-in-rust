@@ -17,7 +17,9 @@ cargo run -p faf-ml-server
 #   FAF_ML_PORT=3100
 #   FAF_ML_DATA_DIR=data/faf-ml                                (gitignored)
 #   FAF_ML_WEB_DIST=target/dx/faf-ml-web/release/web/public
-#   FAF_ML_ICONS_DIR=tmp/custom-strategic-icons                (datagen sprites)
+#   FAF_ML_ICONS_DIR=tmp/custom-strategic-icons                (legacy flat sprite dir — fallback only)
+#   FAF_ML_ICON_MODS=tmp/ReduxStrategicIconsLarge:tmp/Calibersexp:tmp/SACUIcons
+#                                                              (colon-separated icon-set mod dirs)
 ```
 
 Logs: stdout + `data/logs/faf-ml-server.log`.
@@ -35,8 +37,8 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `DELETE /api/screenshots/{id}` | remove image + labels + index entry |
 | `DELETE /api/screenshots?kind={kind}` | bulk-remove every screenshot of one kind (image + labels + index entries); `kind` is mandatory. Clearing `synthetic` also drops finished datagen jobs from the registry |
 | `GET /api/classes` | class names from `classes.txt` |
-| `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt`. `exclude_classes` (default `[]`) skips icon classes; `classes.txt` still merges ALL sprite classes so class ids stay stable |
-| `GET /api/datagen/sprites` | sorted class names of every sprite in the icons dir (the pool the web UI's icon picker excludes from) |
+| `POST /api/datagen` | body = `DatagenConfig` → start a generation job: composites sprites onto `background`-kind screenshots (400 when none exist — triage in the Gallery first), streams each sample into the store as a `synthetic` screenshot + labels JSON, merges sprite class names into `classes.txt`. The sprite pool comes from `icon-config.json` (enabled icon-set mods minus excluded classes — see `/api/icons/*`); `classes.txt` still merges ALL enabled sprite classes so class ids stay stable |
+| `GET /api/datagen/sprites` | sorted class names of every sprite in the legacy flat icons dir (superseded by `/api/icons/classes`) |
 | `GET /api/datagen/sprites/{class}/image` | the sprite as PNG (the source DDS is not browser-displayable) |
 | `GET /api/datagen/jobs` | all datagen jobs (newest first) |
 | `GET /api/datagen/jobs/{id}` | one job (the web UI polls this while `running`) |
@@ -48,6 +50,11 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/units/meta` | unit database version + upstream attribution |
 | `GET /api/units/{id}` | one unit summary (case-insensitive exact id; 404 when unknown) |
 | `GET /api/units/{id}/icons` | the unit's blueprint default icon + every custom-set icon class mapped to it from `icon-map.json`; sharing units are `{id, name}` pairs, four FAF factions only (mod factions like Nomads excluded) |
+| `GET /api/icons/sets` | registered icon-set mods (`FAF_ML_ICON_MODS`) with class/assignment counts and enabled flags (parsed from `mod_info.lua` + `mod_icons.lua`) |
+| `GET/PUT /api/icons/config` | read/persist `icon-config.json` (`enabled_mods`, `excluded_classes`; absent file = all mods enabled). Unknown mod ids → 400 |
+| `GET /api/icons/classes[?mods=a,b]` | per-class source set, unit coverage and excluded flag for the picker |
+| `GET /api/icons/units[?mods=a,b]` | effective strategic icon per unit under the selection (explicit mod assignment > blueprint default > uncovered), four factions only |
+| `GET /api/icons/sprites/{class}/image` | the class's `_rest` sprite as PNG, resolved across enabled sets (a mod's sprite overrides the base set's, like in game) |
 | `GET /api/portraits/{id}` | unit portrait PNG from `FAF_ML_PORTRAITS_DIR` (default `assets/icons/units`) |
 | `GET /ws/training` | WebSocket training (fafcn `/ws/simulate` pattern): `Start {config, speed}` starts a REAL burn training run (`faf-ml-model::train` on a dedicated thread); `Attach` replays + streams the active run without starting anything. The run lives in a server-side registry and survives viewer disconnects; `Command` frames pause/resume/stop/set-speed |
 | `GET /api/training/status` | the training registry as JSON (config, status, points, latest, result with run_dir) — 404 before the first run |

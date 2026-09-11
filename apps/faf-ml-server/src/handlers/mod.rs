@@ -4,6 +4,7 @@ pub mod classes;
 pub mod datagen;
 pub mod datasets;
 pub mod health;
+pub mod icons;
 pub mod labels;
 pub mod portraits;
 pub mod predict;

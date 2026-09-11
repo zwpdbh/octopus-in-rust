@@ -3,6 +3,10 @@ use dioxus::prelude::*;
 use crate::components::UnitSummary;
 use crate::utils::faction_glow_class;
 
+/// Unit id → strategic-icon overlay URL (`None` value = explicitly no icon).
+/// When the map itself is `None`, the blueprint default static PNG is used.
+pub type IconOverrides = std::collections::HashMap<String, Option<String>>;
+
 /// Compact square portrait with faction glow and optional strategic icon overlay.
 #[component]
 pub fn UnitIcon(
@@ -10,15 +14,22 @@ pub fn UnitIcon(
     faction: String,
     selected: bool,
     on_select: EventHandler<UnitSummary>,
+    /// Effective-icon overrides (Icons page): replaces the blueprint default
+    /// overlay with the icon the unit would show under the enabled mods.
+    #[props(default)]
+    icon_overrides: Option<IconOverrides>,
 ) -> Element {
     let id = unit.id.clone();
     let name = unit.name.clone();
     let glow = faction_glow_class(&faction);
     let portrait_src = crate::net::portrait_url(&id);
-    let strategic_src = unit
-        .strategic_icon_name
-        .as_deref()
-        .map(|icon| format!("/strategic/{}_{}.png", faction, icon));
+    let strategic_src = match &icon_overrides {
+        Some(map) => map.get(&id.to_ascii_uppercase()).cloned().flatten(),
+        None => unit
+            .strategic_icon_name
+            .as_deref()
+            .map(|icon| format!("/strategic/{}_{}.png", faction, icon)),
+    };
 
     rsx! {
         button {

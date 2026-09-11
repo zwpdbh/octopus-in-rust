@@ -18,7 +18,7 @@ collect ──► triage ──► generate ──► review ──► snapshot 
 | `faf_ml_screenshots_upload` | multipart-upload local PNG paths (lands in `unclassified`) |
 | `faf_ml_screenshot_triage` | mark a shot `battle` / `background` / `unclassified` |
 | `faf_ml_screenshot_delete` | delete one screenshot (image + labels) |
-| `faf_ml_datagen_start` | start a synthetic-data generation job (count/size/scale/seed/exclude_classes) |
+| `faf_ml_datagen_start` | start a synthetic-data generation job (count/size/scale/seed; icon classes come from the server's icon config) |
 | `faf_ml_datagen_jobs` | poll job progress |
 | `faf_ml_datagen_job_delete` | delete a job AND its whole sample set |
 | `faf_ml_synthetic_clear` | delete ALL synthetic samples (before regenerating a set) |

@@ -67,7 +67,7 @@ pub fn Datasets() -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-4xl mx-auto",
-                crate::workflow::WorkflowBanner { step: 4 }
+                crate::workflow::WorkflowBanner { step: 5 }
                 h1 { class: "text-2xl font-bold text-white mb-6", "Dataset snapshots" }
 
                 // Create form: name + kind selection + snapshot button.

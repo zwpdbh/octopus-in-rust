@@ -69,6 +69,20 @@ pub fn router() -> Router<AppState> {
             "/api/units/{id}/icons",
             get(handlers::units::get_unit_icons),
         )
+        .route("/api/icons/sets", get(handlers::icons::list_icon_sets))
+        .route(
+            "/api/icons/config",
+            get(handlers::icons::get_icon_config).put(handlers::icons::put_icon_config),
+        )
+        .route(
+            "/api/icons/classes",
+            get(handlers::icons::list_icon_classes),
+        )
+        .route("/api/icons/units", get(handlers::icons::list_unit_icons))
+        .route(
+            "/api/icons/sprites/{class}/image",
+            get(handlers::icons::get_icon_sprite_image),
+        )
         .route(
             "/api/portraits/{id}",
             get(handlers::portraits::get_portrait),

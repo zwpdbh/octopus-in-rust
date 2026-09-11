@@ -13,8 +13,8 @@
 //!   finished datagen jobs from the registry).
 //! - `GET /api/classes` — class list.
 //! - `POST /api/datagen` — start a synthetic-data generation job (background
-//!   task streaming samples into the store as `synthetic` screenshots;
-//!   `exclude_classes` in the config skips icon classes).
+//!   task streaming samples into the store as `synthetic` screenshots; the
+//!   sprite pool comes from the icon configuration — see `/api/icons/*`).
 //! - `GET /api/datagen/sprites` — list selectable sprite class names.
 //! - `GET /api/datagen/sprites/:class/image` — serve one sprite as PNG.
 //! - `GET /api/datagen/jobs[/{id}]` — poll job progress.
@@ -37,6 +37,7 @@ mod config;
 mod env;
 mod error;
 mod handlers;
+mod icon_sets;
 mod routes;
 mod state;
 mod training_service;
@@ -93,6 +94,7 @@ async fn main() -> Result<()> {
         server_config.assets_dir.clone(),
         server_config.icons_dir.clone(),
         server_config.portraits_dir.clone(),
+        server_config.icon_mods.clone(),
     )?;
 
     tracing::info!(data_dir = %state.data_dir.display(), "data store ready");

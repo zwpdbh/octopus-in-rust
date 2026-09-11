@@ -11,9 +11,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod datagen;
+mod icons;
 mod training;
 
 pub use datagen::{DatagenConfig, DatagenJob, DatagenStatus};
+pub use icons::{IconClassInfo, IconConfig, IconSetInfo, UnitIconEffective};
 pub use training::{
     DetectionView, PredictRequest, PredictResponse, RunInfo, TrainingClientMessage,
     TrainingCommand, TrainingConfig, TrainingMetricsPoint, TrainingRunResult, TrainingRunStatus,

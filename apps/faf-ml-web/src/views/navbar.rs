@@ -16,6 +16,7 @@ pub fn Navbar() -> Element {
                 NavLink { to: Route::Home {}, label: "Home" }
                 NavLink { to: Route::Gallery {}, label: "Gallery" }
                 NavLink { to: Route::Units {}, label: "Units" }
+                NavLink { to: Route::Icons {}, label: "Icons" }
                 NavLink { to: Route::Training {}, label: "Training" }
                 NavLink { to: Route::Datagen {}, label: "Datagen" }
                 NavLink { to: Route::Datasets {}, label: "Datasets" }

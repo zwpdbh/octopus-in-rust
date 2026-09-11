@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use faf_blueprints::TechLevel;
 use std::collections::HashSet;
 
+use crate::components::unit_icon::IconOverrides;
 use crate::components::{UnitIcon, UnitSummary};
 use crate::utils::{tech_level_short, CATEGORY_ORDER, FACTION_ORDER};
 
@@ -9,11 +10,14 @@ use crate::utils::{tech_level_short, CATEGORY_ORDER, FACTION_ORDER};
 ///
 /// `selected` is an optional display-only set of highlighted unit ids; the
 /// picker itself stays single-select (callers decide what a click means).
+/// `icon_overrides` (Icons page) replaces each unit's blueprint strategic
+/// overlay with its effective icon under the enabled mods.
 #[component]
 pub fn UnitSelector(
     units: Vec<UnitSummary>,
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
+    #[props(default)] icon_overrides: Option<IconOverrides>,
 ) -> Element {
     let mut query = use_signal(String::new);
     let active_factions = use_signal(HashSet::<String>::new);
@@ -58,7 +62,7 @@ pub fn UnitSelector(
                 }
             }
             div { class: "flex-1 overflow-auto p-4",
-                CategoryGrid { units: filtered, on_select, selected }
+                CategoryGrid { units: filtered, on_select, selected, icon_overrides }
             }
         }
     }
@@ -152,6 +156,7 @@ fn CategoryGrid(
     units: Vec<UnitSummary>,
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
+    #[props(default)] icon_overrides: Option<IconOverrides>,
 ) -> Element {
     let mut by_category: std::collections::HashMap<String, Vec<UnitSummary>> =
         std::collections::HashMap::new();
@@ -182,6 +187,7 @@ fn CategoryGrid(
                     units,
                     on_select,
                     selected: selected.clone(),
+                    icon_overrides: icon_overrides.clone(),
                 }
             }
         }
@@ -194,6 +200,7 @@ fn CategoryPanel(
     units: Vec<UnitSummary>,
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
+    #[props(default)] icon_overrides: Option<IconOverrides>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -221,6 +228,7 @@ fn CategoryPanel(
                                 faction,
                                 on_select,
                                 selected: selected.clone(),
+                                icon_overrides: icon_overrides.clone(),
                             }
                         }
                     }
@@ -236,6 +244,7 @@ fn TechCell(
     faction: &'static str,
     on_select: EventHandler<UnitSummary>,
     #[props(default)] selected: HashSet<String>,
+    #[props(default)] icon_overrides: Option<IconOverrides>,
 ) -> Element {
     if units.is_empty() {
         return rsx! {};
@@ -249,6 +258,7 @@ fn TechCell(
                     faction: faction.to_string(),
                     selected: selected.contains(&unit.id),
                     on_select,
+                    icon_overrides: icon_overrides.clone(),
                 }
             }
         }

@@ -33,6 +33,9 @@ pub struct AppState {
     pub unit_display_names: Arc<HashMap<String, String>>,
     /// In-memory datagen job registry (progress is polled, not streamed).
     pub jobs: Arc<Mutex<HashMap<Uuid, DatagenJob>>>,
+    /// Parsed icon-set sources (`FAF_ML_ICON_MODS`, or the legacy flat
+    /// icons dir as a builtin fallback), in override-priority order.
+    pub icon_sets: Arc<Vec<crate::icon_sets::IconSet>>,
 }
 
 impl AppState {
@@ -41,6 +44,7 @@ impl AppState {
         assets_dir: PathBuf,
         icons_dir: PathBuf,
         portraits_dir: PathBuf,
+        icon_mods: Vec<PathBuf>,
     ) -> Result<Self> {
         let unit_index = match std::env::var("FAFCN_UNITS_FILE") {
             Ok(path) => faf_units::FafUnitIndex::new(path.into()),
@@ -61,6 +65,7 @@ impl AppState {
             })
             .collect();
 
+        let icon_sets = crate::icon_sets::load_icon_sets(&icon_mods, &icons_dir);
         let state = Self {
             data_dir: Arc::new(data_dir),
             assets_dir: Arc::new(assets_dir),
@@ -73,6 +78,7 @@ impl AppState {
             unit_display_names: Arc::new(unit_display_names),
             training_run: Arc::new(Mutex::new(None)),
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            icon_sets: Arc::new(icon_sets),
         };
         std::fs::create_dir_all(state.screenshots_dir())?;
         std::fs::create_dir_all(state.labels_dir())?;
@@ -103,6 +109,11 @@ impl AppState {
     /// Strategic-icon ↔ unit mapping artifact (`faf-unit-tools icon-map`).
     pub fn icon_map_path(&self) -> PathBuf {
         self.data_dir.join("icon-map.json")
+    }
+
+    /// User-edited icon configuration (`/api/icons/config`).
+    pub fn icon_config_path(&self) -> PathBuf {
+        self.data_dir.join("icon-config.json")
     }
 
     pub fn image_path(&self, id: Uuid) -> PathBuf {

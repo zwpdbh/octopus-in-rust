@@ -166,7 +166,11 @@ fn run_datagen_job(
 ///
 /// 400 when the background pool is empty (triage screenshots in the Gallery
 /// first). Sprite loading and the classes.txt merge happen synchronously so
-/// a missing `FAF_ML_ICONS_DIR` fails the request instead of the job.
+/// a missing icon set fails the request instead of the job.
+///
+/// The sprite pool comes from the icon configuration (`icon-config.json`,
+/// editable on the Icons page): sprites of the enabled icon-set mods,
+/// minus the configured excluded classes.
 pub async fn start_datagen(
     State(state): State<AppState>,
     Json(config): Json<DatagenConfig>,
@@ -185,22 +189,25 @@ pub async fn start_datagen(
         ));
     }
 
-    let mut sprites = faf_ml_datagen::load_sprites(&state.icons_dir)
+    let icon_config = super::icons::read_icon_config(&state)?;
+    let sets = crate::icon_sets::enabled_sets(&state.icon_sets, &icon_config.enabled_mods);
+    let dirs: Vec<&std::path::Path> = sets.iter().map(|set| set.icons_dir.as_path()).collect();
+    let mut sprites = faf_ml_datagen::load_sprites_multi(&dirs)
         .map_err(|e| Error::Internal(format!("loading sprites: {e:#}")))?;
     if sprites.is_empty() {
-        return Err(Error::Internal(format!(
-            "no sprites found in {} (FAF_ML_ICONS_DIR)",
-            state.icons_dir.display()
-        )));
+        return Err(Error::Internal(
+            "no sprites: no icon set is enabled (configure one on the Icons page)".to_string(),
+        ));
     }
-    // classes.txt is the global training vocabulary: merge ALL sprite class
-    // names (not just this run's selection) so class ids stay stable.
+    // classes.txt is the global training vocabulary: merge ALL enabled
+    // sprite class names (not just this run's selection) so class ids stay
+    // stable.
     merge_classes(&state, &faf_ml_datagen::class_names(&sprites))?;
-    if !config.exclude_classes.is_empty() {
-        sprites.retain(|s| !config.exclude_classes.contains(&s.class_name));
+    if !icon_config.excluded_classes.is_empty() {
+        sprites.retain(|s| !icon_config.excluded_classes.contains(&s.class_name));
         if sprites.is_empty() {
             return Err(Error::BadRequest(
-                "exclude_classes filters out every sprite class".to_string(),
+                "the icon configuration excludes every sprite class".to_string(),
             ));
         }
     }
@@ -272,7 +279,8 @@ pub async fn get_datagen_job(
 }
 
 /// `GET /api/datagen/sprites` — sorted class names of every sprite in the
-/// icons dir (the selectable pool for `DatagenConfig::exclude_classes`).
+/// legacy flat icons dir. Superseded by `GET /api/icons/classes` (the Icons
+/// page picker); kept for API compatibility.
 pub async fn list_sprite_classes(State(state): State<AppState>) -> Result<Json<Vec<String>>> {
     let sprites = faf_ml_datagen::load_sprites(&state.icons_dir)
         .map_err(|e| Error::Internal(format!("loading sprites: {e:#}")))?;

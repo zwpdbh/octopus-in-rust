@@ -70,8 +70,8 @@ pub struct DatagenStartParams {
     scale_max: Option<f32>,
     /// RNG seed (default 42; same config + seed = same set).
     seed: Option<u64>,
-    /// Icon classes to exclude (default: all 193 included).
-    exclude_classes: Option<Vec<String>>,
+    // Icon-class selection is server-side now (`icon-config.json`, editable
+    // on the Icons page) — no per-run exclude_classes here.
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -262,9 +262,6 @@ impl FafMl {
         }
         if let Some(v) = p.seed {
             config.seed = v;
-        }
-        if let Some(v) = p.exclude_classes {
-            config.exclude_classes = v;
         }
         match self
             .api

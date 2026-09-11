@@ -63,9 +63,11 @@ pub struct GenBox {
     pub h: u32,
 }
 
-/// Loads every `icon_*_rest.dds` (plus suffix-less strategic icons), decoding
-/// DDS → RGBA8. Class name = filename minus `icon_` prefix and state suffix:
-/// `icon_bomber1_directfire_rest.dds` → `bomber1_directfire`.
+/// Loads every resting-state sprite (`*_rest.dds`, plus suffix-less icons),
+/// decoding DDS → RGBA8. Class name = filename minus state suffix and an
+/// optional `icon_` prefix: `icon_bomber1_directfire_rest.dds` →
+/// `bomber1_directfire`, `SACU_RAS_rest.dds` → `SACU_RAS` (icon mods do not
+/// all use the `icon_` prefix convention).
 pub fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
     let mut sprites = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {dir:?}"))? {
@@ -73,10 +75,9 @@ pub fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with("icon_") || !name.ends_with(".dds") {
+        let Some(base) = name.strip_suffix(".dds") else {
             continue;
-        }
-        let base = &name["icon_".len()..name.len() - ".dds".len()];
+        };
         let class_name = ["_selectedover", "_selected", "_over", "_rest"] // longest first
             .iter()
             .find_map(|suffix| base.strip_suffix(suffix))
@@ -86,7 +87,10 @@ pub fn load_sprites(dir: &Path) -> Result<Vec<Sprite>> {
         if base != class_name && !name.ends_with("_rest.dds") {
             continue;
         }
-        let class_name = class_name.to_string();
+        let class_name = class_name
+            .strip_prefix("icon_")
+            .unwrap_or(class_name)
+            .to_string();
 
         sprites.push(Sprite {
             class_name,
@@ -104,12 +108,15 @@ fn decode_dds(bytes: &[u8], name: &str) -> Result<RgbaImage> {
 }
 
 /// Load the resting-state sprite of ONE class (the inverse of the
-/// name-stripping in `load_sprites`): tries `icon_{class}_rest.dds`, then
-/// the suffix-less `icon_{class}.dds`. `Ok(None)` when neither exists.
+/// name-stripping in `load_sprites`): tries `icon_{class}_rest.dds`,
+/// `{class}_rest.dds` (prefix-less icon mods), then the suffix-less
+/// variants. `Ok(None)` when none exists.
 pub fn load_class_sprite(dir: &Path, class_name: &str) -> Result<Option<Sprite>> {
     for name in [
         format!("icon_{class_name}_rest.dds"),
+        format!("{class_name}_rest.dds"),
         format!("icon_{class_name}.dds"),
+        format!("{class_name}.dds"),
     ] {
         let path = dir.join(&name);
         if !path.is_file() {
@@ -129,6 +136,20 @@ pub fn class_names(sprites: &[Sprite]) -> Vec<String> {
     classes.sort();
     classes.dedup();
     classes
+}
+
+/// Load sprites from several icon-set directories (e.g. enabled icon mods),
+/// deduplicated by class name: a later directory's sprite OVERRIDES an
+/// earlier one's for the same class — the same priority rule as in-game
+/// mod loading. This lets a mod reskin a base class without renaming it.
+pub fn load_sprites_multi(dirs: &[&Path]) -> Result<Vec<Sprite>> {
+    let mut by_class: std::collections::HashMap<String, Sprite> = std::collections::HashMap::new();
+    for dir in dirs {
+        for sprite in load_sprites(dir)? {
+            by_class.insert(sprite.class_name.clone(), sprite);
+        }
+    }
+    Ok(by_class.into_values().collect())
 }
 
 /// Generate `config.count` samples, invoking `on_sample` per sample so the

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use dioxus::prelude::*;
@@ -14,18 +13,6 @@ async fn fetch_jobs() -> Result<Vec<DatagenJob>, String> {
         .await
         .map_err(|e| e.to_string())?
         .json::<Vec<DatagenJob>>()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Fetch the selectable sprite class pool (every icon in the server's icons
-/// dir; the user excludes classes from this set before generating).
-async fn fetch_sprite_classes() -> Result<Vec<String>, String> {
-    Request::get(&crate::net::api_url("/api/datagen/sprites"))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Vec<String>>()
         .await
         .map_err(|e| e.to_string())
 }
@@ -117,11 +104,10 @@ fn submit(
     scale_min: Signal<String>,
     scale_max: Signal<String>,
     seed: Signal<String>,
-    excluded: Signal<HashSet<String>>,
     mut status: Signal<String>,
     refresh: Signal<u32>,
 ) {
-    let mut config = match parse_config(
+    let config = match parse_config(
         &count.read(),
         &size.read(),
         &max_units.read(),
@@ -135,7 +121,6 @@ fn submit(
             return;
         }
     };
-    config.exclude_classes = excluded.read().iter().cloned().collect();
     spawn(async move {
         match start_job(&config).await {
             Ok(()) => status.set("job started — progress below".to_string()),
@@ -145,8 +130,8 @@ fn submit(
     });
 }
 
-/// Datagen: generation form (sliders + icon-class picker) + live job table
-/// (polls while jobs run).
+/// Datagen: generation form (sliders) + live job table (polls while jobs
+/// run). Icon classes are configured on the Icons page (workflow step 2).
 #[component]
 pub fn Datagen() -> Element {
     // Bump to force the jobs resource to re-run after a submit / poll tick.
@@ -160,14 +145,11 @@ pub fn Datagen() -> Element {
     let scale_min = use_signal(|| defaults.scale_min.to_string());
     let scale_max = use_signal(|| defaults.scale_max.to_string());
     let seed = use_signal(|| defaults.seed.to_string());
-    // Icon classes the user EXCLUDED (empty = all included).
-    let mut excluded: Signal<HashSet<String>> = use_signal(HashSet::new);
 
     let jobs = use_resource(move || async move {
         refresh();
         fetch_jobs().await
     });
-    let sprites = use_resource(fetch_sprite_classes);
 
     // Poll every 2 s while any job is Running (no WebSocket until phase 2).
     use_effect(move || {
@@ -185,7 +167,7 @@ pub fn Datagen() -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-4xl mx-auto",
-                crate::workflow::WorkflowBanner { step: 2 }
+                crate::workflow::WorkflowBanner { step: 3 }
                 h1 { class: "text-2xl font-bold text-white mb-6", "Synthetic data generation" }
 
                 // Generation form.
@@ -195,7 +177,10 @@ pub fn Datagen() -> Element {
                         "Pastes strategic-icon sprites onto crops of "
                         b { "background" }
                         "-marked screenshots (triage them in the Gallery first). Samples stream "
-                        "into the store as synthetic, auto-labeled screenshots."
+                        "into the store as synthetic, auto-labeled screenshots. Icon sets and "
+                        "classes are configured in step 2: "
+                        Link { class: "text-blue-400 hover:underline", to: Route::Icons {}, "Unit icons" }
+                        "."
                     }
                     div { class: "grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4",
                         SliderField {
@@ -236,80 +221,10 @@ pub fn Datagen() -> Element {
                         }
                     }
 
-                    // Icon-class picker (everything included unless excluded).
-                    div { class: "mb-4",
-                        match &*sprites.read() {
-                            None => rsx! { p { class: "text-xs text-neutral-500", "Loading sprite classes..." } },
-                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "{e}" } },
-                            Some(Ok(classes)) => {
-                                let total = classes.len();
-                                let excluded_count = excluded.read().len();
-                                rsx! {
-                                    div { class: "flex items-center gap-2 mb-2",
-                                        span { class: "text-xs text-neutral-400",
-                                            "Icon classes — {total - excluded_count} / {total} included"
-                                        }
-                                        div { class: "flex-1" }
-                                        button {
-                                            class: "px-2 py-0.5 rounded text-[11px] text-neutral-300 bg-neutral-800 hover:bg-neutral-700",
-                                            onclick: move |_| excluded.write().clear(),
-                                            "include all"
-                                        }
-                                        button {
-                                            class: "px-2 py-0.5 rounded text-[11px] text-neutral-300 bg-neutral-800 hover:bg-neutral-700",
-                                            onclick: {
-                                                let all: HashSet<String> =
-                                                    classes.iter().cloned().collect();
-                                                move |_| *excluded.write() = all.clone()
-                                            },
-                                            "exclude all"
-                                        }
-                                    }
-                                    p { class: "text-[11px] text-neutral-500 mb-2",
-                                        "Click an icon to exclude/include it (hover for the class name). Dimmed icons are left out of the synthetic data."
-                                    }
-                                    div { class: "max-h-56 overflow-y-auto grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-1 pr-1 rounded border border-neutral-800 bg-neutral-950 p-2",
-                                        for name in classes.iter() {
-                                            {
-                                                let n = name.clone();
-                                                let included = !excluded.read().contains(name);
-                                                let cell_class = if included {
-                                                    "p-1 rounded border border-blue-500/60 bg-neutral-800 hover:border-blue-400 cursor-pointer transition-all"
-                                                } else {
-                                                    "p-1 rounded border border-transparent opacity-30 grayscale hover:opacity-70 cursor-pointer transition-all"
-                                                };
-                                                rsx! {
-                                                    button {
-                                                        key: "{name}",
-                                                        class: cell_class,
-                                                        title: "{name}",
-                                                        onclick: move |_| {
-                                                            let mut set = excluded.write();
-                                                            if !set.remove(&n) {
-                                                                set.insert(n.clone());
-                                                            }
-                                                        },
-                                                        img {
-                                                            class: "w-9 h-10 block mx-auto",
-                                                            src: crate::net::api_url(&format!(
-                                                                "/api/datagen/sprites/{name}/image"
-                                                            )),
-                                                            alt: "{name}",
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     button {
                         class: "px-4 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm font-semibold transition-colors",
                         onclick: move |_| submit(
-                            count, size, max_units, scale_min, scale_max, seed, excluded, status, refresh,
+                            count, size, max_units, scale_min, scale_max, seed, status, refresh,
                         ),
                         "Generate"
                     }
@@ -375,7 +290,7 @@ fn SliderField(
 fn JobRow(job: DatagenJob, refresh: Signal<u32>) -> Element {
     let started = job.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let job_id = job.id.to_string();
-    let mut summary = format!(
+    let summary = format!(
         "count {} · size {} · max-units {} · scale {:.2}–{:.2} · seed {}",
         job.config.count,
         job.config.size,
@@ -384,12 +299,6 @@ fn JobRow(job: DatagenJob, refresh: Signal<u32>) -> Element {
         job.config.scale_max,
         job.config.seed,
     );
-    if !job.config.exclude_classes.is_empty() {
-        summary.push_str(&format!(
-            " · excl {} icons",
-            job.config.exclude_classes.len()
-        ));
-    }
     let (status_text, status_class) = match &job.status {
         DatagenStatus::Running { done, total } => {
             (format!("running {done}/{total}"), "text-blue-300")

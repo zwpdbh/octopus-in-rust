@@ -88,7 +88,7 @@ pub fn Label(id: String) -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-7xl mx-auto",
-                crate::workflow::WorkflowBanner { step: 3 }
+                crate::workflow::WorkflowBanner { step: 4 }
                 h1 { class: "text-2xl font-bold text-white mb-4", "Review labels" }
                 match &*labels_res.read() {
                     None => rsx! { p { class: "text-neutral-400", "Loading..." } },

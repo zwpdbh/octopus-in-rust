@@ -13,7 +13,7 @@ mod utils;
 mod views;
 mod workflow;
 
-use views::{Datagen, Datasets, Gallery, Home, Label, Navbar, Training, UnitDetail, Units};
+use views::{Datagen, Datasets, Gallery, Home, Icons, Label, Navbar, Training, UnitDetail, Units};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -29,6 +29,8 @@ enum Route {
         Units {},
         #[route("/units/:id")]
         UnitDetail { id: String },
+        #[route("/icons")]
+        Icons {},
         #[route("/training")]
         Training {},
         #[route("/datagen")]

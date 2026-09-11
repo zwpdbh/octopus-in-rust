@@ -27,6 +27,13 @@ pub fn steps() -> Vec<WorkflowStep> {
             route: Some(Route::Gallery {}),
         },
         WorkflowStep {
+            name: "Configure unit icons",
+            description: "Enable strategic-icon mods like in game, preview each \
+                          unit's effective icon, and pick the icon classes the \
+                          detector trains on.",
+            route: Some(Route::Icons {}),
+        },
+        WorkflowStep {
             name: "Generate synthetic samples",
             description: "Paste strategic-icon sprites onto background crops — \
                           perfectly labeled training data for free.",
