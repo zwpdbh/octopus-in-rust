@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 /// Training-run parameters (mirrors the `faf-ml-train train` CLI args).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainingConfig {
+    /// Dataset snapshot to train on (`datasets/<name>.json`). REQUIRED:
+    /// training consumes an immutable snapshot, never the live store —
+    /// create one on the Datasets page first (workflow step 5).
+    #[serde(default)]
+    pub dataset: String,
     /// Number of epochs to run.
     #[serde(default = "default_epochs")]
     pub epochs: usize,
@@ -32,6 +37,7 @@ pub struct TrainingConfig {
 impl Default for TrainingConfig {
     fn default() -> Self {
         Self {
+            dataset: String::new(),
             epochs: default_epochs(),
             batch_size: default_batch_size(),
             lr: default_lr(),

@@ -22,6 +22,17 @@ async fn fetch_status() -> Result<TrainingRunStatus, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Fetch dataset snapshot names (training requires one — step 5).
+async fn fetch_datasets() -> Result<Vec<faf_ml_core::DatasetManifest>, String> {
+    Request::get(&crate::net::api_url("/api/datasets"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Vec<faf_ml_core::DatasetManifest>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Page lifecycle; drives which controls are enabled (mirrors fafcn's
 /// `SimulationStatus`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +67,7 @@ fn y_map(p: &TrainingMetricsPoint) -> f64 {
 
 /// Parse the config fields (empty = keep default).
 fn parse_config(
+    dataset: &str,
     epochs: &str,
     batch_size: &str,
     lr: &str,
@@ -63,6 +75,10 @@ fn parse_config(
     cpu: bool,
 ) -> Result<TrainingConfig, String> {
     let mut config = TrainingConfig::default();
+    if dataset.trim().is_empty() {
+        return Err("pick a dataset snapshot first (create one on the Datasets page)".to_string());
+    }
+    config.dataset = dataset.to_string();
     let raw = epochs.trim();
     if !raw.is_empty() {
         config.epochs = raw
@@ -118,7 +134,11 @@ fn connect(
             status.set(PageStatus::Finished);
             detail.set(format!("failed: {error}"));
         }
-        TrainingServerMessage::Finished | TrainingServerMessage::Error(_) => {}
+        TrainingServerMessage::Finished => {}
+        TrainingServerMessage::Error(e) => {
+            status.set(PageStatus::Finished);
+            detail.set(format!("error: {e}"));
+        }
     };
     let on_status = move |text: String| {
         if text == "finished" {
@@ -158,6 +178,23 @@ pub fn Training() -> Element {
     let mut cpu = use_signal(|| false);
     let speed = use_signal(|| "0".to_string());
     let speed_value = move || speed.read().parse::<f64>().unwrap_or(0.0);
+
+    // Dataset snapshots (training requires one); selection defaults to the
+    // first available snapshot.
+    let datasets = use_resource(fetch_datasets);
+    let mut dataset = use_signal(String::new);
+    let mut dataset_initialized = use_signal(|| false);
+    use_effect(move || {
+        if *dataset_initialized.read() {
+            return;
+        }
+        if let Some(Ok(list)) = datasets.read().as_ref() {
+            if let Some(first) = list.first() {
+                dataset.set(first.name.clone());
+            }
+            dataset_initialized.set(true);
+        }
+    });
 
     // On mount: attach to an active run (replay refills the charts) or show
     // the last run's outcome. Runs once (attached flag).
@@ -215,6 +252,7 @@ pub fn Training() -> Element {
 
     let start = move |_| {
         let config = match parse_config(
+            &dataset.read(),
             &epochs.read(),
             &batch_size.read(),
             &lr.read(),
@@ -280,7 +318,40 @@ pub fn Training() -> Element {
                 // Controls.
                 div { class: "rounded-lg border border-neutral-800 bg-neutral-900 p-4 mb-4",
                     p { class: "text-xs text-neutral-400 mb-3",
-                        "Runs a real SSD training job on the server (Wgpu/Vulkan, or CPU) and streams metrics over a WebSocket. The job lives server-side: this page can be closed and re-opened — it re-attaches and replays."
+                        "Runs a real SSD training job on the server (Wgpu/Vulkan, or CPU) on the "
+                        "selected dataset snapshot — snapshots are immutable, so runs reproduce "
+                        "(create one on the Datasets page first). Metrics stream over a WebSocket; "
+                        "the job lives server-side: this page can be closed and re-opened — it "
+                        "re-attaches and replays."
+                    }
+                    div { class: "mb-4",
+                        match &*datasets.read() {
+                            None => rsx! { p { class: "text-xs text-neutral-500", "Loading snapshots..." } },
+                            Some(Err(e)) => rsx! { p { class: "text-xs text-red-400", "{e}" } },
+                            Some(Ok(list)) if list.is_empty() => rsx! {
+                                p { class: "text-xs text-amber-400",
+                                    "No dataset snapshots yet — training requires one. Create it in step 5: "
+                                    Link { class: "text-blue-400 hover:underline", to: crate::Route::Datasets {}, "Datasets" }
+                                }
+                            },
+                            Some(Ok(list)) => rsx! {
+                                label { class: "flex items-center gap-2 text-xs text-neutral-400",
+                                    span { "dataset snapshot" }
+                                    select {
+                                        class: "px-3 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm text-white",
+                                        value: "{dataset}",
+                                        onchange: move |e| dataset.set(e.value()),
+                                        for d in list.iter() {
+                                            option {
+                                                key: "{d.name}",
+                                                value: "{d.name}",
+                                                "{d.name} ({d.entries.len()} images)"
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
                     }
                     div { class: "grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 mb-4",
                         SliderField { label: "epochs", min: "1", max: "100", step: "1", value: epochs }

@@ -15,3 +15,4 @@ serde_json = { workspace = true }
 image = "0.25"
 rand = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

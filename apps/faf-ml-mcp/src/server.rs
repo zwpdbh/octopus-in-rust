@@ -92,6 +92,9 @@ pub struct NameParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TrainingStartParams {
+    /// Dataset snapshot name to train on (REQUIRED — create one first with
+    /// faf_ml_dataset_create; training consumes immutable snapshots only).
+    dataset: String,
     /// Epochs (default 50).
     epochs: Option<usize>,
     /// Batch size (default 4 — the real detector's GPU cap).
@@ -476,6 +479,7 @@ impl FafMl {
         Parameters(p): Parameters<TrainingStartParams>,
     ) -> String {
         let mut config = TrainingConfig::default();
+        config.dataset = p.dataset;
         if let Some(v) = p.epochs {
             config.epochs = v;
         }

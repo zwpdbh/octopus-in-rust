@@ -1,10 +1,13 @@
-//! Dataset loaders. Two on-disk layouts are supported:
+//! Dataset loaders. Three on-disk layouts are supported:
 //!   1. YOLO datagen dir (backwards compatibility): images/000000.png,
 //!      labels/000000.txt (YOLO: `<class_id> <cx> <cy> <w> <h>` normalized),
 //!      classes.txt (line number = class id).
 //!   2. The faf-ml platform store: screenshots/<uuid>.png + index.json,
 //!      labels/<uuid>.json ([LabeledBox], absolute pixels), classes.txt.
 //!      Only `synthetic`-kind screenshots become training samples.
+//!   3. A dataset SNAPSHOT (`load_snapshot`): datasets/<name>.json embeds
+//!      image ids + labels; images/dims resolve through the store. This is
+//!      what training uses — snapshots are immutable, so runs reproduce.
 //!
 //! Images are decoded lazily per batch from the host (thousands of 640×640
 //! frames don't fit one GPU buffer — the Fashion-MNIST lesson); anchor
@@ -110,6 +113,66 @@ impl DetectDataset {
             "no synthetic-kind screenshots in {}",
             dir.display()
         );
+
+        Ok(Self {
+            classes,
+            samples,
+            input_size,
+        })
+    }
+
+    /// Load a dataset SNAPSHOT: `datasets/<name>.json` embeds image ids and
+    /// their (immutable) labels; image files and dimensions resolve through
+    /// the platform store in `dir`. Training input — a snapshot is a
+    /// prerequisite for `train`.
+    pub fn load_snapshot(dir: &Path, name: &str, input_size: u32) -> Result<Self> {
+        let classes = read_classes(dir)?;
+
+        let manifest_path = dir.join("datasets").join(format!("{name}.json"));
+        let raw = fs::read_to_string(&manifest_path).with_context(|| {
+            format!(
+                "reading {} (no such snapshot — create one on the Datasets page first)",
+                manifest_path.display()
+            )
+        })?;
+        let manifest: faf_ml_core::DatasetManifest = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing {}", manifest_path.display()))?;
+
+        // Snapshot entries carry labels but not image dims — index.json has them.
+        let index_path = dir.join("screenshots").join("index.json");
+        let raw = fs::read_to_string(&index_path)
+            .with_context(|| format!("reading {}", index_path.display()))?;
+        let metas: Vec<ScreenshotMeta> = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing {}", index_path.display()))?;
+        let dims: std::collections::HashMap<uuid::Uuid, (u32, u32)> =
+            metas.iter().map(|m| (m.id, (m.width, m.height))).collect();
+
+        let mut samples = Vec::with_capacity(manifest.entries.len());
+        for entry in &manifest.entries {
+            let image_path = dir
+                .join("screenshots")
+                .join(format!("{}.png", entry.image_id));
+            let Some(&(width, height)) = dims.get(&entry.image_id) else {
+                anyhow::bail!(
+                    "snapshot {name:?} entry {} is missing from the store index",
+                    entry.image_id
+                );
+            };
+            anyhow::ensure!(
+                image_path.exists(),
+                "snapshot {name:?} entry {} has no image {} (was it deleted from the store?)",
+                entry.image_id,
+                image_path.display()
+            );
+            let gt = entry
+                .labels
+                .iter()
+                .map(|b| labeled_box_to_gt(b, &classes, width, height))
+                .collect::<Result<_>>()
+                .with_context(|| format!("snapshot {name:?} entry {}", entry.image_id))?;
+            samples.push(Sample { image_path, gt });
+        }
+        anyhow::ensure!(!samples.is_empty(), "snapshot {name:?} is empty");
 
         Ok(Self {
             classes,
@@ -377,5 +440,67 @@ mod tests {
             ..b
         };
         assert!(labeled_box_to_gt(&unknown, &classes, 640, 640).is_err());
+    }
+
+    #[test]
+    fn snapshot_loads_embedded_labels_against_store_dims() {
+        let dir =
+            std::env::temp_dir().join(format!("octopus-test-snapshot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("screenshots")).unwrap();
+        fs::create_dir_all(dir.join("datasets")).unwrap();
+        fs::write(dir.join("classes.txt"), "tank\nbomber\n").unwrap();
+
+        let id = uuid::Uuid::new_v4();
+        // 1×1 placeholder (images decode lazily — loading never opens them).
+        image::RgbaImage::new(1, 1)
+            .save(dir.join("screenshots").join(format!("{id}.png")))
+            .unwrap();
+        let meta = ScreenshotMeta {
+            id,
+            filename: "s.png".to_string(),
+            width: 640,
+            height: 640,
+            uploaded_at: chrono::Utc::now(),
+            kind: ScreenshotKind::Synthetic,
+            job_id: None,
+        };
+        fs::write(
+            dir.join("screenshots").join("index.json"),
+            serde_json::to_string(&vec![meta]).unwrap(),
+        )
+        .unwrap();
+        let manifest = faf_ml_core::DatasetManifest {
+            name: "v1".to_string(),
+            created_at: chrono::Utc::now(),
+            entries: vec![faf_ml_core::DatasetEntry {
+                image_id: id,
+                labels: vec![LabeledBox {
+                    class: "bomber".to_string(),
+                    x: 100.0,
+                    y: 50.0,
+                    w: 40.0,
+                    h: 20.0,
+                }],
+            }],
+        };
+        fs::write(
+            dir.join("datasets").join("v1.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let ds = DetectDataset::load_snapshot(&dir, "v1", 640).unwrap();
+        assert_eq!(ds.classes, vec!["tank", "bomber"]);
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds.samples[0].gt.len(), 1);
+        assert_eq!(ds.samples[0].gt[0].class_id, 1);
+        assert!((ds.samples[0].gt[0].bbox.cx - 120.0 / 640.0).abs() < 1e-6);
+
+        // A missing snapshot errors with the "create one first" guidance.
+        let err = DetectDataset::load_snapshot(&dir, "nope", 640).unwrap_err();
+        assert!(format!("{err:#}").contains("no such snapshot"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

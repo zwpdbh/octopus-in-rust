@@ -205,7 +205,9 @@ pub async fn start_datagen(
     let effective =
         crate::icon_sets::compute_effective(&super::icons::pipeline_units(&state), &sets);
     let covered: std::collections::HashSet<String> =
-        crate::icon_sets::class_unit_counts(&effective).into_keys().collect();
+        crate::icon_sets::class_unit_counts(&effective)
+            .into_keys()
+            .collect();
     sprites.retain(|s| covered.contains(&s.class_name));
     if sprites.is_empty() {
         return Err(Error::Internal(

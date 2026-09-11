@@ -175,7 +175,7 @@ pub fn Icons() -> Element {
     rsx! {
         div { class: "flex-1 min-h-0 flex flex-col bg-neutral-950 text-gray-200 font-sans",
             div { class: "shrink-0 px-6 pt-6 max-w-none",
-                crate::workflow::WorkflowBanner { step: 2 }
+                crate::workflow::WorkflowBanner { step: 1 }
             }
             div { class: "flex-1 min-h-0 flex overflow-hidden",
                 // Left column: configuration cards.

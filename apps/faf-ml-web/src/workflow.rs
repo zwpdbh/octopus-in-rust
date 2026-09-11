@@ -20,18 +20,18 @@ pub struct WorkflowStep {
 pub fn steps() -> Vec<WorkflowStep> {
     vec![
         WorkflowStep {
-            name: "Collect & triage screenshots",
-            description: "Upload game screenshots, then mark each: background \
-                          (empty terrain — the datagen canvas) or battle (real \
-                          units — the held-out test pool).",
-            route: Some(Route::Gallery {}),
-        },
-        WorkflowStep {
             name: "Configure unit icons",
             description: "Enable strategic-icon mods like in game, preview each \
                           unit's effective icon, and pick the icon classes the \
                           detector trains on.",
             route: Some(Route::Icons {}),
+        },
+        WorkflowStep {
+            name: "Collect & triage screenshots",
+            description: "Upload game screenshots, then mark each: background \
+                          (empty terrain — the datagen canvas) or battle (real \
+                          units — the held-out test pool).",
+            route: Some(Route::Gallery {}),
         },
         WorkflowStep {
             name: "Generate synthetic samples",

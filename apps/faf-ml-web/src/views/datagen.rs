@@ -178,7 +178,7 @@ pub fn Datagen() -> Element {
                         b { "background" }
                         "-marked screenshots (triage them in the Gallery first). Samples stream "
                         "into the store as synthetic, auto-labeled screenshots. Icon sets and "
-                        "classes are configured in step 2: "
+                        "classes are configured in step 1: "
                         Link { class: "text-blue-400 hover:underline", to: Route::Icons {}, "Unit icons" }
                         "."
                     }

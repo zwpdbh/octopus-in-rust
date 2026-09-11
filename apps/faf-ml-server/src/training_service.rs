@@ -51,6 +51,20 @@ impl TrainingService {
     /// Start a real training run. Fails when a run is already active.
     /// Viewers attach through the registry (`AppState::training_run`).
     pub fn run(state: &AppState, config: TrainingConfig, speed: f64) -> anyhow::Result<()> {
+        // Snapshots are a prerequisite for training — validate up front so
+        // the client gets the error immediately, not mid-thread.
+        if config.dataset.trim().is_empty() {
+            return Err(anyhow!(
+                "no dataset snapshot selected — create one on the Datasets page first"
+            ));
+        }
+        crate::state::valid_dataset_name(&config.dataset).map_err(|e| anyhow!("{e}"))?;
+        if !state.dataset_path(&config.dataset).is_file() {
+            return Err(anyhow!(
+                "snapshot {:?} not found — create one on the Datasets page first",
+                config.dataset
+            ));
+        }
         let (events_tx, _) = broadcast::channel(1024);
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TrainingCommand>();
         {
@@ -75,6 +89,7 @@ impl TrainingService {
         let registry = state.training_run.clone();
         let params = TrainParams {
             data: state.data_dir.as_ref().clone(),
+            dataset: config.dataset.clone(),
             out: state.data_dir.join("runs"),
             epochs: config.epochs,
             batch: config.batch_size,

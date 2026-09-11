@@ -32,8 +32,12 @@ pub const INPUT_SIZE: u32 = 640;
 /// Training-run parameters.
 #[derive(Debug, Clone)]
 pub struct TrainParams {
-    /// Dataset directory (the platform store, auto-detected layout).
+    /// Dataset directory (the platform store root; snapshots live under
+    /// `datasets/` inside it).
     pub data: PathBuf,
+    /// Dataset snapshot name (`datasets/<name>.json`). REQUIRED — training
+    /// consumes an immutable snapshot, never the live store.
+    pub dataset: String,
     /// Run-directory root; each run checkpoints into `<out>/<timestamp>/`.
     pub out: PathBuf,
     pub epochs: usize,
@@ -51,6 +55,7 @@ impl Default for TrainParams {
     fn default() -> Self {
         Self {
             data: PathBuf::from("data/faf-ml"),
+            dataset: String::new(),
             out: PathBuf::from("data/faf-ml/runs"),
             epochs: 50,
             batch: 4,
@@ -110,7 +115,11 @@ pub fn train<AB: AutodiffBackend>(
 ) -> Result<PathBuf> {
     let started = Instant::now();
     let device: Device<AB> = Default::default();
-    let dataset = DetectDataset::load(&params.data, INPUT_SIZE)?;
+    anyhow::ensure!(
+        !params.dataset.trim().is_empty(),
+        "no dataset snapshot selected — create one on the Datasets page first"
+    );
+    let dataset = DetectDataset::load_snapshot(&params.data, &params.dataset, INPUT_SIZE)?;
     anyhow::ensure!(
         dataset.len() >= 2,
         "need at least 2 samples to train (have {})",

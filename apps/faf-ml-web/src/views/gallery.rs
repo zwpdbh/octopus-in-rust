@@ -113,7 +113,7 @@ pub fn Gallery() -> Element {
     rsx! {
         div { class: "flex-1 overflow-y-auto bg-neutral-950 text-gray-200 font-sans p-6",
             div { class: "max-w-6xl mx-auto",
-                crate::workflow::WorkflowBanner { step: 1 }
+                crate::workflow::WorkflowBanner { step: 2 }
                 div { class: "flex items-center gap-4 mb-4",
                     h1 { class: "text-2xl font-bold text-white", "Screenshot gallery" }
                     div { class: "flex-1" }

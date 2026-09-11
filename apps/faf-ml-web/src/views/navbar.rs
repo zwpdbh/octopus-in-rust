@@ -14,12 +14,16 @@ pub fn Navbar() -> Element {
                 }
                 div { class: "flex-1" }
                 NavLink { to: Route::Home {}, label: "Home" }
-                NavLink { to: Route::Gallery {}, label: "Gallery" }
+                // Pages outside the workflow come first, then the workflow
+                // steps in order (1 Icons → 2 Gallery → 3 Datagen →
+                // 5 Datasets → 6 Training; step 4 Review labels lives in the
+                // Gallery, step 7 Evaluate is CLI-only for now).
                 NavLink { to: Route::Units {}, label: "Units" }
                 NavLink { to: Route::Icons {}, label: "Icons" }
-                NavLink { to: Route::Training {}, label: "Training" }
+                NavLink { to: Route::Gallery {}, label: "Gallery" }
                 NavLink { to: Route::Datagen {}, label: "Datagen" }
                 NavLink { to: Route::Datasets {}, label: "Datasets" }
+                NavLink { to: Route::Training {}, label: "Training" }
             }
             div { class: "flex-1 min-h-0 flex flex-col",
                 Outlet::<Route> {}
