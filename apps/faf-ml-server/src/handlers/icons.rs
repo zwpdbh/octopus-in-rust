@@ -59,7 +59,7 @@ fn resolve_enabled(state: &AppState, query: &ModsQuery) -> Result<Vec<String>> {
 
 /// Four-faction units (same filter as `/api/units`: mod factions like
 /// Nomads are not part of the pipeline).
-fn pipeline_units(state: &AppState) -> Vec<faf_blueprints::UnitBlueprint> {
+pub(crate) fn pipeline_units(state: &AppState) -> Vec<faf_blueprints::UnitBlueprint> {
     state
         .blueprints
         .all_units()
@@ -117,7 +117,9 @@ pub async fn put_icon_config(
 }
 
 /// `GET /api/icons/classes` — per-class source, unit coverage, and excluded
-/// flag for the include/exclude picker.
+/// flag for the include/exclude picker. Only classes that map to at least
+/// one unit are listed: orphan marker icons (`strat_attack`, `ferry_point`,
+/// ...) can never be trained on, so they are not selectable.
 pub async fn list_icon_classes(
     State(state): State<AppState>,
     Query(query): Query<ModsQuery>,
@@ -138,19 +140,23 @@ pub async fn list_icon_classes(
     classes.dedup();
     let infos = classes
         .into_iter()
-        .map(|class| {
+        .filter_map(|class| {
+            let unit_count = counts.get(&class).copied().unwrap_or(0);
+            if unit_count == 0 {
+                return None;
+            }
             let source = sets
                 .iter()
                 .rev()
                 .find(|set| set.classes.contains(&class))
                 .map(|set| set.id.clone())
                 .unwrap_or_default();
-            IconClassInfo {
-                unit_count: counts.get(&class).copied().unwrap_or(0),
+            Some(IconClassInfo {
+                unit_count,
                 excluded: config.excluded_classes.contains(&class),
                 class,
                 source,
-            }
+            })
         })
         .collect();
     Ok(Json(infos))

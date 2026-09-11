@@ -199,9 +199,22 @@ pub async fn start_datagen(
             "no sprites: no icon set is enabled (configure one on the Icons page)".to_string(),
         ));
     }
+    // Only classes that map to at least one unit are trainable — orphan
+    // marker icons (`strat_attack`, `ferry_point`, ...) never appear on a
+    // unit, so they are dropped before the classes.txt merge as well.
+    let effective =
+        crate::icon_sets::compute_effective(&super::icons::pipeline_units(&state), &sets);
+    let covered: std::collections::HashSet<String> =
+        crate::icon_sets::class_unit_counts(&effective).into_keys().collect();
+    sprites.retain(|s| covered.contains(&s.class_name));
+    if sprites.is_empty() {
+        return Err(Error::Internal(
+            "no sprites map to any unit under the enabled icon sets".to_string(),
+        ));
+    }
     // classes.txt is the global training vocabulary: merge ALL enabled
-    // sprite class names (not just this run's selection) so class ids stay
-    // stable.
+    // unit-mapped sprite class names (not just this run's selection) so
+    // class ids stay stable.
     merge_classes(&state, &faf_ml_datagen::class_names(&sprites))?;
     if !icon_config.excluded_classes.is_empty() {
         sprites.retain(|s| !icon_config.excluded_classes.contains(&s.class_name));

@@ -52,7 +52,7 @@ Logs: stdout + `data/logs/faf-ml-server.log`.
 | `GET /api/units/{id}/icons` | the unit's blueprint default icon + every custom-set icon class mapped to it from `icon-map.json`; sharing units are `{id, name}` pairs, four FAF factions only (mod factions like Nomads excluded) |
 | `GET /api/icons/sets` | registered icon-set mods (`FAF_ML_ICON_MODS`) with class/assignment counts and enabled flags (parsed from `mod_info.lua` + `mod_icons.lua`) |
 | `GET/PUT /api/icons/config` | read/persist `icon-config.json` (`enabled_mods`, `excluded_classes`; absent file = all mods enabled). Unknown mod ids → 400 |
-| `GET /api/icons/classes[?mods=a,b]` | per-class source set, unit coverage and excluded flag for the picker |
+| `GET /api/icons/classes[?mods=a,b]` | per-class source set, unit coverage and excluded flag for the picker; only unit-mapped classes are listed (orphan marker icons like `strat_attack`/`ferry_point` are dropped) |
 | `GET /api/icons/units[?mods=a,b]` | effective strategic icon per unit under the selection (explicit mod assignment > blueprint default > uncovered), four factions only |
 | `GET /api/icons/sprites/{class}/image` | the class's `_rest` sprite as PNG, resolved across enabled sets (a mod's sprite overrides the base set's, like in game) |
 | `GET /api/portraits/{id}` | unit portrait PNG from `FAF_ML_PORTRAITS_DIR` (default `assets/icons/units`) |
