@@ -31,6 +31,7 @@ correction set closes the domain gap.
 
 Not built yet: real mAP (predict+AP over the valid split), train-from-snapshot,
 the eval/analysis view UI (Phase 3), Windows capture client.
+See **Next tasks (priority order)** below for the full backlog.
 
 **Design goal — one backend, two clients.** The platform exposes the same
 typed JSON/WS API to everyone: humans walk the web UI's workflow (each page
@@ -84,6 +85,66 @@ battle shot returns detections JSON. Browser equivalent: Training page Start
 ⚠ **Compute reality check**: this WSL box has NO real GPU — wgpu falls back
 to llvmpipe (software). Real 50-epoch training should run on Windows (native
 Vulkan) or a Linux box with GPU access. A full run here would take forever.
+
+## Next tasks (priority order)
+
+Ordered backlog. Work top-down; bump items only with a reason. When you finish
+one, delete it here and update the tables/sections above to match.
+
+### P0 — Verify the pipeline end-to-end
+
+1. **Finish the smoke run** (`epochs=1, max_batches=2, cpu=true` via the
+   Training page or `faf_ml_training_start`): epoch-end valid point appears,
+   checkpoint lands in `data/faf-ml/runs/<ts>/`, `faf_ml_predict` returns
+   detections on the battle shot. Then update "State at handover" above — it
+   currently claims this is unverified, but a Sep-10 run dir exists; reconcile
+   what actually happened.
+
+### P1 — Make training trustworthy
+
+2. **Seed the train/valid split** — `crates/faf-ml-model/src/train.rs:132`
+   shuffles unseeded; the "deterministic 10% split" is only deterministic in
+   count. Same seed → same split, or runs aren't comparable.
+3. **Save the best checkpoint per epoch** (lowest valid loss), not just the
+   final one — a diverging late epoch currently destroys the run's best state.
+   Add early stopping and a simple LR schedule while you're in there.
+
+### P2 — Data: close the domain gap
+
+4. **Collect real screenshots** — only 4 background + 1 battle on disk vs. the
+   ~20-across-several-maps target (step 1 below). One battle shot is not an
+   exam.
+5. **Calibrate `TEAM_COLORS`** in `crates/faf-ml-datagen/src/lib.rs` against
+   real FAF player colors — player attribution depends on it (decision 3).
+6. **Dataset compose view** (Phase 1 remainder).
+
+### P3 — Evaluation
+
+7. **Real mAP at epoch end** (predict + AP over the valid split) — valid loss
+   alone can't tell you if detections are usable; the `map` field is stubbed
+   `None` everywhere today.
+8. **Phase 3 eval/analysis view** — detections → per-player unit table via
+   `icon-map.json` + dominant-box-color attribution; run-registry UI in the
+   monitor page; train-from-snapshot.
+
+### P4 — Hygiene (cheap, do alongside anything above)
+
+9. Sweep stale docs/comments: `apps/faf-ml-server/README.md` header still says
+   "no training here" while documenting `/ws/training`; doc comments in
+   `faf-ml-core/src/training.rs` and `lib.rs` reference the deleted
+   `faf-ml-train` CLI; this doc says 193 classes but `classes.txt` has 210.
+10. Delete the dead YOLO-dir loader (`faf-ml-model/src/data.rs` `load_yolo_dir`)
+    — nothing writes YOLO dirs since the datagen CLI was removed.
+11. Add a faf-ml section to the root `STATUS.md` — the project is invisible
+    at repo level.
+
+### P5 — Scale up (only with a real GPU)
+
+12. **Gradient accumulation** to lift the batch-4 wgpu buffer cap, and a
+    prefetched/async data pipeline (PNG decode + anchor matching currently run
+    synchronously on the training thread).
+13. Move a real 50-epoch run to the RTX 3090 box; consider hard-negative
+    mining / focal loss if background false positives dominate on real shots.
 
 ## ▶ Your next session, step by step
 
