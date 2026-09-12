@@ -538,15 +538,15 @@ pub async fn sync_gamedata(
         summary.downloaded_files += downloaded;
         summary.downloaded_bytes += bytes;
 
-        match channel {
-            &CHANNEL_GAMEDATA => {
+        match *channel {
+            CHANNEL_GAMEDATA => {
                 summary.extra_files = find_extra_files(&target_dir, &manifest);
                 // The FAF client keeps a separate copy of gamedata for replay
                 // playback (`replaydata/gamedata`); keep it identical so
                 // watching a replay never triggers an official download.
                 mirror_to_replaydata(faf_root, &manifest, progress)?;
             }
-            &CHANNEL_MAP_GENERATOR => {
+            CHANNEL_MAP_GENERATOR => {
                 prune_old_jars(&target_dir, &manifest, progress)?;
             }
             _ => {}

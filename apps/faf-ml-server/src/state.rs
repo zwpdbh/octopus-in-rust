@@ -49,7 +49,7 @@ impl AppState {
     ) -> Result<Self> {
         let unit_index = match std::env::var("FAFCN_UNITS_FILE") {
             Ok(path) => faf_units::FafUnitIndex::new(path.into()),
-            Err(_) => faf_units::FafUnitIndex::default(),
+            Err(_) => faf_units::FafUnitIndex::load_default(),
         }
         .map_err(|e| Error::Internal(format!("loading unit index: {e:#}")))?;
         let unit_display_names: HashMap<String, String> = unit_index

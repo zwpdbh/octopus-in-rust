@@ -278,14 +278,13 @@ pub fn detect_version_from_filename(file_name: &str) -> Option<String> {
         }
         if parts.len() >= 2 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
             let candidate = parts.join(".");
-            let better = match (
-                &best,
-                compare_version_strings(&candidate, best.as_deref().unwrap_or("0")),
-            ) {
-                (None, _) => true,
-                (Some(_), Some(std::cmp::Ordering::Greater)) => true,
-                _ => false,
-            };
+            let better = matches!(
+                (
+                    &best,
+                    compare_version_strings(&candidate, best.as_deref().unwrap_or("0"))
+                ),
+                (None, _) | (Some(_), Some(std::cmp::Ordering::Greater))
+            );
             if better {
                 *best = Some(candidate);
             }
@@ -397,7 +396,7 @@ pub fn compare_version_strings(a: &str, b: &str) -> Option<std::cmp::Ordering> {
     Some(loop {
         match (av.next(), bv.next()) {
             (None, None) => break std::cmp::Ordering::Equal,
-            (None, Some(x)) if x == 0 => continue,
+            (None, Some(0)) => continue,
             (None, Some(_)) => break std::cmp::Ordering::Less,
             (Some(_), None) => break std::cmp::Ordering::Greater,
             (Some(x), Some(y)) => match x.cmp(&y) {

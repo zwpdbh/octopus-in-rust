@@ -162,11 +162,11 @@ mod tests {
 
     #[test]
     fn matching_threshold_and_background() {
-        let anchors = vec![
+        let anchors = [
             center(0.5, 0.5, 0.1, 0.1), // overlaps the GT
             center(0.9, 0.9, 0.1, 0.1), // far away → background
         ];
-        let gt = vec![center(0.52, 0.51, 0.1, 0.1)];
+        let gt = [center(0.52, 0.51, 0.1, 0.1)];
         let anchor_corners: Vec<CornerBox> = anchors.iter().map(|a| a.to_corner()).collect();
         let gt_corners: Vec<CornerBox> = gt.iter().map(|a| a.to_corner()).collect();
         let m = match_anchors(&anchor_corners, &gt_corners, 0.5);
@@ -178,15 +178,15 @@ mod tests {
     fn matching_force_matches_best_anchor_below_threshold() {
         // GT only weakly overlaps anchor 0 (IoU < 0.5); it must still be
         // force-matched so every GT supervises exactly its best anchor.
-        let anchors = vec![center(0.50, 0.50, 0.10, 0.10)];
-        let gt = vec![center(0.56, 0.50, 0.10, 0.10)]; // IoU = 0.04/0.16 = 0.25
+        let anchors = [center(0.50, 0.50, 0.10, 0.10)];
+        let gt = [center(0.56, 0.50, 0.10, 0.10)]; // IoU = 0.04/0.16 = 0.25
         let m = match_anchors(&[anchors[0].to_corner()], &[gt[0].to_corner()], 0.5);
         assert_eq!(m.anchor_to_gt[0], Some(0));
     }
 
     #[test]
     fn matching_no_gt_is_all_background() {
-        let anchors = vec![center(0.5, 0.5, 0.1, 0.1)];
+        let anchors = [center(0.5, 0.5, 0.1, 0.1)];
         let m = match_anchors(&[anchors[0].to_corner()], &[], 0.5);
         assert_eq!(m.anchor_to_gt, vec![None]);
     }

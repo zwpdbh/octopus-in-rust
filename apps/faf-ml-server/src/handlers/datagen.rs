@@ -273,7 +273,7 @@ pub async fn list_datagen_jobs(State(state): State<AppState>) -> Result<Json<Vec
         .values()
         .cloned()
         .collect();
-    jobs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
     Ok(Json(jobs))
 }
 

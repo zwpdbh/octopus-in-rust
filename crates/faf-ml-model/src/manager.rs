@@ -103,8 +103,8 @@ pub enum ManagerEvent {
     Reset,
 }
 
-/// Atomic snapshot for late/reattaching viewers: run status + replay buffer
-/// + a live subscription, all taken under one actor turn so no event can
+/// Atomic snapshot for late/reattaching viewers: run status, replay buffer,
+/// and a live subscription, all taken under one actor turn so no event can
 /// interleave between them.
 pub struct AttachDump {
     pub status: RunStatus,
@@ -398,7 +398,7 @@ impl TrainManager {
             ManagerCommand::SetSpeed { batches_per_sec } => {
                 self.active_phase()?;
                 if let Some(tx) = &self.control_tx {
-                    let _ = tx.send_modify(|c| c.batches_per_sec = batches_per_sec);
+                    tx.send_modify(|c| c.batches_per_sec = batches_per_sec);
                 }
                 Ok(())
             }
@@ -471,7 +471,7 @@ impl TrainManager {
 
     fn set_action(&self, action: TrainAction) {
         if let Some(tx) = &self.control_tx {
-            let _ = tx.send_modify(|c| c.action = action);
+            tx.send_modify(|c| c.action = action);
         }
     }
 

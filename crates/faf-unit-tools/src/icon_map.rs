@@ -8,11 +8,10 @@
 //!
 //!   1. MATCHED   — sprite classes that map to ≥1 unit (the real classes)
 //!   2. ORPHANS   — sprite classes no unit uses (markers like
-//!                  `strategic_nuke`, modded/extra icons) → exclude from
-//!                  training classes
+//!      `strategic_nuke`, modded/extra icons) → exclude from training classes
 //!   3. UNCOVERED — icon names in the unit DB with no sprite in the set →
-//!                  units the detector can never see; the icon set is missing
-//!                  sprites for them
+//!      units the detector can never see; the icon set is missing sprites for
+//!      them
 //!
 //! With `--out`, also writes the mapping as a JSON artifact
 //! (class → unit ids) for the faf-ml platform's analysis view.

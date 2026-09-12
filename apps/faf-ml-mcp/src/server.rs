@@ -478,8 +478,10 @@ impl FafMl {
         &self,
         Parameters(p): Parameters<TrainingStartParams>,
     ) -> String {
-        let mut config = TrainingConfig::default();
-        config.dataset = p.dataset;
+        let mut config = TrainingConfig {
+            dataset: p.dataset,
+            ..Default::default()
+        };
         if let Some(v) = p.epochs {
             config.epochs = v;
         }
