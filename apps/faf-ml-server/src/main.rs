@@ -26,9 +26,10 @@
 //!   `faf-blueprints`).
 //! - `GET /api/portraits/:id` — unit portrait PNGs for the Units page.
 //! - `GET /ws/training` — WebSocket training: `Start {config, speed}` starts
-//!   a REAL burn training thread (server-side registry, survives viewer
-//!   disconnects); `Attach` replays + streams an active run; `Command` frames
-//!   pause/resume/stop/change speed.
+//!   a REAL burn training thread (managed by the `faf-ml-model` training
+//!   manager actor; survives viewer disconnects); `Attach` replays + streams
+//!   the current/last run; `Command` frames pause/resume/stop/reset/change
+//!   speed.
 //! - `GET /api/training/status` — the run registry as JSON.
 //! - `GET /api/runs` — checkpoint list; `POST /api/predict(/annotate)` — run
 //!   a checkpoint on a store screenshot (JSON detections / annotated PNG).
@@ -40,7 +41,6 @@ mod handlers;
 mod icon_sets;
 mod routes;
 mod state;
-mod training_service;
 
 use anyhow::Context;
 use axum::http::{header, Method};

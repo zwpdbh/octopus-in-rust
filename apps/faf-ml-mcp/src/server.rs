@@ -9,19 +9,19 @@ use faf_ml_core::{DatagenConfig, DatagenJob, ScreenshotMeta, TrainingCommand, Tr
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
 
-use crate::{api::Api, training::TrainingManager};
+use crate::{api::Api, training::TrainingRuns};
 
 #[derive(Clone)]
 pub struct FafMl {
     api: Api,
-    training: TrainingManager,
+    training: TrainingRuns,
 }
 
 impl FafMl {
     pub fn new() -> Self {
         Self {
             api: Api::from_env(),
-            training: TrainingManager::default(),
+            training: TrainingRuns::default(),
         }
     }
 }
@@ -121,7 +121,7 @@ pub struct TrainingStatusParams {
 pub struct TrainingCommandParams {
     /// Run handle from training_start.
     handle: String,
-    /// pause | resume | stop | set_speed
+    /// pause | resume | stop | reset | set_speed
     command: String,
     /// Required when command = set_speed.
     batches_per_sec: Option<f64>,
@@ -563,7 +563,11 @@ impl FafMl {
         }
     }
 
-    #[tool(description = "Control a training run: pause / resume / stop / set_speed.")]
+    #[tool(
+        description = "Control a training run: pause / resume / stop / reset / set_speed. \
+                          Stop and reset both save the checkpoint; reset additionally wipes \
+                          the run record and clears viewers' charts."
+    )]
     async fn faf_ml_training_command(
         &self,
         Parameters(p): Parameters<TrainingCommandParams>,
@@ -572,6 +576,7 @@ impl FafMl {
             "pause" => TrainingCommand::Pause,
             "resume" => TrainingCommand::Resume,
             "stop" => TrainingCommand::Stop,
+            "reset" => TrainingCommand::Reset,
             "set_speed" => match p.batches_per_sec {
                 Some(v) => TrainingCommand::SetSpeed { batches_per_sec: v },
                 None => return "error: set_speed requires batches_per_sec".to_string(),
@@ -591,9 +596,14 @@ impl FafMl {
 fn format_run_status(status: &faf_ml_core::TrainingRunStatus) -> String {
     let state = match &status.status {
         faf_ml_core::TrainingStatus::Running => "running".to_string(),
+        faf_ml_core::TrainingStatus::Pausing => "pausing".to_string(),
         faf_ml_core::TrainingStatus::Paused => "paused".to_string(),
+        faf_ml_core::TrainingStatus::Stopping => "stopping".to_string(),
         faf_ml_core::TrainingStatus::Done { duration_secs } => {
             format!("done ({duration_secs}s)")
+        }
+        faf_ml_core::TrainingStatus::Stopped { duration_secs } => {
+            format!("stopped ({duration_secs}s)")
         }
         faf_ml_core::TrainingStatus::Failed { error } => format!("failed: {error}"),
     };
@@ -616,6 +626,10 @@ fn format_run_status(status: &faf_ml_core::TrainingRunStatus) -> String {
                 run_dir,
                 duration_secs,
             } => format!("\nresult: done in {duration_secs}s → {run_dir}"),
+            faf_ml_core::TrainingRunResult::Stopped {
+                run_dir,
+                duration_secs,
+            } => format!("\nresult: stopped after {duration_secs}s → {run_dir}"),
             faf_ml_core::TrainingRunResult::Failed { error } => {
                 format!("\nresult: failed — {error}")
             }

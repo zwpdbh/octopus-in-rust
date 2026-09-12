@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Training-run parameters (mirrors the `faf-ml-train train` CLI args).
+/// Training-run parameters (sent by the Training page / MCP start tool).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainingConfig {
     /// Dataset snapshot to train on (`datasets/<name>.json`). REQUIRED:
@@ -100,31 +100,52 @@ pub enum TrainingClientMessage {
     Command(TrainingCommand),
 }
 
-/// Runtime commands for a training thread.
+/// Runtime commands for a training run.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum TrainingCommand {
     Pause,
     Resume,
+    /// Finish the current batch, save the checkpoint, end the run (the run
+    /// record stays visible).
     Stop,
-    SetSpeed { batches_per_sec: f64 },
+    /// Like Stop (checkpoint still saved), but additionally wipes the run
+    /// record and tells every viewer to clear its charts.
+    Reset,
+    SetSpeed {
+        batches_per_sec: f64,
+    },
 }
 
-/// Lifecycle of one training run.
+/// Lifecycle of one training run. `Pausing`/`Stopping` are the instant
+/// command acknowledgments; the settled `Paused`/`Stopped` arrive when the
+/// training thread reaches the batch boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum TrainingStatus {
     Running,
+    Pausing,
     Paused,
-    Done { duration_secs: u64 },
-    Failed { error: String },
+    Stopping,
+    Done {
+        duration_secs: u64,
+    },
+    /// Ended via Stop or Reset (checkpoint saved).
+    Stopped {
+        duration_secs: u64,
+    },
+    Failed {
+        error: String,
+    },
 }
 
-/// Final outcome of a training run (`GET /api/training/status`).
+/// Final outcome of a training run (`GET /api/training/status`). A Reset
+/// wipes the run record entirely — it leaves no result behind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum TrainingRunResult {
     Done { run_dir: String, duration_secs: u64 },
+    Stopped { run_dir: String, duration_secs: u64 },
     Failed { error: String },
 }
 
@@ -192,7 +213,10 @@ pub enum TrainingServerMessage {
     Metrics(TrainingMetricsPoint),
     Status(TrainingStatus),
     Error(String),
-    /// Training thread exited cleanly (after `Status::Done`); the server
+    /// The run record was wiped (`TrainingCommand::Reset`); viewers clear
+    /// their charts and go back to idle.
+    Reset,
+    /// Training thread exited cleanly (after a terminal `Status`); the server
     /// closes the socket right after.
     Finished,
 }
@@ -235,5 +259,22 @@ mod tests {
         );
         let back: TrainingClientMessage = serde_json::from_str(&raw).unwrap();
         assert_eq!(back, cmd);
+
+        let cmd = TrainingClientMessage::Command(TrainingCommand::Reset);
+        let raw = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(raw, r#"{"type":"command","command":"reset"}"#);
+        let back: TrainingClientMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back, cmd);
+
+        let status = TrainingServerMessage::Status(TrainingStatus::Stopped { duration_secs: 42 });
+        let raw = serde_json::to_string(&status).unwrap();
+        let back: TrainingServerMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back, status);
+
+        let reset = TrainingServerMessage::Reset;
+        let raw = serde_json::to_string(&reset).unwrap();
+        assert_eq!(raw, r#"{"type":"reset"}"#);
+        let back: TrainingServerMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back, reset);
     }
 }

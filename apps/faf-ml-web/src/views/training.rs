@@ -39,7 +39,12 @@ async fn fetch_datasets() -> Result<Vec<faf_ml_core::DatasetManifest>, String> {
 enum PageStatus {
     Idle,
     Running,
+    /// Pause accepted; waiting for the training thread to reach the batch
+    /// boundary.
+    Pausing,
     Paused,
+    /// Stop accepted; waiting for the terminal event.
+    Stopping,
     Finished,
 }
 
@@ -123,16 +128,32 @@ fn connect(
         TrainingServerMessage::Status(TrainingStatus::Running) => {
             status.set(PageStatus::Running);
         }
+        TrainingServerMessage::Status(TrainingStatus::Pausing) => {
+            status.set(PageStatus::Pausing);
+        }
         TrainingServerMessage::Status(TrainingStatus::Paused) => {
             status.set(PageStatus::Paused);
+        }
+        TrainingServerMessage::Status(TrainingStatus::Stopping) => {
+            status.set(PageStatus::Stopping);
         }
         TrainingServerMessage::Status(TrainingStatus::Done { duration_secs }) => {
             status.set(PageStatus::Finished);
             detail.set(format!("done in {duration_secs}s"));
         }
+        TrainingServerMessage::Status(TrainingStatus::Stopped { duration_secs }) => {
+            status.set(PageStatus::Finished);
+            detail.set(format!("stopped after {duration_secs}s — checkpoint saved"));
+        }
         TrainingServerMessage::Status(TrainingStatus::Failed { error }) => {
             status.set(PageStatus::Finished);
             detail.set(format!("failed: {error}"));
+        }
+        TrainingServerMessage::Reset => {
+            data.write().clear();
+            latest.set(None);
+            status.set(PageStatus::Idle);
+            detail.set("run reset".to_string());
         }
         TrainingServerMessage::Finished => {}
         TrainingServerMessage::Error(e) => {
@@ -157,8 +178,8 @@ fn connect(
     }
 }
 
-/// Training monitor: start/pause/resume/reset a training run and watch its
-/// metrics live. On load it checks the server registry — if a run is active
+/// Training monitor: start/pause/resume/stop/reset a training run and watch
+/// its metrics live. On load it checks the server registry — if a run is active
 /// it attaches (the replay refills the charts); a finished run shows its
 /// outcome. Mirrors fafcn's simulate page: a WebSocket streams events into a
 /// signal, uPlot renders the buffer.
@@ -166,7 +187,7 @@ fn connect(
 pub fn Training() -> Element {
     let mut status = use_signal(|| PageStatus::Idle);
     let mut detail = use_signal(String::new);
-    let mut connection = use_signal(|| None::<TrainingConnection>);
+    let connection = use_signal(|| None::<TrainingConnection>);
     let mut data: Signal<Vec<TrainingMetricsPoint>> = use_signal(Vec::new);
     let mut latest: Signal<Option<TrainingMetricsPoint>> = use_signal(|| None);
 
@@ -214,8 +235,12 @@ pub fn Training() -> Element {
         };
         attached.set(true);
         match run.status {
-            TrainingStatus::Running => {
-                status.set(PageStatus::Running);
+            TrainingStatus::Running | TrainingStatus::Pausing | TrainingStatus::Stopping => {
+                status.set(match run.status {
+                    TrainingStatus::Pausing => PageStatus::Pausing,
+                    TrainingStatus::Stopping => PageStatus::Stopping,
+                    _ => PageStatus::Running,
+                });
                 detail.set("attached to the running job — replaying metrics".to_string());
                 connect(None, connection, status, detail, data, latest);
             }
@@ -231,6 +256,10 @@ pub fn Training() -> Element {
                             run_dir,
                             duration_secs,
                         } => format!("last run: done in {duration_secs}s → {run_dir}"),
+                        faf_ml_core::TrainingRunResult::Stopped {
+                            run_dir,
+                            duration_secs,
+                        } => format!("last run: stopped after {duration_secs}s → {run_dir}"),
                         faf_ml_core::TrainingRunResult::Failed { error } => {
                             format!("last run: failed — {error}")
                         }
@@ -284,25 +313,22 @@ pub fn Training() -> Element {
         }
     };
 
-    let reset = move |_| {
-        if let Some(conn) = connection.read().as_ref() {
-            conn.close();
-        }
-        connection.set(None);
-        data.write().clear();
-        latest.set(None);
-        status.set(PageStatus::Idle);
-        detail.set(String::new());
-    };
+    let reset = move |_| send(TrainingCommand::Reset);
 
     let can_start = matches!(*status.read(), PageStatus::Idle | PageStatus::Finished);
     let can_pause = matches!(*status.read(), PageStatus::Running);
-    let can_resume = matches!(*status.read(), PageStatus::Paused);
+    let can_resume = matches!(*status.read(), PageStatus::Pausing | PageStatus::Paused);
+    let can_stop = matches!(
+        *status.read(),
+        PageStatus::Running | PageStatus::Pausing | PageStatus::Paused
+    );
     let can_reset = !matches!(*status.read(), PageStatus::Idle);
     let (badge_text, badge_class) = match *status.read() {
         PageStatus::Idle => ("idle", "bg-neutral-800 text-neutral-400"),
         PageStatus::Running => ("running", "bg-blue-900 text-blue-200"),
+        PageStatus::Pausing => ("pausing…", "bg-amber-900 text-amber-200"),
         PageStatus::Paused => ("paused", "bg-amber-900 text-amber-200"),
+        PageStatus::Stopping => ("stopping…", "bg-amber-900 text-amber-200"),
         PageStatus::Finished => ("finished", "bg-green-900 text-green-200"),
     };
 
@@ -397,6 +423,12 @@ pub fn Training() -> Element {
                             disabled: !can_resume,
                             onclick: move |_| send(TrainingCommand::Resume),
                             "Resume"
+                        }
+                        button {
+                            class: "px-3 py-2 rounded bg-red-900/60 hover:bg-red-800 disabled:opacity-40 text-red-200 text-sm transition-colors",
+                            disabled: !can_stop,
+                            onclick: move |_| send(TrainingCommand::Stop),
+                            "Stop"
                         }
                         button {
                             class: "px-3 py-2 rounded bg-red-900/60 hover:bg-red-800 disabled:opacity-40 text-red-200 text-sm transition-colors",

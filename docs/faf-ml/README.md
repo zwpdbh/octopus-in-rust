@@ -25,8 +25,8 @@ correction set closes the domain gap.
 | Synthetic data generator | `crates/faf-ml-datagen` (runs as a server job; the `faf-datagen` CLI is gone) | ✅ works; tint + scale + clustering; streams samples into the store as `synthetic` screenshots with JSON labels |
 | Web platform | `apps/faf-ml-server` (:3100) + `apps/faf-ml-web` + `crates/faf-ml-core` | ✅ upload (drag&drop), triage badges, label view (edit boxes), dataset snapshots, datagen jobs (`POST /api/datagen` + polling + per-job/bulk sample deletion), Units page (fafcn-web unit browser ported: `/api/units` + portraits) |
 | Icon↔unit mapping | `crates/faf-unit-tools` (`icon-map` subcommand) | ✅ 114 classes ↔ 501 units; artifact at `data/faf-ml/icon-map.json`; the Units page (`/units`) is its future UI home |
-| SSD detector | `crates/faf-ml-model` (model/loss/anchors/data/predict + `train.rs` event-driven loop) | ✅ implemented, 17/17 tests; `apps/faf-ml-train` CLI is DELETED — training is a server capability |
-| Training monitor | `/training` page + `GET /ws/training` + `GET /api/training/status` (server `training_service.rs` driving `faf-ml-model::train`) | ✅ REAL burn training in the server: live loss/valid charts (uPlot), pause/resume/stop, server-side run registry (viewers attach/detach freely; `Attach` replays). mAP stays empty until the eval pass lands |
+| SSD detector | `crates/faf-ml-model` (model/loss/anchors/data/predict + `train.rs` event-driven loop) | ✅ implemented, 26/26 tests; `apps/faf-ml-train` CLI is DELETED — training is a server capability |
+| Training monitor | `/training` page + `GET /ws/training` + `GET /api/training/status` (`faf-ml-model::manager::TrainManager` actor driving `train()`; the server is a thin adapter) | ✅ REAL burn training in the server: live loss/valid charts (uPlot), pause/resume/stop/reset with instant ack (`pausing…`/`stopping…` settle at the batch boundary), server-side run registry (viewers attach/detach freely; `Attach` replays). mAP stays empty until the eval pass lands |
 | MCP server | `apps/faf-ml-mcp` (rmcp, stdio) | ✅ 15 workflow-level tools (screenshots/datagen/datasets/training) — LLM agents drive the same API the web UI uses |
 
 Not built yet: real mAP (predict+AP over the valid split), train-from-snapshot,
@@ -129,10 +129,10 @@ one, delete it here and update the tables/sections above to match.
 
 ### P4 — Hygiene (cheap, do alongside anything above)
 
-9. Sweep stale docs/comments: `apps/faf-ml-server/README.md` header still says
-   "no training here" while documenting `/ws/training`; doc comments in
-   `faf-ml-core/src/training.rs` and `lib.rs` reference the deleted
-   `faf-ml-train` CLI; this doc says 193 classes but `classes.txt` has 210.
+9. Sweep stale docs/comments: this doc says 193 classes but `classes.txt`
+   has 210. (Done in the TrainManager refactor: `apps/faf-ml-server/README.md`
+   header, `faf-ml-core/src/training.rs` / `faf-ml-model/src/lib.rs` doc
+   comments referencing the deleted `faf-ml-train` CLI.)
 10. Delete the dead YOLO-dir loader (`faf-ml-model/src/data.rs` `load_yolo_dir`)
     — nothing writes YOLO dirs since the datagen CLI was removed.
 11. Add a faf-ml section to the root `STATUS.md` — the project is invisible
@@ -229,6 +229,15 @@ curl -X POST localhost:3100/api/predict -H 'content-type: application/json' \
 - **wgpu per-buffer cap ~128 MiB**: the detector's stem conv is stride-2 and
   default `--batch` is 4 because of this. Batch ≥6 panics with
   "can't allocate buffer". Fix = gradient accumulation (not implemented).
+- **Training control commands** (pause/resume/stop/reset) ack instantly —
+  the status flips to `pausing`/`stopping` immediately, and the settled
+  `paused`/`stopped` arrives when the training thread reaches the next
+  **batch boundary** (up to ~30 s on llvmpipe, ms on a real GPU). **Stop vs
+  Reset**: both save the checkpoint (`data/faf-ml/runs/<ts>/`); Stop keeps
+  the run record visible as a terminal state, Reset additionally wipes the
+  run record and clears every viewer's charts, returning the manager to
+  idle immediately (a new Start is accepted while the old thread finishes
+  its last batch + save).
 - **Train with `--release`.**
 - Burn: `AdamConfig::with_grad_clipping` vs `SgdConfig::with_gradient_clipping`
   (inconsistent naming); BatchNorm/Dropout pick train/eval from
@@ -263,8 +272,9 @@ curl -X POST localhost:3100/api/predict -H 'content-type: application/json' \
 - **Next real milestone** — detector trained on synthetic data detecting
   units on a held-out real screenshot (steps 1–5 above)
 - **Phase 2 ✅ (mostly)** — real burn training lives in the server:
-  `faf-ml-model::train` (event-driven loop + validation split) driven by
-  `training_service.rs`; `faf-ml-train` CLI deleted; predict is
+  `faf-ml-model::train` (event-driven loop + validation split) driven by the
+  `faf-ml-model::manager::TrainManager` actor (pause/resume/stop/reset with
+  instant ack); `faf-ml-train` CLI deleted; predict is
   `POST /api/predict(/annotate)`. Remaining: real mAP at epoch end,
   train-from-snapshot, run registry UI in the monitor page
 - **Phase 3** — eval/analysis view (per-player unit tables), correction loop,

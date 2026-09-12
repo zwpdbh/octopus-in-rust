@@ -29,14 +29,15 @@ struct RunHandle {
 }
 
 /// Registry of training runs started through this MCP server (in-memory;
-/// runs do not survive a server restart).
+/// runs do not survive a server restart). (Client-side view of the server's
+/// training manager — hence `TrainingRuns`, not `TrainingManager`.)
 #[derive(Clone, Default)]
-pub struct TrainingManager {
+pub struct TrainingRuns {
     runs: Arc<Mutex<HashMap<String, RunHandle>>>,
     last_started: Arc<Mutex<Option<String>>>,
 }
 
-impl TrainingManager {
+impl TrainingRuns {
     /// Open `/ws/training`, send `Start { config, speed }`, and spawn the
     /// reader task. Returns the run handle (a uuid string).
     pub async fn start(
@@ -80,16 +81,31 @@ impl TrainingManager {
                                         let mut s = task_state.lock().await;
                                         s.status = match &status {
                                             faf_ml_core::TrainingStatus::Running => "running".into(),
+                                            faf_ml_core::TrainingStatus::Pausing => "pausing".into(),
                                             faf_ml_core::TrainingStatus::Paused => "paused".into(),
+                                            faf_ml_core::TrainingStatus::Stopping => "stopping".into(),
                                             faf_ml_core::TrainingStatus::Done { duration_secs } => {
                                                 s.detail = format!("done in {duration_secs}s");
                                                 "done".into()
+                                            }
+                                            faf_ml_core::TrainingStatus::Stopped { duration_secs } => {
+                                                s.detail = format!(
+                                                    "stopped after {duration_secs}s — checkpoint saved"
+                                                );
+                                                "stopped".into()
                                             }
                                             faf_ml_core::TrainingStatus::Failed { error } => {
                                                 s.detail = error.clone();
                                                 "failed".into()
                                             }
                                         };
+                                    }
+                                    Ok(TrainingServerMessage::Reset) => {
+                                        let mut s = task_state.lock().await;
+                                        s.status = "reset".into();
+                                        s.detail = "run reset — charts cleared".into();
+                                        s.points = 0;
+                                        s.latest = None;
                                     }
                                     Ok(TrainingServerMessage::Error(err)) => {
                                         task_state.lock().await.detail = format!("error: {err}");

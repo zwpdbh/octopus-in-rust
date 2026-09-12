@@ -24,8 +24,9 @@ pub struct AppState {
     /// Unit blueprints backing `/api/units` (shared ETFreeman unit database).
     pub blueprints: Arc<FafBlueprints>,
     /// Live registry of the current/last training run (`/ws/training` +
-    /// `GET /api/training/status`). `None` until the first run starts.
-    pub training_run: Arc<Mutex<Option<crate::training_service::RunState>>>,
+    /// `GET /api/training/status`) — a handle to the training manager actor
+    /// in `faf-ml-model`; `Idle` until the first run starts.
+    pub training: faf_ml_model::manager::TrainManagerHandle,
     /// Display name per unit id (uppercase): the game nickname
     /// (`General.UnitName`, e.g. "Spook") when set, otherwise the ordinary
     /// description (e.g. "Spy Plane"). Loaded from the raw unit index so
@@ -76,7 +77,9 @@ impl AppState {
                     .map_err(|e| Error::Internal(format!("loading unit blueprints: {e:#}")))?,
             ),
             unit_display_names: Arc::new(unit_display_names),
-            training_run: Arc::new(Mutex::new(None)),
+            // Spawns the manager actor on the ambient tokio runtime — only
+            // valid because `AppState::new` is called from async main.
+            training: faf_ml_model::manager::TrainManagerHandle::spawn(),
             jobs: Arc::new(Mutex::new(HashMap::new())),
             icon_sets: Arc::new(icon_sets),
         };

@@ -16,3 +16,7 @@ image = "0.25"
 rand = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

@@ -19,7 +19,7 @@ impl TrainingConnection {
     /// `on_message` is called for every `TrainingServerMessage`. `on_status`
     /// is called when the connection opens/closes/errors or the run finishes.
     /// Callbacks are intentionally `.forget()`ed — one connection per page,
-    /// dropped only when the page resets (same trade-off as fafcn's
+    /// replaced when a new run starts (same trade-off as fafcn's
     /// `SimConnection`).
     /// Open a WebSocket and START a new training run.
     pub fn open(
@@ -88,8 +88,9 @@ impl TrainingConnection {
             if let Some(text) = e.data().as_string() {
                 match serde_json::from_str::<TrainingServerMessage>(&text) {
                     Ok(
-                        msg
-                        @ (TrainingServerMessage::Metrics(_) | TrainingServerMessage::Status(_)),
+                        msg @ (TrainingServerMessage::Metrics(_)
+                        | TrainingServerMessage::Status(_)
+                        | TrainingServerMessage::Reset),
                     ) => (message.borrow_mut())(msg),
                     Ok(TrainingServerMessage::Finished) => {
                         (status.borrow_mut())("finished".to_string())
@@ -112,9 +113,5 @@ impl TrainingConnection {
         let _ = self
             .ws
             .send_with_str(&serde_json::to_string(&msg).unwrap_or_default());
-    }
-
-    pub fn close(&self) {
-        let _ = self.ws.close();
     }
 }

@@ -1,11 +1,13 @@
-//! Event-driven training loop for the SSD detector (moved out of the
-//! deleted `faf-ml-train` CLI).
+//! Event-driven training loop for the SSD detector.
 //!
 //! **One event bus**: all training observability flows through [`TrainEvent`];
 //! transports (the server's `/ws/training` stream, future loggers) subscribe
 //! downstream. Extending metrics later (real mAP, grad norm, per-scale
 //! losses) = add a variant here plus one translation in the consumer — this
 //! loop never changes.
+//!
+//! Control flows the other way through a `watch` channel ([`ControlState`]):
+//! pause/resume/stop/speed are read at batch boundaries only.
 
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +22,7 @@ use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::{Device, ElementConversion};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, watch};
 
 use crate::anchors::{default_anchor_spec, generate_anchors};
 use crate::data::DetectDataset;
@@ -30,7 +33,7 @@ use crate::model::{DetectorConfig, SsdModel};
 pub const INPUT_SIZE: u32 = 640;
 
 /// Training-run parameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrainParams {
     /// Dataset directory (the platform store root; snapshots live under
     /// `datasets/` inside it).
@@ -49,6 +52,8 @@ pub struct TrainParams {
     pub valid_fraction: f32,
     /// Cap optimizer steps per epoch (smoke runs; `None` = full epochs).
     pub max_batches: Option<usize>,
+    /// Use the portable CPU (NdArray) backend instead of Wgpu/Vulkan.
+    pub cpu: bool,
 }
 
 impl Default for TrainParams {
@@ -62,6 +67,7 @@ impl Default for TrainParams {
             lr: 1e-3,
             valid_fraction: 0.1,
             max_batches: None,
+            cpu: false,
         }
     }
 }
@@ -88,17 +94,15 @@ pub enum TrainEvent {
         valid_cls: f32,
         valid_bbox: f32,
     },
-    /// Loop exited (naturally or aborted); the checkpoint is saved.
-    Done {
-        run_dir: PathBuf,
-        duration_secs: u64,
-    },
+    /// The thread has actually entered the pause hold (first observation of
+    /// `TrainAction::Pause` at a batch boundary). Lets the manager tell
+    /// "pausing" (command sent) from "paused" (thread is holding).
+    Paused,
 }
 
-/// Command polled by the loop between batches (mirrors the server's
-/// pause/resume/stop semantics).
+/// Action the loop should take at the next batch boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrainControl {
+pub enum TrainAction {
     Continue,
     /// Hold position: no progress, no events, keep polling.
     Pause,
@@ -106,13 +110,39 @@ pub enum TrainControl {
     Abort,
 }
 
-/// Run a full training run, emitting [`TrainEvent`]s and honoring
-/// `control()` between batches. Returns the checkpoint run directory.
+/// Control channel value read between batches (one watch value for both
+/// pause/stop and the speed throttle).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ControlState {
+    pub action: TrainAction,
+    /// Post-batch throttle in batches/sec (≤ 0 = unlimited).
+    pub batches_per_sec: f64,
+}
+
+/// How a training run ended (terminal state — the loop emits no `Done`
+/// event; the return value IS the terminal signal).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrainExit {
+    /// All epochs finished.
+    Completed {
+        run_dir: PathBuf,
+        duration_secs: u64,
+    },
+    /// Aborted via `TrainAction::Abort` (Stop or Reset) — checkpoint saved.
+    Aborted {
+        run_dir: PathBuf,
+        duration_secs: u64,
+    },
+}
+
+/// Run a full training run, emitting [`TrainEvent`]s over `events` and
+/// honoring `control` between batches. Returns how the run ended (the
+/// checkpoint is saved in both exit cases).
 pub fn train<AB: AutodiffBackend>(
     params: &TrainParams,
-    on_event: &mut dyn FnMut(TrainEvent),
-    control: &dyn Fn() -> TrainControl,
-) -> Result<PathBuf> {
+    events: mpsc::UnboundedSender<TrainEvent>,
+    control: watch::Receiver<ControlState>,
+) -> Result<TrainExit> {
     let started = Instant::now();
     let device: Device<AB> = Default::default();
     anyhow::ensure!(
@@ -159,12 +189,23 @@ pub fn train<AB: AutodiffBackend>(
         let mut batches = 0usize;
         for chunk in order.chunks(params.batch.max(1)) {
             // Honor control between batches (pause holds without progress).
+            let mut paused = false;
             loop {
-                match control() {
-                    TrainControl::Continue => break,
-                    TrainControl::Pause => std::thread::sleep(Duration::from_millis(50)),
-                    TrainControl::Abort => {
-                        return finish(model, &config, params, started, on_event)
+                match control.borrow().action {
+                    TrainAction::Continue => break,
+                    TrainAction::Pause => {
+                        if !paused {
+                            paused = true;
+                            let _ = events.send(TrainEvent::Paused);
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    TrainAction::Abort => {
+                        let (run_dir, duration_secs) = finish(model, &config, params, started)?;
+                        return Ok(TrainExit::Aborted {
+                            run_dir,
+                            duration_secs,
+                        });
                     }
                 }
             }
@@ -191,7 +232,7 @@ pub fn train<AB: AutodiffBackend>(
             cls_sum += cls_l;
             box_sum += box_l;
             batches += 1;
-            on_event(TrainEvent::Batch {
+            let _ = events.send(TrainEvent::Batch {
                 epoch: epoch + 1,
                 batch: batches,
                 total_batches,
@@ -202,6 +243,12 @@ pub fn train<AB: AutodiffBackend>(
 
             let grads = GradientsParams::from_grads(loss.total.backward(), &model);
             model = optim.step(params.lr, model, grads);
+
+            // Post-batch throttle (0 or negative = unlimited).
+            let limit = control.borrow().batches_per_sec;
+            if limit > 0.0 {
+                std::thread::sleep(Duration::from_secs_f64(1.0 / limit));
+            }
 
             if params.max_batches.is_some_and(|m| batches >= m) {
                 break;
@@ -221,7 +268,7 @@ pub fn train<AB: AutodiffBackend>(
                 &device,
             )?
         };
-        on_event(TrainEvent::EpochEnd {
+        let _ = events.send(TrainEvent::EpochEnd {
             epoch: epoch + 1,
             total_epochs: params.epochs,
             train_cls: cls_sum / batches as f32,
@@ -231,7 +278,11 @@ pub fn train<AB: AutodiffBackend>(
         });
     }
 
-    finish(model, &config, params, started, on_event)
+    let (run_dir, duration_secs) = finish(model, &config, params, started)?;
+    Ok(TrainExit::Completed {
+        run_dir,
+        duration_secs,
+    })
 }
 
 /// No-grad forward over the validation split → mean (cls, bbox) losses.
@@ -267,14 +318,13 @@ fn eval_valid<AB: AutodiffBackend>(
     Ok((cls_sum / batches as f32, box_sum / batches as f32))
 }
 
-/// Save the checkpoint and emit `TrainEvent::Done`.
+/// Save the checkpoint; returns the run dir and elapsed seconds.
 fn finish<AB: AutodiffBackend>(
     model: SsdModel<AB>,
     config: &DetectorConfig,
     params: &TrainParams,
     started: Instant,
-    on_event: &mut dyn FnMut(TrainEvent),
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, u64)> {
     let run_dir = params
         .out
         .join(chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string());
@@ -288,9 +338,5 @@ fn finish<AB: AutodiffBackend>(
         serde_json::to_string_pretty(config)?,
     )
     .with_context(|| format!("writing {}", run_dir.join("config.json").display()))?;
-    on_event(TrainEvent::Done {
-        run_dir: run_dir.clone(),
-        duration_secs: started.elapsed().as_secs(),
-    });
-    Ok(run_dir)
+    Ok((run_dir, started.elapsed().as_secs()))
 }
