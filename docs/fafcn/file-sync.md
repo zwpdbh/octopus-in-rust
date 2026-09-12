@@ -47,7 +47,7 @@ Everything the mirror serves belongs to a well-known channel
 // crates/fafcn-gamedata/src/channels.rs ~line 57 — channel registry
 pub const CHANNELS: &[&str] = &[
     CHANNEL_GAMEDATA,      // "gamedata": env/units/textures.nx2 patch archives + frozen static extras (faforever.faf)
-    CHANNEL_MAP_GENERATOR, // "map-generator": newest 3 MapGenerator_*.jar
+    CHANNEL_MAP_GENERATOR, // "map-generator": all MapGenerator_*.jar in the newest 3 version series
     CHANNEL_FAF_CLIENT,    // "faf-client": installer, mirror-only (not synced)
     CHANNEL_MAPS,          // "maps": FAF maps, merged uploads
     CHANNEL_COOP,          // "coop": co-op mission files, synced to FAForever root
@@ -68,7 +68,7 @@ Per-channel rules that new code MUST respect:
 | Channel         | Synced into                                                          | Version source                                                                    | Client deletes?                        | Server file lifecycle                                                                                                     |
 | --------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `gamedata`      | `FAForever/gamedata` (+ mirrored to `FAForever/replaydata/gamedata`) | FAF patch version (`lua.nx2` on manual upload; `mod_info.lua` upstream)           | **Never** deletes extras               | Fixed filenames → overwritten in place; per-file rules live in the `GAMEDATA_FILES` table: `PatchArchive` entries are auto-mirrored, `ManualPreserved` extras (`faforever.faf`) are manual-upload-only and **preserved by the auto-updater** |
-| `map-generator` | `FAForever/map_generator`                                            | Newest jar version (manual upload); auto-mirror uses the GitHub release tag       | Prunes jars beyond newest 3            | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
+| `map-generator` | `FAForever/map_generator`                                            | Newest jar version (manual upload); auto-mirror uses the GitHub release tag       | Prunes jars beyond the newest 3 version series (`1.22.x`–`1.20.x` when 1.22 is newest) | Prune-on-commit: files not in the new manifest are deleted; also auto-mirrored from GitHub releases by the server updater |
 | `faf-client`    | — (web download)                                                     | From installer filename on manual upload; auto-mirror uses the GitHub release tag | —                                      | Prune-on-commit; also auto-mirrored from GitHub releases by the server updater                                            |
 | `coop` | FAForever **root** (paths carry `bin/`/`gamedata/` prefixes) | fa-coop `mod_info.lua` version, fetched from GitHub at upload time | Never deletes extras | Fixed names → overwritten in place; **manual upload only** (see TODO below) |
 | `bin` | `FAForever/bin` | Same as the gamedata patch version (exe tracks the game version) | Never deletes extras | Fixed name → overwritten in place; manual upload via the 上传补丁 flow when `bin/ForgedAlliance.exe` exists locally; **policy: read `game-binary-channel.md`** |
@@ -173,7 +173,9 @@ CLI:
    from that separate copy when playing replays and would otherwise download
    mismatches from the official servers. Mirroring is local-only (hash-check
    → copy → atomic rename) and never overwrites a working replaydata copy
-   with a bad gamedata one; map-generator prunes jars beyond the newest 3.
+   with a bad gamedata one; map-generator prunes jars beyond the newest 3
+   version series (but never a jar the manifest tracks — that would just
+   re-download it on the next sync).
    `sync_maps` handles the maps channel separately (different root folder).
 
 Progress flows through the `SyncProgress` enum (including the `Upstream`
@@ -227,9 +229,10 @@ still run, and the first error lands in `last_error`):
    (`parse_generator_release`, ~line 128): exact `NeroxisGen_<version>.jar`,
    falling back to any `NeroxisGen_*.jar`. The jar is stored under the
    channel's `MapGenerator_<version>.jar` name; the commit lists the new jar
-   plus the newest existing jars so the channel keeps its newest-3 semantics
-   (prune-on-commit drops what falls off). Newest release recorded in
-   `UpdaterInfo.latest_generator_version`.
+   plus the existing jars in the newest 3 version series (`1.22.x`, `1.21.x`,
+   `1.20.x` when 1.22 is newest — every jar in a kept series survives,
+   however many there are), and prune-on-commit drops what falls off. Newest
+   release recorded in `UpdaterInfo.latest_generator_version`.
 
 Two triggers share one `update_once` (~line 306) behind a single-flight mutex
 
@@ -400,7 +403,8 @@ All under `/api/gamedata`; channel ids validated against `CHANNELS`.
 
 - **Never delete a player's files implicitly.** Client-side, gamedata extras
   are reported, never removed; pruning is limited to map-generator jars beyond
-  the keep-count and superseded map versions.
+  the newest few version series (jars the manifest tracks are never pruned)
+  and superseded map versions.
 - **Atomicity everywhere.** Temp file in `incoming/` → hash-verify → rename.
   A failed download/upload/commit leaves the previous state fully intact.
 - **The manifest is the only source of truth**, and it is only ever replaced

@@ -15,9 +15,10 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use fafcn_gamedata::{
     channel_subdir, compare_version_strings, map_folder_version, map_generator_jar_version,
-    sha256_bytes, sha256_file, validate_relative_path, FileEntry, Manifest, StatusResponse,
-    UpdaterComponent, UpdaterInfo, UpdaterState, CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS,
-    CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP, SYNC_CHANNELS,
+    map_generator_series, newest_jar_series, sha256_bytes, sha256_file, validate_relative_path,
+    FileEntry, Manifest, StatusResponse, UpdaterComponent, UpdaterInfo, UpdaterState,
+    CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP_SERIES,
+    SYNC_CHANNELS,
 };
 use walkdir::WalkDir;
 
@@ -126,7 +127,7 @@ pub enum SyncProgress {
         path: String,
     },
     /// An outdated local file was pruned (map-generator keeps only the
-    /// newest few jars).
+    /// newest few version series).
     Pruned {
         /// File name that was removed.
         path: String,
@@ -879,16 +880,18 @@ fn find_extra_files(dir: &Path, manifest: &Manifest) -> Vec<String> {
     extras
 }
 
-/// Keep only the newest [`MAP_GENERATOR_KEEP`] `MapGenerator_*.jar` versions
-/// locally (considering both local files and the manifest), deleting older
-/// ones. Only jar files matching the generator pattern are ever touched.
+/// Keep every local `MapGenerator_*.jar` whose version series is among the
+/// newest [`MAP_GENERATOR_KEEP_SERIES`] series (considering both local files
+/// and the manifest), deleting jars from older series. A jar tracked by the
+/// manifest is never deleted even when a newer local-only jar pushes its
+/// series out of the keep set — deleting it would just re-download it on the
+/// next sync. Only jar files matching the generator pattern are ever touched.
 fn prune_old_jars(
     dir: &Path,
     manifest: &Manifest,
     progress: &mut dyn FnMut(SyncProgress),
 ) -> Result<()> {
-    // Newest N versions across local + manifest.
-    let mut versions: Vec<String> = manifest
+    let manifest_versions: HashSet<String> = manifest
         .files
         .iter()
         .filter_map(|f| map_generator_jar_version(&f.path))
@@ -897,20 +900,20 @@ fn prune_old_jars(
     for item in fs::read_dir(dir)? {
         let name = item?.file_name().to_string_lossy().into_owned();
         if let Some(v) = map_generator_jar_version(&name) {
-            local_jars.push((name, v.clone()));
-            versions.push(v);
+            local_jars.push((name, v));
         }
     }
-    versions.sort_by(|a, b| compare_version_strings(b, a).unwrap_or(std::cmp::Ordering::Equal));
-    versions.dedup();
-    let keep: HashSet<&str> = versions
-        .iter()
-        .take(MAP_GENERATOR_KEEP)
-        .map(|s| s.as_str())
-        .collect();
-
+    let keep_series = newest_jar_series(
+        manifest_versions
+            .iter()
+            .map(String::as_str)
+            .chain(local_jars.iter().map(|(_, v)| v.as_str())),
+        MAP_GENERATOR_KEEP_SERIES,
+    );
     for (name, version) in local_jars {
-        if !keep.contains(version.as_str()) {
+        let kept = manifest_versions.contains(&version)
+            || keep_series.contains(map_generator_series(&version));
+        if !kept {
             fs::remove_file(dir.join(&name))?;
             progress(SyncProgress::Pruned { path: name });
         }
@@ -1197,6 +1200,104 @@ mod tests {
             b"working-replay-copy"
         );
         assert!(events.is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Write empty generator jars into `root/map_generator/`.
+    fn write_jars(root: &Path, names: &[&str]) -> PathBuf {
+        let dir = root.join("map_generator");
+        fs::create_dir_all(&dir).unwrap();
+        for name in names {
+            fs::write(dir.join(name), b"jar").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn prune_keeps_every_jar_in_the_newest_series() {
+        let root = temp_faf_root();
+        // Three jars in the 1.22.x series, two in 1.21.x, one in 1.20.x, one
+        // in the outdated 1.19.x series.
+        let dir = write_jars(
+            &root,
+            &[
+                "MapGenerator_1.22.2.jar",
+                "MapGenerator_1.22.1.jar",
+                "MapGenerator_1.22.0.jar",
+                "MapGenerator_1.21.5.jar",
+                "MapGenerator_1.21.0.jar",
+                "MapGenerator_1.20.3.jar",
+                "MapGenerator_1.19.9.jar",
+            ],
+        );
+        let manifest = manifest_with(vec![
+            entry_for("MapGenerator_1.22.2.jar", b"jar"),
+            entry_for("MapGenerator_1.21.5.jar", b"jar"),
+        ]);
+
+        let mut pruned = Vec::new();
+        prune_old_jars(&dir, &manifest, &mut |e| {
+            if let SyncProgress::Pruned { path } = e {
+                pruned.push(path);
+            }
+        })
+        .unwrap();
+
+        // Only the jar outside the newest 3 series (1.22/1.21/1.20) is pruned;
+        // every jar within a kept series survives, however many there are.
+        assert_eq!(pruned, vec!["MapGenerator_1.19.9.jar"]);
+        for kept in [
+            "MapGenerator_1.22.2.jar",
+            "MapGenerator_1.22.1.jar",
+            "MapGenerator_1.22.0.jar",
+            "MapGenerator_1.21.5.jar",
+            "MapGenerator_1.21.0.jar",
+            "MapGenerator_1.20.3.jar",
+        ] {
+            assert!(dir.join(kept).is_file(), "{kept} must be kept");
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn prune_never_deletes_manifest_jars() {
+        let root = temp_faf_root();
+        // The manifest is one series behind a newer local-only jar (e.g. the
+        // official client fetched 1.23.0 while the mirror still serves 1.22).
+        // Without the manifest protection the just-downloaded 1.20.0 jar would
+        // be pruned and re-downloaded on every sync.
+        let dir = write_jars(
+            &root,
+            &[
+                "MapGenerator_1.23.0.jar",
+                "MapGenerator_1.22.1.jar",
+                "MapGenerator_1.21.0.jar",
+                "MapGenerator_1.20.0.jar",
+            ],
+        );
+        let manifest = manifest_with(vec![
+            entry_for("MapGenerator_1.22.1.jar", b"jar"),
+            entry_for("MapGenerator_1.21.0.jar", b"jar"),
+            entry_for("MapGenerator_1.20.0.jar", b"jar"),
+        ]);
+
+        let mut pruned = Vec::new();
+        prune_old_jars(&dir, &manifest, &mut |e| {
+            if let SyncProgress::Pruned { path } = e {
+                pruned.push(path);
+            }
+        })
+        .unwrap();
+
+        assert!(pruned.is_empty(), "nothing may be pruned: {pruned:?}");
+        for kept in [
+            "MapGenerator_1.23.0.jar",
+            "MapGenerator_1.22.1.jar",
+            "MapGenerator_1.21.0.jar",
+            "MapGenerator_1.20.0.jar",
+        ] {
+            assert!(dir.join(kept).is_file(), "{kept} must be kept");
+        }
         fs::remove_dir_all(&root).unwrap();
     }
 }

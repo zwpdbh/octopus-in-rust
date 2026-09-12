@@ -28,10 +28,10 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use fafcn_gamedata::{
-    compare_version_strings, map_generator_jar_version, sha256_file, FileEntry, FileSyncRule,
-    UpdaterComponent, UpdaterInfo, UpdaterState, UploadCommitRequest, CHANNEL_FAF_CLIENT,
-    CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR, GAMEDATA_FILES, MAP_GENERATOR_JAR_PREFIX,
-    MAP_GENERATOR_KEEP,
+    compare_version_strings, map_generator_jar_version, map_generator_series, newest_jar_series,
+    sha256_file, FileEntry, FileSyncRule, UpdaterComponent, UpdaterInfo, UpdaterState,
+    UploadCommitRequest, CHANNEL_FAF_CLIENT, CHANNEL_GAMEDATA, CHANNEL_MAP_GENERATOR,
+    GAMEDATA_FILES, MAP_GENERATOR_JAR_PREFIX, MAP_GENERATOR_KEEP_SERIES,
 };
 use futures::StreamExt;
 use serde::Deserialize;
@@ -550,9 +550,10 @@ impl UpdaterHandle {
 
     /// Check the latest Neroxis map generator release on GitHub, then
     /// download and commit the `NeroxisGen_<version>.jar` when it is newer
-    /// than the mirrored map-generator manifest. The commit keeps the newest
-    /// [`MAP_GENERATOR_KEEP`] jars (new release + newest existing entries);
-    /// prune-on-commit deletes older ones.
+    /// than the mirrored map-generator manifest. The commit keeps every jar
+    /// in the newest [`MAP_GENERATOR_KEEP_SERIES`] version series (the new
+    /// release plus the existing entries in those series); prune-on-commit
+    /// deletes jars of older series.
     async fn update_map_generator(&self) -> anyhow::Result<()> {
         let release = self
             .upstream
@@ -609,9 +610,9 @@ impl UpdaterHandle {
     }
 
     /// Download the jar to `tmp` (Content-Length check), hash it, store it
-    /// under the channel's `MapGenerator_<version>.jar` name and commit the
-    /// newest [`MAP_GENERATOR_KEEP`] jars (the new one plus the newest
-    /// entries of the previous manifest).
+    /// under the channel's `MapGenerator_<version>.jar` name and commit every
+    /// jar in the newest [`MAP_GENERATOR_KEEP_SERIES`] version series (the new
+    /// one plus the existing entries in those series).
     async fn download_generator_jar(
         &self,
         release: &UpstreamRelease,
@@ -649,7 +650,11 @@ impl UpdaterHandle {
         .map_err(|e| anyhow!("{e}"))?;
 
         // New jar first, then the newest existing jars; prune-on-commit
-        // removes whatever falls off the keep-list (and nothing else).
+        // removes whatever falls off the keep set (and nothing else). The
+        // keep set counts version SERIES: every jar in the newest
+        // MAP_GENERATOR_KEEP_SERIES series survives. The new jar's series is
+        // always among them — the caller only runs this when the release is
+        // newer than every mirrored version.
         let mut entries = vec![new_entry];
         if let Some(manifest) = existing {
             let mut old: Vec<FileEntry> = manifest
@@ -672,7 +677,18 @@ impl UpdaterHandle {
             });
             entries.extend(old);
         }
-        entries.truncate(MAP_GENERATOR_KEEP);
+        let versions: Vec<String> = entries
+            .iter()
+            .filter_map(|e| map_generator_jar_version(&e.path))
+            .collect();
+        let keep_series = newest_jar_series(
+            versions.iter().map(String::as_str),
+            MAP_GENERATOR_KEEP_SERIES,
+        );
+        entries.retain(|e| {
+            map_generator_jar_version(&e.path)
+                .is_some_and(|v| keep_series.contains(map_generator_series(&v)))
+        });
 
         // Drop entries whose file is no longer stored (defensive: commit
         // would reject the whole update otherwise).
@@ -1396,9 +1412,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generator_update_keeps_newest_jars_and_prunes_oldest() {
+    async fn generator_update_keeps_newest_series_and_prunes_older() {
         let (root, store) = temp_store();
-        // Mirror already has three older jars; gamedata/client are current.
+        // Mirror already has jars across four series (two jars in 1.21.x);
+        // gamedata/client are current.
         commit_one(&store, CHANNEL_GAMEDATA, "env.nx2", "3838", b"patch-bytes");
         commit_one(
             &store,
@@ -1409,8 +1426,10 @@ mod tests {
         );
         let mut jars = Vec::new();
         for (name, version) in [
+            ("MapGenerator_1.19.0.jar", "1.19.0"),
             ("MapGenerator_1.20.0.jar", "1.20.0"),
             ("MapGenerator_1.21.0.jar", "1.21.0"),
+            ("MapGenerator_1.21.1.jar", "1.21.1"),
             ("MapGenerator_1.22.0.jar", "1.22.0"),
         ] {
             let entry = FileEntry {
@@ -1451,20 +1470,24 @@ mod tests {
         assert_eq!(manifest.patch_version, FAKE_GENERATOR_VERSION);
         assert_eq!(manifest.uploader, AUTO_UPLOADER);
         let paths: Vec<&str> = manifest.files.iter().map(|e| e.path.as_str()).collect();
+        // Every jar in the newest 3 series (1.22.x, 1.21.x, 1.20.x) is kept,
+        // including both 1.21.x jars; only the 1.19.x series falls off.
         assert_eq!(
             paths,
             vec![
                 "MapGenerator_1.22.1.jar",
                 "MapGenerator_1.22.0.jar",
-                "MapGenerator_1.21.0.jar"
+                "MapGenerator_1.21.1.jar",
+                "MapGenerator_1.21.0.jar",
+                "MapGenerator_1.20.0.jar"
             ],
-            "newest 3 jars kept"
+            "newest 3 series kept"
         );
         assert!(
             !root
-                .join("channels/map-generator/files/MapGenerator_1.20.0.jar")
+                .join("channels/map-generator/files/MapGenerator_1.19.0.jar")
                 .exists(),
-            "oldest jar pruned on commit"
+            "oldest series pruned on commit"
         );
         fs_remove(root);
     }

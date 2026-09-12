@@ -8,8 +8,9 @@
 //!   plus frozen legacy extras (`faforever.faf`) that are manual-upload-only
 //!   and preserved across auto-updates. The full per-file rule table is
 //!   [`GAMEDATA_FILES`].
-//! - `map-generator` — the newest few `MapGenerator_*.jar` files, versioned
-//!   by the newest jar's version.
+//! - `map-generator` — every `MapGenerator_*.jar` in the newest few version
+//!   series (`1.22.x`, `1.21.x`, `1.20.x`), versioned by the newest jar's
+//!   version.
 //! - `faf-client` — the client installer (mirror-only).
 //! - `maps` — FAF maps (folders like `name.v0001`), synced into the FAF
 //!   Client's `maps_and_mods/maps` folder instead of the FAForever folder.
@@ -24,6 +25,8 @@
 //!   download. NOTE: FAF deliberately distributes this exe only through
 //!   their official client to ownership-verified accounts; see
 //!   `docs/fafcn/game-binary-channel.md` before changing this channel.
+
+use std::collections::HashSet;
 
 /// Channel id for the gamedata patch archives.
 pub const CHANNEL_GAMEDATA: &str = "gamedata";
@@ -249,8 +252,11 @@ pub fn channel_subdir(channel: &str) -> Option<&'static str> {
 /// Filename pattern of map generator jars, e.g. `MapGenerator_1.22.1.jar`.
 pub const MAP_GENERATOR_JAR_PREFIX: &str = "MapGenerator_";
 
-/// How many recent map generator versions to keep (server and client).
-pub const MAP_GENERATOR_KEEP: usize = 3;
+/// How many recent map generator version SERIES to keep (server and client).
+/// Every jar within those series is kept: when the newest jar is `1.22.x`,
+/// all of `1.22.x`, `1.21.x` and `1.20.x` are kept, however many jars each
+/// series contains.
+pub const MAP_GENERATOR_KEEP_SERIES: usize = 3;
 
 /// Extract a dotted version from a file name, e.g. `dfc_windows_1_6_3.exe`
 /// or `downlords-faf-client-1.6.3.exe` → `1.6.3`. Returns the first run of
@@ -305,6 +311,33 @@ pub fn map_generator_jar_version(file_name: &str) -> Option<String> {
         return None;
     }
     Some(version.to_string())
+}
+
+/// The `major.minor` series of a generator jar version (`1.22.1` → `1.22`;
+/// a version with fewer than two components maps to itself). Jars within one
+/// series are kept and pruned together.
+pub fn map_generator_series(version: &str) -> &str {
+    match version.match_indices('.').nth(1) {
+        Some((idx, _)) => &version[..idx],
+        None => version,
+    }
+}
+
+/// The newest `max_series` jar version series across `versions` — e.g. for
+/// [`MAP_GENERATOR_KEEP_SERIES`] and jars up to `1.22.2`, the set
+/// `{1.22, 1.21, 1.20}` (assuming those series exist in `versions`).
+pub fn newest_jar_series<'a>(
+    versions: impl IntoIterator<Item = &'a str>,
+    max_series: usize,
+) -> HashSet<String> {
+    let mut series: Vec<&str> = versions.into_iter().map(map_generator_series).collect();
+    series.sort_by(|a, b| compare_version_strings(b, a).unwrap_or(std::cmp::Ordering::Equal));
+    series.dedup();
+    series
+        .into_iter()
+        .take(max_series)
+        .map(str::to_string)
+        .collect()
 }
 
 /// Parse a FAF map folder name of the form `base.vNNNN` (e.g.
@@ -413,6 +446,30 @@ mod tests {
         );
         assert_eq!(map_generator_jar_version("other.jar"), None);
         assert_eq!(map_generator_jar_version("MapGenerator_beta.jar"), None);
+    }
+
+    #[test]
+    fn jar_series_grouping() {
+        assert_eq!(map_generator_series("1.22.1"), "1.22");
+        assert_eq!(map_generator_series("2.0"), "2.0");
+        assert_eq!(map_generator_series("3"), "3");
+    }
+
+    #[test]
+    fn newest_jar_series_picks_latest_distinct_series() {
+        // Several jars per series: the keep set counts SERIES, not jars.
+        let versions = [
+            "1.22.2", "1.22.1", "1.22.0", "1.21.5", "1.21.0", "1.20.3", "1.19.9",
+        ];
+        let keep = newest_jar_series(versions, MAP_GENERATOR_KEEP_SERIES);
+        assert_eq!(keep.len(), 3);
+        assert!(keep.contains("1.22"));
+        assert!(keep.contains("1.21"));
+        assert!(keep.contains("1.20"));
+        assert!(!keep.contains("1.19"));
+        // Fewer series than the keep count: keep everything.
+        let keep = newest_jar_series(["1.22.0", "1.21.0"], MAP_GENERATOR_KEEP_SERIES);
+        assert_eq!(keep.len(), 2);
     }
 
     #[test]

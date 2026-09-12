@@ -5,8 +5,9 @@
 //! - `gamedata`: the files in [`GAMEDATA_FILES`] (the big patch archives,
 //!   plus optional frozen legacy extras), versioned by the FAF patch version
 //!   from `lua.nx2`.
-//! - `map-generator`: the newest [`MAP_GENERATOR_KEEP`] `MapGenerator_*.jar`
-//!   files, versioned by the newest jar.
+//! - `map-generator`: every `MapGenerator_*.jar` in the newest
+//!   [`MAP_GENERATOR_KEEP_SERIES`] version series, versioned by the newest
+//!   jar.
 //! - `coop`: co-op mission support files (`bin/init_coop.lua`,
 //!   `gamedata/lobby_coop.cop`, `gamedata/*_VO.nx2`, coop-specific archives),
 //!   versioned by the fa-coop `mod_info.lua` version fetched from GitHub.
@@ -21,11 +22,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use fafcn_gamedata::{
-    compare_version_strings, map_generator_jar_version, parse_mod_info_version, sha256_file,
-    sha256_file_with_progress, validate_relative_path, FileEntry, FileMatch, Manifest,
-    UploadCheckRequest, UploadCheckResponse, UploadCommitRequest, BIN_FILES, CHANNEL_BIN,
-    CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, COOP_FILES,
-    FAF_STANDARD_NX2, FORGED_ALLIANCE_EXE, GAMEDATA_FILES, MAP_GENERATOR_KEEP,
+    compare_version_strings, map_generator_jar_version, map_generator_series, newest_jar_series,
+    parse_mod_info_version, sha256_file, sha256_file_with_progress, validate_relative_path,
+    FileEntry, FileMatch, Manifest, UploadCheckRequest, UploadCheckResponse, UploadCommitRequest,
+    BIN_FILES, CHANNEL_BIN, CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR,
+    COOP_FILES, FAF_STANDARD_NX2, FORGED_ALLIANCE_EXE, GAMEDATA_FILES, MAP_GENERATOR_KEEP_SERIES,
 };
 use futures_util::StreamExt;
 use walkdir::WalkDir;
@@ -638,14 +639,15 @@ fn plan_coop(
     }))
 }
 
-/// The newest [`MAP_GENERATOR_KEEP`] generator jars and their version.
+/// Every generator jar in the newest [`MAP_GENERATOR_KEEP_SERIES`] version
+/// series, and the newest jar's version.
 fn newest_generator_jars(
     dir: &Path,
     progress: &mut dyn FnMut(UploadProgress),
 ) -> Option<(String, Vec<FileEntry>)> {
     let mut jars: Vec<(String, String)> = Vec::new(); // (file_name, version)
-    for item in fs::read_dir(dir).ok()? {
-        let name = item.ok()?.file_name().to_string_lossy().into_owned();
+    for item in fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
+        let name = item.file_name().to_string_lossy().into_owned();
         if let Some(v) = map_generator_jar_version(&name) {
             jars.push((name, v));
         }
@@ -654,7 +656,11 @@ fn newest_generator_jars(
         return None;
     }
     jars.sort_by(|a, b| compare_version_strings(&b.1, &a.1).unwrap_or(std::cmp::Ordering::Equal));
-    jars.truncate(MAP_GENERATOR_KEEP);
+    let keep_series = newest_jar_series(
+        jars.iter().map(|(_, v)| v.as_str()),
+        MAP_GENERATOR_KEEP_SERIES,
+    );
+    jars.retain(|(_, v)| keep_series.contains(map_generator_series(v)));
     let version = jars.first()?.1.clone();
     let paths: Vec<std::path::PathBuf> = jars.iter().map(|(name, _)| dir.join(name)).collect();
     let entries = hash_files_with_progress(dir, &paths, progress).ok()?;
@@ -1025,6 +1031,37 @@ mod tests {
             .filter(|f| f.rule == FileSyncRule::PatchArchive)
             .count();
         assert_eq!(gamedata_plan.entries.len(), patch_archives);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn generator_upload_keeps_every_jar_in_the_newest_series() {
+        let root = temp_faf_root();
+        let generator = root.join("map_generator");
+        fs::create_dir_all(&generator).unwrap();
+        for name in [
+            "MapGenerator_1.22.2.jar",
+            "MapGenerator_1.22.1.jar",
+            "MapGenerator_1.21.0.jar",
+            "MapGenerator_1.20.0.jar",
+            "MapGenerator_1.19.0.jar",
+        ] {
+            fs::write(generator.join(name), b"jar").unwrap();
+        }
+
+        let (version, entries) = newest_generator_jars(&generator, &mut |_| {}).unwrap();
+        assert_eq!(version, "1.22.2");
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        // All of 1.22.x, 1.21.x and 1.20.x; the 1.19.x series is dropped.
+        assert_eq!(
+            paths,
+            vec![
+                "MapGenerator_1.22.2.jar",
+                "MapGenerator_1.22.1.jar",
+                "MapGenerator_1.21.0.jar",
+                "MapGenerator_1.20.0.jar",
+            ]
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 }
