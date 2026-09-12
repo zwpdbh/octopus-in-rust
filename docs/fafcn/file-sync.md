@@ -162,8 +162,11 @@ File lifecycle per channel (all in
 CLI:
 
 1. `prepare_upstream` (~line 281) — **asks the server to check upstream
-   first** (see 5.2) and waits if the server is downloading a new patch
-   (5 s polls, 10 min cap). Best-effort: any error → log and continue.
+   first** (see 5.2) and waits while the server is downloading a component
+   the sync consumes — the gamedata patch **and the map generator jars**
+   (5 s polls, 10 min cap, one wait per component); the mirror-only FAF
+   client installer is never waited on. Best-effort: any error → log and
+   continue.
 2. Per `SYNC_CHANNELS`: fetch manifest → diff local files by sha256 →
    download missing/mismatched to a `.fafcn-sync-tmp` dir → verify → atomic
    rename into place.
@@ -380,8 +383,10 @@ installs without CJK supplemental fonts (`gui/fonts.rs`).
 The **检查更新** button checks all three updatable components at once: the
 sync-client build above, plus the three server-side upstream sources — it POSTs
 the debounced `upstream/refresh`, then polls `/api/gamedata/status` every 2 s
-(max ~15 s) until the check finishes (never waiting for downloads) and logs
-one conclusion line each for the gamedata patch and the FAF client
+(max ~15 s) until the check finishes, and **keeps polling while the server is
+downloading** (every 5 s, max ~10 min), streaming live snapshots so the
+panel's blue "server downloading" row shows; the conclusion lines (gamedata
+patch, FAF client, map generator) then reflect the final state
 (`apps/fafcn-sync/src/gui/version_panel.rs`).
 
 GUI layout: the sync tab keeps the update row, a **version panel** (one

@@ -4,6 +4,7 @@
 use std::{path::PathBuf, sync::mpsc::channel, thread};
 
 use eframe::egui;
+use fafcn_gamedata::UpdaterComponent;
 
 use crate::{
     config::ClientConfig,
@@ -215,12 +216,22 @@ impl SyncApp {
                     WorkerMsg::Sync(SyncProgress::Upstream(event)) => {
                         let line = match event {
                             sync::UpstreamEvent::Checking => log_upstream_checking(self.lang),
-                            sync::UpstreamEvent::ServerDownloading { version } => {
-                                log_upstream_downloading(self.lang, &version)
+                            sync::UpstreamEvent::ServerDownloading { component, version } => {
+                                match component {
+                                    UpdaterComponent::MapGenerator => {
+                                        log_generator_downloading(self.lang, &version)
+                                    }
+                                    _ => log_upstream_downloading(self.lang, &version),
+                                }
                             }
                             sync::UpstreamEvent::UpToDate => log_upstream_up_to_date(self.lang),
-                            sync::UpstreamEvent::WaitTimedOut { version } => {
-                                log_upstream_timeout(self.lang, version.as_deref())
+                            sync::UpstreamEvent::WaitTimedOut { component, version } => {
+                                match component {
+                                    Some(UpdaterComponent::MapGenerator) => {
+                                        log_generator_timeout(self.lang, version.as_deref())
+                                    }
+                                    _ => log_upstream_timeout(self.lang, version.as_deref()),
+                                }
                             }
                             sync::UpstreamEvent::Skipped { reason } => {
                                 log_upstream_skipped(self.lang, &reason)

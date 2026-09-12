@@ -38,21 +38,28 @@ const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// How long to wait at most for the mirror's upstream download to finish.
 const UPSTREAM_WAIT_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Sub-events of the upstream (official patch) check phase at sync start.
+/// Sub-events of the upstream (official release) check phase at sync start.
 pub enum UpstreamEvent {
-    /// Asking the mirror to check for a newer official FAF patch.
+    /// Asking the mirror to check for newer official releases.
     Checking,
-    /// The mirror is downloading official patch `version`; we wait for it.
+    /// The mirror is downloading `version` of a component; we wait for it.
     ServerDownloading {
-        /// Official patch version being downloaded.
+        /// Which component is being downloaded (gamedata patch or map
+        /// generator — the mirror-only FAF client installer is never waited
+        /// on).
+        component: UpdaterComponent,
+        /// Version being downloaded.
         version: String,
     },
-    /// The mirror already has the latest official patch.
+    /// The mirror already has the latest official releases.
     UpToDate,
-    /// The mirror did not finish its upstream download in time; the sync
-    /// proceeds with the version the mirror currently has.
+    /// The mirror did not finish in time; the sync proceeds with the version
+    /// the mirror currently has. One event per component still pending;
+    /// `component: None` means the upstream check itself never finished.
     WaitTimedOut {
-        /// Official patch version we waited for, when known.
+        /// Component we waited for.
+        component: Option<UpdaterComponent>,
+        /// Version we waited for, when known.
         version: Option<String>,
     },
     /// The upstream check failed (old server, network, …); the sync
@@ -212,15 +219,24 @@ pub async fn run(args: SyncArgs) -> Result<()> {
 fn print_progress(event: SyncProgress) {
     match event {
         SyncProgress::Upstream(event) => match event {
-            UpstreamEvent::Checking => println!("checking for a new official patch…"),
-            UpstreamEvent::ServerDownloading { version } => {
-                println!("server is downloading official patch v{version}, waiting for it…")
-            }
+            UpstreamEvent::Checking => println!("checking for official updates…"),
+            UpstreamEvent::ServerDownloading { component, version } => match component {
+                UpdaterComponent::MapGenerator => {
+                    println!("server is downloading map generator v{version}, waiting for it…")
+                }
+                _ => println!("server is downloading official patch v{version}, waiting for it…"),
+            },
             UpstreamEvent::UpToDate => println!("server is up to date"),
-            UpstreamEvent::WaitTimedOut { version } => println!(
-                "timed out waiting for upstream patch {}; syncing what the mirror has",
-                version.as_deref().unwrap_or("(unknown)")
-            ),
+            UpstreamEvent::WaitTimedOut { component, version } => {
+                let what = match component {
+                    Some(UpdaterComponent::MapGenerator) => "map generator",
+                    _ => "upstream patch",
+                };
+                println!(
+                    "timed out waiting for {what} {}; syncing what the mirror has",
+                    version.as_deref().unwrap_or("(unknown)")
+                );
+            }
             UpstreamEvent::Skipped { reason } => {
                 println!("upstream check skipped ({reason}); continuing")
             }
@@ -275,9 +291,11 @@ fn print_progress(event: SyncProgress) {
     }
 }
 
-/// Ask the mirror to check for a newer official FAF patch and, when it is
-/// downloading one, wait (bounded) until the gamedata manifest catches up.
-/// Best-effort: any error is logged as a progress event and the sync
+/// Ask the mirror to check for newer official releases and, when it is
+/// downloading them, wait (bounded) until the manifests catch up. Both
+/// components that change synced files are waited on — the gamedata patch
+/// and the map generator jars; the mirror-only FAF client installer never
+/// is. Best-effort: any error is logged as a progress event and the sync
 /// continues with whatever the mirror currently has.
 pub async fn prepare_upstream(server: &str, progress: &mut dyn FnMut(SyncProgress)) {
     progress(SyncProgress::Upstream(UpstreamEvent::Checking));
@@ -291,31 +309,60 @@ pub async fn prepare_upstream(server: &str, progress: &mut dyn FnMut(SyncProgres
             return;
         }
     };
-    let mut wanted = match info.state {
-        UpdaterState::Idle => {
-            progress(SyncProgress::Upstream(UpstreamEvent::UpToDate));
-            return;
-        }
-        // Version unknown until the check finishes; poll the status.
-        UpdaterState::Checking => info.latest_official_version,
-        // Only a gamedata download is worth waiting for; a FAF client
-        // installer download does not change the gamedata manifest.
-        UpdaterState::Downloading {
-            component: UpdaterComponent::Gamedata,
-            version,
-        } => Some(version),
-        UpdaterState::Downloading { .. } => {
-            progress(SyncProgress::Upstream(UpstreamEvent::UpToDate));
-            return;
-        }
-    };
-    let mut announced: Option<String> = None;
+    // Versions worth waiting for, per component. During Checking they are
+    // only known from the server's PREVIOUS check — the poll loop refines
+    // them once the fresh check finishes.
+    let (mut wanted_gamedata, mut wanted_generator): (Option<String>, Option<String>) =
+        match info.state {
+            UpdaterState::Idle => {
+                progress(SyncProgress::Upstream(UpstreamEvent::UpToDate));
+                return;
+            }
+            UpdaterState::Checking => (info.latest_official_version, info.latest_generator_version),
+            UpdaterState::Downloading { component, version } => {
+                // The phases run sequentially server-side (gamedata →
+                // faf-client → map-generator), so seed the other component
+                // from the last known check; the mirrored-version check
+                // clears it right away when the mirror already has it.
+                let mut gamedata = info.latest_official_version;
+                let mut generator = info.latest_generator_version;
+                match component {
+                    UpdaterComponent::Gamedata => gamedata = Some(version),
+                    UpdaterComponent::MapGenerator => generator = Some(version),
+                    UpdaterComponent::FafClient => {}
+                }
+                (gamedata, generator)
+            }
+        };
+    // Becomes true once a wanted version turned out to be already mirrored:
+    // then a lingering `Checking` state is not worth waiting out (the common
+    // "everything current" case stays snappy). When nothing is known wanted
+    // and the check is still running, keep waiting — a download may follow.
+    let mut satisfied = false;
+    let mut announced_gamedata: Option<String> = None;
+    let mut announced_generator: Option<String> = None;
     let deadline = Instant::now() + UPSTREAM_WAIT_TIMEOUT;
     loop {
         if Instant::now() >= deadline {
-            progress(SyncProgress::Upstream(UpstreamEvent::WaitTimedOut {
-                version: wanted,
-            }));
+            let mut reported = false;
+            for (component, wanted) in [
+                (UpdaterComponent::Gamedata, &wanted_gamedata),
+                (UpdaterComponent::MapGenerator, &wanted_generator),
+            ] {
+                if wanted.is_some() {
+                    reported = true;
+                    progress(SyncProgress::Upstream(UpstreamEvent::WaitTimedOut {
+                        component: Some(component),
+                        version: wanted.clone(),
+                    }));
+                }
+            }
+            if !reported {
+                progress(SyncProgress::Upstream(UpstreamEvent::WaitTimedOut {
+                    component: None,
+                    version: None,
+                }));
+            }
             return;
         }
         let status = match fetch_status(&http, server).await {
@@ -339,23 +386,41 @@ pub async fn prepare_upstream(server: &str, progress: &mut dyn FnMut(SyncProgres
             UpdaterState::Downloading {
                 component: UpdaterComponent::Gamedata,
                 version,
-            } => wanted = Some(version.clone()),
+            } => wanted_gamedata = Some(version.clone()),
+            UpdaterState::Downloading {
+                component: UpdaterComponent::MapGenerator,
+                version,
+            } => wanted_generator = Some(version.clone()),
             UpdaterState::Downloading { .. } => {}
             UpdaterState::Checking => {
                 if updater.latest_official_version.is_some() {
-                    wanted = updater.latest_official_version.clone();
+                    wanted_gamedata = updater.latest_official_version.clone();
+                }
+                if updater.latest_generator_version.is_some() {
+                    wanted_generator = updater.latest_generator_version.clone();
                 }
             }
             UpdaterState::Idle => {}
         }
-        let mirrored = status
-            .channels
-            .iter()
-            .find(|c| c.name == CHANNEL_GAMEDATA)
-            .and_then(|c| c.manifest.as_ref())
-            .map(|m| m.patch_version.as_str());
-        if let (Some(wanted), Some(mirrored)) = (wanted.as_deref(), mirrored) {
-            if compare_version_strings(mirrored, wanted) != Some(std::cmp::Ordering::Less) {
+        let mirrored = |channel: &str| {
+            status
+                .channels
+                .iter()
+                .find(|c| c.name == channel)
+                .and_then(|c| c.manifest.as_ref())
+                .map(|m| m.patch_version.as_str())
+        };
+        if !still_pending(wanted_gamedata.as_deref(), mirrored(CHANNEL_GAMEDATA)) {
+            satisfied |= wanted_gamedata.is_some();
+            wanted_gamedata = None;
+        }
+        if !still_pending(wanted_generator.as_deref(), mirrored(CHANNEL_MAP_GENERATOR)) {
+            satisfied |= wanted_generator.is_some();
+            wanted_generator = None;
+        }
+        if wanted_gamedata.is_none() && wanted_generator.is_none() {
+            let checking = matches!(updater.state, UpdaterState::Checking);
+            if !checking || satisfied {
                 progress(SyncProgress::Upstream(UpstreamEvent::UpToDate));
                 return;
             }
@@ -369,15 +434,41 @@ pub async fn prepare_upstream(server: &str, progress: &mut dyn FnMut(SyncProgres
             }
             return;
         }
-        if let Some(version) = &wanted {
-            if announced.as_ref() != Some(version) {
-                announced = Some(version.clone());
-                progress(SyncProgress::Upstream(UpstreamEvent::ServerDownloading {
-                    version: version.clone(),
-                }));
+        for (component, wanted, announced) in [
+            (
+                UpdaterComponent::Gamedata,
+                &wanted_gamedata,
+                &mut announced_gamedata,
+            ),
+            (
+                UpdaterComponent::MapGenerator,
+                &wanted_generator,
+                &mut announced_generator,
+            ),
+        ] {
+            if let Some(version) = wanted {
+                if announced.as_ref() != Some(version) {
+                    *announced = Some(version.clone());
+                    progress(SyncProgress::Upstream(UpstreamEvent::ServerDownloading {
+                        component,
+                        version: version.clone(),
+                    }));
+                }
             }
         }
         tokio::time::sleep(UPSTREAM_POLL_INTERVAL).await;
+    }
+}
+
+/// Whether a wanted upstream version is still pending given the version the
+/// mirror currently serves: pending when something is wanted and the mirror
+/// has nothing yet or is strictly older. Unparseable versions cannot be
+/// ordered — treat them as satisfied rather than waiting forever.
+fn still_pending(wanted: Option<&str>, mirrored: Option<&str>) -> bool {
+    match (wanted, mirrored) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(w), Some(m)) => compare_version_strings(m, w) == Some(std::cmp::Ordering::Less),
     }
 }
 
@@ -1148,6 +1239,22 @@ mod tests {
         ));
         fs::create_dir_all(root.join("gamedata")).unwrap();
         root
+    }
+
+    #[test]
+    fn upstream_wait_pending_logic() {
+        // Wanted but nothing mirrored yet, or mirror strictly older → wait.
+        assert!(still_pending(Some("3838"), None));
+        assert!(still_pending(Some("3838"), Some("3837")));
+        assert!(still_pending(Some("1.22.1"), Some("1.22.0")));
+        // Mirrored at or beyond the wanted version → satisfied.
+        assert!(!still_pending(Some("3838"), Some("3838")));
+        assert!(!still_pending(Some("3838"), Some("3839")));
+        // Nothing wanted → never pending.
+        assert!(!still_pending(None, None));
+        assert!(!still_pending(None, Some("3837")));
+        // Unparseable versions cannot be ordered → don't wait forever.
+        assert!(!still_pending(Some("abc"), Some("xyz")));
     }
 
     #[test]

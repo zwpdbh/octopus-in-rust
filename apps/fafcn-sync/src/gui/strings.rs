@@ -524,6 +524,28 @@ pub(super) fn log_upstream_skipped(lang: GuiLang, reason: &str) -> String {
     }
 }
 
+/// The server is downloading a new map generator jar; the sync waits for it.
+pub(super) fn log_generator_downloading(lang: GuiLang, version: &str) -> String {
+    match lang {
+        GuiLang::Zh => format!("服务器正在下载地图生成器 v{version},请稍候…"),
+        GuiLang::En => format!("Server is downloading map generator v{version}, please wait…"),
+    }
+}
+
+/// Waiting for the server's map generator download timed out.
+pub(super) fn log_generator_timeout(lang: GuiLang, version: Option<&str>) -> String {
+    match lang {
+        GuiLang::Zh => format!(
+            "等待地图生成器{}下载超时,将同步镜像当前版本",
+            version.map(|v| format!(" v{v}")).unwrap_or_default()
+        ),
+        GuiLang::En => format!(
+            "Timed out waiting for map generator{}; syncing what the mirror has",
+            version.map(|v| format!(" v{v}")).unwrap_or_default()
+        ),
+    }
+}
+
 /// Conclusion of a manual gamedata upstream check: mirror already current.
 pub(super) fn log_gamedata_current(lang: GuiLang, version: &str) -> String {
     match lang {
