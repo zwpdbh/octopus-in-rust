@@ -221,18 +221,23 @@ still run, and the first error lands in `last_error`):
    `dfc_windows_*.exe` naming; error when the release has no Windows
    installer. The newest release is recorded in
    `UpdaterInfo.latest_client_version`.
-3. **Map generator jar** (`update_map_generator`, ~line 556). Latest GitHub
-   release of `FAForever/Neroxis-Map-Generator` (`GENERATOR_RELEASE_API`,
-   ~line 62) — the same endpoint family the official client polls when the
-   user opens the "generate map" dialog; its download URL format is
-   `releases/download/{version}/NeroxisGen_{version}.jar`. Asset pick
-   (`parse_generator_release`, ~line 128): exact `NeroxisGen_<version>.jar`,
-   falling back to any `NeroxisGen_*.jar`. The jar is stored under the
-   channel's `MapGenerator_<version>.jar` name; the commit lists the new jar
-   plus the existing jars in the newest 3 version series (`1.22.x`, `1.21.x`,
-   `1.20.x` when 1.22 is newest — every jar in a kept series survives,
-   however many there are), and prune-on-commit drops what falls off. Newest
-   release recorded in `UpdaterInfo.latest_generator_version`.
+3. **Map generator jars** (`update_map_generator`, ~line 568). The GitHub
+   release LIST of `FAForever/Neroxis-Map-Generator`
+   (`GENERATOR_RELEASES_API`, ~line 62) — the same endpoint the official
+   client polls when the user opens the "generate map" dialog; its download
+   URL format is `releases/download/{version}/NeroxisGen_{version}.jar`.
+   Parsing (`parse_generator_releases`, ~line 133): exact
+   `NeroxisGen_<version>.jar` per release, falling back to any
+   `NeroxisGen_*.jar`; non-numeric tags (prereleases) and jar-less releases
+   are skipped. Not just the latest release is mirrored: EVERY release in
+   the newest 3 version series (`1.22.x`, `1.21.x`, `1.20.x` when 1.22 is
+   newest) is wanted, because a player joining a game on a map generated
+   with an older generator needs that exact jar — missing ones are
+   backfilled. Each jar is stored under the channel's
+   `MapGenerator_<version>.jar` name; the commit lists the downloaded jars
+   plus the existing entries in the kept series, and prune-on-commit drops
+   what falls off. Newest release recorded in
+   `UpdaterInfo.latest_generator_version`.
 
 Two triggers share one `update_once` (~line 306) behind a single-flight mutex
 
@@ -251,9 +256,11 @@ One gamedata pass: parse version → compare with the gamedata manifest (equal
 from the faf-client download so clients never wait on the wrong one) →
 stream the 3 archives to `incoming/`, verify Content-Length + sha256 →
 `store_file_from_path` as unversioned names → `commit()` with
-`uploader: "auto-updater"`. The faf-client and map-generator passes work the
-same way for their single assets (as `Downloading{component: FafClient| MapGenerator, ..}`); prune-on-commit deletes the superseded installer and
-oldest jars automatically. Any failure (including the deploy-lag 404 race)
+`uploader: "auto-updater"`. The faf-client pass works the same way for its
+single installer asset; the map-generator pass downloads every missing jar
+in the keep range (as `Downloading{component: FafClient|MapGenerator, ..}`);
+prune-on-commit deletes the superseded installer and jars of dropped series
+automatically. Any failure (including the deploy-lag 404 race)
 cleans temp files, records `last_error`, returns to `Idle`. The updater never
 panics and never blocks the server.
 

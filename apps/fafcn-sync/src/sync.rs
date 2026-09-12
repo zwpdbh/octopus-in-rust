@@ -16,8 +16,8 @@ use anyhow::{anyhow, Context, Result};
 use fafcn_gamedata::{
     channel_subdir, compare_version_strings, map_folder_version, map_generator_jar_version,
     map_generator_series, newest_jar_series, sha256_bytes, sha256_file, validate_relative_path,
-    FileEntry, Manifest, StatusResponse, UpdaterComponent, UpdaterInfo, UpdaterState,
-    CHANNEL_COOP, CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP_SERIES,
+    FileEntry, Manifest, StatusResponse, UpdaterComponent, UpdaterInfo, UpdaterState, CHANNEL_COOP,
+    CHANNEL_GAMEDATA, CHANNEL_MAPS, CHANNEL_MAP_GENERATOR, MAP_GENERATOR_KEEP_SERIES,
     SYNC_CHANNELS,
 };
 use walkdir::WalkDir;
