@@ -119,6 +119,43 @@ pub struct ControlState {
     pub batches_per_sec: f64,
 }
 
+/// Post-batch speed throttle. Deadline-based: each batch sleeps only for the
+/// shortfall between its compute time and the per-batch budget, so the
+/// long-run rate matches the requested batches/sec (a plain `sleep(1/rate)`
+/// per batch always undershoots by the compute time). Falling behind (slow
+/// batch, pause, …) drops the debt instead of bursting to catch up.
+struct Throttle {
+    rate: f64,
+    next: Instant,
+}
+
+impl Throttle {
+    fn new() -> Self {
+        Self {
+            rate: 0.0,
+            next: Instant::now(),
+        }
+    }
+
+    fn wait(&mut self, rate: f64) {
+        if rate <= 0.0 {
+            self.rate = rate;
+            return;
+        }
+        if self.rate != rate {
+            self.rate = rate;
+            self.next = Instant::now();
+        }
+        self.next += Duration::from_secs_f64(1.0 / rate);
+        let now = Instant::now();
+        if self.next > now {
+            std::thread::sleep(self.next - now);
+        } else {
+            self.next = now;
+        }
+    }
+}
+
 /// How a training run ended (terminal state — the loop emits no `Done`
 /// event; the return value IS the terminal signal).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +216,7 @@ pub fn train<AB: AutodiffBackend>(
     let mut optim = AdamConfig::new()
         .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
         .init::<AB, SsdModel<AB>>();
+    let mut throttle = Throttle::new();
 
     for epoch in 0..params.epochs {
         let mut order = train_idx.clone();
@@ -245,10 +283,7 @@ pub fn train<AB: AutodiffBackend>(
             model = optim.step(params.lr, model, grads);
 
             // Post-batch throttle (0 or negative = unlimited).
-            let limit = control.borrow().batches_per_sec;
-            if limit > 0.0 {
-                std::thread::sleep(Duration::from_secs_f64(1.0 / limit));
-            }
+            throttle.wait(control.borrow().batches_per_sec);
 
             if params.max_batches.is_some_and(|m| batches >= m) {
                 break;

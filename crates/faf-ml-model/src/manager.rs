@@ -18,6 +18,7 @@
 //!                                                                   │  (generation, ThreadMsg) out
 //! ```
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -108,10 +109,17 @@ pub enum ManagerEvent {
 /// interleave between them.
 pub struct AttachDump {
     pub status: RunStatus,
-    /// Buffered Batch/EpochEnd events (replay for new viewers).
+    /// Buffered Batch/EpochEnd events (replay for new viewers). Batch points
+    /// are capped at [`MAX_REPLAY_BATCH_EVENTS`] (oldest dropped); epoch
+    /// summaries are kept for the whole run.
     pub replay: Vec<TrainEvent>,
     pub events: broadcast::Receiver<ManagerEvent>,
 }
+
+/// Per-batch points retained in the replay buffer. Epoch summaries never
+/// count against the cap — a long run's memory stays bounded while the
+/// epoch-level curve remains complete.
+const MAX_REPLAY_BATCH_EVENTS: usize = 5000;
 
 /// Point-in-time snapshot for `GET /api/training/status`.
 pub struct Snapshot {
@@ -173,7 +181,8 @@ impl TrainManagerHandle {
         let manager = TrainManager {
             run: RunStatus::Idle,
             generation: 0,
-            replay: Vec::new(),
+            replay: VecDeque::new(),
+            replay_batches: 0,
             events_tx,
             control_tx: None,
             trainer,
@@ -272,8 +281,11 @@ struct TrainManager {
     /// Id of the current run; bumped on Start and Reset.
     generation: u64,
     /// Buffered Batch/EpochEnd events (replayed to new viewers; survives
-    /// into `Ended` so late attachers still see the last run).
-    replay: Vec<TrainEvent>,
+    /// into `Ended` so late attachers still see the last run). Batch points
+    /// are capped (see [`MAX_REPLAY_BATCH_EVENTS`]); epoch ends are kept.
+    replay: VecDeque<TrainEvent>,
+    /// Number of `Batch` events currently in `replay` (epoch ends excluded).
+    replay_batches: usize,
     events_tx: broadcast::Sender<ManagerEvent>,
     /// Control channel of the active run (`None` when idle/ended).
     control_tx: Option<watch::Sender<ControlState>>,
@@ -317,14 +329,14 @@ impl TrainManager {
             TrainCmd::Attach { reply } => {
                 let _ = reply.send(AttachDump {
                     status: self.run.clone(),
-                    replay: self.replay.clone(),
+                    replay: self.replay.iter().cloned().collect(),
                     events: self.events_tx.subscribe(),
                 });
             }
             TrainCmd::Snapshot { reply } => {
                 let _ = reply.send(Snapshot {
                     status: self.run.clone(),
-                    replay: self.replay.clone(),
+                    replay: self.replay.iter().cloned().collect(),
                 });
             }
         }
@@ -348,6 +360,7 @@ impl TrainManager {
         );
         self.control_tx = Some(control_tx);
         self.replay.clear();
+        self.replay_batches = 0;
         self.run = RunStatus::Active {
             phase: Phase::Running,
             config: params,
@@ -367,6 +380,7 @@ impl TrainManager {
                 self.generation += 1;
                 self.control_tx = None;
                 self.replay.clear();
+                self.replay_batches = 0;
                 self.run = RunStatus::Idle;
                 self.broadcast(ManagerEvent::Reset);
                 Ok(())
@@ -425,7 +439,7 @@ impl TrainManager {
                     }
                     return;
                 }
-                self.replay.push(event.clone());
+                self.push_replay(event.clone());
                 self.broadcast(ManagerEvent::Train(event));
             }
             ThreadMsg::Exited(result) => {
@@ -469,6 +483,28 @@ impl TrainManager {
         }
     }
 
+    /// Buffer an event for late attachers. Epoch summaries are kept for the
+    /// whole run; batch points beyond [`MAX_REPLAY_BATCH_EVENTS`] drop the
+    /// oldest first, so a long run can't grow memory without bound.
+    fn push_replay(&mut self, event: TrainEvent) {
+        let is_batch = matches!(event, TrainEvent::Batch { .. });
+        self.replay.push_back(event);
+        if !is_batch {
+            return;
+        }
+        self.replay_batches += 1;
+        if self.replay_batches > MAX_REPLAY_BATCH_EVENTS {
+            let oldest_batch = self
+                .replay
+                .iter()
+                .position(|e| matches!(e, TrainEvent::Batch { .. }));
+            if let Some(pos) = oldest_batch {
+                self.replay.remove(pos);
+                self.replay_batches -= 1;
+            }
+        }
+    }
+
     fn set_action(&self, action: TrainAction) {
         if let Some(tx) = &self.control_tx {
             tx.send_modify(|c| c.action = action);
@@ -487,9 +523,13 @@ impl TrainManager {
     }
 }
 
-/// Snapshot existence/validity check (params carry `data`/`out` paths, so
-/// the manager stays path-agnostic; snapshots live in `datasets/` under the
-/// store root by `TrainParams` convention).
+/// Snapshot pre-flight check, run synchronously in `start` so a bad snapshot
+/// fails the Start request itself instead of surfacing as a `Failed` run
+/// seconds later. Checks the name, and that the manifest exists, parses, and
+/// has enough samples (params carry `data`/`out` paths, so the manager stays
+/// path-agnostic; snapshots live in `datasets/` under the store root by
+/// `TrainParams` convention). Image/label integrity is still verified by
+/// `DetectDataset::load_snapshot` on the training thread.
 fn validate_dataset(params: &TrainParams) -> Result<(), String> {
     let name = params.dataset.trim();
     if name.is_empty() {
@@ -515,6 +555,17 @@ fn validate_dataset(params: &TrainParams) -> Result<(), String> {
             params.dataset
         ));
     }
+    let raw = std::fs::read_to_string(&snapshot)
+        .map_err(|e| format!("reading {}: {e}", snapshot.display()))?;
+    let manifest: faf_ml_core::DatasetManifest =
+        serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", snapshot.display()))?;
+    if manifest.entries.len() < 2 {
+        return Err(format!(
+            "snapshot {:?} has {} sample(s) — need at least 2 to train",
+            params.dataset,
+            manifest.entries.len()
+        ));
+    }
     Ok(())
 }
 
@@ -523,11 +574,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    /// A store dir with a `datasets/test.json` snapshot in it.
+    /// A store dir with a `datasets/test.json` snapshot in it (valid
+    /// manifest, 2 entries — passes the start pre-flight).
     fn test_params() -> (PathBuf, TrainParams) {
         let dir = std::env::temp_dir().join(format!("train-manager-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("datasets")).unwrap();
-        std::fs::write(dir.join("datasets/test.json"), "{}").unwrap();
+        let manifest = serde_json::json!({
+            "name": "test",
+            "created_at": "2026-01-01T00:00:00Z",
+            "entries": [
+                {"image_id": uuid::Uuid::new_v4(), "labels": []},
+                {"image_id": uuid::Uuid::new_v4(), "labels": []},
+            ],
+        });
+        std::fs::write(dir.join("datasets/test.json"), manifest.to_string()).unwrap();
         let params = TrainParams {
             data: dir.clone(),
             dataset: "test".to_string(),
@@ -788,5 +848,94 @@ mod tests {
         assert!(handle.command(ManagerCommand::Stop).await.is_err());
         // Reset from idle is a no-op Ok.
         handle.command(ManagerCommand::Reset).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_rejects_tiny_snapshot() {
+        let handle = TrainManagerHandle::spawn_with(completes());
+        let (dir, params) = test_params();
+        let manifest = serde_json::json!({
+            "name": "test",
+            "created_at": "2026-01-01T00:00:00Z",
+            "entries": [{"image_id": uuid::Uuid::new_v4(), "labels": []}],
+        });
+        std::fs::write(dir.join("datasets/test.json"), manifest.to_string()).unwrap();
+        let err = handle.start(params, 0.0).await.unwrap_err();
+        assert!(err.contains("need at least 2"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn replay_caps_batch_events_but_keeps_epochs() {
+        let batches_per_epoch = MAX_REPLAY_BATCH_EVENTS / 2 + 100;
+        let handle = TrainManagerHandle::spawn_with(Arc::new(
+            move |_params, _control, events, generation| {
+                tokio::spawn(async move {
+                    for epoch in 1..=2usize {
+                        for batch in 1..=batches_per_epoch {
+                            let _ = events.send((
+                                generation,
+                                ThreadMsg::Event(TrainEvent::Batch {
+                                    epoch,
+                                    batch,
+                                    total_batches: 1,
+                                    cls_loss: 1.0,
+                                    bbox_loss: 1.0,
+                                    total_loss: 2.0,
+                                }),
+                            ));
+                        }
+                        let _ = events.send((
+                            generation,
+                            ThreadMsg::Event(TrainEvent::EpochEnd {
+                                epoch,
+                                total_epochs: 2,
+                                train_cls: 1.0,
+                                train_bbox: 1.0,
+                                valid_cls: 1.0,
+                                valid_bbox: 1.0,
+                            }),
+                        ));
+                    }
+                    let _ = events.send((
+                        generation,
+                        ThreadMsg::Exited(Ok(TrainExit::Completed {
+                            run_dir: PathBuf::from("runs/20260912-000000"),
+                            duration_secs: 1,
+                        })),
+                    ));
+                });
+            },
+        ));
+        let (dir, params) = test_params();
+        handle.start(params, 0.0).await.unwrap();
+        loop {
+            let snap = handle.snapshot().await.unwrap();
+            if matches!(snap.status, RunStatus::Ended { .. }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let dump = handle.attach().await.unwrap();
+        let batches = dump
+            .replay
+            .iter()
+            .filter(|e| matches!(e, TrainEvent::Batch { .. }))
+            .count();
+        let epochs = dump
+            .replay
+            .iter()
+            .filter(|e| matches!(e, TrainEvent::EpochEnd { .. }))
+            .count();
+        assert_eq!(batches, MAX_REPLAY_BATCH_EVENTS);
+        assert_eq!(epochs, 2);
+        // Oldest batch points were dropped first.
+        match dump.replay.first() {
+            Some(TrainEvent::Batch { epoch, batch, .. }) => {
+                assert_eq!((*epoch, *batch), (1, 201));
+            }
+            other => panic!("expected oldest surviving Batch, got {other:?}"),
+        }
+        std::fs::remove_dir_all(dir).ok();
     }
 }
