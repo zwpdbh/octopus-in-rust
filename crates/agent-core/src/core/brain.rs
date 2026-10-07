@@ -146,7 +146,10 @@ impl Brain {
         let custom_toolset = self.custom_toolset.clone();
 
         tokio::spawn(async move {
-            run_step_loop(config, provider, registry, custom_toolset, tx).await;
+            let toolset = build_toolset(&registry, custom_toolset, &config, &tx);
+            if let Err(err) = run_step_loop(&config, &toolset, 0, provider, &tx).await {
+                emit(&tx, BrainEvent::Error(err.to_string()));
+            }
         });
 
         Ok(Box::pin(
@@ -206,78 +209,16 @@ async fn run_turn_loop(
             .await;
     }
 
-    let base_toolset: Arc<dyn llm_provider::Toolset> = match custom_toolset {
-        Some(toolset) => toolset,
-        None => Arc::new(ApprovalToolset {
-            inner: registry.clone(),
-            runtime: config.approval_runtime.clone(),
-            event_tx: tx.clone(),
-        }),
-    };
-    let toolset = HookAwareToolset {
-        inner: base_toolset,
-        hook_policy: config.hook_policy.clone(),
-    };
+    let toolset = build_toolset(&registry, custom_toolset, &config, &tx);
 
     let mut final_text = String::new();
 
     for step_no in 0..config.max_steps_per_turn {
-        let ctx = StepContext {
-            step_no,
-            turn_id: None,
-        };
-
-        emit(&tx, BrainEvent::StepBegin { n: step_no });
-
-        // Create a checkpoint before the step, if a checkpoint policy is configured.
-        if let Some(policy) = &config.checkpoint_policy {
-            let history = config.message_store.lock().await.history().await;
-            match policy.checkpoint(&ctx, &history).await {
-                Ok(id) => emit(&tx, BrainEvent::CheckpointCreated { id }),
-                Err(e) => {
-                    emit(&tx, BrainEvent::Error(e.to_string()));
-                    emit(&tx, BrainEvent::TurnEnd);
-                    config.hook_policy.on_turn_failure(&e.to_string()).await;
-                    return;
-                }
-            }
-        }
-
-        match run_single_step_with_retry(&config, &toolset, &ctx, provider.clone(), tx.clone())
-            .await
-        {
-            Ok(StepControl::Continue) => {
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
-                continue;
-            }
-            Ok(StepControl::Stop { final_text: text }) => {
+        match run_step_loop(&config, &toolset, step_no, provider.clone(), &tx).await {
+            Ok(StepLoopOutcome::Continue) => continue,
+            Ok(StepLoopOutcome::Stop { final_text: text }) => {
                 final_text = text;
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
                 break;
-            }
-            Ok(StepControl::RewindToCheckpoint {
-                checkpoint_id,
-                inject_messages,
-            }) => {
-                if let Some(policy) = &config.checkpoint_policy {
-                    match policy.revert_to(checkpoint_id).await {
-                        Ok(history) => {
-                            let mut store = config.message_store.lock().await;
-                            let mut new_history = history;
-                            new_history.extend(inject_messages);
-                            store.set_history(new_history).await;
-                            emit(&tx, BrainEvent::CheckpointReverted { id: checkpoint_id });
-                        }
-                        Err(e) => {
-                            emit(&tx, BrainEvent::Error(e.to_string()));
-                            emit(&tx, BrainEvent::TurnEnd);
-                            config.hook_policy.on_turn_failure(&e.to_string()).await;
-                            return;
-                        }
-                    }
-                }
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
-                continue;
             }
             Err(err) => {
                 let msg = err.to_string();
@@ -305,13 +246,20 @@ async fn run_turn_loop(
     config.hook_policy.on_turn_end(&final_text).await;
 }
 
-async fn run_step_loop(
-    config: BrainConfig,
-    provider: Arc<dyn llm_provider::ChatProvider>,
-    registry: ToolRegistry,
+/// Outcome of one completed step (checkpoint rewinds are handled internally).
+enum StepLoopOutcome {
+    /// Tool calls ran; the turn should continue to the next step.
+    Continue,
+    /// The model produced a final answer.
+    Stop { final_text: String },
+}
+
+fn build_toolset(
+    registry: &ToolRegistry,
     custom_toolset: Option<Arc<dyn llm_provider::Toolset>>,
-    tx: UnboundedSender<BrainEvent>,
-) {
+    config: &BrainConfig,
+    tx: &UnboundedSender<BrainEvent>,
+) -> HookAwareToolset {
     let base_toolset: Arc<dyn llm_provider::Toolset> = match custom_toolset {
         Some(toolset) => toolset,
         None => Arc::new(ApprovalToolset {
@@ -320,40 +268,59 @@ async fn run_step_loop(
             event_tx: tx.clone(),
         }),
     };
-    let toolset = HookAwareToolset {
+    HookAwareToolset {
         inner: base_toolset,
         hook_policy: config.hook_policy.clone(),
-    };
+    }
+}
 
-    let step_no = 0;
+/// Run a single reasoning step, looping internally on checkpoint rewinds.
+///
+/// Emits `StepBegin`/`StepEnd` and checkpoint events, but never `Error`,
+/// `StepInterrupted`, or `TurnEnd` — callers decorate errors.
+async fn run_step_loop(
+    config: &BrainConfig,
+    toolset: &HookAwareToolset,
+    step_no: usize,
+    provider: Arc<dyn llm_provider::ChatProvider>,
+    tx: &UnboundedSender<BrainEvent>,
+) -> Result<StepLoopOutcome, BrainError> {
+    let mut attempts = 0;
+
     loop {
+        attempts += 1;
+        if attempts > config.max_steps_per_turn {
+            return Err(BrainError::Other(format!(
+                "Step {step_no} exceeded maximum checkpoint rewinds ({})",
+                config.max_steps_per_turn
+            )));
+        }
+
         let ctx = StepContext {
             step_no,
             turn_id: None,
         };
 
+        emit(tx, BrainEvent::StepBegin { n: step_no });
+
         // Create a checkpoint before the step, if a checkpoint policy is configured.
         if let Some(policy) = &config.checkpoint_policy {
             let history = config.message_store.lock().await.history().await;
             match policy.checkpoint(&ctx, &history).await {
-                Ok(id) => emit(&tx, BrainEvent::CheckpointCreated { id }),
-                Err(e) => {
-                    emit(&tx, BrainEvent::Error(e.to_string()));
-                    return;
-                }
+                Ok(id) => emit(tx, BrainEvent::CheckpointCreated { id }),
+                Err(e) => return Err(BrainError::Other(e.to_string())),
             }
         }
 
-        match run_single_step_with_retry(&config, &toolset, &ctx, provider.clone(), tx.clone())
-            .await
+        match run_single_step_with_retry(config, toolset, &ctx, provider.clone(), tx.clone()).await
         {
             Ok(StepControl::Continue) => {
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
-                break;
+                emit(tx, BrainEvent::StepEnd { n: step_no });
+                return Ok(StepLoopOutcome::Continue);
             }
-            Ok(StepControl::Stop { final_text: _ }) => {
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
-                break;
+            Ok(StepControl::Stop { final_text }) => {
+                emit(tx, BrainEvent::StepEnd { n: step_no });
+                return Ok(StepLoopOutcome::Stop { final_text });
             }
             Ok(StepControl::RewindToCheckpoint {
                 checkpoint_id,
@@ -366,21 +333,15 @@ async fn run_step_loop(
                             let mut new_history = history;
                             new_history.extend(inject_messages);
                             store.set_history(new_history).await;
-                            emit(&tx, BrainEvent::CheckpointReverted { id: checkpoint_id });
+                            emit(tx, BrainEvent::CheckpointReverted { id: checkpoint_id });
                         }
-                        Err(e) => {
-                            emit(&tx, BrainEvent::Error(e.to_string()));
-                            return;
-                        }
+                        Err(e) => return Err(BrainError::Other(e.to_string())),
                     }
                 }
-                emit(&tx, BrainEvent::StepEnd { n: step_no });
+                emit(tx, BrainEvent::StepEnd { n: step_no });
                 continue;
             }
-            Err(err) => {
-                emit(&tx, BrainEvent::Error(err.to_string()));
-                return;
-            }
+            Err(err) => return Err(err),
         }
     }
 }

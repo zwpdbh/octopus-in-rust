@@ -15,10 +15,12 @@ abstraction; dependency direction is one-way: agent-core → llm-provider).
   retry, recovery, step, checkpoint, compaction, injection, system-prompt,
   tool-result-transformer, event, approval, provider-factory — all with NoOp
   defaults, assembled via `BrainBuilder`.
-- The loop (`run_turn_loop`): user-prompt hook → per step: checkpoint →
-  retry/recovery wrapper → `execute_step` (compaction → injection → before_step
-  → system prompt → LLM step with tool dispatch → after_step), controlled by
-  `StepControl::{Continue, Stop, RewindToCheckpoint}`.
+- The loop (`run_turn_loop`): user-prompt hook → per step: `run_step_loop`
+  (checkpoint → retry/recovery wrapper → `execute_step`: compaction →
+  injection → before_step → system prompt → LLM step with tool dispatch →
+  after_step, looping internally on `RewindToCheckpoint`), controlled by
+  `StepControl::{Continue, Stop, RewindToCheckpoint}`. The standalone
+  `Brain::run_step` reuses the same `run_step_loop` without turn scaffolding.
 - Events stream out over an mpsc channel; tools are gated by
   `ApprovalToolset` inside `HookAwareToolset`.
 
