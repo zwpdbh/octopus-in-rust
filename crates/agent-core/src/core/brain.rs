@@ -353,10 +353,20 @@ async fn run_single_step_with_retry(
     mut provider: Arc<dyn llm_provider::ChatProvider>,
     tx: UnboundedSender<BrainEvent>,
 ) -> Result<StepControl, BrainError> {
+    // `attempt` budgets the retry tier only; it resets when a provider refresh
+    // installs new credentials. `total_attempts` spans retry + recovery and is
+    // never reset, so a persistent error cannot alternate between the two
+    // tiers forever.
     let mut attempt: usize = 0;
+    let mut total_attempts: usize = 0;
+    let max_total_attempts = config.retry_policy.max_attempts() + config.max_step_attempts;
+    // A provider refresh buys one chance per step; a second request means the
+    // new credentials did not help.
+    let mut provider_refreshed = false;
 
     loop {
         attempt += 1;
+        total_attempts += 1;
 
         match execute_step(config, toolset, ctx, provider.clone(), tx.clone()).await {
             Ok(control) => return Ok(control),
@@ -379,8 +389,16 @@ async fn run_single_step_with_retry(
                     continue;
                 }
 
+                if total_attempts >= max_total_attempts {
+                    return Err(err);
+                }
+
                 match config.recovery_policy.recover(&err).await {
                     RecoveryAction::RefreshProvider => {
+                        if provider_refreshed {
+                            return Err(err);
+                        }
+                        provider_refreshed = true;
                         emit(
                             &tx,
                             BrainEvent::ProviderRefreshing {
@@ -402,6 +420,10 @@ async fn run_single_step_with_retry(
                         }
                     }
                     RecoveryAction::RequestInteractiveProvider { reason } => {
+                        if provider_refreshed {
+                            return Err(err);
+                        }
+                        provider_refreshed = true;
                         let (refresh_tx, mut refresh_rx) = tokio::sync::mpsc::unbounded_channel();
                         emit(
                             &tx,
@@ -426,7 +448,6 @@ async fn run_single_step_with_retry(
                     }
                     RecoveryAction::Retry { wait } => {
                         tokio::time::sleep(wait).await;
-                        attempt = 0;
                         continue;
                     }
                     RecoveryAction::Abort => return Err(err),
@@ -789,5 +810,185 @@ impl llm_provider::Toolset for HookAwareToolset {
         });
 
         HandleResult::Pending(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::provider::ProviderFactory;
+    use crate::core::recovery::{DefaultRecoveryPolicy, RecoveryPolicy};
+    use crate::core::retry::RetryPolicy;
+    use llm_provider::chat_provider::{
+        ChatProvider, ChatProviderError, StreamedMessage, ThinkingEffort,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    struct AlwaysFailingProvider {
+        calls: Arc<AtomicUsize>,
+        status_code: u16,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatProvider for AlwaysFailingProvider {
+        fn name(&self) -> &str {
+            "always_failing"
+        }
+
+        fn model_name(&self) -> &str {
+            "always_failing"
+        }
+
+        fn thinking_effort(&self) -> Option<&ThinkingEffort> {
+            None
+        }
+
+        async fn generate(
+            &self,
+            _system_prompt: &str,
+            _tools: &[llm_provider::Tool],
+            _history: &[Message],
+        ) -> std::result::Result<StreamedMessage, ChatProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ChatProviderError::status(
+                self.status_code,
+                "simulated failure",
+                None,
+            ))
+        }
+
+        async fn list_models(&self) -> std::result::Result<Vec<String>, ChatProviderError> {
+            Ok(vec!["always_failing".to_string()])
+        }
+
+        fn with_thinking(&self, _effort: ThinkingEffort) -> Arc<dyn ChatProvider> {
+            Arc::new(Self {
+                calls: self.calls.clone(),
+                status_code: self.status_code,
+            })
+        }
+    }
+
+    struct NoWaitRetryPolicy {
+        max_attempts: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl RetryPolicy for NoWaitRetryPolicy {
+        fn max_attempts(&self) -> usize {
+            self.max_attempts
+        }
+
+        fn should_retry(&self, error: &BrainError, attempt: usize) -> Option<Duration> {
+            if attempt > self.max_attempts || (!error.is_transient() && !error.is_auth_failure()) {
+                return None;
+            }
+            Some(Duration::ZERO)
+        }
+    }
+
+    struct EndlessRetryRecovery;
+
+    #[async_trait::async_trait]
+    impl RecoveryPolicy for EndlessRetryRecovery {
+        async fn recover(&self, _error: &BrainError) -> RecoveryAction {
+            RecoveryAction::Retry {
+                wait: Duration::ZERO,
+            }
+        }
+    }
+
+    struct RefreshingFactory {
+        calls: Arc<AtomicUsize>,
+        status_code: u16,
+    }
+
+    #[async_trait::async_trait]
+    impl ProviderFactory for RefreshingFactory {
+        async fn create(
+            &self,
+            _config: &BrainConfig,
+        ) -> Result<Arc<dyn ChatProvider>, BrainError> {
+            Ok(Arc::new(AlwaysFailingProvider {
+                calls: self.calls.clone(),
+                status_code: self.status_code,
+            }))
+        }
+    }
+
+    fn empty_toolset() -> HookAwareToolset {
+        HookAwareToolset {
+            inner: Arc::new(llm_provider::SimpleToolset::new()),
+            hook_policy: Arc::new(crate::hooks::policy::NoOpHookPolicy),
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_retry_is_bounded() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider: Arc<dyn ChatProvider> = Arc::new(AlwaysFailingProvider {
+            calls: calls.clone(),
+            status_code: 503,
+        });
+        let retry_max = 3;
+        let recovery_budget = 2;
+        let config = BrainConfig {
+            provider: Some(provider.clone()),
+            retry_policy: Arc::new(NoWaitRetryPolicy {
+                max_attempts: retry_max,
+            }),
+            recovery_policy: Arc::new(EndlessRetryRecovery),
+            max_step_attempts: recovery_budget,
+            ..Default::default()
+        };
+        let toolset = empty_toolset();
+        let ctx = StepContext {
+            step_no: 0,
+            turn_id: None,
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = run_single_step_with_retry(&config, &toolset, &ctx, provider, tx).await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), retry_max + recovery_budget);
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_is_capped() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider: Arc<dyn ChatProvider> = Arc::new(AlwaysFailingProvider {
+            calls: calls.clone(),
+            status_code: 401,
+        });
+        let retry_max = 3;
+        let recovery_budget = 3;
+        let config = BrainConfig {
+            provider: Some(provider.clone()),
+            provider_factory: Arc::new(RefreshingFactory {
+                calls: calls.clone(),
+                status_code: 401,
+            }),
+            retry_policy: Arc::new(NoWaitRetryPolicy {
+                max_attempts: retry_max,
+            }),
+            recovery_policy: Arc::new(DefaultRecoveryPolicy),
+            max_step_attempts: recovery_budget,
+            ..Default::default()
+        };
+        let toolset = empty_toolset();
+        let ctx = StepContext {
+            step_no: 0,
+            turn_id: None,
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = run_single_step_with_retry(&config, &toolset, &ctx, provider, tx).await;
+
+        assert!(result.is_err());
+        // retry budget (3) + recovery budget (3): one refresh happens, the
+        // refreshed provider gets a fresh retry budget, then the loop stops.
+        assert_eq!(calls.load(Ordering::SeqCst), retry_max + recovery_budget);
     }
 }

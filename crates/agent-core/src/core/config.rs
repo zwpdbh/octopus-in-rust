@@ -34,7 +34,11 @@ pub struct BrainConfig {
     /// Maximum reasoning steps per turn.
     pub max_steps_per_turn: usize,
 
-    /// Maximum retry attempts for a single step before recovery policies run.
+    /// Extra attempts granted to recovery actions (provider refresh, delayed
+    /// retries) after the retry policy's budget is exhausted. The total
+    /// attempt budget for one step is
+    /// `retry_policy.max_attempts() + max_step_attempts`, and recovery never
+    /// resets it. `0` disables recovery.
     pub max_step_attempts: usize,
 
     /// Pre-built LLM provider. When `Some`, it takes precedence over the

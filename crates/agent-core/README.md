@@ -49,14 +49,15 @@ and behave — the public API must not break silently.
 
 ## Part 1 — Correctness fixes (do first, in this order)
 
-**1.1 Bound the retry/recovery loop** — `core/brain.rs:397-475`
-Worst defect: `RefreshProvider`/`Retry` reset `attempt = 0` (`:432`, `:468`)
-with no global cap → persistent 401/503 loops forever.
-Fix: never reset the counter; total-attempt and/or wall-clock budget spanning
-retry + recovery; cap `RefreshProvider` to once per distinct error.
-Read: `ac2/src/human/llm/requester/retry.ts` (max 10 attempts, 500ms→32s exp
-backoff + jitter, honors `Retry-After`, retryability by error kind) and
-`recovery.ts` (recovery does NOT reset the budget).
+**1.1 Bound the retry/recovery loop** — `core/brain.rs:349` — **FIXED.**
+`run_single_step_with_retry` now keeps two counters: `attempt` (retry tier;
+reset only when a provider refresh installs new credentials) and
+`total_attempts` (spans retry + recovery, never reset, capped at
+`retry_policy.max_attempts() + max_step_attempts`). A provider refresh is
+allowed once per step; a second request surfaces the error.
+`RecoveryAction::Retry` no longer resets the retry budget. Regression tests:
+`core::brain::tests::recovery_retry_is_bounded`,
+`core::brain::tests::provider_refresh_is_capped`.
 
 **1.2 Cancellation** — `core/brain.rs:92`
 `run_turn` drops the `JoinHandle`; dropping the receiver leaves the task
@@ -103,7 +104,6 @@ Fix: single-flight/mutex across check+refresh.
 
 **2.1 Kill the dead surface** (wire it or delete it):
 `EventPolicy` never consulted (`config.rs:88`, `brain.rs:168`);
-`max_step_attempts` never read (`config.rs:38`);
 `StepContext.turn_id` always `None` (`brain.rs:227`, `:331`);
 `RetryableChatProvider` never implemented (`chat_provider.rs:49-51`, providers
 have shadowing inherent methods); `ApprovalRequest.display` always empty
