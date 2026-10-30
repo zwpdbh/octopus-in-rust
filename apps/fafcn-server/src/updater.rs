@@ -46,9 +46,10 @@ use crate::handlers::gamedata::GamedataStore;
 /// How often the poller checks upstream for a new patch.
 const POLL_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 
-/// Minimum time between update attempts; concurrent sync clients within one
-/// window share a single upstream check.
-const DEBOUNCE: Duration = Duration::from_secs(30);
+/// Minimum time between update attempts shared by all triggers. Each attempt
+/// makes two GitHub API requests, so this caps fafcn at 14 requests in any
+/// one-hour window, below GitHub's anonymous 60-request hourly limit.
+const DEBOUNCE: Duration = Duration::from_secs(10 * 60);
 
 /// Where the current official patch version is published (`version = NNNN`).
 const VERSION_URL: &str = "https://raw.githubusercontent.com/FAForever/fa/deploy/faf/mod_info.lua";

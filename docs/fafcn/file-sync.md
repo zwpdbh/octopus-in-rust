@@ -244,7 +244,9 @@ still run, and the first error lands in `last_error`):
 
 Two triggers share one `update_once` (~line 306) behind a single-flight mutex
 
-- 30 s debounce (`trigger`, ~line 285):
+- 10 min debounce shared by every trigger (`trigger`, ~line 309). Each accepted
+  pass makes two GitHub API requests, limiting fafcn to at most 14 requests in
+  any one-hour window — below GitHub's anonymous 60-request hourly limit:
 
 1. **Poller** — `spawn_poller` (~line 769), hardcoded 24 h interval, first
    tick on boot. All knobs are constants (`POLL_INTERVAL`, `VERSION_URL`,
